@@ -1,0 +1,5 @@
+# Triad: Autodoc device-link sink, ported from Goob-MRP. Pairs with the existing OperatingTable source port.
+- type: sinkPort
+  id: OperatingTableReceiver
+  name: signal-port-name-operating-table
+  description: signal-port-description-operating-table-receiver

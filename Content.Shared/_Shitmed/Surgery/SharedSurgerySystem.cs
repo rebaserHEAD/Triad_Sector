@@ -52,9 +52,16 @@ public abstract partial class SharedSurgerySystem : EntitySystem
 
     private readonly Dictionary<EntProtoId, EntityUid> _surgeries = new();
 
+    // Triad: full list of surgery prototypes, ported from Goob-MRP so the Autodoc can enumerate available surgeries.
+    private readonly List<EntProtoId> _allSurgeries = new();
+
+    public IReadOnlyList<EntProtoId> AllSurgeries => _allSurgeries;
+
     public override void Initialize()
     {
         base.Initialize();
+
+        LoadSurgeries();
 
         SubscribeLocalEvent<RoundRestartCleanupEvent>(OnRoundRestartCleanup);
 
@@ -83,13 +90,31 @@ public abstract partial class SharedSurgerySystem : EntitySystem
         _surgeries.Clear();
     }
 
+    // Triad: caches all surgery prototype ids for the Autodoc, ported from Goob-MRP.
+    private void LoadSurgeries()
+    {
+        _allSurgeries.Clear();
+        var surgeryName = _compFactory.GetComponentName(typeof(SurgeryComponent));
+        foreach (var entity in _prototypes.EnumeratePrototypes<EntityPrototype>())
+        {
+            if (entity.Components.ContainsKey(surgeryName))
+                _allSurgeries.Add(new EntProtoId(entity.ID));
+        }
+    }
+
     private void OnTargetDoAfter(Entity<SurgeryTargetComponent> ent, ref SurgeryDoAfterEvent args)
     {
         if (!_timing.IsFirstTimePredicted)
             return;
 
-        if (args.Cancelled
-            || args.Handled
+        if (args.Cancelled)
+        {
+            var failEv = new SurgeryStepFailedEvent(args.User, ent, args.Surgery, args.Step);
+            RaiseLocalEvent(args.User, ref failEv);
+            return;
+        }
+
+        if (args.Handled
             || args.Target is not { } target
             || !IsSurgeryValid(ent, target, args.Surgery, args.Step, args.User, out var surgery, out var part, out var step)
             || !PreviousStepsComplete(ent, part, surgery, args.Step)
@@ -99,9 +124,11 @@ public abstract partial class SharedSurgerySystem : EntitySystem
             return;
         }
 
-        args.Repeat = (HasComp<SurgeryRepeatableStepComponent>(step) && !IsStepComplete(ent, part, args.Step, surgery));
-        var ev = new SurgeryStepEvent(args.User, ent, part, GetTools(args.User), surgery);
+        var complete = IsStepComplete(ent, part, args.Step, surgery);
+        args.Repeat = HasComp<SurgeryRepeatableStepComponent>(step) && !complete;
+        var ev = new SurgeryStepEvent(args.User, ent, part, GetTools(args.User), surgery, step, complete);
         RaiseLocalEvent(step, ref ev);
+        RaiseLocalEvent(args.User, ref ev);
         RefreshUI(ent);
     }
 

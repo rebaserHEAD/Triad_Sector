@@ -1,0 +1,7 @@
+# Triad: Autodoc wire layout, ported from Goob-MRP to re-enable the Autodoc machine.
+# AutodocSafetyWireAction is the ported server-side wire action.
+- type: wireLayout
+  id: Autodoc
+  wires:
+  - !type:PowerWireAction
+  - !type:AutodocSafetyWireAction

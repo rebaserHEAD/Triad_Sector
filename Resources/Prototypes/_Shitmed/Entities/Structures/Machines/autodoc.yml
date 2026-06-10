@@ -1,11 +1,12 @@
-# Basic Autodoc and AutodocSyndie entity prototypes
-# These are placeholder definitions to resolve the reference errors
+# Autodoc - programmable robotic surgeon.
+# Triad: re-enabled from the prior placeholder stub by porting Goob-MRP's functional component set.
+# Sprite kept as Triad's scanner.rsi (no autodoc.rsi in tree); GuideHelp dropped (no Autodoc guide entry).
 
 - type: entity
-  id: Autodoc
   parent: [BaseMachine, ConstructibleMachine]
-  name: autodoc
-  description: An advanced medical machine for healing the critically wounded.
+  id: Autodoc
+  name: Autodoc Mk.XIV
+  description: A programmable robotic surgeon capable of automatically operating on patients.
   components:
   - type: Sprite
     sprite: Structures/Machines/scanner.rsi
@@ -15,22 +16,94 @@
       map: [machineLayer]
     - state: idle_unlit
       map: [terminalLayer]
+  - type: Hands
+  - type: HandsFill
+    hands:
+      multitool: OmnimedToolAutodoc
+      surgery_specific: null
+  - type: WiresPanel
+  - type: Wires
+    layoutId: Autodoc
+    boardName: wires-board-name-autodoc
   - type: Machine
     board: AutodocCircuitboard
+  - type: Construction
+    graph: Machine
+    node: machine
+    containers:
+     - machine_board
+     - machine_parts
+     - storagebase
+  - type: EmptyOnMachineDeconstruct
+    containers:
+    - surgery_specific
+    - storagebase
+  - type: ContainerContainer
+    containers:
+      machine_board: !type:Container
+        showEnts: False
+        occludes: True
+        ents: []
+      machine_parts: !type:Container
+        showEnts: False
+        occludes: True
+        ents: []
+      storagebase: !type:Container
+        showEnts: False
+        occludes: True
+        ents: []
+  - type: ApcPowerReceiver
+    powerLoad: 10000
+  - type: DeviceList
+  - type: DeviceNetwork
+    deviceNetId: Wired
+    receiveFrequencyId: BasicDevice
+  - type: DeviceLinkSink
+    ports:
+    - OperatingTableReceiver
+  - type: UserInterface
+    interfaces:
+      enum.AutodocUiKey.Key:
+        type: AutodocBoundUserInterface
+      enum.StorageUiKey.Key:
+        type: StorageBoundUserInterface
+      enum.WiresUiKey.Key:
+        type: WiresBoundUserInterface
+  - type: ActivatableUI
+    key: enum.AutodocUiKey.Key
+  - type: ActivatableUIRequiresPower
+  - type: Autodoc
+  - type: Sanitized
+  - type: DoAfter
+  - type: TypingIndicator
+    proto: robot
+  - type: Speech
+    speechVerb: Robotic
+    speechSounds: Pai
+  - type: Storage
+    clickInsert: false
+    grid:
+    - 0,0,3,3
+  - type: SurgerySpeedModifier
+    speedModifier: 0.5 # on par with a surgeon using normal tools
 
 - type: entity
-  id: AutodocSyndie
   parent: Autodoc
+  id: AutodocSyndie
+  suffix: Syndie
   name: syndicate autodoc
   description: An advanced medical machine for healing the critically wounded. This one has a suspicious red paint job.
   components:
-  - type: Sprite
-    sprite: Structures/Machines/scanner.rsi
-    snapCardinals: true
-    layers:
-    - state: open
-      map: [machineLayer]
-    - state: idle_unlit
-      map: [terminalLayer]
   - type: Machine
     board: AutodocSyndieCircuitboard
+  - type: SurgerySpeedModifier
+    speedModifier: 1.0 # as good as a surgeon using a multitool
+
+# Autodoc tools
+
+- type: entity
+  parent: OmnimedTool
+  id: OmnimedToolAutodoc
+  suffix: Unremoveable
+  components:
+  - type: Unremoveable
