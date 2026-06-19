@@ -110,7 +110,15 @@ namespace Content.Server.Speech.EntitySystems
                     }
                     else if (match.Length >= 1 && replacement.Length >= 1 && char.IsUpper(match.Value[0]))
                     {
-                        replacement = replacement[0].ToString().ToUpper() + replacement[1..];
+                        // Triad: a one-letter capital match ("I"/"A") is ambiguous -- "I" is always written
+                        // capital regardless of position, so copying that capital onto a multi-letter
+                        // expansion ("Ah") injected a stray mid-sentence capital ("Sorry, Ah have"). Case
+                        // single-letter expansions by sentence position; multi-letter matches keep the
+                        // copy-the-capital behavior (their capital is meaningful).
+                        var capitalize = match.Length > 1 || IsSentenceStart(message, match.Index);
+                        replacement = capitalize
+                            ? char.ToUpperInvariant(replacement[0]) + replacement[1..]
+                            : char.ToLowerInvariant(replacement[0]) + replacement[1..];
                     }
 
                     // In-place replace the match with the transformed capitalization replacement
@@ -121,6 +129,21 @@ namespace Content.Server.Speech.EntitySystems
             }
 
             return message;
+        }
+
+        // Triad: true if the character at <paramref name="index"/> begins a sentence -- it is the first
+        // non-space character, or the nearest preceding non-space character is sentence-ending punctuation.
+        // Used to decide whether a respelled one-letter pronoun ("I" -> "Ah") should keep its capital.
+        private static bool IsSentenceStart(string message, int index)
+        {
+            for (var i = index - 1; i >= 0; i--)
+            {
+                if (char.IsWhiteSpace(message[i]))
+                    continue;
+                return message[i] is '.' or '!' or '?';
+            }
+
+            return true;
         }
 
         private (Regex regex, string replacement)[] GetCachedReplacements(ReplacementAccentPrototype prototype)

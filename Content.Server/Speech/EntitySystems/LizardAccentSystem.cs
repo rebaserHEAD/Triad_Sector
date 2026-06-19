@@ -29,8 +29,10 @@ public sealed class LizardAccentSystem : EntitySystem
         message = AccentHelpers.ReplaceCasePreserving(message, RegexSoftC, "s");
         // hissss
         message = RegexLowerS.Replace(message, "sss");
-        // hiSSS
-        message = RegexUpperS.Replace(message, "SSS");
+        // hiSSS -- Triad: a lone leading capital S is ordinary capitalization (Steal, Silver), not a
+        // shout, so only the first S stays capital (Sss); a run of 2+ capital S is a genuine shout and
+        // stays SSS. Without this, "Something" came out "SSSomething".
+        message = RegexUpperS.Replace(message, m => m.Value.Length > 1 ? "SSS" : "Sss");
         // ekssit
         message = RegexInternalX.Replace(message, "$1kss");
         // ecks
