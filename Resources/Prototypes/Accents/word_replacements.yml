@@ -520,32 +520,44 @@
   id: southern
   wordReplacements:
     accent-southern-words-1: accent-southern-words-replace-1
+    accent-southern-words-1-2: accent-southern-words-replace-1
     accent-southern-words-2: accent-southern-words-replace-2
+    accent-southern-words-2-2: accent-southern-words-replace-2
+    accent-southern-words-2-3: accent-southern-words-replace-2
+    accent-southern-words-2-4: accent-southern-words-replace-2
     accent-southern-words-3: accent-southern-words-replace-3
+    accent-southern-words-3-2: accent-southern-words-replace-3
+    accent-southern-words-3-3: accent-southern-words-replace-3
     accent-southern-words-4: accent-southern-words-replace-4
+    accent-southern-words-4-2: accent-southern-words-replace-4
+    accent-southern-words-4-3: accent-southern-words-replace-4
     accent-southern-words-5: accent-southern-words-replace-5
     accent-southern-words-6: accent-southern-words-replace-6
     accent-southern-words-7: accent-southern-words-replace-7
     accent-southern-words-8: accent-southern-words-replace-8
     accent-southern-words-9: accent-southern-words-replace-9
+    accent-southern-words-9-2: accent-southern-words-replace-9
     accent-southern-words-10: accent-southern-words-replace-10
     accent-southern-words-11: accent-southern-words-replace-11
+    accent-southern-words-11-2: accent-southern-words-replace-11
     accent-southern-words-12: accent-southern-words-replace-12
-    accent-southern-words-12-2: accent-southern-words-replace-12
-    accent-southern-words-12-3: accent-southern-words-replace-12
     accent-southern-words-13: accent-southern-words-replace-13
-    accent-southern-words-13-2: accent-southern-words-replace-13
     accent-southern-words-14: accent-southern-words-replace-14
+    accent-southern-words-14-2: accent-southern-words-replace-14
     accent-southern-words-15: accent-southern-words-replace-15
+    accent-southern-words-15-2: accent-southern-words-replace-15
+    accent-southern-words-15-3: accent-southern-words-replace-15
     accent-southern-words-16: accent-southern-words-replace-16
     accent-southern-words-17: accent-southern-words-replace-17
-    accent-southern-words-17-2: accent-southern-words-replace-17
     accent-southern-words-18: accent-southern-words-replace-18
-    accent-southern-words-18-2: accent-southern-words-replace-18
     accent-southern-words-19: accent-southern-words-replace-19
+    accent-southern-words-19-2: accent-southern-words-replace-19
     accent-southern-words-20: accent-southern-words-replace-20
+    accent-southern-words-20-2: accent-southern-words-replace-20
     accent-southern-words-21: accent-southern-words-replace-21
-    accent-southern-words-21-2: accent-southern-words-replace-21
+    accent-southern-words-22: accent-southern-words-replace-22
+    accent-southern-words-23: accent-southern-words-replace-23
+    accent-southern-words-24: accent-southern-words-replace-24
 
 # For the chat sanitization system
 - type: accent

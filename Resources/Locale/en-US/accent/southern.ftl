@@ -1,88 +1,97 @@
+# Triad: Southern accent -- one genderless, charming antebellum register (the Django-gentry drawl:
+# courtly and mannered, with a little steel under the manners). Charm rides on the drawl phonetics
+# (DrawlAccentSystem) plus this single-word dictionary; NO prefix/suffix tics (they read as bolt-on
+# clown-noise on fragments). Non-religious. Single-word swaps except the one signature phrase "fixin' to".
+
+# Core
 accent-southern-words-1 = you all
+accent-southern-words-1-2 = you guys
 accent-southern-words-replace-1 = y'all
 
-accent-southern-words-2 = you guys
-accent-southern-words-replace-2 = y'all
+accent-southern-words-2 = isn't
+accent-southern-words-2-2 = is not
+accent-southern-words-2-3 = aren't
+accent-southern-words-2-4 = are not
+accent-southern-words-replace-2 = ain't
 
-accent-southern-words-3 = isn't
-accent-southern-words-replace-3 = ain't
+accent-southern-words-3 = gonna
+accent-southern-words-3-2 = going to
+accent-southern-words-3-3 = about to
+accent-southern-words-replace-3 = fixin' to
 
-accent-southern-words-4 = is not
-accent-southern-words-replace-4 = ain't
+# Gentry modal / social
+accent-southern-words-4 = think
+accent-southern-words-4-2 = guess
+accent-southern-words-4-3 = suppose
+accent-southern-words-replace-4 = reckon
 
-accent-southern-words-5 = aren't
-accent-southern-words-replace-5 = ain't
+accent-southern-words-5 = sure
+accent-southern-words-replace-5 = surely
 
-accent-southern-words-6 = are not
-accent-southern-words-replace-6 = ain't
+accent-southern-words-6 = maybe
+accent-southern-words-replace-6 = perhaps
 
-accent-southern-words-7 = idiot
-accent-southern-words-replace-7 = damn fool
+accent-southern-words-7 = yes
+accent-southern-words-replace-7 = indeed
 
-accent-southern-words-8 = jerk
-accent-southern-words-replace-8 = sumbitch
+accent-southern-words-8 = please
+accent-southern-words-replace-8 = kindly
 
-accent-southern-words-9 = bullshit
-accent-southern-words-replace-9 = horseshit
+accent-southern-words-9 = thanks
+accent-southern-words-9-2 = thank you
+accent-southern-words-replace-9 = obliged
 
-# Warm good-ol'-boy vocab: hospitable, domestic register (kept distinct from the cartoon-Western cowboy).
-accent-southern-words-10 = friend
-accent-southern-words-replace-10 = neighbor
+accent-southern-words-10 = sorry
+accent-southern-words-replace-10 = pardon
 
-accent-southern-words-11 = friends
-accent-southern-words-replace-11 = neighbors
+accent-southern-words-11 = goodbye
+accent-southern-words-11-2 = bye
+accent-southern-words-replace-11 = farewell
 
-accent-southern-words-12 = gonna
-accent-southern-words-12-2 = going to
-accent-southern-words-12-3 = about to
-accent-southern-words-replace-12 = fixin' to
+# Warm / address
+accent-southern-words-12 = friend
+accent-southern-words-replace-12 = neighbor
 
-accent-southern-words-13 = thanks
-accent-southern-words-13-2 = thank you
-accent-southern-words-replace-13 = much obliged
+accent-southern-words-13 = friends
+accent-southern-words-replace-13 = neighbors
 
-accent-southern-words-14 = very
-accent-southern-words-replace-14 = mighty
+accent-southern-words-14 = man
+accent-southern-words-14-2 = guy
+accent-southern-words-replace-14 = fella
 
-accent-southern-words-15 = tired
-accent-southern-words-replace-15 = plumb tuckered
+accent-southern-words-15 = people
+accent-southern-words-15-2 = everybody
+accent-southern-words-15-3 = everyone
+accent-southern-words-replace-15 = folks
 
-accent-southern-words-16 = a lot
-accent-southern-words-replace-16 = a whole heap
+# Descriptors
+accent-southern-words-16 = very
+accent-southern-words-replace-16 = mighty
 
-accent-southern-words-17 = man
-accent-southern-words-17-2 = guy
-accent-southern-words-replace-17 = fella
+accent-southern-words-17 = crazy
+accent-southern-words-replace-17 = touched
 
-accent-southern-words-18 = hello
-accent-southern-words-18-2 = hi
-accent-southern-words-replace-18 = why hello
+accent-southern-words-18 = tired
+accent-southern-words-replace-18 = weary
 
-accent-southern-words-19 = food
-accent-southern-words-replace-19 = supper
+accent-southern-words-19 = weird
+accent-southern-words-19-2 = strange
+accent-southern-words-replace-19 = peculiar
 
-accent-southern-words-20 = crazy
-accent-southern-words-replace-20 = touched
+accent-southern-words-20 = angry
+accent-southern-words-20-2 = mad
+accent-southern-words-replace-20 = riled
 
-accent-southern-words-21 = kids
-accent-southern-words-21-2 = children
-accent-southern-words-replace-21 = young'uns
+# "pretty" deliberately excluded -- it's usually an intensifier ("pretty good"), not "beautiful".
+accent-southern-words-21 = beautiful
+accent-southern-words-replace-21 = fetching
 
-# Triad: prefix/suffix tics for the shared drawl engine (DrawlAccentSystem). Warm-genteel register.
-accent-southern-prefix-1 = Well,
-accent-southern-prefix-2 = Why,
-accent-southern-prefix-3 = I do declare,
-accent-southern-prefix-4 = Bless your heart,
-accent-southern-prefix-5 = Well now,
-accent-southern-prefix-6 = Land sakes,
-accent-southern-prefix-7 = Lord have mercy,
-accent-southern-prefix-8 = Mercy me,
+# The bite
+accent-southern-words-22 = idiot
+accent-southern-words-replace-22 = fool
 
-accent-southern-suffix-1 = , sugar
-accent-southern-suffix-2 = , honey
-accent-southern-suffix-3 = , darlin'
-accent-southern-suffix-4 = , y'all
-accent-southern-suffix-5 = , I tell you what
-accent-southern-suffix-6 = , bless your heart
-accent-southern-suffix-7 = , much obliged
-accent-southern-suffix-8 = , I do appreciate it
+accent-southern-words-23 = jerk
+accent-southern-words-replace-23 = sumbitch
+
+accent-southern-words-24 = bullshit
+accent-southern-words-replace-24 = horseshit

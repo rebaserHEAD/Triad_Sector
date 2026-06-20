@@ -27,6 +27,12 @@ public sealed class DrawlAccentSystem : EntitySystem
     // The drawl monophthong: the standalone pronoun "I" becomes "Ah". The (?!') keeps it off
     // contractions ("I'm"/"I'll") so they don't collide with the prefix's capital-handling.
     private static readonly Regex RegexI = new(@"\bI\b(?!')");
+    // Triad: more drawl respellings -- the zero-inflation charm lever. Carries the accent without
+    // adding words. "your" -> "yer", "for" -> "fer", "just" -> "jus'", "of" -> "o'".
+    private static readonly Regex RegexYour = new(@"\byour\b", RegexOptions.IgnoreCase);
+    private static readonly Regex RegexFor = new(@"\bfor\b", RegexOptions.IgnoreCase);
+    private static readonly Regex RegexJust = new(@"\bjust\b", RegexOptions.IgnoreCase);
+    private static readonly Regex RegexOf = new(@"\bof\b", RegexOptions.IgnoreCase);
 
     [Dependency] private readonly IRobustRandom _random = default!;
     [Dependency] private readonly ReplacementAccentSystem _replacement = default!;
@@ -62,6 +68,10 @@ public sealed class DrawlAccentSystem : EntitySystem
         msg = RegexAnd.Replace(msg, "$1'");                                 // and -> an', And -> An', AND -> AN'
         msg = AccentHelpers.ReplaceCasePreserving(msg, RegexDve, "da");     // would've -> woulda, WOULD'VE -> WOULDA
         msg = RegexI.Replace(msg, "Ah");                                    // standalone I -> Ah
+        msg = AccentHelpers.ReplaceCasePreserving(msg, RegexYour, "yer");   // your -> yer
+        msg = AccentHelpers.ReplaceCasePreserving(msg, RegexFor, "fer");    // for -> fer
+        msg = AccentHelpers.ReplaceCasePreserving(msg, RegexJust, "jus'");  // just -> jus'
+        msg = AccentHelpers.ReplaceCasePreserving(msg, RegexOf, "o'");      // of -> o'
 
         if (string.IsNullOrWhiteSpace(msg))
             return msg;
