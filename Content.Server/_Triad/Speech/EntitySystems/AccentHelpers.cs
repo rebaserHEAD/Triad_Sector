@@ -190,4 +190,21 @@ public static class AccentHelpers
 
         return replacement;
     }
+
+    /// <summary>
+    ///     Triad: true if the character at <paramref name="index"/> begins a sentence -- it is the first
+    ///     non-space character, or the nearest preceding non-space character is sentence-ending punctuation.
+    ///     Used to decide whether a respelled always-capital pronoun ("I" -> "Ah") should keep its capital.
+    /// </summary>
+    public static bool IsSentenceStart(string message, int index)
+    {
+        for (var i = index - 1; i >= 0; i--)
+        {
+            if (char.IsWhiteSpace(message[i]))
+                continue;
+            return message[i] is '.' or '!' or '?';
+        }
+
+        return true;
+    }
 }

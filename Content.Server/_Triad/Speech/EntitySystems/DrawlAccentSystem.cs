@@ -61,7 +61,9 @@ public sealed class DrawlAccentSystem : EntitySystem
         msg = AccentHelpers.DropG(msg);
         msg = RegexAnd.Replace(msg, "$1'");                                 // and -> an', And -> An', AND -> AN'
         msg = AccentHelpers.ReplaceCasePreserving(msg, RegexDve, "da");     // would've -> woulda, WOULD'VE -> WOULDA
-        msg = RegexI.Replace(msg, "Ah");                                    // standalone I -> Ah
+        // Triad: "I" is always written capital, so a flat "Ah" injected a stray mid-sentence capital
+        // ("Sorry, Ah have"). Capitalize only at a sentence start; lowercase "ah" mid-sentence.
+        msg = RegexI.Replace(msg, m => AccentHelpers.IsSentenceStart(msg, m.Index) ? "Ah" : "ah"); // I -> Ah / ah
 
         if (string.IsNullOrWhiteSpace(msg))
             return msg;
