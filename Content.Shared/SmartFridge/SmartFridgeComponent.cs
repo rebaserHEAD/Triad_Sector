@@ -43,9 +43,15 @@ public sealed partial class SmartFridgeComponent : Component
     public List<SmartFridgeEntry> Entries = new();
 
     /// <summary>
-    /// A mapping of smart fridge entries to the actual contained contents
+    /// A mapping of smart fridge entries to the actual contained contents.
     /// </summary>
-    [DataField, AutoNetworkedField]
+    /// <remarks>
+    /// Triad: deliberately NOT a [DataField]. The key is a record struct, which can't serialize as a YAML
+    /// mapping key, and the NetEntity values aren't stable across save/load. Persisting it threw
+    /// NotSupportedException and aborted ship saves, so the index is rebuilt from the inventory container
+    /// on load instead (see <see cref="SharedSmartFridgeSystem.OnStartup"/>).
+    /// </remarks>
+    [AutoNetworkedField]
     [Access(typeof(SharedSmartFridgeSystem), Other = AccessPermissions.ReadExecute)]
     public Dictionary<SmartFridgeEntry, HashSet<NetEntity>> ContainedEntries = new();
 

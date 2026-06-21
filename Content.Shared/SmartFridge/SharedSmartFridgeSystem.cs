@@ -9,6 +9,7 @@ using Content.Shared.Verbs;
 using Content.Shared.Whitelist;
 using Robust.Shared.Audio.Systems;
 using Robust.Shared.Containers;
+using Robust.Shared.Network;
 using Robust.Shared.Timing;
 using Robust.Shared.Utility;
 
@@ -19,6 +20,7 @@ public abstract class SharedSmartFridgeSystem : EntitySystem
     [Dependency] private readonly AccessReaderSystem _accessReader = default!;
     [Dependency] private readonly EntityWhitelistSystem _whitelist = default!;
     [Dependency] private readonly IGameTiming _timing = default!;
+    [Dependency] private readonly INetManager _net = default!;
     [Dependency] private readonly SharedAudioSystem _audio = default!;
     [Dependency] private readonly SharedContainerSystem _container = default!;
     [Dependency] private readonly SharedHandsSystem _hands = default!;
@@ -28,6 +30,7 @@ public abstract class SharedSmartFridgeSystem : EntitySystem
     {
         base.Initialize();
 
+        SubscribeLocalEvent<SmartFridgeComponent, ComponentStartup>(OnStartup);
         SubscribeLocalEvent<SmartFridgeComponent, InteractUsingEvent>(OnInteractUsing, after: [typeof(AnchorableSystem)]);
         SubscribeLocalEvent<SmartFridgeComponent, EntInsertedIntoContainerMessage>(OnItemInserted);
         SubscribeLocalEvent<SmartFridgeComponent, EntRemovedFromContainerMessage>(OnItemRemoved);
@@ -77,6 +80,33 @@ public abstract class SharedSmartFridgeSystem : EntitySystem
             return;
 
         args.Handled = DoInsert(ent, args.User, [args.Used], true);
+    }
+
+    // Triad: ContainedEntries is no longer persisted (see SmartFridgeComponent), so it has to be regenerated
+    // from the inventory container after a save/load. Container restore on load doesn't raise insertion
+    // events, so OnItemInserted never fires for restored contents. The client receives the index as networked
+    // state, so only the server rebuilds it.
+    private void OnStartup(Entity<SmartFridgeComponent> ent, ref ComponentStartup args)
+    {
+        if (_net.IsClient)
+            return;
+
+        if (!_container.TryGetContainer(ent, ent.Comp.Container, out var container))
+            return;
+
+        foreach (var item in container.ContainedEntities)
+        {
+            var key = new SmartFridgeEntry(Identity.Name(item, EntityManager));
+            if (!ent.Comp.Entries.Contains(key))
+                ent.Comp.Entries.Add(key);
+
+            ent.Comp.ContainedEntries.TryAdd(key, new());
+            ent.Comp.ContainedEntries[key].Add(GetNetEntity(item));
+        }
+
+        // Keep out-of-stock entries (restored from the persisted Entries list) resolvable in the UI.
+        foreach (var entry in ent.Comp.Entries)
+            ent.Comp.ContainedEntries.TryAdd(entry, new());
     }
 
     private void OnItemInserted(Entity<SmartFridgeComponent> ent, ref EntInsertedIntoContainerMessage args)
