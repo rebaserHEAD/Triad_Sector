@@ -384,6 +384,11 @@
       CornerClutter: NFBaseClutter
       Entrance: NFMiningAirlock
       EntranceFlank: NFMiningWindow
+      # Triad: NF's #2560 dungeon refactor accidentally dropped this key when migrating NFSalvageOutpost onto
+      # the NFPlanetBase pipeline (added 4 of 5 needed keys, missed Junction), so JunctionDunGen logged
+      # "Dungeon data keys are missing" and skipped corridor junction airlocks. NFBaseAirlock matches the value
+      # in upstream Frontier's current (post-refactor) NFSalvageOutpost junction passes.
+      Junction: NFBaseAirlock
       WallMounts: NFBaseWallMounts
       Window: NFMiningWindow
     tiles:
