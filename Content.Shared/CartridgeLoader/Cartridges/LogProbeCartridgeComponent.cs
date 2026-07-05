@@ -1,26 +1,26 @@
 using Content.Shared._DV.CartridgeLoader.Cartridges; // Triad: NanoChatData for TriTalk card scanning
-using Content.Shared.CartridgeLoader.Cartridges;
-﻿using Content.Shared.Paper;
+using Content.Shared.Paper;
 using Robust.Shared.Audio;
+using Robust.Shared.GameStates;
 using Robust.Shared.Prototypes;
 using Robust.Shared.Serialization.TypeSerializers.Implementations.Custom;
 
-namespace Content.Server.CartridgeLoader.Cartridges;
+namespace Content.Shared.CartridgeLoader.Cartridges;
 
-[RegisterComponent, Access(typeof(LogProbeCartridgeSystem))]
-[AutoGenerateComponentPause]
+[RegisterComponent, NetworkedComponent, AutoGenerateComponentState, AutoGenerateComponentPause]
+[Access(typeof(LogProbeCartridgeSystem))]
 public sealed partial class LogProbeCartridgeComponent : Component
 {
     /// <summary>
     /// The name of the scanned entity, sent to clients when they open the UI.
     /// </summary>
-    [DataField]
+    [DataField, AutoNetworkedField]
     public string EntityName = string.Empty;
 
     /// <summary>
     /// The list of pulled access logs
     /// </summary>
-    [DataField, ViewVariables]
+    [DataField, AutoNetworkedField]
     public List<PulledAccessLog> PulledAccessLogs = new();
 
     // Triad begin: TriTalk card scanning
@@ -34,7 +34,7 @@ public sealed partial class LogProbeCartridgeComponent : Component
     /// <summary>
     /// The sound to make when we scan something with access
     /// </summary>
-    [DataField, ViewVariables(VVAccess.ReadWrite)]
+    [DataField]
     public SoundSpecifier SoundScan = new SoundPathSpecifier("/Audio/Machines/scan_finish.ogg", AudioParams.Default.WithVariation(0.25f));
 
     /// <summary>
@@ -55,6 +55,6 @@ public sealed partial class LogProbeCartridgeComponent : Component
     /// <summary>
     /// When anyone is allowed to spawn another printout.
     /// </summary>
-    [DataField(customTypeSerializer: typeof(TimeOffsetSerializer)), AutoPausedField]
+    [DataField(customTypeSerializer: typeof(TimeOffsetSerializer)), AutoNetworkedField, AutoPausedField]
     public TimeSpan NextPrintAllowed = TimeSpan.Zero;
 }

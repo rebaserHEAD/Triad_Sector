@@ -76,7 +76,8 @@
       PDA-pai: !type:ContainerSlot {}
       PDA-book: !type:ContainerSlot {} # Frontier
       Cartridge-Slot: !type:ContainerSlot {}
-      program-container: !type:Container
+      preinstalled-program-container: !type:Container
+      removable-program-container: !type:Container
       PDA-projector: !type:ContainerSlot {} # Triad
   - type: ItemSlots
   - type: Clothing
@@ -100,13 +101,6 @@
 #    range: 500 # Frontier
   - type: CartridgeLoader
     uiKey: enum.PdaUiKey.Key
-    preinstalled:
-      - CrewManifestCartridge
-      - NotekeeperCartridge
-      - NewsReaderCartridge
-      - BountyContractsCartridge # Frontier
-      - AstroNavCartridge # Frontier
-      - TriTalkCartridge # Triad
     cartridgeSlot:
       priority: -1
       name: device-pda-slot-component-slot-name-cartridge
@@ -115,6 +109,16 @@
       whitelist:
         components:
           - Cartridge
+  - type: EntityTableContainerFill
+    containers:
+      preinstalled-program-container: !type:AllSelector
+        children:
+        - id: CrewManifestCartridge
+        - id: NotekeeperCartridge
+        - id: NewsReaderCartridge
+        - id: BountyContractsCartridge # Frontier
+        - id: AstroNavCartridge # Frontier
+        - id: TriTalkCartridge # Triad
   - type: ActivatableUI
     key: enum.PdaUiKey.Key
     singleUser: true
@@ -176,31 +180,34 @@
   id: BaseSecurityPDA
   abstract: true
   components:
-  - type: CartridgeLoader
-    preinstalled:
-    - CrewManifestCartridge
-    - NotekeeperCartridge
-    - NewsReaderCartridge
-    - BountyContractsCartridge # Frontier
-    - AstroNavCartridge # Frontier
-    - WantedListCartridge
-    - TriTalkCartridge # Triad
+  - type: EntityTableContainerFill
+    containers:
+      preinstalled-program-container: !type:AllSelector
+        children:
+        - id: CrewManifestCartridge
+        - id: NotekeeperCartridge
+        - id: NewsReaderCartridge
+        - id: BountyContractsCartridge # Frontier
+        - id: AstroNavCartridge # Frontier
+        - id: WantedListCartridge
+        - id: TriTalkCartridge # Triad
 
 - type: entity
   parent: BasePDA
   id: BaseMedicalPDA # Mono: BaseMedicalPDA reinstated
   abstract: true
   components:
-  - type: CartridgeLoader
-    uiKey: enum.PdaUiKey.Key
-    preinstalled:
-    - CrewManifestCartridge
-    - NotekeeperCartridge
-    - NewsReaderCartridge
-    - BountyContractsCartridge # Frontier
-    - AstroNavCartridge # Frontier
-    - MedTekCartridge
-    - TriTalkCartridge # Triad
+  - type: EntityTableContainerFill
+    containers:
+      preinstalled-program-container: !type:AllSelector
+        children:
+        - id: CrewManifestCartridge
+        - id: NotekeeperCartridge
+        - id: NewsReaderCartridge
+        - id: BountyContractsCartridge # Frontier
+        - id: AstroNavCartridge # Frontier
+        - id: MedTekCartridge
+        - id: TriTalkCartridge # Triad
   # End Frontier
 
 - type: entity
@@ -907,14 +914,16 @@
     accentHColor: "#447987"
   - type: Icon
     state: pda-hos
-  - type: CartridgeLoader
-    preinstalled:
-    - CrewManifestCartridge
-    - NotekeeperCartridge
-    - NewsReaderCartridge
-    - WantedListCartridge
-    - LogProbeCartridge
-    - TriTalkCartridge # Triad
+  - type: EntityTableContainerFill
+    containers:
+      preinstalled-program-container: !type:AllSelector
+        children:
+        - id: CrewManifestCartridge
+        - id: NotekeeperCartridge
+        - id: NewsReaderCartridge
+        - id: WantedListCartridge
+        - id: LogProbeCartridge
+        - id: TriTalkCartridge # Triad
 
 - type: entity
   parent: BaseSecurityPDA
@@ -975,17 +984,18 @@
     borderColor: "#00842e"
   - type: Icon
     state: pda-centcom
-  - type: CartridgeLoader
-    uiKey: enum.PdaUiKey.Key
-    preinstalled:
-      - CrewManifestCartridge
-      - NotekeeperCartridge
-      - NewsReaderCartridge
-      - MedTekCartridge
-      - WantedListCartridge
-      - LogProbeCartridge
-      - AstroNavCartridge
-      - TriTalkCartridge # Triad
+  - type: EntityTableContainerFill
+    containers:
+      preinstalled-program-container: !type:AllSelector
+        children:
+        - id: CrewManifestCartridge
+        - id: NotekeeperCartridge
+        - id: NewsReaderCartridge
+        - id: MedTekCartridge
+        - id: WantedListCartridge
+        - id: LogProbeCartridge
+        - id: AstroNavCartridge
+        - id: TriTalkCartridge # Triad
 
 - type: entity
   parent: CentcomPDA
@@ -1007,17 +1017,19 @@
     isEnabled: true
     attachedToSuit: true # Mono
   - type: CartridgeLoader
-    uiKey: enum.PdaUiKey.Key
     notificationsEnabled: false
-    preinstalled:
-      - CrewManifestCartridge
-      - NotekeeperCartridge
-      - NewsReaderCartridge
-      - LogProbeCartridge
-      - WantedListCartridge
-      - MedTekCartridge
-      - AstroNavCartridge
-      - TriTalkCartridge # Triad
+  - type: EntityTableContainerFill
+    containers:
+      preinstalled-program-container: !type:AllSelector
+        children:
+        - id: CrewManifestCartridge
+        - id: NotekeeperCartridge
+        - id: NewsReaderCartridge
+        - id: LogProbeCartridge
+        - id: WantedListCartridge
+        - id: MedTekCartridge
+        - id: AstroNavCartridge
+        - id: TriTalkCartridge # Triad
   - type: Tag #  Ignore Chameleon tags
     tags:
     - DoorBumpOpener
@@ -1132,11 +1144,12 @@
     borderColor: "#891417"
   - type: Icon
     state: pda-syndi
-  - type: CartridgeLoader
-    uiKey: enum.PdaUiKey.Key
-    preinstalled:
-      - NotekeeperCartridge
-      - AstroNavCartridge # Frontier
+  - type: EntityTableContainerFill
+    containers:
+      preinstalled-program-container: !type:AllSelector
+        children:
+        - id: NotekeeperCartridge
+        - id: AstroNavCartridge # Frontier
 
 - type: entity
   parent: BaseSecurityPDA
@@ -1158,18 +1171,19 @@
     accentVColor: "#447987"
   - type: Icon
     state: pda-ert
-  - type: CartridgeLoader
-    uiKey: enum.PdaUiKey.Key
-    preinstalled:
-      - CrewManifestCartridge
-      - NotekeeperCartridge
-      - NewsReaderCartridge
-      - MedTekCartridge
-      - WantedListCartridge
-      - LogProbeCartridge
-      - AstroNavCartridge
-      - MailMetricsCartridge # Frontier
-      - TriTalkCartridge # Triad
+  - type: EntityTableContainerFill
+    containers:
+      preinstalled-program-container: !type:AllSelector
+        children:
+        - id: CrewManifestCartridge
+        - id: NotekeeperCartridge
+        - id: NewsReaderCartridge
+        - id: MedTekCartridge
+        - id: WantedListCartridge
+        - id: LogProbeCartridge
+        - id: AstroNavCartridge
+        - id: MailMetricsCartridge # Frontier
+        - id: TriTalkCartridge # Triad
   - type: Geiger # Mono
     showExamine: true
     showControl: true
@@ -1342,14 +1356,16 @@
     borderColor: "#774705"
   - type: Icon
     state: pda-detective
-  - type: CartridgeLoader
-    preinstalled:
-    - CrewManifestCartridge
-    - NotekeeperCartridge
-    - NewsReaderCartridge
-    - WantedListCartridge
-    - LogProbeCartridge
-    - TriTalkCartridge # Triad
+  - type: EntityTableContainerFill
+    containers:
+      preinstalled-program-container: !type:AllSelector
+        children:
+        - id: CrewManifestCartridge
+        - id: NotekeeperCartridge
+        - id: NewsReaderCartridge
+        - id: WantedListCartridge
+        - id: LogProbeCartridge
+        - id: TriTalkCartridge # Triad
 
 - type: entity
   parent: BaseMedicalPDA
@@ -1370,14 +1386,16 @@
     accentVColor: "#d7d7d0"
   - type: Icon
     state: pda-brigmedic
-  - type: CartridgeLoader
-    preinstalled:
-    - CrewManifestCartridge
-    - NotekeeperCartridge
-    - NewsReaderCartridge
-    - WantedListCartridge
-    - MedTekCartridge
-    - TriTalkCartridge # Triad
+  - type: EntityTableContainerFill
+    containers:
+      preinstalled-program-container: !type:AllSelector
+        children:
+        - id: CrewManifestCartridge
+        - id: NotekeeperCartridge
+        - id: NewsReaderCartridge
+        - id: WantedListCartridge
+        - id: MedTekCartridge
+        - id: TriTalkCartridge # Triad
 
 - type: entity
   parent: ClownPDA
