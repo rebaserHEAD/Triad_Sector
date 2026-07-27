@@ -88,6 +88,15 @@
                                  Text="{controls:Loc 'shuttle-console-autopilot-button'}"
                                  TextAlign="Center"
                                  StyleClasses="ButtonSquare"/>
+                <!-- Triad - Autopilot flight status + cancel -->
+                <controls:Label Name="MapAutopilotStatusLabel"
+                                Text="{controls:Loc 'shuttle-console-autopilot-status-idle'}"
+                                HorizontalAlignment="Center"/>
+                <controls:Button Name="MapAutopilotCancelButton"
+                                 Text="{controls:Loc 'shuttle-console-autopilot-cancel-button'}"
+                                 TextAlign="Center"
+                                 StyleClasses="ButtonSquare"
+                                 Disabled="True"/>
                 <controls:Button Name="MapRebuildButton"
                         Text="{controls:Loc 'shuttle-console-map-rebuild'}"
                         TextAlign="Center"

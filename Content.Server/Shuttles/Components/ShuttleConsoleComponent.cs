@@ -67,6 +67,12 @@ namespace Content.Server.Shuttles.Components
         public SoundSpecifier? AutopilotDoneSound = new SoundPathSpecifier("/Audio/Effects/Shuttle/radar_ping.ogg");
         // </Mono>
 
+        // Triad: last speed-limiter value set at this helm. The live setting sits on the pilot's
+        // per-session PilotComponent and evaporates at dismount; autopilot flight orders read this
+        // so the ship's standing speed policy survives crew changes.
+        [DataField]
+        public float? StoredMaxVelocity;
+
         // Network Port Button Source Ports
         [DataField]
         public List<ProtoId<SourcePortPrototype>> SourcePorts = new()

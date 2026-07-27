@@ -23,6 +23,9 @@ public sealed partial class ShuttleConsoleWindow : FancyWindow,
     // Mono
     public event Action<MapCoordinates, Angle>? RequestAutopilot;
 
+    // Triad
+    public event Action? RequestAutopilotCancel;
+
     public event Action<NetEntity, NetEntity>? DockRequest;
     public event Action<NetEntity>? UndockRequest;
     public event Action<List<NetEntity>>? UndockAllRequest;
@@ -62,6 +65,12 @@ public sealed partial class ShuttleConsoleWindow : FancyWindow,
         MapContainer.RequestAutopilot += (coords, angle) =>
         {
             RequestAutopilot?.Invoke(coords, angle);
+        };
+
+        // Triad
+        MapContainer.RequestAutopilotCancel += () =>
+        {
+            RequestAutopilotCancel?.Invoke();
         };
 
         DockContainer.DockRequest += (entity, netEntity) =>

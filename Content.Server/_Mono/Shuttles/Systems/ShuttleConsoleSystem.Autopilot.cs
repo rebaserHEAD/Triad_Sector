@@ -1,6 +1,5 @@
 using Content.Server._Mono.NPC.HTN;
 using Content.Server._Mono.NPC.HTN.Operators;
-using Content.Server._Triad.Shuttles;
 using Content.Server.NPC.HTN;
 using Content.Server.Physics.Controllers;
 using Content.Server.Power.Components;
@@ -8,6 +7,7 @@ using Content.Server.Power.EntitySystems;
 using Content.Shared.Popups;
 using Content.Server.Shuttles.Components;
 using Content.Shared._Mono.Shuttles;
+using Content.Shared._Triad.Shuttles;
 using Content.Shared.Construction.Components;
 using Content.Shared.Shuttles.Components;
 using Robust.Shared.Audio;
@@ -34,6 +34,7 @@ public sealed partial class ShuttleConsoleAutopilotSystem : EntitySystem
         base.Initialize();
 
         SubscribeLocalEvent<ShuttleConsoleComponent, ShuttleConsoleAutopilotPositionMessage>(OnAutopilotMessage);
+        SubscribeLocalEvent<ShuttleConsoleComponent, ShuttleConsoleAutopilotCancelMessage>(OnAutopilotCancel); // Triad
         SubscribeLocalEvent<ShuttleConsoleComponent, SteeringDoneEvent>(OnSteeringDone);
         SubscribeLocalEvent<ShuttleAutopilotComponent, ComponentShutdown>(OnAutopilotShutdown); // Triad
     }
@@ -47,15 +48,31 @@ public sealed partial class ShuttleConsoleAutopilotSystem : EntitySystem
         // var blackboard = htn.Blackboard;
         // blackboard.SetValue(ent.Comp.AutopilotTargetKey, _transform.ToCoordinates(args.Coordinates));
         // blackboard.SetValue(ent.Comp.AutopilotRotationKey, args.Angle + MathF.PI);
+        // One flight order per grid: silently drop any other console's autopilot on this grid,
+        // or both steerers register as pilots and the mover averages their inputs into garbage.
+        var gridUid = Transform(ent).GridUid;
+        var others = EntityQueryEnumerator<ShuttleAutopilotComponent, TransformComponent>();
+        while (others.MoveNext(out var otherUid, out _, out var otherXform))
+        {
+            if (otherUid == ent.Owner || otherXform.GridUid != gridUid)
+                continue;
+
+            _steering.Stop(otherUid);
+            RemCompDeferred<ShuttleAutopilotComponent>(otherUid);
+        }
+
         var autopilot = EnsureComp<ShuttleAutopilotComponent>(ent);
         autopilot.Target = _transform.ToCoordinates(args.Coordinates);
         autopilot.TargetAngle = args.Angle + MathF.PI;
 
-        // Obey the helm speed limiter: the setting lives on the ordering pilot's PilotComponent
-        // (set per piloting session, not on the console), so stamp it onto the flight order now.
+        // Obey the helm speed limiter. The console keeps the last value set at this helm (the
+        // live setting lives on the pilot's per-session PilotComponent, so it would evaporate at
+        // dismount); fall back to the ordering pilot's live value for pre-existing sessions.
         // The dampening mode itself needs no handling here; its drag applies to the grid physics
         // no matter who is flying.
-        autopilot.MaxSpeed = TryComp<PilotComponent>(args.Actor, out var pilot) ? pilot.SetMaxVelocity : null;
+        autopilot.MaxSpeed = ent.Comp.StoredMaxVelocity
+            ?? (TryComp<PilotComponent>(args.Actor, out var pilot) ? pilot.SetMaxVelocity : null);
+        Dirty(ent.Owner, autopilot);
 
         if (Engage(ent, autopilot) == null)
             RemCompDeferred<ShuttleAutopilotComponent>(ent);
@@ -134,6 +151,13 @@ public sealed partial class ShuttleConsoleAutopilotSystem : EntitySystem
         _steering.Stop(uid);
         RemCompDeferred<ShuttleAutopilotComponent>(uid);
         RaiseLocalEvent(uid, new SteeringDoneEvent(), false);
+    }
+
+    private void OnAutopilotCancel(Entity<ShuttleConsoleComponent> ent, ref ShuttleConsoleAutopilotCancelMessage args)
+    {
+        // Finish raises SteeringDoneEvent, so the disengage gets the same audible feedback as arrival.
+        if (HasComp<ShuttleAutopilotComponent>(ent))
+            Finish(ent);
     }
 
     private void OnAutopilotShutdown(Entity<ShuttleAutopilotComponent> ent, ref ComponentShutdown args)

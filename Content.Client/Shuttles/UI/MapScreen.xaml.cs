@@ -2,6 +2,7 @@ using System.Linq;
 using System.Numerics;
 using Content.Client.Shuttles.Systems;
 using Content.Shared._Mono.Detection;
+using Content.Shared._Triad.Shuttles;
 using Content.Shared._NF.Shuttles.Components;
 using Content.Shared.Shuttles.BUIStates;
 using Content.Shared.Shuttles.Components;
@@ -65,6 +66,9 @@ public sealed partial class MapScreen : BoxContainer
     // Mono
     public event Action<MapCoordinates, Angle>? RequestAutopilot;
 
+    // Triad
+    public event Action? RequestAutopilotCancel;
+
     private readonly Dictionary<MapId, BoxContainer> _mapHeadings = new();
     private readonly Dictionary<MapId, List<IMapObject>> _mapObjects = new();
     private readonly List<(MapId mapId, IMapObject mapobj)> _pendingMapObjects = new();
@@ -93,6 +97,7 @@ public sealed partial class MapScreen : BoxContainer
 
         MapFTLButton.OnToggled += FtlPreviewToggled;
         MapAutopilotButton.OnToggled += AutopilotPreviewToggled; // Mono
+        MapAutopilotCancelButton.OnPressed += _ => RequestAutopilotCancel?.Invoke(); // Triad
 
         _ftlStyle = new StyleBoxFlat(Color.LimeGreen);
         FTLBar.ForegroundStyleBoxOverride = _ftlStyle;
@@ -597,6 +602,26 @@ public sealed partial class MapScreen : BoxContainer
 
         var progress = _ftlTime.ProgressAt(curTime);
         FTLBar.Value = float.IsFinite(progress) ? progress : 1;
+
+        // Triad: autopilot flight-order status readout
+        if (_console is { } console
+            && _shuttleEntity is { } shuttle
+            && _entManager.TryGetComponent<ShuttleAutopilotComponent>(console, out var autopilot))
+        {
+            var target = _xformSystem.ToMapCoordinates(autopilot.Target);
+            var shipPos = _xformSystem.GetMapCoordinates(shuttle);
+            var distance = target.MapId == shipPos.MapId
+                ? (target.Position - shipPos.Position).Length()
+                : 0f;
+            MapAutopilotStatusLabel.Text = Loc.GetString("shuttle-console-autopilot-status-engaged",
+                ("distance", (int) MathF.Round(distance)));
+            MapAutopilotCancelButton.Disabled = false;
+        }
+        else
+        {
+            MapAutopilotStatusLabel.Text = Loc.GetString("shuttle-console-autopilot-status-idle");
+            MapAutopilotCancelButton.Disabled = true;
+        }
     }
 
     protected override void Draw(DrawingHandleScreen handle)

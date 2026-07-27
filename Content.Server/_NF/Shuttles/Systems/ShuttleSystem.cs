@@ -88,6 +88,7 @@ public sealed partial class ShuttleSystem
             maxSpeed = Math.Max(speed, 0f);
 
         pilot.SetMaxVelocity = maxSpeed;
+        component.StoredMaxVelocity = maxSpeed; // Triad: persist the helm's speed policy for autopilot
 
         // Refresh the shuttle consoles to update the UI
         _console.RefreshShuttleConsoles(xform.GridUid.Value);

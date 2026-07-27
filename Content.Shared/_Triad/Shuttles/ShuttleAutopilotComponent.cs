@@ -1,13 +1,14 @@
+using Robust.Shared.GameStates;
 using Robust.Shared.Map;
 
-namespace Content.Server._Triad.Shuttles;
+namespace Content.Shared._Triad.Shuttles;
 
 /// <summary>
 /// Active autopilot flight order on a shuttle console. Present only while autopilot is engaged;
-/// <see cref="Content.Server._Mono.Shuttles.ShuttleConsoleAutopilotSystem"/> drives the steering
-/// servo from it directly, with no HTN brain involved.
+/// the server's ShuttleConsoleAutopilotSystem drives the steering servo from it directly, with
+/// no HTN brain involved. Networked so the console UI can show flight status.
 /// </summary>
-[RegisterComponent]
+[RegisterComponent, NetworkedComponent]
 public sealed partial class ShuttleAutopilotComponent : Component
 {
     /// <summary>
@@ -24,8 +25,8 @@ public sealed partial class ShuttleAutopilotComponent : Component
     public Angle TargetAngle;
 
     /// <summary>
-    /// Speed limit for the flight, stamped from the ordering pilot's helm speed limiter
-    /// when the destination is set. Null = no limit.
+    /// Speed limit for the flight, stamped from the helm's stored speed limiter when the
+    /// destination is set. Null = no limit.
     /// </summary>
     [ViewVariables(VVAccess.ReadWrite)]
     public float? MaxSpeed;
