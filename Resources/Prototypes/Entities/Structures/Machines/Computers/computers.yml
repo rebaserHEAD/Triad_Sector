@@ -195,9 +195,11 @@
       respectZoom: true
       rotate: true
       bounds: "-0.5,-0.5,0.5,0.5"
-  - type: HTN
-    rootTask:
-      task: AutopilotShuttleCompound
+  # Triad: autopilot no longer rides the NPC HTN stack; ShuttleConsoleAutopilotSystem
+  # drives the steering servo directly (see ShuttleAutopilotComponent).
+  # - type: HTN
+  #   rootTask:
+  #     task: AutopilotShuttleCompound
 
 - type: entity
   parent: [BaseComputerShuttle, BaseShuttleIntercom] # Frontier - BaseShuttleIntercom
