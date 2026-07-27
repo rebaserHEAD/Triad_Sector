@@ -22,4 +22,11 @@ public sealed partial class ShuttleAutopilotComponent : Component
     /// </summary>
     [ViewVariables(VVAccess.ReadWrite)]
     public Angle TargetAngle;
+
+    /// <summary>
+    /// Speed limit for the flight, stamped from the ordering pilot's helm speed limiter
+    /// when the destination is set. Null = no limit.
+    /// </summary>
+    [ViewVariables(VVAccess.ReadWrite)]
+    public float? MaxSpeed;
 }

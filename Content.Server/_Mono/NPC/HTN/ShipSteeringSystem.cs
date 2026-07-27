@@ -158,6 +158,7 @@ public sealed partial class ShipSteeringSystem : EntitySystem
         };
 
         args.Input = ProcessMovement(ref context, config, ent.Comp);
+        args.SetMaxVelocity = ent.Comp.MaxVelocity; // Triad: echo the helm speed limiter (null = uncapped)
     }
 
     /// <summary>

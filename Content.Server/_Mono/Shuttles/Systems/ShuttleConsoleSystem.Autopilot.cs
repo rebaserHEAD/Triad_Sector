@@ -9,6 +9,7 @@ using Content.Shared.Popups;
 using Content.Server.Shuttles.Components;
 using Content.Shared._Mono.Shuttles;
 using Content.Shared.Construction.Components;
+using Content.Shared.Shuttles.Components;
 using Robust.Shared.Audio;
 using Robust.Shared.Audio.Systems;
 
@@ -49,6 +50,12 @@ public sealed partial class ShuttleConsoleAutopilotSystem : EntitySystem
         var autopilot = EnsureComp<ShuttleAutopilotComponent>(ent);
         autopilot.Target = _transform.ToCoordinates(args.Coordinates);
         autopilot.TargetAngle = args.Angle + MathF.PI;
+
+        // Obey the helm speed limiter: the setting lives on the ordering pilot's PilotComponent
+        // (set per piloting session, not on the console), so stamp it onto the flight order now.
+        // The dampening mode itself needs no handling here; its drag applies to the grid physics
+        // no matter who is flying.
+        autopilot.MaxSpeed = TryComp<PilotComponent>(args.Actor, out var pilot) ? pilot.SetMaxVelocity : null;
 
         if (Engage(ent, autopilot) == null)
             RemCompDeferred<ShuttleAutopilotComponent>(ent);
@@ -108,6 +115,7 @@ public sealed partial class ShuttleConsoleAutopilotSystem : EntitySystem
         comp.InRangeRotation = autopilot.TargetAngle;
         comp.LeadingEnabled = false;
         comp.MaxRotateRate = 0.01f;
+        comp.MaxVelocity = autopilot.MaxSpeed;
         comp.Mode = ShipSteeringMode.GoToRange;
         comp.NoFinish = false;
         comp.Range = 40f;

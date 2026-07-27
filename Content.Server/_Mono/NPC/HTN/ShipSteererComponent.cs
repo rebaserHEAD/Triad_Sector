@@ -138,6 +138,16 @@ public sealed partial class ShipSteererComponent : Component
     [ViewVariables(VVAccess.ReadWrite)]
     public float? MaxRotateRate = null;
 
+    // Triad: velocity cap forwarded to the mover, mirroring the helm speed limiter that human
+    // pilots supply via PilotComponent.SetMaxVelocity. The mover uncaps the whole ship whenever
+    // any input source supplies null, so the steerer must echo the cap or autopilot ignores the
+    // console's speed setting. Null = no cap, which keeps NPC drone behavior unchanged.
+    /// <summary>
+    /// Velocity cap handed to the mover while steering, if not null.
+    /// </summary>
+    [ViewVariables(VVAccess.ReadWrite)]
+    public float? MaxVelocity = null;
+
     /// <summary>
     /// Check for obstacles for collision avoidance at most this far.
     /// </summary>
