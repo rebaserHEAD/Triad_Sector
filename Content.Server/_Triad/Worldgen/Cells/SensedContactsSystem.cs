@@ -13,6 +13,7 @@ using Robust.Server.Player;
 using Robust.Shared.Configuration;
 using Robust.Shared.Enums;
 using Robust.Shared.Player;
+using Robust.Shared.Timing;
 
 namespace Content.Server._Triad.Worldgen.Cells;
 
@@ -28,6 +29,7 @@ public sealed class SensedContactsSystem : EntitySystem
 {
     [Dependency] private readonly CellDescribeSystem _describe = default!;
     [Dependency] private readonly IConfigurationManager _cfg = default!;
+    [Dependency] private readonly IGameTiming _timing = default!;
     [Dependency] private readonly IPlayerManager _playerManager = default!;
     [Dependency] private readonly TransformSystem _xformSys = default!;
 
@@ -56,7 +58,7 @@ public sealed class SensedContactsSystem : EntitySystem
     {
         base.Initialize();
 
-        Subs.CVar(_cfg, TriadCCVars.WorldgenSensedEnabled, v => _enabled = v, true);
+        Subs.CVar(_cfg, TriadCCVars.WorldgenSensedEnabled, OnSensedEnabledChanged, true);
         Subs.CVar(_cfg, TriadCCVars.WorldgenContactAddsPerPoll, v => _addsPerPoll = v, true);
         Subs.CVar(_cfg, TriadCCVars.WorldgenSensedRange, v => _sensedRange = v, true);
         Subs.CVar(_cfg, MonoCVars.VisualDetectionMultiplier, v => _visualMul = v, true);
@@ -70,6 +72,25 @@ public sealed class SensedContactsSystem : EntitySystem
         base.Shutdown();
 
         _playerManager.PlayerStatusChanged -= OnPlayerStatusChanged;
+    }
+
+    /// <summary>
+    ///     Drops every known-set when the tier is switched off. Nothing maintains those sets while
+    ///     the tier is disabled, so switching it back on hands each console a full reset instead of
+    ///     diffing against a set that has been sitting still. Same shape the decal and gas-overlay
+    ///     systems use to drop their per-session sent-state on the NetPVS toggle. This is hygiene,
+    ///     not a visual fix: record ids never recycle and removes are uncapped, so a stale set
+    ///     would converge on its own.
+    /// </summary>
+    private void OnSensedEnabledChanged(bool value)
+    {
+        if (value == _enabled)
+            return;
+
+        _enabled = value;
+
+        if (!value)
+            _known.Clear();
     }
 
     private void OnContactsRequested(RequestSensedContactsEvent ev, EntitySessionEventArgs args)
@@ -108,8 +129,11 @@ public sealed class SensedContactsSystem : EntitySystem
                 _tempRemovesCache.Add(id);
         }
 
-        if (_tempAddsCache.Count == 0 && _tempRemovesCache.Count == 0 && !isNew)
-            return;
+        // An empty delta is still sent, on purpose: the reply is the client's keepalive. The client
+        // only stamps a console's last-updated time when a delta lands, and blanks that console
+        // after its own staleness window of silence. A settled picture (parked, docked,
+        // station-keeping, or a nav UI reopened onto an unchanged set) produces no adds and no
+        // removes forever, so staying quiet here reads as the debris having vanished.
 
         // Reflect exactly what is about to be sent: capped adds included, uncapped removes included.
         foreach (var add in _tempAddsCache)
@@ -144,6 +168,12 @@ public sealed class SensedContactsSystem : EntitySystem
         var consoleMap = Transform(consoleUid).MapUid;
         if (consoleMap is null)
             return;
+
+        // Timed because this walk is unindexed and its input never shrinks in-round: cost is
+        // consoles x live records, twice a second. If the perception side ever starts eating the
+        // residency win, it shows up here first.
+        var scanStart = _timing.RealTime;
+        SensedMetrics.ContactScanRecords.Observe(_describe.Records.Count);
 
         var consolePos = _xformSys.GetWorldPosition(consoleUid);
         var maxRangeSq = radar.MaxRange * radar.MaxRange;
@@ -184,6 +214,8 @@ public sealed class SensedContactsSystem : EntitySystem
             _tempVisibleCache.Add(record);
             _tempVisibleIdsCache.Add(record.Id);
         }
+
+        SensedMetrics.ContactScan.Observe((_timing.RealTime - scanStart).TotalSeconds);
     }
 
     /// <summary>
