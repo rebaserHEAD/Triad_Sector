@@ -11,11 +11,17 @@ public sealed class SensedContactsSystem : EntitySystem
 {
     [Dependency] private readonly IGameTiming _timing = default!;
 
+    // These two are coupled: the server answers every poll, so StaleAfter divided by
+    // RequestThrottle is the number of consecutive dropped replies a console tolerates before it
+    // blanks. Ten is a sane UDP margin. Do not raise the throttle without raising StaleAfter too.
     private static readonly TimeSpan RequestThrottle = TimeSpan.FromMilliseconds(500);
     private static readonly TimeSpan StaleAfter = TimeSpan.FromSeconds(5);
     private static readonly SensedContactData[] EmptyContacts = Array.Empty<SensedContactData>();
 
-    private TimeSpan _lastRequestTime = TimeSpan.Zero;
+    // Keyed per console, matching the caches below. A single system-wide scalar let whichever
+    // radar control ticked first in UI tree order consume the gate every cycle, so any second
+    // open console never sent a request and rendered nothing.
+    private readonly Dictionary<NetEntity, TimeSpan> _lastRequestTime = new();
 
     private readonly Dictionary<NetEntity, Dictionary<int, SensedContactData>> _contacts = new();
     private readonly Dictionary<NetEntity, TimeSpan> _lastUpdated = new();
@@ -52,19 +58,24 @@ public sealed class SensedContactsSystem : EntitySystem
 
     /// <summary>
     /// Requests a refresh of sensed contacts for the given console, throttled to one network
-    /// send per <see cref="RequestThrottle"/> across the whole system.
+    /// send per <see cref="RequestThrottle"/> per console. Each console gates independently, so
+    /// several radar screens can be open at once without starving one another.
     /// </summary>
     public void RequestContacts(EntityUid console)
     {
         if (!Exists(console))
             return;
 
-        if (_timing.CurTime - _lastRequestTime < RequestThrottle)
-            return;
-
-        _lastRequestTime = _timing.CurTime;
-
         var netConsole = GetNetEntity(console);
+
+        if (_lastRequestTime.TryGetValue(netConsole, out var lastRequest)
+            && _timing.CurTime - lastRequest < RequestThrottle)
+        {
+            return;
+        }
+
+        _lastRequestTime[netConsole] = _timing.CurTime;
+
         RaiseNetworkEvent(new RequestSensedContactsEvent(netConsole));
     }
 
