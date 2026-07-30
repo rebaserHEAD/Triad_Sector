@@ -39,11 +39,32 @@ public sealed class DebrisMaterializeQueueSystem : BaseWorldSystem
     /// </summary>
     private const byte MaxBlockedAttempts = 3;
 
+    /// <summary>
+    ///     Seconds between re-orderings of the queue. Sorting every tick charges an
+    ///     O(n * loaders) key sweep to every frame, and the order barely ages in between: a loader
+    ///     at 50 m/s moves about twelve metres per pass against a panic reach measured in
+    ///     hundreds.
+    ///     Ordering is not merely cosmetic, though. The drain loop breaks at the first record that
+    ///     is over budget and outside panic range, so the panic escape only ever tests records the
+    ///     loop actually reaches. The sort is what keeps urgent records at the head where that
+    ///     escape can see them.
+    /// </summary>
+    private const float SortInterval = 0.25f;
+
     private bool _enabled;
     private float _budgetMs;
     private float _panicRange;
 
+    private float _sortAccumulator;
+
     private readonly List<DebrisRecord> _queue = new();
+
+    /// <summary>
+    ///     Loader pose snapshot, rebuilt per ordering pass. Only <see cref="SortByArrival"/> may
+    ///     read this: it is up to <see cref="SortInterval"/> stale, so no correctness path can use
+    ///     it. Live checks such as <see cref="WithinPanicRange"/> re-query the world themselves.
+    /// </summary>
+    private readonly List<(Vector2 Pos, Vector2 Vel)> _loaders = new();
     private List<Entity<MapGridComponent>> _gridsIntersecting = new();
 
     public override void Initialize()
@@ -89,6 +110,12 @@ public sealed class DebrisMaterializeQueueSystem : BaseWorldSystem
             record.BlockedAttempts = 0;
             record.Queued = true;
             _queue.Add(record);
+
+            // Arm the next pass to re-order. New records land on the tail with no arrival key, so
+            // a genuinely urgent one would otherwise sit behind the whole queue, out of reach of
+            // the drain loop's panic escape, until the interval elapsed. Cell loads are rare
+            // enough that this does not put the sort back on the tick.
+            _sortAccumulator = SortInterval;
         }
     }
 
@@ -119,18 +146,36 @@ public sealed class DebrisMaterializeQueueSystem : BaseWorldSystem
     {
         if (!_enabled || _queue.Count == 0)
         {
+            // Arm the next pass to sort. A queue refilling from empty is in insertion order, and
+            // the accumulator does not advance while we are returning early here.
+            _sortAccumulator = SortInterval;
             SensedMetrics.MaterializeQueueDepth.Set(_queue.Count);
             return;
         }
 
         var budget = TimeSpan.FromMilliseconds(_budgetMs);
-        var start = _timing.RealTime;
         var panicSq = _panicRange * _panicRange;
 
-        SortByArrival();
+        _sortAccumulator += frameTime;
+        if (_sortAccumulator >= SortInterval)
+        {
+            _sortAccumulator -= SortInterval;
+            SortByArrival();
+        }
+
+        // Taken after the sort, not before. The budget bounds spawn work; charging the ordering
+        // pass to it is what let a deep queue eat its own budget, break before building anything,
+        // and come back next tick with a longer queue and a slower sort.
+        var start = _timing.RealTime;
+
+        // Snapshot the length before walking it. Materialize re-queues a blocked record onto the
+        // tail of this same list, so a live bound walks straight into the retry and burns all
+        // MaxBlockedAttempts, and all their broadphase queries, inside one tick. Re-queued entries
+        // sit past this bound and get their next attempt on the next pass, one per pass.
+        var count = _queue.Count;
 
         var index = 0;
-        for (; index < _queue.Count; index++)
+        for (; index < count; index++)
         {
             var record = _queue[index];
 
@@ -163,11 +208,19 @@ public sealed class DebrisMaterializeQueueSystem : BaseWorldSystem
 
     /// <summary>
     ///     Orders the queue by time to arrival rather than raw distance, so a ship at speed gets
-    ///     the space ahead of it built first even when something closer sits off its beam.
+    ///     the space ahead of it built first even when something closer sits off its beam. Runs on
+    ///     <see cref="SortInterval"/>, not every tick.
+    ///     The key is computed once per record and parked on it. A comparator that recomputed
+    ///     arrival for both operands made the pass O(n log n * loaders) square roots: a 2000-deep
+    ///     queue against a 30-loader fleet is over a million of them, in the very tick where the
+    ///     queue is already deep enough to be in trouble.
     /// </summary>
     private void SortByArrival()
     {
-        var loaders = new List<(Vector2 Pos, Vector2 Vel)>();
+        if (_queue.Count < 2)
+            return;
+
+        _loaders.Clear();
         var query = EntityQueryEnumerator<WorldLoaderComponent, TransformComponent>();
 
         while (query.MoveNext(out var uid, out var loader, out var xform))
@@ -175,13 +228,20 @@ public sealed class DebrisMaterializeQueueSystem : BaseWorldSystem
             if (loader.Disabled)
                 continue;
 
-            loaders.Add((_xformSys.GetWorldPosition(xform), _physics.GetMapLinearVelocity(uid, xform: xform)));
+            _loaders.Add((_xformSys.GetWorldPosition(xform), _physics.GetMapLinearVelocity(uid, xform: xform)));
         }
 
-        if (loaders.Count == 0)
+        if (_loaders.Count == 0)
             return;
 
-        _queue.Sort((a, b) => ArrivalTime(a, loaders).CompareTo(ArrivalTime(b, loaders)));
+        foreach (var record in _queue)
+        {
+            record.ArrivalKey = ArrivalTime(record, _loaders);
+        }
+
+        // Static, so the delegate is compiler-cached rather than allocated per pass; the old
+        // comparator captured the loader list and minted a closure every tick.
+        _queue.Sort(static (a, b) => a.ArrivalKey.CompareTo(b.ArrivalKey));
     }
 
     private static float ArrivalTime(DebrisRecord record, List<(Vector2 Pos, Vector2 Vel)> loaders)

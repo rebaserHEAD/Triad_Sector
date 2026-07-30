@@ -69,4 +69,11 @@ public sealed class DebrisRecord
 
     /// <summary>Materialize attempts dropped because the spawn point was blocked.</summary>
     public byte BlockedAttempts;
+
+    /// <summary>
+    ///     Scratch sort key: seconds until the nearest loader reaches <see cref="Point"/>. Written
+    ///     by the materialization queue's ordering pass and only meaningful during it. Not
+    ///     persisted, not networked, and nothing outside that pass may read it.
+    /// </summary>
+    public float ArrivalKey;
 }
