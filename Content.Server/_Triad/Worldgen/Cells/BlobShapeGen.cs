@@ -112,7 +112,14 @@ public static class BlobShapeGen
         return tiles;
     }
 
-    public static Vector2[] ComputeHull(IReadOnlyList<BlobTile> tiles, int maxVerts = 16)
+    /// <summary>
+    ///     Convex hull of the rolled tile set, as a fallback outline.
+    ///     <paramref name="maxVerts"/> sits above the largest hull any shipping prototype
+    ///     produces (observed maximum 22 over 200 rolls each), so the trim loop below does not
+    ///     fire in practice. That is deliberate: the trim is not outward-safe, so the cheapest
+    ///     way to keep the outline a strict superset of the rock is to never need it.
+    /// </summary>
+    public static Vector2[] ComputeHull(IReadOnlyList<BlobTile> tiles, int maxVerts = 24)
     {
         var points = new List<Vector2>(tiles.Count * 4);
         foreach (var tile in tiles)
@@ -127,9 +134,15 @@ public static class BlobShapeGen
 
         var hull = MonotoneChainHull(points);
 
-        // Trimming cuts corners inward, so the extreme vertices are pinned: the simplified
-        // outline must keep the true bounding box. Detection range is derived from that box,
-        // and a contact that resolved at the wrong range would betray the handoff.
+        // Pinning the extreme vertices preserves the true bounding box, and nothing more.
+        // Detection range is derived from that box, so a contact would otherwise resolve at the
+        // wrong range and betray the handoff.
+        //
+        // It does NOT make the trim safe. Deleting an interior vertex replaces two edges with a
+        // chord across the corner, and that chord can pass through real tiles, so a trimmed
+        // outline can read smaller than the rock it stands for. The default maxVerts is set above
+        // any observed hull size precisely so this loop stays unreached; if you lower it, the
+        // outline stops being a strict superset and radar can report empty where rock is.
         var minX = float.MaxValue;
         var minY = float.MaxValue;
         var maxX = float.MinValue;
