@@ -1,4 +1,5 @@
-﻿using Content.Server.Worldgen.Components.Debris;
+﻿using Content.Server._Triad.Worldgen.Cells; // Triad: seeded interior rolls
+using Content.Server.Worldgen.Components.Debris;
 using Content.Shared.Maps;
 using Robust.Shared.Map;
 using Robust.Shared.Map.Components;
@@ -24,6 +25,11 @@ public sealed class SimpleFloorPlanPopulatorSystem : BaseWorldSystem
     private void OnFloorPlanBuilt(EntityUid uid, SimpleFloorPlanPopulatorComponent component,
         LocalStructureLoadedEvent args)
     {
+        // Triad: pre-determined debris derives its interior from the record seed, so a rock
+        // that unloads and reloads comes back with the layout it had. Anything spawned outside
+        // the sensed tier keeps rolling on the shared RNG.
+        var rand = SeededRandom.ForStage(EntityManager, uid, SeededRandom.InteriorStage) ?? _random;
+
         var placeables = new List<string?>(4);
         var grid = Comp<MapGridComponent>(uid);
         var enumerator = _map.GetAllTilesEnumerator(uid, grid);
@@ -35,7 +41,7 @@ public sealed class SimpleFloorPlanPopulatorSystem : BaseWorldSystem
                 continue;
 
             placeables.Clear();
-            cache.GetSpawns(_random, ref placeables);
+            cache.GetSpawns(rand, ref placeables); // Triad: seeded when pre-determined
 
             foreach (var proto in placeables)
             {

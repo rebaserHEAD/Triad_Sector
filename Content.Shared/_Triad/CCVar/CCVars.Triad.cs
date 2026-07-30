@@ -45,4 +45,38 @@ public sealed class TriadCCVars
 
     public static readonly CVarDef<string> NightVisionColor =
         CVarDef.Create("triad.night_vision_color", "#00FF00", CVar.CLIENTONLY | CVar.ARCHIVE, "The tint/phosphor color of night vision.");
+
+    // Triad: worldgen sensed tier
+    /// <summary>
+    /// Master switch for the sensed worldgen tier (describe service, radar contacts, JIT materialization). Off = stock burst-spawn path.
+    /// </summary>
+    public static readonly CVarDef<bool> WorldgenSensedEnabled =
+        CVarDef.Create("triad.worldgen.sensed_enabled", true, CVar.SERVERONLY);
+
+    /// <summary>
+    /// Radius around world loaders in which cells are described (radar-visible before entities exist).
+    /// </summary>
+    public static readonly CVarDef<float> WorldgenSensedRange =
+        CVarDef.Create("triad.worldgen.sensed_range", 1024f, CVar.SERVERONLY);
+
+    public static readonly CVarDef<float> WorldgenDescribeBudgetMs =
+        CVarDef.Create("triad.worldgen.describe_budget_ms", 1.5f, CVar.SERVERONLY);
+
+    public static readonly CVarDef<float> WorldgenMaterializeBudgetMs =
+        CVarDef.Create("triad.worldgen.materialize_budget_ms", 2f, CVar.SERVERONLY);
+
+    /// <summary>
+    /// Dormant debris within this range of any loader spawns immediately, ignoring the budget.
+    /// </summary>
+    public static readonly CVarDef<float> WorldgenMaterializePanicRange =
+        CVarDef.Create("triad.worldgen.materialize_panic_range", 96f, CVar.SERVERONLY);
+
+    /// <summary>
+    /// Seconds of loader velocity lead applied to the describe sweep center.
+    /// </summary>
+    public static readonly CVarDef<float> WorldgenDescribeLeadS =
+        CVarDef.Create("triad.worldgen.describe_lead_s", 3f, CVar.SERVERONLY);
+
+    public static readonly CVarDef<int> WorldgenContactAddsPerPoll =
+        CVarDef.Create("triad.worldgen.contact_adds_per_poll", 256, CVar.SERVERONLY);
 }

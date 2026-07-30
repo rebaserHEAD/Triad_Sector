@@ -1,4 +1,5 @@
 using System.Linq;
+using Content.Server._Triad.Worldgen.Cells; // Triad: seeded deposit rolls
 using Content.Server.Atmos.EntitySystems;
 using Content.Server.Worldgen.Components.Debris;
 using Robust.Server.GameObjects;
@@ -28,22 +29,26 @@ public sealed class RandomEntityPopulatorSystem : BaseWorldSystem
         if (!TryComp<MapGridComponent>(ent, out var mapGrid))
             return;
 
+        // Triad: pre-determined debris derives its deposits from the record seed so they survive
+        // an unload/reload cycle. Debris spawned outside the sensed tier rolls as before.
+        var rand = SeededRandom.ForStage(EntityManager, ent.Owner, SeededRandom.DepositStage) ?? _random;
+
         var placeables = new List<string?>(4);
         List<Vector2i>? validTileIndices = null;
         // For each entity populator in the set, select a number between min and max
         foreach (var (paramSet, cache) in ent.Comp.Caches)
         {
-            if (!_random.Prob(paramSet.Prob))
+            if (!rand.Prob(paramSet.Prob)) // Triad: seeded when pre-determined
                 continue;
 
-            var numToGenerate = _random.Next(paramSet.Min, paramSet.Max + 1);
+            var numToGenerate = rand.Next(paramSet.Min, paramSet.Max + 1); // Triad: seeded when pre-determined
             for (var i = 0; i < numToGenerate; i++)
             {
                 // Then find a spot (if we can) - on any failure, assume the asteroid is full and move onto the next one, which may have different parameters
-                if (!SelectRandomTile(ent, mapGrid, paramSet.CanBeAirSealed, ref validTileIndices, out var coords))
+                if (!SelectRandomTile(ent, mapGrid, paramSet.CanBeAirSealed, rand, ref validTileIndices, out var coords)) // Triad: seeded when pre-determined
                     break;
 
-                cache.GetSpawns(_random, ref placeables);
+                cache.GetSpawns(rand, ref placeables); // Triad: seeded when pre-determined
 
                 foreach (var proto in placeables)
                 {
@@ -60,6 +65,7 @@ public sealed class RandomEntityPopulatorSystem : BaseWorldSystem
     private bool SelectRandomTile(EntityUid gridUid,
         MapGridComponent mapComp,
         bool canBeAirSealed,
+        IRobustRandom rand, // Triad: seeded when pre-determined
         ref List<Vector2i>? tileIndices,
         out EntityCoordinates targetCoords)
     {
@@ -77,7 +83,7 @@ public sealed class RandomEntityPopulatorSystem : BaseWorldSystem
             if (tileIndices.Count <= 0)
                 return false;
 
-            var idx = _random.Next(tileIndices.Count);
+            var idx = rand.Next(tileIndices.Count); // Triad: seeded when pre-determined
             if (!canBeAirSealed && _atmosphere.IsTileAirBlocked(gridUid, tileIndices[idx], mapGridComp: mapComp))
                 continue;
 

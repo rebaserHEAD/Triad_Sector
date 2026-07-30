@@ -484,7 +484,10 @@ public partial class ShuttleNavControl : BaseShuttleControl // Mono
             _updateAccumulator = 0; // I'm not subtracting because frame updates can majorly lag in a way normal ones cannot.
 
             if (_consoleEntity != null)
+            {
                 _blips.RequestBlips((EntityUid)_consoleEntity);
+                TriadRequestSensedContacts(); // Triad: sensed worldgen contacts
+            }
         }
 
         if (_isMouseDown && _isMouseInside)
@@ -873,6 +876,8 @@ public partial class ShuttleNavControl : BaseShuttleControl // Mono
                 DrawDocks(handle, gUid, curGridToView);
             }
         }
+
+        TriadDrawSensedContacts(handle, worldToView); // Triad: sensed worldgen contacts
 
         // If we've set the controlling console, and it's on a different grid
         // to the shuttle itself, then draw an additional marker to help the

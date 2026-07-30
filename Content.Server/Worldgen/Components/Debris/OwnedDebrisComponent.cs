@@ -8,7 +8,8 @@ namespace Content.Server.Worldgen.Components.Debris;
 ///     Mostly just syncs deletion.
 /// </summary>
 [RegisterComponent]
-[Access(typeof(DebrisFeaturePlacerSystem))]
+// Triad: the materialization queue fills this in on spawn, standing in for the placer.
+[Access(typeof(DebrisFeaturePlacerSystem), typeof(Content.Server._Triad.Worldgen.Cells.DebrisMaterializeQueueSystem))]
 public sealed partial class OwnedDebrisComponent : Component
 {
     /// <summary>

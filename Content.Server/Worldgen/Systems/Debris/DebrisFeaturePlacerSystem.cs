@@ -11,6 +11,8 @@ using Robust.Shared.Map.Components;
 using Robust.Shared.Random;
 using Robust.Shared.Utility;
 using Content.Server._NF.Worldgen.Components.Debris; // Frontier
+using Content.Shared._Triad.CCVar; // Triad: sensed tier gate
+using Robust.Shared.Configuration; // Triad: sensed tier gate
 
 namespace Content.Server.Worldgen.Systems.Debris;
 
@@ -26,6 +28,7 @@ public sealed class DebrisFeaturePlacerSystem : BaseWorldSystem
     [Dependency] private readonly ILogManager _logManager = default!;
     [Dependency] private readonly IMapManager _mapManager = default!;
     [Dependency] private readonly IRobustRandom _random = default!;
+    [Dependency] private readonly IConfigurationManager _cfg = default!; // Triad: sensed tier gate
 
     private ISawmill _sawmill = default!;
 
@@ -154,6 +157,12 @@ public sealed class DebrisFeaturePlacerSystem : BaseWorldSystem
     private void OnChunkLoaded(EntityUid uid, DebrisFeaturePlacerControllerComponent component,
         ref WorldChunkLoadedEvent args)
     {
+        // Triad: the sensed tier decides cell contents ahead of time and spawns them through a
+        // budgeted queue, so this burst-spawn path stands down. The unload handler below stays
+        // live either way; the queue registers its spawns in OwnedDebris for exactly that.
+        if (_cfg.GetCVar(TriadCCVars.WorldgenSensedEnabled))
+            return;
+
         if (component.DoSpawns == false)
             return;
 

@@ -6,7 +6,9 @@ using Content.Shared.Ghost;
 using Content.Shared.Mind.Components;
 using JetBrains.Annotations;
 using Robust.Server.GameObjects;
+using System.Numerics; // Triad: loader hull extent
 using Robust.Shared.Map;
+using Robust.Shared.Map.Components; // Triad: loader hull extent
 using Robust.Shared.Physics.Systems;
 using Robust.Shared.Timing;
 using Robust.Shared.Configuration; // HL: for IConfigurationManager
@@ -280,6 +282,10 @@ public sealed class WorldControllerSystem : EntitySystem
         // Mono - load ahead a little
         var mapVel = _physics.GetMapLinearVelocity(uid, xform: xform);
         wc += mapVel * _updateInterval;
+        // Triad: a loader measures from wherever its console sits, so the far end of a long hull
+        // can leave the loaded region. Grow the radius by the loader's distance to its own grid's
+        // farthest corner; ship size stops deciding how much space is real around you.
+        radius += GetGridExtentChunks(xform);
         var coords = WorldGen.WorldToChunkCoords(wc);
         var chunks = new GridPointsNearEnumerator(coords.Floored(), radius);
 
@@ -293,6 +299,24 @@ public sealed class WorldControllerSystem : EntitySystem
         }
 
         return true;
+    }
+
+    // Triad: loader-to-hull-corner distance, in whole chunks, for the radius inflation above.
+    private int GetGridExtentChunks(TransformComponent xform)
+    {
+        if (xform.GridUid is not { } grid || !TryComp<MapGridComponent>(grid, out var gridComp))
+            return 0;
+
+        var local = Vector2.Transform(_xformSys.GetWorldPosition(xform), _xformSys.GetInvWorldMatrix(grid));
+        var aabb = gridComp.LocalAABB;
+
+        var extent = MathF.Max(
+            (aabb.BottomLeft - local).Length(),
+            MathF.Max(
+                (aabb.TopRight - local).Length(),
+                MathF.Max((aabb.TopLeft - local).Length(), (aabb.BottomRight - local).Length())));
+
+        return (int) MathF.Ceiling(extent / WorldGen.ChunkSize);
     }
 }
 
