@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: 2026 Triad Sector
+//
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 using System.Numerics;
 using Content.Shared._Mono.CCVar;
 using Content.Shared._Mono.Detection;
@@ -32,6 +36,7 @@ public sealed class SensedContactsSystem : EntitySystem
 
     private bool _enabled;
     private float _visualMul;
+    private float _sensedRange;
     private int _addsPerPoll;
     private int _sweepCounter;
 
@@ -53,6 +58,7 @@ public sealed class SensedContactsSystem : EntitySystem
 
         Subs.CVar(_cfg, TriadCCVars.WorldgenSensedEnabled, v => _enabled = v, true);
         Subs.CVar(_cfg, TriadCCVars.WorldgenContactAddsPerPoll, v => _addsPerPoll = v, true);
+        Subs.CVar(_cfg, TriadCCVars.WorldgenSensedRange, v => _sensedRange = v, true);
         Subs.CVar(_cfg, MonoCVars.VisualDetectionMultiplier, v => _visualMul = v, true);
 
         SubscribeNetworkEvent<RequestSensedContactsEvent>(OnContactsRequested);
@@ -159,7 +165,18 @@ public sealed class SensedContactsSystem : EntitySystem
 
             if (!alwaysDetect)
             {
-                var detectRadius = record.DetectSignature * visualMultiplier * _visualMul + record.DetectBias;
+                // Dormant debris is a navigation aid, not a sensor puzzle: if the describe sweep
+                // decided a rock is out there, it is worth painting, so the detection formula only
+                // ever raises this floor rather than lowering it. Real grids keep their own
+                // detection untouched, and the console's own MaxRange still caps everything above.
+                //
+                // This does not reopen a handoff seam: materialization happens inside the chunk-load
+                // radius, which is far closer than any debris detection radius, so a record always
+                // becomes a grid well within the range that grid is detected at.
+                var detectRadius = MathF.Max(
+                    record.DetectSignature * visualMultiplier * _visualMul + record.DetectBias,
+                    _sensedRange);
+
                 if (distSq > detectRadius * detectRadius)
                     continue;
             }
