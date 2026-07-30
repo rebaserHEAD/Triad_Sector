@@ -48,7 +48,11 @@ public sealed class TriadCCVars
 
     // Triad: worldgen sensed tier
     /// <summary>
-    /// Master switch for the sensed worldgen tier (describe service, radar contacts, JIT materialization). Off = stock burst-spawn path.
+    /// Master switch for the sensed worldgen tier (describe service, radar contacts, JIT
+    /// materialization). Off restores the stock burst-spawn placer and the stock chunk-load
+    /// radius, but not stock asteroid shapes: BlobFloorPlanBuilderSystem routes its tile walk
+    /// through the seed-deterministic BlobShapeGen either way, so debris geometry stays on the
+    /// Triad generator regardless of this switch.
     /// </summary>
     public static readonly CVarDef<bool> WorldgenSensedEnabled =
         CVarDef.Create("triad.worldgen.sensed_enabled", true, CVar.SERVERONLY);
