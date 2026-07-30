@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: 2026 Triad Sector
+//
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 using System.Numerics;
 
 namespace Content.Server._Triad.Worldgen.Cells;
@@ -20,26 +24,36 @@ public static class BlobShapeGen
             throw new ArgumentOutOfRangeException(nameof(floorPlacements), floorPlacements, "Must be non-negative.");
 
         var candidates = new List<Vector2i>(floorPlacements * 6);
-        var candidateSet = new HashSet<Vector2i>(floorPlacements * 6);
+        // Position index rather than a plain membership set: removal is a swap with the tail, and
+        // finding the victim's slot by scanning was the walk's dominant cost at prototype sizes
+        // (a few hundred placements against a candidate list that runs past a thousand). The
+        // resulting list order is identical either way, which matters because the draw at the
+        // bottom of this method indexes straight into it.
+        var candidateIndex = new Dictionary<Vector2i, int>(floorPlacements * 6);
         var taken = new HashSet<Vector2i>(floorPlacements * 5);
         var tiles = new List<BlobTile>(floorPlacements + 1);
         var radsq = Math.Pow(radius, 2);
 
         void AddCandidate(Vector2i point)
         {
-            if (taken.Contains(point) || !candidateSet.Add(point))
+            if (taken.Contains(point) || candidateIndex.ContainsKey(point))
                 return;
+            candidateIndex[point] = candidates.Count;
             candidates.Add(point);
         }
 
         void RemoveCandidate(Vector2i point)
         {
-            if (!candidateSet.Remove(point))
+            if (!candidateIndex.Remove(point, out var idx))
                 return;
-            var idx = candidates.IndexOf(point);
+
             var lastIdx = candidates.Count - 1;
-            candidates[idx] = candidates[lastIdx];
+            var moved = candidates[lastIdx];
+            candidates[idx] = moved;
             candidates.RemoveAt(lastIdx);
+
+            if (idx != lastIdx)
+                candidateIndex[moved] = idx;
         }
 
         void PlaceTile(Vector2i point)
@@ -53,16 +67,19 @@ public static class BlobShapeGen
             var east = point.Offset(Direction.East);
             var west = point.Offset(Direction.West);
 
-            // Same distance-squared-from-origin check as the upstream walk.
-            if (Math.Pow(north.X, 2) + Math.Pow(north.Y, 2) <= radsq)
+            // Same distance-squared-from-origin check as the upstream walk. Integer squares are
+            // exact in a double, so dropping Math.Pow here is a speedup and not a rounding change.
+            if (DistSqFromOrigin(north) <= radsq)
                 AddCandidate(north);
-            if (Math.Pow(south.X, 2) + Math.Pow(south.Y, 2) <= radsq)
+            if (DistSqFromOrigin(south) <= radsq)
                 AddCandidate(south);
-            if (Math.Pow(east.X, 2) + Math.Pow(east.Y, 2) <= radsq)
+            if (DistSqFromOrigin(east) <= radsq)
                 AddCandidate(east);
-            if (Math.Pow(west.X, 2) + Math.Pow(west.Y, 2) <= radsq)
+            if (DistSqFromOrigin(west) <= radsq)
                 AddCandidate(west);
         }
+
+        static double DistSqFromOrigin(Vector2i p) => (double) p.X * p.X + (double) p.Y * p.Y;
 
         PlaceTile(Vector2i.Zero);
 

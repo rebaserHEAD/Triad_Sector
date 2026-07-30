@@ -1,4 +1,10 @@
+// SPDX-FileCopyrightText: 2026 Triad Sector
+//
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 using System.Numerics;
+using System.Security.Cryptography;
+using System.Text;
 using Content.Server._Triad.Worldgen.Cells;
 
 namespace Content.IntegrationTests.Tests._Triad.Worldgen;
@@ -41,6 +47,48 @@ public sealed class BlobShapeGenTest
             var distSq = (double) tile.Pos.X * tile.Pos.X + (double) tile.Pos.Y * tile.Pos.Y;
             Assert.That(distSq, Is.LessThanOrEqualTo(radiusSq));
         }
+    }
+
+    /// <summary>
+    ///     Pins the exact walk output across a spread of seeds and prototype shapes. The describe
+    ///     pass and the materialize pass roll this walk independently from the same seed, so any
+    ///     change to draw count, draw order, or candidate ordering silently desynchronizes the
+    ///     radar outline from the grid that loads in. Optimizations to <see cref="BlobShapeGen"/>
+    ///     must leave this fingerprint untouched; a deliberate generation change must update it in
+    ///     the same commit that changes the walk.
+    /// </summary>
+    [Test]
+    public void Walk_FingerprintIsStable()
+    {
+        Assert.That(ComputeWalkFingerprint(),
+            Is.EqualTo("473FA9F1CEFC496B6C7BE3C14F67081347980FFD7FB005BCA4140E46A288381F"));
+    }
+
+    private static string ComputeWalkFingerprint()
+    {
+        // Spread over the real prototype range: NF debris runs radius 5-26, placements 96-324.
+        (int Seed, float Radius, int Placements, float DrawProb, int Tileset)[] cases =
+        {
+            (1, 15f, 100, 0.5f, 4),
+            (2, 15f, 100, 0.5f, 4),
+            (42, 15f, 100, 0.5f, 4),
+            (12345, 26f, 276, 0.5f, 4),
+            (7, 5f, 96, 0.0f, 1),
+            (999, 26f, 324, 0.9f, 8),
+            (2024, 10f, 200, 0.25f, 2),
+        };
+
+        var sb = new StringBuilder();
+        foreach (var (seed, radius, placements, drawProb, tileset) in cases)
+        {
+            var tiles = BlobShapeGen.Roll(new System.Random(seed), radius, placements, drawProb, tileset);
+            sb.Append(seed).Append(':').Append(tiles.Count).Append('|');
+            foreach (var tile in tiles)
+                sb.Append(tile.Pos.X).Append(',').Append(tile.Pos.Y).Append(',').Append(tile.TilesetIndex).Append(';');
+        }
+
+        var hash = SHA256.HashData(Encoding.UTF8.GetBytes(sb.ToString()));
+        return Convert.ToHexString(hash);
     }
 
     [Test]
