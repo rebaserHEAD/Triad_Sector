@@ -140,6 +140,9 @@ public sealed class SensedTierTest
             }
         });
 
+        // The map holds a live WorldLoader, so leaving it behind hands the next test on a
+        // recycled pair a world that is still describing and loading chunks.
+        await server.WaitPost(() => entManager.DeleteEntity(map));
         await pair.CleanReturnAsync();
     }
 
@@ -183,6 +186,7 @@ public sealed class SensedTierTest
             }
         });
 
+        await server.WaitPost(() => entManager.DeleteEntity(map));
         await pair.CleanReturnAsync();
     }
 
@@ -252,6 +256,7 @@ public sealed class SensedTierTest
                 $"(records={all.Count} materialized={materializedCount} withHull={withHull} withGrid={withGrid})");
         });
 
+        await server.WaitPost(() => entManager.DeleteEntity(map));
         await pair.CleanReturnAsync();
     }
 
@@ -289,6 +294,7 @@ public sealed class SensedTierTest
                 "a rock destroyed in play left its record behind, so radar would keep painting it");
         });
 
+        await server.WaitPost(() => entManager.DeleteEntity(map));
         await pair.CleanReturnAsync();
     }
 
@@ -358,6 +364,7 @@ public sealed class SensedTierTest
             Assert.That(stockSpawned, Is.True, "the stock placer spawned nothing with the sensed tier disabled");
         });
 
+        await server.WaitPost(() => entManager.DeleteEntity(mapUid));
         await pair.CleanReturnAsync();
     }
 }
