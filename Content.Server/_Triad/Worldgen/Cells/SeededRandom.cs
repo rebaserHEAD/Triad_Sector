@@ -16,6 +16,7 @@ public static class SeededRandom
     public const int ShapeStage = 0;
     public const int InteriorStage = 0x5f37;
     public const int DepositStage = 0x2b91;
+    public const int RoomStage = 0x1e2f;
 
     /// <summary>
     ///     A seeded RNG for the given stage, or null when the entity is not pre-determined and
