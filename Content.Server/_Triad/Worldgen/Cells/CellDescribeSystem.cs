@@ -44,6 +44,14 @@ public sealed class CellDescribeSystem : BaseWorldSystem
 
     private const float UpdateInterval = 1f;
 
+    /// <summary>
+    ///     Matches the chunk radius <see cref="WorldControllerSystem"/> already loads around any
+    ///     mindful entity. Describing at least this far keeps the decision ahead of the build
+    ///     for someone out on a jetpack, who otherwise only ever describes reactively as chunks
+    ///     load under them.
+    /// </summary>
+    private const float PlayerPresenceRange = 2 * WorldGen.ChunkSize;
+
     private bool _enabled;
     private float _sensedRange;
     private float _describeBudgetMs;
@@ -168,7 +176,7 @@ public sealed class CellDescribeSystem : BaseWorldSystem
             if (!mind.HasMind || ghostQuery.HasComp(uid))
                 continue;
 
-            AddSource(uid, xform, MathF.Max(_viewRange, GetLoaderExtent(uid, xform)));
+            AddSource(uid, xform, MathF.Max(PlayerPresenceRange, MathF.Max(_viewRange, GetLoaderExtent(uid, xform))));
         }
 
         // A powered handheld scanner reaches further than the person holding it, so it extends
