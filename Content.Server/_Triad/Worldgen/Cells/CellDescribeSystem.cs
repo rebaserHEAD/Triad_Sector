@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 using System.Numerics;
+using Content.Server._NF.Worldgen.Components.Debris;
 using Content.Server.Worldgen;
 using Content.Server.Worldgen.Components;
 using Content.Server.Worldgen.Components.Debris;
@@ -84,18 +85,38 @@ public sealed class CellDescribeSystem : BaseWorldSystem
 
     public override void Update(float frameTime)
     {
-        if (!_enabled)
-            return;
-
         _accumulator += frameTime;
         if (_accumulator < UpdateInterval)
             return;
         _accumulator -= UpdateInterval;
 
+        // Counted above the enabled gate, deliberately. This gauge exists to compare the sensed
+        // tier against the stock burst-spawn placer, so it has to keep reporting when the tier is
+        // switched off; a metric that goes dark in one arm of the comparison cannot make it.
+        SensedMetrics.ResidentDebris.Set(CountResidentDebris());
+
+        if (!_enabled)
+            return;
+
         CollectPending();
         DrainPending();
 
         SensedMetrics.Records.Set(Records.Count);
+    }
+
+    /// <summary>
+    ///     Live debris grids from either spawn path. Both paths carry
+    ///     <see cref="SpaceDebrisComponent"/>: the stock placer from the prototype, and the
+    ///     materialize queue by explicit EnsureComp, precisely so the two are comparable.
+    /// </summary>
+    private int CountResidentDebris()
+    {
+        var n = 0;
+        var query = EntityQueryEnumerator<SpaceDebrisComponent>();
+        while (query.MoveNext(out _))
+            n++;
+
+        return n;
     }
 
     /// <summary>
