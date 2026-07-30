@@ -34,7 +34,7 @@ public sealed class SensedSourceModelTest
     private const string Anchor = "TriadSensedTestAnchor";
     private const string ShortAnchor = "TriadSensedTestAnchorShort";
 
-    private const float SensedRange = 1024f;
+    private const float DescribeRange = 1024f;
 
     // String rather than float so the prototype below and the envelope math stay one value; only
     // string constants are foldable into a constant interpolated string.
@@ -78,7 +78,7 @@ public sealed class SensedSourceModelTest
         await server.WaitPost(() =>
         {
             cfg.SetCVar(TriadCCVars.WorldgenSensedEnabled, true);
-            cfg.SetCVar(TriadCCVars.WorldgenSensedRange, SensedRange);
+            cfg.SetCVar(TriadCCVars.WorldgenDescribeRange, DescribeRange);
             cfg.SetCVar(TriadCCVars.WorldgenDescribeBudgetMs, 500f);
             cfg.SetCVar(TriadCCVars.WorldgenMaterializeBudgetMs, 500f);
 
@@ -172,7 +172,7 @@ public sealed class SensedSourceModelTest
     }
 
     /// <summary>
-    ///     An anchor's own range overrides the server-wide sensed range, so a large POI can hold
+    ///     An anchor's own range overrides the server-wide describe range, so a large POI can hold
     ///     more space real than a shuttle without moving the global knob.
     /// </summary>
     [Test]
@@ -190,7 +190,7 @@ public sealed class SensedSourceModelTest
 
         // The sweep enumerates a disc in chunk space of ceil(range / chunkSize) + 1, so that is the
         // whole reachable envelope. A short anchor that described past it would mean the per-anchor
-        // range is being ignored in favour of the server-wide sensed range.
+        // range is being ignored in favour of the server-wide describe range.
         var range = float.Parse(ShortRange, CultureInfo.InvariantCulture);
         var chunkRadius = (int) MathF.Ceiling(range / Content.Server.Worldgen.WorldGen.ChunkSize) + 1;
 
@@ -199,7 +199,7 @@ public sealed class SensedSourceModelTest
             "so the range field is not bounding the sweep.");
 
         // And it must genuinely be shorter than the global range, or the bound above proves nothing.
-        var globalChunkRadius = (int) MathF.Ceiling(SensedRange / Content.Server.Worldgen.WorldGen.ChunkSize) + 1;
+        var globalChunkRadius = (int) MathF.Ceiling(DescribeRange / Content.Server.Worldgen.WorldGen.ChunkSize) + 1;
         Assert.That(chunkRadius, Is.LessThan(globalChunkRadius));
 
         await Cleanup(pair, map);

@@ -38,7 +38,7 @@ public sealed class SensedContactsSystem : EntitySystem
 
     private bool _enabled;
     private float _visualMul;
-    private float _sensedRange;
+    private float _describeRange;
     private int _addsPerPoll;
     private int _sweepCounter;
 
@@ -60,7 +60,7 @@ public sealed class SensedContactsSystem : EntitySystem
 
         Subs.CVar(_cfg, TriadCCVars.WorldgenSensedEnabled, OnSensedEnabledChanged, true);
         Subs.CVar(_cfg, TriadCCVars.WorldgenContactAddsPerPoll, v => _addsPerPoll = v, true);
-        Subs.CVar(_cfg, TriadCCVars.WorldgenSensedRange, v => _sensedRange = v, true);
+        Subs.CVar(_cfg, TriadCCVars.WorldgenDescribeRange, v => _describeRange = v, true);
         Subs.CVar(_cfg, MonoCVars.VisualDetectionMultiplier, v => _visualMul = v, true);
 
         SubscribeNetworkEvent<RequestSensedContactsEvent>(OnContactsRequested);
@@ -205,7 +205,7 @@ public sealed class SensedContactsSystem : EntitySystem
                 // becomes a grid well within the range that grid is detected at.
                 var detectRadius = MathF.Max(
                     record.DetectSignature * visualMultiplier * _visualMul + record.DetectBias,
-                    _sensedRange);
+                    _describeRange);
 
                 if (distSq > detectRadius * detectRadius)
                     continue;

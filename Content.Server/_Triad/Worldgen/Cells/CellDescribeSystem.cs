@@ -47,7 +47,7 @@ public sealed class CellDescribeSystem : BaseWorldSystem
     private const float UpdateInterval = 1f;
 
     private bool _enabled;
-    private float _sensedRange;
+    private float _describeRange;
     private float _describeBudgetMs;
     private float _describeLead;
 
@@ -68,7 +68,7 @@ public sealed class CellDescribeSystem : BaseWorldSystem
     public override void Initialize()
     {
         Subs.CVar(_cfg, TriadCCVars.WorldgenSensedEnabled, v => _enabled = v, true);
-        Subs.CVar(_cfg, TriadCCVars.WorldgenSensedRange, v => _sensedRange = v, true);
+        Subs.CVar(_cfg, TriadCCVars.WorldgenDescribeRange, v => _describeRange = v, true);
         Subs.CVar(_cfg, TriadCCVars.WorldgenDescribeBudgetMs, v => _describeBudgetMs = v, true);
         Subs.CVar(_cfg, TriadCCVars.WorldgenDescribeLeadS, v => _describeLead = v, true);
 
@@ -184,7 +184,7 @@ public sealed class CellDescribeSystem : BaseWorldSystem
             if (loader.Disabled)
                 continue;
 
-            AddSource(uid, xform, _sensedRange + GetLoaderExtent(uid, xform));
+            AddSource(uid, xform, _describeRange + GetLoaderExtent(uid, xform));
         }
 
         // People. A miner out on a jetpack anchors the world exactly as a ship does. The extent
@@ -197,7 +197,7 @@ public sealed class CellDescribeSystem : BaseWorldSystem
             if (!mind.HasMind || ghostQuery.HasComp(uid))
                 continue;
 
-            AddSource(uid, xform, _sensedRange + GetLoaderExtent(uid, xform));
+            AddSource(uid, xform, _describeRange + GetLoaderExtent(uid, xform));
         }
 
         // Stations and points of interest, which hold their surroundings real without crewing a
@@ -205,7 +205,7 @@ public sealed class CellDescribeSystem : BaseWorldSystem
         var anchors = EntityQueryEnumerator<DescribeAnchorComponent, TransformComponent>();
         while (anchors.MoveNext(out var uid, out var anchor, out var xform))
         {
-            AddSource(uid, xform, (anchor.Range ?? _sensedRange) + GetLoaderExtent(uid, xform));
+            AddSource(uid, xform, (anchor.Range ?? _describeRange) + GetLoaderExtent(uid, xform));
         }
     }
 

@@ -71,7 +71,7 @@ public sealed class SensedTierTest
         await server.WaitPost(() =>
         {
             cfg.SetCVar(TriadCCVars.WorldgenSensedEnabled, true);
-            cfg.SetCVar(TriadCCVars.WorldgenSensedRange, sensedRange);
+            cfg.SetCVar(TriadCCVars.WorldgenDescribeRange, sensedRange);
             // Budgets high enough that a test map describes and materializes in a few ticks.
             cfg.SetCVar(TriadCCVars.WorldgenDescribeBudgetMs, 500f);
             cfg.SetCVar(TriadCCVars.WorldgenMaterializeBudgetMs, 500f);

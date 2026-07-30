@@ -16,7 +16,7 @@ public sealed partial class DescribeAnchorComponent : Component
 {
     /// <summary>
     ///     Describe reach in metres, measured from the anchor's hull edge. Null takes the
-    ///     server-wide sensed range, which is what almost everything should want.
+    ///     server-wide describe range, which is what almost everything should want.
     /// </summary>
     [DataField]
     public float? Range;
