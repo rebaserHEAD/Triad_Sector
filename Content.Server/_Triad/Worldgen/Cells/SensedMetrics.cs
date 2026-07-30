@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: 2026 Triad Sector
+//
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 using Prometheus;
 
 namespace Content.Server._Triad.Worldgen.Cells;
