@@ -173,7 +173,13 @@ public sealed class WorldControllerSystem : EntitySystem
         {
             var coords = chunk.Coordinates;
 
-            if (!_chunksToLoad[chunk.Map].ContainsKey(coords))
+            // Triad: TryGetValue, not the indexer. _chunksToLoad is rebuilt each pass from maps
+            // that currently have a WorldControllerComponent, while this enumeration walks chunk
+            // entities. A deleted map loses its controller before its chunks finish being torn
+            // down, so the indexer threw KeyNotFoundException for every surviving chunk on every
+            // tick of that window. A chunk whose map is loading nothing is exactly a chunk to
+            // unload, which is what this branch already does.
+            if (!_chunksToLoad.TryGetValue(chunk.Map, out var mapChunks) || !mapChunks.ContainsKey(coords))
             {
                 RemCompDeferred<LoadedChunkComponent>(uid);
                 chunksUnloaded++;
