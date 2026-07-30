@@ -54,10 +54,13 @@ public sealed class TriadCCVars
         CVarDef.Create("triad.worldgen.sensed_enabled", true, CVar.SERVERONLY);
 
     /// <summary>
-    /// Radius around world loaders in which cells are described (radar-visible before entities exist).
+    /// Radius around anything present (ship, person, station) in which cells are described, making
+    /// debris radar-visible before any entity exists. Sensors do not extend this; they only decide
+    /// how much of it a given console is shown. Defaults to the stock radar range, since a console
+    /// can only paint what has been described and anything shorter puts a hard ring on the screen.
     /// </summary>
     public static readonly CVarDef<float> WorldgenSensedRange =
-        CVarDef.Create("triad.worldgen.sensed_range", 1024f, CVar.SERVERONLY);
+        CVarDef.Create("triad.worldgen.sensed_range", 3072f, CVar.SERVERONLY);
 
     public static readonly CVarDef<float> WorldgenDescribeBudgetMs =
         CVarDef.Create("triad.worldgen.describe_budget_ms", 1.5f, CVar.SERVERONLY);

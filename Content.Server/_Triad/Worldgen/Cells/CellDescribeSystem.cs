@@ -1,4 +1,7 @@
-using System.Linq;
+// SPDX-FileCopyrightText: 2026 Triad Sector
+//
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 using System.Numerics;
 using Content.Server.Worldgen;
 using Content.Server.Worldgen.Components;
@@ -9,11 +12,9 @@ using Content.Server.Worldgen.Tools;
 using Content.Shared._Mono.Detection;
 using Content.Shared._Triad.CCVar;
 using Content.Shared.Ghost;
-using Content.Shared.Item.ItemToggle.Components;
 using Content.Shared.Mind.Components;
 using Content.Shared.Shuttles.Components;
 using Robust.Server.GameObjects;
-using Robust.Shared;
 using Robust.Shared.Configuration;
 using Robust.Shared.Map;
 using Robust.Shared.Map.Components;
@@ -44,21 +45,10 @@ public sealed class CellDescribeSystem : BaseWorldSystem
 
     private const float UpdateInterval = 1f;
 
-    /// <summary>
-    ///     Matches the chunk radius <see cref="WorldControllerSystem"/> already loads around any
-    ///     mindful entity. Describing at least this far keeps the decision ahead of the build
-    ///     for someone out on a jetpack, who otherwise only ever describes reactively as chunks
-    ///     load under them.
-    /// </summary>
-    private const float PlayerPresenceRange = 2 * WorldGen.ChunkSize;
-
     private bool _enabled;
     private float _sensedRange;
     private float _describeBudgetMs;
     private float _describeLead;
-
-    /// <summary>Half of the PVS view square: how far a person can actually see from where they stand.</summary>
-    private float _viewRange;
 
     private float _accumulator;
     private int _nextRecordId = 1;
@@ -80,8 +70,6 @@ public sealed class CellDescribeSystem : BaseWorldSystem
         Subs.CVar(_cfg, TriadCCVars.WorldgenSensedRange, v => _sensedRange = v, true);
         Subs.CVar(_cfg, TriadCCVars.WorldgenDescribeBudgetMs, v => _describeBudgetMs = v, true);
         Subs.CVar(_cfg, TriadCCVars.WorldgenDescribeLeadS, v => _describeLead = v, true);
-        // net.pvs_range is the side of the view square, so half of it is the reach from centre.
-        Subs.CVar(_cfg, CVars.NetMaxUpdateRange, v => _viewRange = v * 0.5f, true);
 
         SubscribeLocalEvent<SensedCellComponent, ComponentShutdown>(OnCellShutdown);
     }
@@ -123,10 +111,11 @@ public sealed class CellDescribeSystem : BaseWorldSystem
         CollectSources();
 
         var controllerQuery = GetEntityQuery<WorldControllerComponent>();
+        var sensedQuery = GetEntityQuery<SensedCellComponent>();
 
         foreach (var (map, center, range) in _sources)
         {
-            if (!controllerQuery.HasComp(map))
+            if (!controllerQuery.TryComp(map, out var controller))
                 continue;
 
             var radius = (int) MathF.Ceiling(range / WorldGen.ChunkSize) + 1;
@@ -135,6 +124,15 @@ public sealed class CellDescribeSystem : BaseWorldSystem
             while (chunks.MoveNext(out var chunk))
             {
                 var coords = chunk.Value;
+
+                // Already-described cells are the overwhelming majority of any steady-state sweep,
+                // and rejecting them here rather than in the drain keeps both the pending list and
+                // the sort over it proportional to the work actually left instead of to the total
+                // area ever described. A coord with no chunk entity yet has necessarily never been
+                // described, so it stays pending.
+                if (controller.Chunks.TryGetValue(coords, out var existing) && sensedQuery.HasComp(existing))
+                    continue;
+
                 if (!_pendingSet.Add((map, coords)))
                     continue;
 
@@ -148,27 +146,29 @@ public sealed class CellDescribeSystem : BaseWorldSystem
     }
 
     /// <summary>
-    ///     Everything that makes space around it real, each with the radius it earns. Rock is
-    ///     described for anyone present, not only for whoever owns a sensor: a player out on a
-    ///     jetpack has real asteroids around them, and a scanner in their hand only decides how
-    ///     far out they can see the ones already there.
+    ///     Everything that makes the space around it real, all at the same reach. Presence decides
+    ///     what exists: a ship, a person, or a station anchors the world identically, and debris is
+    ///     there whether or not anything is pointed at it. No sensor is consulted here. A radar
+    ///     decides what a console is *told* about (see <see cref="SensedContactsSystem"/>); it never
+    ///     decides what is out there, or a drifting ghost would be minting asteroids.
     /// </summary>
     private void CollectSources()
     {
+        // Ships. A loader is bolted wherever its console sits, so reach is measured from the hull's
+        // farthest corner; otherwise the far end of a kilometre-long capital outruns its own
+        // describe radius.
         var loaders = EntityQueryEnumerator<WorldLoaderComponent, TransformComponent>();
         while (loaders.MoveNext(out var uid, out var loader, out var xform))
         {
             if (loader.Disabled)
                 continue;
 
-            // A console sits wherever it sits on its ship; sense from the hull, not the console,
-            // or the far end of a kilometre-long capital outruns its own describe radius.
             AddSource(uid, xform, _sensedRange + GetLoaderExtent(uid, xform));
         }
 
-        // Anyone present in space makes the space around them real, sensor or not. The halo is
-        // whichever box reaches further: the hull they are standing on, or what they can see
-        // from it. A jetpack miner is their own view box; a crewman is their ship.
+        // People. A miner out on a jetpack anchors the world exactly as a ship does. The extent
+        // term folds to zero off-grid, so this is genuinely the same formula rather than a weaker
+        // special case, and a crewman standing on a hull simply dedupes into their own ship's halo.
         var ghostQuery = GetEntityQuery<GhostComponent>();
         var minds = EntityQueryEnumerator<MindContainerComponent, TransformComponent>();
         while (minds.MoveNext(out var uid, out var mind, out var xform))
@@ -176,20 +176,15 @@ public sealed class CellDescribeSystem : BaseWorldSystem
             if (!mind.HasMind || ghostQuery.HasComp(uid))
                 continue;
 
-            AddSource(uid, xform, MathF.Max(PlayerPresenceRange, MathF.Max(_viewRange, GetLoaderExtent(uid, xform))));
+            AddSource(uid, xform, _sensedRange + GetLoaderExtent(uid, xform));
         }
 
-        // A powered handheld scanner reaches further than the person holding it, so it extends
-        // the halo to full sensed range: the picture on a mass scanner is as honest as the one
-        // on a bridge console, just weaker for its lower detection multiplier.
-        var toggleQuery = GetEntityQuery<ItemToggleComponent>();
-        var consoles = EntityQueryEnumerator<RadarConsoleComponent, TransformComponent>();
-        while (consoles.MoveNext(out var uid, out var console, out var xform))
+        // Stations and points of interest, which hold their surroundings real without crewing a
+        // chunk loader. Carrying its own range lets a large POI reach further than a shuttle.
+        var anchors = EntityQueryEnumerator<DescribeAnchorComponent, TransformComponent>();
+        while (anchors.MoveNext(out var uid, out var anchor, out var xform))
         {
-            if (toggleQuery.TryComp(uid, out var toggle) && !toggle.Activated)
-                continue;
-
-            AddSource(uid, xform, MathF.Min(console.MaxRange, _sensedRange));
+            AddSource(uid, xform, (anchor.Range ?? _sensedRange) + GetLoaderExtent(uid, xform));
         }
     }
 
@@ -213,9 +208,9 @@ public sealed class CellDescribeSystem : BaseWorldSystem
         var start = _timing.RealTime;
         var described = 0;
 
-        // Already-described cells stay in the sweep and cost a lookup each; the budget only
-        // has to bound real describe work, and rechecking is how a cell that was GC'd out
-        // from under us gets rebuilt.
+        // CollectPending already dropped described cells, so this list is the work actually
+        // outstanding. The recheck below is a cheap guard, not a rebuild path: GetOrCreateChunk
+        // can mint the chunk entity here for a coord that had none at collection time.
         foreach (var (_, coords, map) in _pending)
         {
             if (_timing.RealTime - start > budget)
