@@ -125,10 +125,12 @@ public sealed class SensedTierTest
 
             var withHulls = records.Where(r => r.Hull is not null).ToList();
             Assert.That(withHulls, Is.Not.Empty, "no described debris carried a hull to paint on radar");
-            // Upper bound tracks ComputeHull's maxVerts default; it sat at 16 after the cap moved
-            // to 24, so it was asserting against a limit the code no longer had.
-            Assert.That(withHulls.All(r => r.Hull!.Length is > 2 and <= 24),
-                "hulls must be simplified polygons, not degenerate or unbounded");
+            // Outlines are true silhouettes now, not convex hulls, so the ceiling is the tracer's
+            // sanity valve rather than the hull's vertex cap. A real rock traces to somewhere
+            // between 19 and 182 vertices depending on size tier; the floor still matters, since
+            // fewer than three vertices is not a polygon.
+            Assert.That(withHulls.All(r => r.Hull!.Length is > 2 and <= TileOutline.MaxOutlineVerts),
+                "outlines must be bounded polygons, not degenerate or unbounded");
             Assert.That(withHulls.Any(r => r.DetectSignature > 0f),
                 "described debris carried no detection signature, so contacts could never resolve");
 

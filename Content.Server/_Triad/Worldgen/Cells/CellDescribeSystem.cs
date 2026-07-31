@@ -360,7 +360,10 @@ public sealed class CellDescribeSystem : BaseWorldSystem
         if (tiles.Count == 0)
             return;
 
-        record.Hull = BlobShapeGen.ComputeHull(tiles);
+        // The true silhouette when it can be traced, the convex hull only as a fallback. Trace
+        // returns null for an empty roll or an outline past its sanity cap, neither of which any
+        // shipping prototype produces, so the hull is a safety net rather than a code path.
+        record.Hull = TileOutline.Trace(tiles) ?? BlobShapeGen.ComputeHull(tiles);
 
         // DetectionSystem sizes a grid by its local AABB diagonal; the hull's AABB is that
         // same box, computed without ever building the grid.
