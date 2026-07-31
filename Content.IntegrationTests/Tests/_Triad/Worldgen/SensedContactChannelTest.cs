@@ -129,6 +129,34 @@ public sealed class SensedContactChannelTest
     }
 
     /// <summary>
+    ///     Drops the map AND the records this fixture injected.
+    ///
+    ///     <see cref="CellDescribeSystem.Records"/> is a plain dictionary on a system, so it outlives
+    ///     the map and rides a pooled server into whatever test runs next. Injecting into it without
+    ///     cleaning up is the same class of leak as leaving the worldgen map behind: it is invisible
+    ///     here and fails somewhere else. It surfaced exactly that way, as a phantom record 900001 in
+    ///     a SensedTierTest assertion about a completely different map.
+    /// </summary>
+    private static async Task Cleanup(Content.IntegrationTests.Pair.TestPair pair, EntityUid map)
+    {
+        var server = pair.Server;
+
+        await server.WaitPost(() =>
+        {
+            var describe = server.System<CellDescribeSystem>();
+            var mine = describe.Records
+                .Where(r => r.Value.Map == map)
+                .Select(r => r.Key)
+                .ToList();
+
+            foreach (var id in mine)
+                describe.Records.Remove(id);
+
+            server.EntMan.DeleteEntity(map);
+        });
+    }
+
+    /// <summary>
     ///     Drives one client poll cycle: ask for contacts on every console, then run enough ticks
     ///     for the request to reach the server and the reply to land. The client gates requests on
     ///     its own 500ms throttle, so this ticks past that rather than assuming a request went out.
@@ -188,7 +216,7 @@ public sealed class SensedContactChannelTest
         Assert.That(cSys.GetContacts(clientConsole), Is.Not.Empty,
             "console blanked on a settled picture: the empty delta is the keepalive, so every poll must be answered");
 
-        await server.WaitPost(() => server.EntMan.DeleteEntity(map));
+        await Cleanup(pair, map);
         await pair.CleanReturnAsync();
     }
 
@@ -229,7 +257,7 @@ public sealed class SensedContactChannelTest
             }
         });
 
-        await server.WaitPost(() => server.EntMan.DeleteEntity(map));
+        await Cleanup(pair, map);
         await pair.CleanReturnAsync();
     }
 
@@ -270,7 +298,7 @@ public sealed class SensedContactChannelTest
         Assert.That(cSys.GetContacts(clientConsole), Is.Empty,
             "materialized record still painting as a contact; the grid and the contact are now doubled");
 
-        await server.WaitPost(() => server.EntMan.DeleteEntity(map));
+        await Cleanup(pair, map);
         await pair.CleanReturnAsync();
     }
 
@@ -316,7 +344,7 @@ public sealed class SensedContactChannelTest
                 "a console the player never opened was served its contacts; any client can read any console's picture");
         });
 
-        await server.WaitPost(() => server.EntMan.DeleteEntity(map));
+        await Cleanup(pair, map);
         await pair.CleanReturnAsync();
     }
 }

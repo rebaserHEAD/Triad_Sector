@@ -71,12 +71,55 @@ public sealed class CellDescribeSystem : BaseWorldSystem
 
     public override void Initialize()
     {
-        Subs.CVar(_cfg, TriadCCVars.WorldgenSensedEnabled, v => _enabled = v, true);
+        Subs.CVar(_cfg, TriadCCVars.WorldgenSensedEnabled, OnEnabledChanged, true);
         Subs.CVar(_cfg, TriadCCVars.WorldgenDescribeRange, v => _describeRange = v, true);
         Subs.CVar(_cfg, TriadCCVars.WorldgenDescribeBudgetMs, v => _describeBudgetMs = v, true);
         Subs.CVar(_cfg, TriadCCVars.WorldgenDescribeLeadS, v => _describeLead = v, true);
 
         SubscribeLocalEvent<SensedCellComponent, ComponentShutdown>(OnCellShutdown);
+    }
+
+    /// <summary>
+    ///     Retires every described cell when the tier is switched off, so the switch is an actual
+    ///     rollback rather than a pause.
+    ///
+    ///     Without this the records survive the switch while the stock burst-spawn placer populates
+    ///     the same cells, and switching back on re-materializes the old roll alongside the placer's
+    ///     debris: not on top of it, since the spawn-site collision check holds, but roughly double
+    ///     the population in every cell that was visited in between, charged to PVS and broadphase
+    ///     for the rest of the round with nothing to clear it.
+    ///
+    ///     Dropping <see cref="SensedCellComponent"/> is the whole of it. <see cref="OnCellShutdown"/>
+    ///     already drains that cell's entries out of the flat index, so there is no second
+    ///     bookkeeping path to keep in step, and a cell with no component is one Describe will roll
+    ///     again from scratch if the tier comes back.
+    /// </summary>
+    private void OnEnabledChanged(bool value)
+    {
+        if (value == _enabled)
+            return;
+
+        _enabled = value;
+
+        if (value)
+            return;
+
+        var cells = new List<EntityUid>();
+        var query = EntityQueryEnumerator<SensedCellComponent>();
+
+        while (query.MoveNext(out var uid, out _))
+        {
+            cells.Add(uid);
+        }
+
+        // Collected first: RemComp fires OnCellShutdown, which mutates Records, and the query is
+        // live over the same component set.
+        foreach (var uid in cells)
+        {
+            RemComp<SensedCellComponent>(uid);
+        }
+
+        SensedMetrics.Records.Set(Records.Count);
     }
 
     private void OnCellShutdown(EntityUid uid, SensedCellComponent component, ComponentShutdown args)

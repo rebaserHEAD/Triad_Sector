@@ -415,6 +415,63 @@ public sealed class SensedTierTest
     }
 
     /// <summary>
+    ///     The kill switch has to be a rollback, not a pause. Records that outlive the switch are
+    ///     records that re-materialize the moment it comes back on, alongside whatever the stock
+    ///     burst-spawn placer built in the meantime: not on top of it, since the spawn-site
+    ///     collision check holds, but roughly double the population in every cell visited while the
+    ///     tier was off, charged to PVS and broadphase for the rest of the round with nothing to
+    ///     clear it.
+    ///
+    ///     Asserts the retirement directly rather than staging a full off/on/reload cycle. The
+    ///     fuller regression is possible but it depends on unload timing and on the worldgen GC
+    ///     queue's minimum drain depth, which makes it flaky for no extra signal: if the records are
+    ///     gone, there is nothing left to double with.
+    /// </summary>
+    [Test]
+    public async Task DisablingRetiresDescribedCells()
+    {
+        await using var pair = await PoolManager.GetServerClient();
+        var server = pair.Server;
+        await server.WaitIdleAsync();
+        var entManager = server.ResolveDependency<IEntityManager>();
+        var cfg = server.ResolveDependency<IConfigurationManager>();
+
+        var (map, _) = await SetupBelt(pair, sensedRange: 512f, loaderProto: FarLoader, needMaterialized: false);
+
+        await server.WaitAssertion(() =>
+        {
+            Assert.That(RecordsOnMap(entManager, map), Is.Not.Empty,
+                "nothing was described, so flipping the switch would prove nothing");
+        });
+
+        await server.WaitPost(() => cfg.SetCVar(TriadCCVars.WorldgenSensedEnabled, false));
+        await server.WaitRunTicks(5);
+        await server.WaitIdleAsync();
+
+        await server.WaitAssertion(() =>
+        {
+            var stillSensed = 0;
+            var query = entManager.EntityQueryEnumerator<SensedCellComponent>();
+            while (query.MoveNext(out _, out _))
+                stillSensed++;
+
+            Assert.Multiple(() =>
+            {
+                // Scoped to this map rather than the whole dictionary: it is process-wide and shared
+                // with any other fixture running against the same pooled server.
+                Assert.That(RecordsOnMap(entManager, map), Is.Empty,
+                    "records survived the kill switch; switching back on would build this roll on top of "
+                    + "whatever the stock placer spawned while it was off");
+                Assert.That(stillSensed, Is.Zero,
+                    "cells are still marked described after the tier was switched off, so they would never be re-rolled");
+            });
+        });
+
+        await server.WaitPost(() => entManager.DeleteEntity(map));
+        await pair.CleanReturnAsync();
+    }
+
+    /// <summary>
     ///     The traced silhouette of a live debris grid's own tiles. Empty rather than null when the
     ///     entity is not a grid, has no tiles, or cannot be traced: this project is not in a nullable
     ///     annotation context, and the callers only ever need "did we get a shape".
