@@ -218,6 +218,13 @@ public sealed class SensedContactsSystem : EntitySystem
             if (record.Hull is null || record.State != SensedState.Dormant || record.Map != consoleMap)
                 continue;
 
+            // A record that burned through its spawn attempts is obstructed by something durable
+            // and will not build for the rest of this load cycle. Painting it anyway is a ghost
+            // rock: you fly to the outline and there is nothing there. The count is zeroed by
+            // EnqueueCell on the next cell load, so the contact comes back if the way clears.
+            if (record.BlockedAttempts >= DebrisMaterializeQueueSystem.MaxBlockedAttempts)
+                continue;
+
             var distSq = (consolePos - record.Point).LengthSquared();
             if (distSq > maxRangeSq)
                 continue;

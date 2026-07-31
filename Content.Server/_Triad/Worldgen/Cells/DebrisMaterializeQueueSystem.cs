@@ -37,7 +37,13 @@ public sealed class DebrisMaterializeQueueSystem : BaseWorldSystem
     ///     A record blocked this many times in a row stays dormant until its cell reloads.
     ///     Something durable is parked on the point; retrying it every tick is wasted work.
     /// </summary>
-    private const byte MaxBlockedAttempts = 3;
+    /// <summary>
+    ///     Spawn attempts a record gets before it is left alone for the rest of the load cycle.
+    ///     Internal because the contact channel has to know when a record has given up: a record
+    ///     that will not spawn must stop being painted. <see cref="EnqueueCell"/> zeroes the count
+    ///     on every cell load, so giving up is per load cycle rather than permanent.
+    /// </summary>
+    internal const byte MaxBlockedAttempts = 3;
 
     /// <summary>
     ///     Seconds between re-orderings of the queue. Sorting every tick charges an
