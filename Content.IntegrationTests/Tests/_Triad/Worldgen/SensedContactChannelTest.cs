@@ -32,10 +32,16 @@ namespace Content.IntegrationTests.Tests._Triad.Worldgen;
 public sealed class SensedContactChannelTest
 {
     private const string ConsoleProto = "TriadContactTestConsole";
+    private const string RockProto = "TriadContactTestRock";
 
     // The UserInterface is not decoration. The server authorizes a contact request against whether
     // the sender has an interface open on that console, so a console without one is unreachable and
     // every test here would silently assert on an empty picture.
+    //
+    // The rock prototype is not decoration either: the wire carries a recipe mirrored from the
+    // prototype's BlobFloorPlanBuilder, and the client rolls the shape from it, so a record whose
+    // prototype has no blob builder is never sent and a record whose prototype does not exist at
+    // all would fail recipe lookup server-side and color lookup client-side.
     [TestPrototypes]
     private const string Prototypes = $@"
 - type: entity
@@ -50,6 +56,16 @@ public sealed class SensedContactChannelTest
         # which puts the far ones past the 2 m default and makes opening them fail on distance.
         # Range enforcement is the UI system's own business and is not what these tests cover.
         interactionRange: 0
+
+- type: entity
+  id: {RockProto}
+  components:
+  - type: BlobFloorPlanBuilder
+    radius: 6
+    floorPlacements: 8
+    blobDrawProb: 0.5
+    floorTileset:
+    - FloorAsteroidSand
 ";
 
     /// <summary>Ids well clear of anything <see cref="CellDescribeSystem"/> hands out in a test round.</summary>
@@ -62,17 +78,12 @@ public sealed class SensedContactChannelTest
             Id = id,
             Map = map,
             Point = point,
-            Proto = "TriadContactTestRock",
+            Proto = RockProto,
             Seed = id,
-            // A unit square is enough: nothing in the contact path reads the shape, only that
-            // there is one. Records with a null hull are filtered out before they are sent.
-            Hull = new[]
-            {
-                new Vector2i(0, 0),
-                new Vector2i(1, 0),
-                new Vector2i(1, 1),
-                new Vector2i(0, 1),
-            },
+            // Shaped is the send gate; the geometry itself is the client's business now. The seed
+            // and the RockProto recipe are all the client needs to roll a real outline, which is
+            // exactly what GetContacts asserting Not.Empty exercises end to end.
+            Shaped = true,
             DetectSignature = 1f,
             DetectBias = 0f,
             State = SensedState.Dormant,

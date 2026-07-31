@@ -15,7 +15,6 @@ using Content.Shared._Triad.CCVar;
 using Content.Shared._Triad.Worldgen;
 using Content.Shared.Ghost;
 using Content.Shared.Mind.Components;
-using Content.Shared.Shuttles.Components;
 using Robust.Server.GameObjects;
 using Robust.Shared.Configuration;
 using Robust.Shared.Map;
@@ -463,18 +462,19 @@ public sealed class CellDescribeSystem : BaseWorldSystem
     }
 
     /// <summary>
-    ///     Computes the record's radar-facing data from its prototype and seed: outline, family
-    ///     colour, and the detection terms <see cref="DetectionSystem"/> would apply to the real
-    ///     grid, so a contact appears at the range its grid would. Sized off the rolled blob, so a
-    ///     rock that later gets decorated reads marginally smaller here than the grid it becomes.
+    ///     Computes the record's detection terms from its prototype and seed: the same size and
+    ///     bias <see cref="DetectionSystem"/> would apply to the real grid, so a contact appears
+    ///     at the range its grid would. Sized off the rolled blob, so a rock that later gets
+    ///     decorated reads marginally smaller here than the grid it becomes.
+    ///
+    ///     Detection terms only: no outline is kept server-side. The client re-rolls the shape
+    ///     from (Proto, Seed) through the shared generator, and the contact channel ships the
+    ///     recipe rather than geometry, so the walk here exists purely to size the tile AABB.
     /// </summary>
     private void FillShape(DebrisRecord record)
     {
         if (!_proto.TryIndex<EntityPrototype>(record.Proto, out var proto))
             return;
-
-        if (proto.TryGetComponent<IFFComponent>("IFF", out var iff))
-            record.IffColor = iff.Color;
 
         if (proto.TryGetComponent<DetectedAtRangeMultiplierComponent>("DetectedAtRangeMultiplier", out var detect))
             record.DetectBias = detect.VisualBias;
@@ -490,23 +490,26 @@ public sealed class CellDescribeSystem : BaseWorldSystem
         if (tiles.Count == 0)
             return;
 
-        // The true silhouette when it can be traced, the convex hull only as a fallback. Trace
-        // returns null for an empty roll or an outline past its sanity cap, neither of which any
-        // shipping prototype produces, so the hull is a safety net rather than a code path.
-        record.Hull = TileOutline.Trace(tiles) ?? BlobShapeGen.ComputeHull(tiles);
+        record.Shaped = true;
 
-        // DetectionSystem sizes a grid by its local AABB diagonal; the hull's AABB is that
-        // same box, computed without ever building the grid.
-        var min = new Vector2(float.MaxValue, float.MaxValue);
-        var max = new Vector2(float.MinValue, float.MinValue);
-        foreach (var vert in record.Hull)
+        // DetectionSystem sizes a grid by its local AABB diagonal. Tiles are unit squares, so the
+        // box runs from the smallest tile origin to the largest tile origin plus one; that is the
+        // identical box the old traced outline spanned, keeping detection ranges unchanged.
+        var minX = int.MaxValue;
+        var minY = int.MaxValue;
+        var maxX = int.MinValue;
+        var maxY = int.MinValue;
+        foreach (var tile in tiles)
         {
-            min = Vector2.Min(min, vert);
-            max = Vector2.Max(max, vert);
+            minX = Math.Min(minX, tile.Pos.X);
+            minY = Math.Min(minY, tile.Pos.Y);
+            maxX = Math.Max(maxX, tile.Pos.X);
+            maxY = Math.Max(maxY, tile.Pos.Y);
         }
 
-        var size = max - min;
-        record.DetectSignature = MathF.Sqrt(size.X * size.X + size.Y * size.Y) * (detect?.VisualMultiplier ?? 1f);
+        float sizeX = maxX + 1 - minX;
+        float sizeY = maxY + 1 - minY;
+        record.DetectSignature = MathF.Sqrt(sizeX * sizeX + sizeY * sizeY) * (detect?.VisualMultiplier ?? 1f);
     }
 
     private List<Vector2> GeneratePointsInCell(float density, Vector2 coords)

@@ -2,29 +2,78 @@
 //
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
+using System.Numerics;
 using Content.Shared._Triad.Worldgen;
+using Content.Shared.Shuttles.Components;
+using Robust.Shared.Prototypes;
 using Robust.Shared.Timing;
 
 namespace Content.Client._Triad.Worldgen;
 
+/// <summary>
+///     A dormant contact ready to draw: position, derived outline, derived color. The wire never
+///     carries geometry on the common path; this is what the recipe resolves into locally.
+/// </summary>
+public readonly record struct SensedContactView(Vector2 MapPosition, Vector2i[] Outline, Color Color);
+
 public sealed class SensedContactsSystem : EntitySystem
 {
+    [Dependency] private readonly IComponentFactory _factory = default!;
     [Dependency] private readonly IGameTiming _timing = default!;
+    [Dependency] private readonly IPrototypeManager _proto = default!;
 
     // These two are coupled: the server answers every poll, so StaleAfter divided by
     // RequestThrottle is the number of consecutive dropped replies a console tolerates before it
     // blanks. Ten is a sane UDP margin. Do not raise the throttle without raising StaleAfter too.
     private static readonly TimeSpan RequestThrottle = TimeSpan.FromMilliseconds(500);
     private static readonly TimeSpan StaleAfter = TimeSpan.FromSeconds(5);
-    private static readonly SensedContactData[] EmptyContacts = Array.Empty<SensedContactData>();
+
+    /// <summary>
+    ///     Cap on shape rolls per frame. A full-picture sync arrives as batches of up to 256
+    ///     contacts, and rolling every shape on receipt would lump tens of milliseconds into one
+    ///     frame; deriving on demand under this cap instead lets a cold picture fill over a few
+    ///     frames, which is invisible at radar timescales. Rocks whose shape is not rolled yet
+    ///     are simply skipped by <see cref="GetContacts"/> until a frame has budget for them.
+    /// </summary>
+    private const int MaxDerivesPerFrame = 16;
+
+    private int _derivesThisFrame;
 
     // Keyed per console, matching the caches below. A single system-wide scalar let whichever
     // radar control ticked first in UI tree order consume the gate every cycle, so any second
     // open console never sent a request and rendered nothing.
     private readonly Dictionary<NetEntity, TimeSpan> _lastRequestTime = new();
 
-    private readonly Dictionary<NetEntity, Dictionary<int, SensedContactData>> _contacts = new();
+    private readonly Dictionary<NetEntity, Dictionary<int, ClientContact>> _contacts = new();
     private readonly Dictionary<NetEntity, TimeSpan> _lastUpdated = new();
+
+    /// <summary>
+    ///     Derived outlines keyed by the roll identity. Version is part of the key so a
+    ///     re-versioned rock (persist-modified, later) re-derives instead of reusing the pristine
+    ///     shape. Bounded by distinct rocks seen this round; dropped wholesale on round restart
+    ///     once the chart layer lands, and a round's worth is at most a few MB.
+    /// </summary>
+    private readonly Dictionary<(string Proto, int Seed, int Version), Vector2i[]> _shapes = new();
+
+    private readonly Dictionary<string, Color> _colors = new();
+
+    /// <summary>
+    ///     A contact as stored: legend index and color both resolved at receipt, geometry not yet
+    ///     derived. Color is resolved eagerly because prototype component lookups touch
+    ///     thread-local IoC (a debug assert fires even on the factory overload), and receipt is
+    ///     the last point guaranteed to be on the game thread: <see cref="GetContacts"/> is a
+    ///     public read API with callers off it (tests), so everything it touches must be plain
+    ///     data or pure math.
+    /// </summary>
+    private readonly record struct ClientContact(
+        int Id,
+        int Version,
+        SensedContactArm Arm,
+        Vector2 MapPosition,
+        SensedProtoRecipe Recipe,
+        int Seed,
+        Vector2i[]? Outline,
+        Color Color);
 
     public override void Initialize()
     {
@@ -32,11 +81,21 @@ public sealed class SensedContactsSystem : EntitySystem
         SubscribeNetworkEvent<SensedContactsDeltaEvent>(OnDelta);
     }
 
+    // Tick, not FrameUpdate: a headless client (integration tests, replays) never renders a
+    // frame, and a budget that only refills on render would wedge shut after the first sixteen
+    // derives there. Ticks always run, and per-tick refill only makes the budget slightly more
+    // generous per second on a high-refresh client.
+    public override void Update(float frameTime)
+    {
+        base.Update(frameTime);
+        _derivesThisFrame = 0;
+    }
+
     private void OnDelta(SensedContactsDeltaEvent ev)
     {
         if (!_contacts.TryGetValue(ev.Console, out var consoleContacts))
         {
-            consoleContacts = new Dictionary<int, SensedContactData>();
+            consoleContacts = new Dictionary<int, ClientContact>();
             _contacts[ev.Console] = consoleContacts;
         }
 
@@ -50,7 +109,15 @@ public sealed class SensedContactsSystem : EntitySystem
 
         foreach (var contact in ev.Adds)
         {
-            consoleContacts[contact.Id] = contact;
+            // Legend indices are only meaningful within the event that carried them, so they are
+            // resolved here at receipt, never stored. Out-of-range means a malformed event;
+            // dropping the contact beats throwing in a network handler.
+            if (contact.ProtoIndex < 0 || contact.ProtoIndex >= ev.Legend.Count)
+                continue;
+
+            var recipe = ev.Legend[contact.ProtoIndex];
+            consoleContacts[contact.Id] = new ClientContact(contact.Id, contact.Version, contact.Arm,
+                contact.MapPosition, recipe, contact.Seed, contact.Outline, GetColor(recipe.ProtoId));
         }
 
         _lastUpdated[ev.Console] = _timing.CurTime;
@@ -80,11 +147,12 @@ public sealed class SensedContactsSystem : EntitySystem
     }
 
     /// <summary>
-    /// Gets the current sensed contacts for the given console. Returns an empty collection if
-    /// the console has no known contacts or its data hasn't been refreshed in a while (contacts
-    /// are static, so a generous staleness window is used to avoid flicker).
+    /// Streams the drawable contacts for the given console, deriving any outlines not yet rolled
+    /// under the per-frame budget. Yields nothing if the console has no known contacts or its
+    /// data hasn't been refreshed in a while (contacts are static, so a generous staleness window
+    /// is used to avoid flicker).
     /// </summary>
-    public IReadOnlyCollection<SensedContactData> GetContacts(EntityUid console)
+    public IEnumerable<SensedContactView> GetContacts(EntityUid console)
     {
         var netConsole = GetNetEntity(console);
 
@@ -92,9 +160,82 @@ public sealed class SensedContactsSystem : EntitySystem
             || _timing.CurTime - lastUpdate > StaleAfter
             || !_contacts.TryGetValue(netConsole, out var consoleContacts))
         {
-            return EmptyContacts;
+            yield break;
         }
 
-        return consoleContacts.Values;
+        foreach (var contact in consoleContacts.Values)
+        {
+            if (TryGetShape(contact, out var outline))
+                yield return new SensedContactView(contact.MapPosition, outline, contact.Color);
+        }
+    }
+
+    /// <summary>
+    ///     Resolves a contact's outline, rolling and caching it if the frame budget allows.
+    ///     False only for a not-yet-rolled shape past this frame's budget, an arm this client
+    ///     does not understand, or a roll that produced nothing (which the server never sends).
+    /// </summary>
+    private bool TryGetShape(in ClientContact contact, out Vector2i[] outline)
+    {
+        outline = Array.Empty<Vector2i>();
+
+        // The Explicit arm carries its geometry verbatim; nothing to roll.
+        if (contact.Arm == SensedContactArm.Explicit)
+        {
+            if (contact.Outline is not { Length: > 2 })
+                return false;
+
+            outline = contact.Outline;
+            return true;
+        }
+
+        // Unknown arms (Modified, or anything newer) are skipped rather than misdrawn.
+        if (contact.Arm != SensedContactArm.Pristine)
+            return false;
+
+        var key = (contact.Recipe.ProtoId, contact.Seed, contact.Version);
+        if (_shapes.TryGetValue(key, out var cached))
+        {
+            outline = cached;
+            return cached.Length > 2;
+        }
+
+        if (_derivesThisFrame >= MaxDerivesPerFrame)
+            return false;
+
+        _derivesThisFrame++;
+
+        // The same walk and trace the server rolled at describe time and the builder will roll at
+        // materialize time; shared code and a shared seed are what make the painted silhouette
+        // the rock that eventually loads in.
+        var recipe = contact.Recipe;
+        var tiles = BlobShapeGen.Roll(new System.Random(contact.Seed), recipe.Radius, recipe.FloorPlacements,
+            recipe.BlobDrawProb, Math.Max(1, recipe.TilesetCount));
+
+        cached = tiles.Count == 0
+            ? Array.Empty<Vector2i>()
+            : TileOutline.Trace(tiles) ?? BlobShapeGen.ComputeHull(tiles);
+
+        _shapes[key] = cached;
+        outline = cached;
+        return cached.Length > 2;
+    }
+
+    private Color GetColor(string protoId)
+    {
+        if (_colors.TryGetValue(protoId, out var color))
+            return color;
+
+        color = Color.Gray;
+        // Game thread only (called from OnDelta): every TryGetComponent overload funnels into the
+        // by-name one, whose debug assert resolves the component factory through thread-local IoC.
+        if (_proto.TryIndex<EntityPrototype>(protoId, out var proto)
+            && proto.TryGetComponent<IFFComponent>(out var iff, _factory))
+        {
+            color = iff.Color;
+        }
+
+        _colors[protoId] = color;
+        return color;
     }
 }

@@ -54,13 +54,20 @@ public sealed class DebrisRecord
     public int Seed;
 
     /// <summary>
-    ///     Traced silhouette of the rolled blob, in grid-local tile units relative to
-    ///     <see cref="Point"/>. Vertices are tile corners, so they are exactly integral. Null for
-    ///     non-blob debris (spawner markers etc.), which get no radar contact.
+    ///     Whether the shape roll produced tiles. False for non-blob debris (spawner markers
+    ///     etc.), which get no radar contact. The server keeps no outline geometry at all: the
+    ///     client re-rolls the shape from (<see cref="Proto"/>, <see cref="Seed"/>) through the
+    ///     shared generator, and color derives from the prototype's IFF component client-side.
     /// </summary>
-    public Vector2i[]? Hull;
+    public bool Shaped;
 
-    public Color IffColor = Color.Gray;
+    /// <summary>
+    ///     Bumped whenever the record's client-facing data changes, so the contact channel
+    ///     re-sends on version mismatch. Nothing bumps it yet: unload is a rollback today, so 0
+    ///     means "pristine roll from <see cref="Seed"/>" for the life of the round. The bump
+    ///     site, when debris persistence lands, is unload capture in the materialize queue.
+    /// </summary>
+    public int Version;
 
     /// <summary>Hull AABB diagonal times the prototype's visual detection multiplier.</summary>
     public float DetectSignature;

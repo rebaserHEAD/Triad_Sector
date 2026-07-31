@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 using System.Numerics;
+using Content.Server.Worldgen.Components.Debris;
 using Content.Shared._Mono.CCVar;
 using Content.Shared._Mono.Detection;
 using Content.Shared._Triad.CCVar;
@@ -13,6 +14,7 @@ using Robust.Server.Player;
 using Robust.Shared.Configuration;
 using Robust.Shared.Enums;
 using Robust.Shared.Player;
+using Robust.Shared.Prototypes;
 using Robust.Shared.Timing;
 
 namespace Content.Server._Triad.Worldgen.Cells;
@@ -31,6 +33,7 @@ public sealed class SensedContactsSystem : EntitySystem
     [Dependency] private readonly IConfigurationManager _cfg = default!;
     [Dependency] private readonly IGameTiming _timing = default!;
     [Dependency] private readonly IPlayerManager _playerManager = default!;
+    [Dependency] private readonly IPrototypeManager _proto = default!;
     [Dependency] private readonly TransformSystem _xformSys = default!;
 
     /// <summary>Requests between opportunistic sweeps for known-sets whose console died.</summary>
@@ -42,14 +45,28 @@ public sealed class SensedContactsSystem : EntitySystem
     private int _addsPerPoll;
     private int _sweepCounter;
 
-    /// <summary>Per (session, console) set of record ids that session's client currently holds.</summary>
-    private readonly Dictionary<(ICommonSession Session, EntityUid Console), HashSet<int>> _known = new();
+    /// <summary>
+    ///     Per (session, console) map of record id to the <see cref="DebrisRecord.Version"/> that
+    ///     session's client currently holds. A version mismatch re-sends the contact exactly like
+    ///     a missing id, which is the entire dirty mechanism: bump the record, and every viewer
+    ///     picks up the change on its next poll.
+    /// </summary>
+    private readonly Dictionary<(ICommonSession Session, EntityUid Console), Dictionary<int, int>> _known = new();
+
+    /// <summary>
+    ///     Roll parameters per prototype id, mirrored once from the server-only
+    ///     BlobFloorPlanBuilder component. Null entries cache the misses too. Never invalidated:
+    ///     prototypes are static for the round.
+    /// </summary>
+    private readonly Dictionary<string, SensedProtoRecipe?> _recipeCache = new();
 
     // Scratch, cleared at the top of every request rather than after the send: the delta event
     // needs its own List copies anyway (see the comment in OnContactsRequested), so these only
     // ever hold one request's intermediate state.
     private readonly List<DebrisRecord> _tempVisibleCache = new();
     private readonly HashSet<int> _tempVisibleIdsCache = new();
+    private readonly List<SensedProtoRecipe> _tempLegendCache = new();
+    private readonly Dictionary<string, int> _tempLegendIndexCache = new();
     private readonly List<SensedContactData> _tempAddsCache = new();
     private readonly List<int> _tempRemovesCache = new();
     private readonly List<(ICommonSession Session, EntityUid Console)> _tempEvictCache = new();
@@ -134,25 +151,43 @@ public sealed class SensedContactsSystem : EntitySystem
 
         var key = (args.SenderSession, consoleUid.Value);
         var isNew = !_known.TryGetValue(key, out var knownIds);
-        knownIds ??= new HashSet<int>();
+        knownIds ??= new Dictionary<int, int>();
 
         CollectVisible(consoleUid.Value, radar);
 
         _tempAddsCache.Clear();
         _tempRemovesCache.Clear();
+        _tempLegendCache.Clear();
+        _tempLegendIndexCache.Clear();
 
         foreach (var record in _tempVisibleCache)
         {
-            if (knownIds.Contains(record.Id))
+            // Same-version contacts are settled; a version mismatch re-sends exactly like a
+            // missing id, and the client upserts by id either way.
+            if (knownIds.TryGetValue(record.Id, out var knownVersion) && knownVersion == record.Version)
                 continue;
 
             if (_tempAddsCache.Count >= _addsPerPoll)
                 break; // rest arrive on a later poll
 
-            _tempAddsCache.Add(new SensedContactData(record.Id, record.Point, record.Hull!, record.IffColor));
+            // CollectVisible only passes shaped records, and a record is only shaped if its
+            // prototype carried a blob builder, so the recipe lookup cannot miss in practice.
+            // Guarded anyway: a contact the client cannot roll is worse than no contact.
+            if (GetRecipe(record.Proto) is not { } recipe)
+                continue;
+
+            if (!_tempLegendIndexCache.TryGetValue(record.Proto, out var protoIndex))
+            {
+                protoIndex = _tempLegendCache.Count;
+                _tempLegendCache.Add(recipe);
+                _tempLegendIndexCache[record.Proto] = protoIndex;
+            }
+
+            _tempAddsCache.Add(new SensedContactData(record.Id, record.Version, SensedContactArm.Pristine,
+                record.Point, protoIndex, record.Seed, null));
         }
 
-        foreach (var id in knownIds)
+        foreach (var id in knownIds.Keys)
         {
             if (!_tempVisibleIdsCache.Contains(id))
                 _tempRemovesCache.Add(id);
@@ -166,7 +201,7 @@ public sealed class SensedContactsSystem : EntitySystem
 
         // Reflect exactly what is about to be sent: capped adds included, uncapped removes included.
         foreach (var add in _tempAddsCache)
-            knownIds.Add(add.Id);
+            knownIds[add.Id] = add.Version;
         foreach (var removed in _tempRemovesCache)
             knownIds.Remove(removed);
 
@@ -174,10 +209,11 @@ public sealed class SensedContactsSystem : EntitySystem
 
         // Fresh copies, not the pooled caches: those get cleared on this system's very next
         // request, which can race the network layer's own serialization of this event.
+        var legend = new List<SensedProtoRecipe>(_tempLegendCache);
         var adds = new List<SensedContactData>(_tempAddsCache);
         var removes = new List<int>(_tempRemovesCache);
 
-        RaiseNetworkEvent(new SensedContactsDeltaEvent(ev.Console, isNew, adds, removes), args.SenderSession);
+        RaiseNetworkEvent(new SensedContactsDeltaEvent(ev.Console, isNew, legend, adds, removes), args.SenderSession);
 
         if (_tempAddsCache.Count > 0)
             SensedMetrics.ContactsSent.Inc(_tempAddsCache.Count);
@@ -215,7 +251,7 @@ public sealed class SensedContactsSystem : EntitySystem
 
         foreach (var record in _describe.Records.Values)
         {
-            if (record.Hull is null || record.State != SensedState.Dormant || record.Map != consoleMap)
+            if (!record.Shaped || record.State != SensedState.Dormant || record.Map != consoleMap)
                 continue;
 
             // A record that burned through its spawn attempts is obstructed by something durable
@@ -252,6 +288,28 @@ public sealed class SensedContactsSystem : EntitySystem
         }
 
         SensedMetrics.ContactScan.Observe((_timing.RealTime - scanStart).TotalSeconds);
+    }
+
+    /// <summary>
+    ///     Roll parameters for a prototype, mirrored from its server-only BlobFloorPlanBuilder
+    ///     component so the client can re-run the identical walk. Null for prototypes without a
+    ///     blob builder, whose records are never shaped and never reach the adds loop.
+    /// </summary>
+    private SensedProtoRecipe? GetRecipe(string protoId)
+    {
+        if (_recipeCache.TryGetValue(protoId, out var cached))
+            return cached;
+
+        SensedProtoRecipe? recipe = null;
+        if (_proto.TryIndex<EntityPrototype>(protoId, out var proto)
+            && proto.TryGetComponent<BlobFloorPlanBuilderComponent>("BlobFloorPlanBuilder", out var blob))
+        {
+            recipe = new SensedProtoRecipe(protoId, blob.Radius, blob.FloorPlacements, blob.BlobDrawProb,
+                Math.Max(1, blob.FloorTileset.Count));
+        }
+
+        _recipeCache[protoId] = recipe;
+        return recipe;
     }
 
     /// <summary>

@@ -95,8 +95,8 @@ public sealed class SensedTierTest
                 .ToList();
 
             return needMaterialized
-                ? records.Any(r => r is { State: SensedState.Materialized, Hull: not null })
-                : records.Any(r => r is { State: SensedState.Dormant, Hull: not null });
+                ? records.Any(r => r is { State: SensedState.Materialized, Shaped: true })
+                : records.Any(r => r is { State: SensedState.Dormant, Shaped: true });
         }, maxTicks: 900);
 
         await server.WaitIdleAsync();
@@ -110,6 +110,27 @@ public sealed class SensedTierTest
         return describe.Records.Values.Where(r => r.Map == map).ToList();
     }
 
+    /// <summary>
+    ///     Rolls the outline a client derives for this record. The recipe wire format means the
+    ///     server keeps no geometry at all, so the assertions below re-derive it exactly the way
+    ///     the client does: the prototype's blob parameters plus the record's seed, through the
+    ///     shared generator. Null for records whose prototype carries no blob builder.
+    /// </summary>
+    private static Vector2i[] RollOutline(IPrototypeManager protoManager, DebrisRecord record)
+    {
+        if (!protoManager.TryIndex<EntityPrototype>(record.Proto, out var proto)
+            || !proto.TryGetComponent<BlobFloorPlanBuilderComponent>("BlobFloorPlanBuilder", out var blob))
+            return null;
+
+        var tiles = BlobShapeGen.Roll(new System.Random(record.Seed), blob.Radius, blob.FloorPlacements,
+            blob.BlobDrawProb, System.Math.Max(1, blob.FloorTileset.Count));
+
+        if (tiles.Count == 0)
+            return null;
+
+        return TileOutline.Trace(tiles) ?? BlobShapeGen.ComputeHull(tiles);
+    }
+
     [Test]
     public async Task DescribesBeyondLoadRadius()
     {
@@ -117,6 +138,7 @@ public sealed class SensedTierTest
         var server = pair.Server;
         await server.WaitIdleAsync();
         var entManager = server.ResolveDependency<IEntityManager>();
+        var protoManager = server.ResolveDependency<IPrototypeManager>();
 
         // Sense far, load near: the gap between the two is the whole point of the tier.
         var (map, _) = await SetupBelt(pair, sensedRange: 1024f, loaderProto: NearLoader, needMaterialized: false);
@@ -126,15 +148,15 @@ public sealed class SensedTierTest
             var records = RecordsOnMap(entManager, map);
             Assert.That(records, Is.Not.Empty, "describe pass produced no records for the belt map");
 
-            var withHulls = records.Where(r => r.Hull is not null).ToList();
-            Assert.That(withHulls, Is.Not.Empty, "no described debris carried a hull to paint on radar");
-            // Outlines are true silhouettes now, not convex hulls, so the ceiling is the tracer's
-            // sanity valve rather than the hull's vertex cap. A real rock traces to somewhere
+            var shaped = records.Where(r => r.Shaped).ToList();
+            Assert.That(shaped, Is.Not.Empty, "no described debris was shaped to paint on radar");
+            // Outlines are true silhouettes derived from (proto, seed), so the ceiling is the
+            // tracer's sanity valve rather than a hull vertex cap. A real rock traces to somewhere
             // between 19 and 182 vertices depending on size tier; the floor still matters, since
             // fewer than three vertices is not a polygon.
-            Assert.That(withHulls.All(r => r.Hull!.Length is > 2 and <= TileOutline.MaxOutlineVerts),
+            Assert.That(shaped.All(r => RollOutline(protoManager, r) is { Length: > 2 and <= TileOutline.MaxOutlineVerts }),
                 "outlines must be bounded polygons, not degenerate or unbounded");
-            Assert.That(withHulls.Any(r => r.DetectSignature > 0f),
+            Assert.That(shaped.Any(r => r.DetectSignature > 0f),
                 "described debris carried no detection signature, so contacts could never resolve");
 
             var farDormant = records.Where(r => r.Point.Length() > 400f && r.State == SensedState.Dormant).ToList();
@@ -202,7 +224,7 @@ public sealed class SensedTierTest
     ///     dormant is the silhouette of the ROCK that loads in, not of the finished grid. Describe
     ///     models the shape roll and stops there. Decoration runs afterwards at build time and lays
     ///     tiles of its own, chiefly the RoomFill markers in the NF debris tables, so a decorated
-    ///     grid traces to a slightly larger outline than the one describe stored.
+    ///     grid traces to a slightly larger outline than the one the record derives.
     ///
     ///     So this asserts equality where nothing decorated the grid and growth-only where something
     ///     did: what built may enclose more than what was painted, never less, and never somewhere
@@ -217,6 +239,7 @@ public sealed class SensedTierTest
         var server = pair.Server;
         await server.WaitIdleAsync();
         var entManager = server.ResolveDependency<IEntityManager>();
+        var protoManager = server.ResolveDependency<IPrototypeManager>();
 
         var (map, _) = await SetupBelt(pair, sensedRange: 512f, loaderProto: FarLoader, needMaterialized: true);
 
@@ -227,15 +250,20 @@ public sealed class SensedTierTest
             var decorated = 0;
             var all = RecordsOnMap(entManager, map);
             var materializedCount = all.Count(r => r.State == SensedState.Materialized);
-            var withHull = all.Count(r => r.State == SensedState.Materialized && r.Hull is not null);
+            var withShape = all.Count(r => r.State == SensedState.Materialized && r.Shaped);
             var withGrid = all.Count(r => r.State == SensedState.Materialized && r.Entity is { } e
                                           && entManager.HasComponent<MapGridComponent>(e));
 
             foreach (var record in all)
             {
-                if (record is not { State: SensedState.Materialized, Hull: not null, Entity: { } ent }
+                if (record is not { State: SensedState.Materialized, Shaped: true, Entity: { } ent }
                     || !entManager.TryGetComponent<MapGridComponent>(ent, out var grid))
                     continue;
+
+                // What radar painted: the client-side derivation, reproduced here.
+                var described = RollOutline(protoManager, record);
+                Assert.That(described, Is.Not.Null,
+                    $"a shaped record of {record.Proto} no longer derives an outline");
 
                 // Take the grid's real tiles, not their bounding box. Comparing boxes only ever
                 // constrained four numbers out of a couple of hundred tiles and said nothing at
@@ -256,7 +284,7 @@ public sealed class SensedTierTest
                 Assert.That(fromGrid, Is.Not.Null,
                     $"could not trace the materialized grid of {record.Proto}");
 
-                if (record.Hull!.SequenceEqual(fromGrid!))
+                if (described!.SequenceEqual(fromGrid!))
                 {
                     exact++;
                     continue;
@@ -266,7 +294,7 @@ public sealed class SensedTierTest
                 // and that is what separates "a room was laid on top of the rock" from "we described
                 // a different rock": decoration only ever adds tiles, so it can only push the
                 // outline outward. Anything that moves the shape breaks containment immediately.
-                var (describedMin, describedMax) = Bounds(record.Hull);
+                var (describedMin, describedMax) = Bounds(described);
                 var (builtMin, builtMax) = Bounds(fromGrid!);
 
                 Assert.That(
@@ -275,7 +303,7 @@ public sealed class SensedTierTest
                     $"the outline painted at range is not inside the rock that loaded for {record.Proto}: "
                     + $"described {describedMin}..{describedMax} against {builtMin}..{builtMax} from the grid");
 
-                Assert.That(EnclosedCells(fromGrid!), Is.GreaterThanOrEqualTo(EnclosedCells(record.Hull)),
+                Assert.That(EnclosedCells(fromGrid!), Is.GreaterThanOrEqualTo(EnclosedCells(described)),
                     $"the materialized grid of {record.Proto} encloses less than the outline painted for it");
 
                 decorated++;
@@ -284,8 +312,8 @@ public sealed class SensedTierTest
             // At least one undecorated rock has to be in the sample, or the equality half of the
             // promise is never exercised and this degenerates into the containment check alone.
             Assert.That(exact, Is.GreaterThan(0),
-                $"no undecorated blob debris was available to compare exactly against its hull "
-                + $"(records={all.Count} materialized={materializedCount} withHull={withHull} "
+                $"no undecorated blob debris was available to compare exactly against its outline "
+                + $"(records={all.Count} materialized={materializedCount} withShape={withShape} "
                 + $"withGrid={withGrid} exact={exact} decorated={decorated})");
         });
 
@@ -333,7 +361,7 @@ public sealed class SensedTierTest
         await server.WaitAssertion(() =>
         {
             var subject = RecordsOnMap(entManager, map).FirstOrDefault(r =>
-                r is { State: SensedState.Materialized, Hull: not null, Entity: not null }
+                r is { State: SensedState.Materialized, Shaped: true, Entity: not null }
                 && entManager.HasComponent<MapGridComponent>(r.Entity!.Value));
 
             Assert.That(subject, Is.Not.Null, "no materialized blob debris to round-trip");

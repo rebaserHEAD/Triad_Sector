@@ -32,19 +32,19 @@ public partial class ShuttleNavControl // Triad
 
         var cullBounds = new Box2(-64f, -64f, Size.X + 64f, Size.Y + 64f);
 
+        // GetContacts only yields contacts whose outline has been derived (the recipe wire format
+        // means shapes are rolled client-side, budgeted per frame), so a cold picture fills in
+        // over a few frames rather than hitching one.
         foreach (var contact in TriadSensedContacts.GetContacts(console))
         {
             var viewPos = Vector2.Transform(contact.MapPosition, worldToView);
             if (!cullBounds.Contains(viewPos))
                 continue;
 
-            if (contact.Hull.Length == 0)
-                continue;
-
             _triadHullVertsBuffer.Clear();
-            foreach (var hullVert in contact.Hull)
+            foreach (var outlineVert in contact.Outline)
             {
-                _triadHullVertsBuffer.Add(Vector2.Transform(contact.MapPosition + hullVert, worldToView));
+                _triadHullVertsBuffer.Add(Vector2.Transform(contact.MapPosition + outlineVert, worldToView));
             }
 
             _triadHullVertsBuffer.Add(_triadHullVertsBuffer[0]);
