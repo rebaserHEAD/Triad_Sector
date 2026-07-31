@@ -1,3 +1,5 @@
+// using System.Linq; // Triad: removed - only the original body below needed it, for the
+// .Select(...).ToList() at its tail. The replacement builds its tile list directly.
 using Content.Server._Triad.Worldgen.Cells; // Triad: extracted seed-deterministic shape walk
 using Content.Server.Worldgen.Components.Debris;
 using Content.Shared.Maps;
@@ -33,10 +35,14 @@ public sealed class BlobFloorPlanBuilderSystem : BaseWorldSystem
     {
         // Triad: walk extracted to BlobShapeGen.Roll (seed-deterministic, so a radar-sensed shape
         // preview rolled ahead of materialization matches what actually gets built here). Original
-        // body kept below, commented, so future upstream merges surface the conflict.
-        // NO MORE THAN TWO ALLOCATIONS THANK YOU VERY MUCH.
-        // TODO: Just put these on a field instead then?
-        // Also the end of the method has a big LINQ which is gonna blow this out the water.
+        // body kept below, commented, so future upstream merges surface the conflict. Everything
+        // from here down to the blank line above the replacement is upstream's, comments and all,
+        // which is why its own comments are double-prefixed: they describe the dead body, not this
+        // method.
+        //
+        // // NO MORE THAN TWO ALLOCATIONS THANK YOU VERY MUCH.
+        // // TODO: Just put these on a field instead then?
+        // // Also the end of the method has a big LINQ which is gonna blow this out the water.
         // var spawnPoints = new HashSet<Vector2i>(comp.FloorPlacements * 6);
         // var taken = new Dictionary<Vector2i, Tile>(comp.FloorPlacements * 5);
         //
