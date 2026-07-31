@@ -195,8 +195,11 @@ public sealed class SensedTierTest
     }
 
     /// <summary>
-    ///     The radar promise: the hull painted while dormant is the footprint of the grid that
-    ///     eventually loads. Compares the described hull against the real grid's tile bounds.
+    ///     The radar promise, asserted on the shape rather than a proxy for it: the outline painted
+    ///     while dormant is the silhouette of the grid that eventually loads. Re-traces the
+    ///     materialized grid's own tiles and requires an exact match against what describe stored,
+    ///     so this fails on a seed desync, a generator drift, or an outline that stops following
+    ///     the rock.
     /// </summary>
     [Test]
     public async Task DescribedHullMatchesMaterializedGrid()
@@ -223,34 +226,29 @@ public sealed class SensedTierTest
                 if (record is { State: SensedState.Materialized, Hull: not null, Entity: { } ent }
                     && entManager.TryGetComponent<MapGridComponent>(ent, out var grid))
                 {
+                    // Take the grid's real tiles, not their bounding box. Comparing boxes only ever
+                    // constrained four numbers out of a couple of hundred tiles, and now that the
+                    // outline follows the silhouette we can assert the actual shape: re-trace the
+                    // materialized tiles and require the described outline to equal it exactly.
                     var tiles = mapSystem.GetAllTilesEnumerator(ent, grid);
-                    var min = new Vector2(float.MaxValue, float.MaxValue);
-                    var max = new Vector2(float.MinValue, float.MinValue);
-                    var any = false;
+                    var gridTiles = new List<BlobTile>();
 
                     while (tiles.MoveNext(out var tile))
                     {
-                        any = true;
-                        var idx = tile.Value.GridIndices;
-                        min = Vector2.Min(min, new Vector2(idx.X, idx.Y));
-                        max = Vector2.Max(max, new Vector2(idx.X + 1, idx.Y + 1));
+                        gridTiles.Add(new BlobTile(tile.Value.GridIndices, 0));
                     }
 
-                    if (!any)
+                    if (gridTiles.Count == 0)
                         continue;
 
-                    var hullMin = new Vector2(float.MaxValue, float.MaxValue);
-                    var hullMax = new Vector2(float.MinValue, float.MinValue);
-                    foreach (var vert in record.Hull)
-                    {
-                        hullMin = Vector2.Min(hullMin, vert);
-                        hullMax = Vector2.Max(hullMax, vert);
-                    }
+                    var fromGrid = TileOutline.Trace(gridTiles);
 
-                    Assert.That(hullMin.X, Is.EqualTo(min.X).Within(0.01f), $"hull minX drifted for {record.Proto}");
-                    Assert.That(hullMin.Y, Is.EqualTo(min.Y).Within(0.01f), $"hull minY drifted for {record.Proto}");
-                    Assert.That(hullMax.X, Is.EqualTo(max.X).Within(0.01f), $"hull maxX drifted for {record.Proto}");
-                    Assert.That(hullMax.Y, Is.EqualTo(max.Y).Within(0.01f), $"hull maxY drifted for {record.Proto}");
+                    Assert.That(fromGrid, Is.Not.Null,
+                        $"could not trace the materialized grid of {record.Proto}");
+                    Assert.That(record.Hull, Is.EqualTo(fromGrid),
+                        $"the outline painted at range is not the shape that loaded in for {record.Proto}: "
+                        + $"described {record.Hull!.Length} verts against {fromGrid!.Length} traced from the grid");
+
                     checkedAny = true;
                 }
             }
