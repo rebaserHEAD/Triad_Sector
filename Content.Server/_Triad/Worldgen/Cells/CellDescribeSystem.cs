@@ -57,13 +57,17 @@ public sealed class CellDescribeSystem : BaseWorldSystem
 
     private float _accumulator;
 
-    /// <summary>Tick the inline-describe budget below is being counted against, and what it has spent.</summary>
+    /// <summary>Tick the shared per-tick describe pool is being counted against, and what it has spent.</summary>
     private GameTick _inlineTick;
     private TimeSpan _inlineSpent;
     private int _nextRecordId = 1;
 
-    /// <summary>Cells wanted by loaders but not yet described, nearest-first per pass.</summary>
+    /// <summary>
+    ///     Cells wanted by sources but not yet described, nearest-first. Rebuilt by each 1 Hz
+    ///     collect pass and drained a budget slice per tick from <see cref="_pendingHead"/> on.
+    /// </summary>
     private readonly List<(float DistSq, Vector2i Coords, EntityUid Map)> _pending = new();
+    private int _pendingHead;
     private readonly HashSet<(EntityUid Map, Vector2i Coords)> _pendingSet = new();
 
     /// <summary>Everything making space real this pass, as (map, centre, radius).</summary>
@@ -137,19 +141,24 @@ public sealed class CellDescribeSystem : BaseWorldSystem
     public override void Update(float frameTime)
     {
         _accumulator += frameTime;
-        if (_accumulator < UpdateInterval)
-            return;
-        _accumulator -= UpdateInterval;
+        if (_accumulator >= UpdateInterval)
+        {
+            _accumulator -= UpdateInterval;
 
-        // Counted above the enabled gate, deliberately. This gauge exists to compare the sensed
-        // tier against the stock burst-spawn placer, so it has to keep reporting when the tier is
-        // switched off; a metric that goes dark in one arm of the comparison cannot make it.
-        SensedMetrics.ResidentDebris.Set(CountResidentDebris());
+            // Counted above the enabled gate, deliberately. This gauge exists to compare the sensed
+            // tier against the stock burst-spawn placer, so it has to keep reporting when the tier is
+            // switched off; a metric that goes dark in one arm of the comparison cannot make it.
+            SensedMetrics.ResidentDebris.Set(CountResidentDebris());
+
+            if (_enabled)
+                CollectPending();
+        }
 
         if (!_enabled)
             return;
 
-        CollectPending();
+        // Every tick, not just on the 1 Hz collect: the drain is budget-capped per tick either
+        // way, so ticking it thirty times a second is what sets the fill rate, not the hitch.
         DrainPending();
 
         SensedMetrics.Records.Set(Records.Count);
@@ -177,6 +186,7 @@ public sealed class CellDescribeSystem : BaseWorldSystem
     private void CollectPending()
     {
         _pending.Clear();
+        _pendingHead = 0;
         _pendingSet.Clear();
         _sources.Clear();
 
@@ -293,35 +303,50 @@ public sealed class CellDescribeSystem : BaseWorldSystem
         _sources.Add((map, center, range));
     }
 
+    /// <summary>
+    ///     Works the pending list down a budget slice per tick, charged against the same per-tick
+    ///     pool as <see cref="EnsureDescribed"/> so sweep and demand describes together stay under
+    ///     describe_budget_ms on any single tick. Ticking the slice rather than running it once per
+    ///     collect pass is what sets the fill rate: the opening picture around a spawn is roughly
+    ///     2600 cells at shipping defaults, and a once-a-second slice took minutes to paint what a
+    ///     slice a tick paints in seconds, at the identical worst case per tick.
+    /// </summary>
     private void DrainPending()
     {
-        if (_pending.Count == 0)
+        if (_pendingHead >= _pending.Count)
             return;
 
+        RollInlineBudget();
+
         var budget = TimeSpan.FromMilliseconds(_describeBudgetMs);
-        var start = _timing.RealTime;
+        var sliceStart = _timing.RealTime;
         var described = 0;
 
-        // CollectPending already dropped described cells, so this list is the work actually
-        // outstanding. The recheck below is a cheap guard, not a rebuild path: GetOrCreateChunk
-        // can mint the chunk entity here for a coord that had none at collection time.
-        foreach (var (_, coords, map) in _pending)
+        while (_pendingHead < _pending.Count)
         {
-            if (_timing.RealTime - start > budget)
+            if (_inlineSpent > budget)
                 break;
 
-            var cell = GetOrCreateChunk(coords, map);
-            if (cell is null || HasComp<SensedCellComponent>(cell.Value))
-                continue;
+            var (_, coords, map) = _pending[_pendingHead++];
+            var start = _timing.RealTime;
 
-            Describe(cell.Value);
-            described++;
+            // CollectPending already dropped described cells, but this list can be most of a second
+            // old: EnsureDescribed or an earlier slice may have got here first. GetOrCreateChunk can
+            // also mint the chunk entity for a coord that had none at collection time.
+            var cell = GetOrCreateChunk(coords, map);
+            if (cell is not null && !HasComp<SensedCellComponent>(cell.Value))
+            {
+                Describe(cell.Value);
+                described++;
+            }
+
+            _inlineSpent += _timing.RealTime - start;
         }
 
         if (described > 0)
         {
             SensedMetrics.CellsDescribed.Inc(described);
-            SensedMetrics.DescribePass.Observe((_timing.RealTime - start).TotalSeconds);
+            SensedMetrics.DescribePass.Observe((_timing.RealTime - sliceStart).TotalSeconds);
         }
     }
 
@@ -330,29 +355,23 @@ public sealed class CellDescribeSystem : BaseWorldSystem
     ///     contents right now (the materialization queue on a chunk load that outran the
     ///     sweep) use this instead of waiting for the next pass.
     ///
-    ///     Budgeted per tick, because this bypasses the sweep's budget entirely and the number of
-    ///     callers in one tick is set by how many chunks entered load range together: a fast ship,
-    ///     several loaders, or players spread across a sector can stack whole describes into one
-    ///     tick, which is the exact hitch DrainPending's budget exists to prevent. Returning null
-    ///     past the budget is not a failure: the cell keeps no <see cref="SensedCellComponent"/>,
-    ///     so the next sweep collects it like any other undescribed cell, a second at most later.
+    ///     Budgeted per tick, because the number of callers in one tick is set by how many chunks
+    ///     entered load range together: a fast ship, several loaders, or players spread across a
+    ///     sector can stack whole describes into one tick, which is the exact hitch the budget
+    ///     exists to prevent. Returning null past the budget is not a failure: the cell keeps no
+    ///     <see cref="SensedCellComponent"/>, so the next sweep collects it like any other
+    ///     undescribed cell, a second at most later.
     ///
-    ///     It reuses describe_budget_ms but resets PER TICK, where the sweep spends it per second.
-    ///     Same number, different period, deliberately: this is demand work with someone already
-    ///     standing in the chunk, so it gets roughly thirty times the sweep's allowance per second
-    ///     while any single tick stays capped. Budgeting it at the sweep's rate would starve the
-    ///     path that exists precisely because the sweep cannot keep up with a fast approach.
+    ///     The pool is shared with <see cref="DrainPending"/>: demand describes and the sweep's
+    ///     per-tick slice draw down the same describe_budget_ms, so the cap on describe work in
+    ///     any single tick holds no matter how the two paths interleave.
     /// </summary>
     public SensedCellComponent? EnsureDescribed(EntityUid cell)
     {
         if (TryComp<SensedCellComponent>(cell, out var existing))
             return existing;
 
-        if (_inlineTick != _timing.CurTick)
-        {
-            _inlineTick = _timing.CurTick;
-            _inlineSpent = TimeSpan.Zero;
-        }
+        RollInlineBudget();
 
         if (_inlineSpent > TimeSpan.FromMilliseconds(_describeBudgetMs))
             return null;
@@ -362,6 +381,16 @@ public sealed class CellDescribeSystem : BaseWorldSystem
         _inlineSpent += _timing.RealTime - start;
 
         return sensed;
+    }
+
+    /// <summary>Resets the shared per-tick describe pool when the tick has advanced.</summary>
+    private void RollInlineBudget()
+    {
+        if (_inlineTick == _timing.CurTick)
+            return;
+
+        _inlineTick = _timing.CurTick;
+        _inlineSpent = TimeSpan.Zero;
     }
 
     /// <summary>

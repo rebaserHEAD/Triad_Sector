@@ -66,6 +66,11 @@ public sealed class TriadCCVars
     public static readonly CVarDef<float> WorldgenDescribeRange =
         CVarDef.Create("triad.worldgen.describe_range", 3072f, CVar.SERVERONLY);
 
+    /// <summary>
+    /// Milliseconds of describe work allowed per tick, spent from one pool by both the sweep's
+    /// per-tick slice and on-demand describes from chunk loads. Governs how fast the radar picture
+    /// fills, not whether it fills: cells past the budget stay pending and are worked next tick.
+    /// </summary>
     public static readonly CVarDef<float> WorldgenDescribeBudgetMs =
         CVarDef.Create("triad.worldgen.describe_budget_ms", 1.5f, CVar.SERVERONLY);
 
