@@ -83,8 +83,24 @@ public sealed class DebrisRecord
     /// <summary>Set while sitting in the materialization queue to prevent double-enqueue.</summary>
     public bool Queued;
 
+    /// <summary>
+    ///     Spawn attempts a record gets before it is left alone for the rest of the load cycle.
+    ///     Something durable is parked on the point; retrying it every tick is wasted work.
+    ///     <see cref="DebrisMaterializeQueueSystem.EnqueueCell"/> zeroes the count on every cell
+    ///     load, so giving up is per load cycle rather than permanent.
+    /// </summary>
+    public const byte MaxBlockedAttempts = 3;
+
     /// <summary>Materialize attempts dropped because the spawn point was blocked.</summary>
     public byte BlockedAttempts;
+
+    /// <summary>
+    ///     A ghost rock: it burned through its spawn attempts, so nothing durable can stand on
+    ///     the point this load cycle. Ghosts are filtered everywhere the player could meet them,
+    ///     and the rule is one rule on purpose: what radar will not paint must not stop a shot,
+    ///     or the block is an invisible wall.
+    /// </summary>
+    public bool GaveUp => BlockedAttempts >= MaxBlockedAttempts;
 
     /// <summary>
     ///     Scratch sort key: seconds until the nearest loader reaches <see cref="Point"/>. Written

@@ -39,7 +39,7 @@ public partial class ShuttleNavControl // Triad
         TriadDrawOutlines(handle, worldToView, TriadSensedContacts.GetChart(console, map), alpha: 0.3f);
     }
 
-    private void TriadDrawSensedContacts(DrawingHandleScreen handle, Matrix3x2 worldToView)
+    private void TriadDrawSensedContacts(DrawingHandleScreen handle, Matrix3x2 worldToView, MapId map)
     {
         if (_consoleEntity is not { } console)
             return;
@@ -47,7 +47,7 @@ public partial class ShuttleNavControl // Triad
         // GetContacts only yields contacts whose outline has been derived (the recipe wire format
         // means shapes are rolled client-side, budgeted per frame), so a cold picture fills in
         // over a few frames rather than hitching one.
-        TriadDrawOutlines(handle, worldToView, TriadSensedContacts.GetContacts(console), alpha: 0.8f);
+        TriadDrawOutlines(handle, worldToView, TriadSensedContacts.GetContacts(console, map), alpha: 0.8f);
     }
 
     private void TriadDrawOutlines(DrawingHandleScreen handle, Matrix3x2 worldToView,

@@ -127,7 +127,7 @@ public sealed class SensedTierTest
         if (tiles.Count == 0)
             return null;
 
-        return TileOutline.Trace(tiles) ?? BlobShapeGen.ComputeHull(tiles);
+        return TileOutline.Trace(tiles);
     }
 
     [Test]

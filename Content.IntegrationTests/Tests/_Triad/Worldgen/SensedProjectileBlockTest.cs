@@ -119,7 +119,7 @@ public sealed class SensedProjectileBlockTest
         var throughRock = await Fly(pair, map.MapId, new Vector2(30f, 0f), new Vector2(70f, 0f));
         var wideMiss = await Fly(pair, map.MapId, new Vector2(30f, 30f), new Vector2(70f, 30f));
 
-        await server.WaitPost(() => record.BlockedAttempts = DebrisMaterializeQueueSystem.MaxBlockedAttempts);
+        await server.WaitPost(() => record.BlockedAttempts = DebrisRecord.MaxBlockedAttempts);
         var throughGhost = await Fly(pair, map.MapId, new Vector2(30f, 0f), new Vector2(70f, 0f));
 
         Assert.Multiple(() =>

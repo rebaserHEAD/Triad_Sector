@@ -524,10 +524,15 @@ public sealed class CellDescribeSystem : BaseWorldSystem
         return points;
     }
 
-    private bool HasCollisions(MapId mapId, Box2 point)
+    /// <summary>
+    ///     Whether any grid overlaps the box. The tier's one world-collision probe, shared with
+    ///     the materialization queue's spawn-safety check; game thread only, it reuses one
+    ///     scratch list.
+    /// </summary>
+    public bool HasCollisions(MapId mapId, Box2 bounds)
     {
         _gridsIntersecting.Clear();
-        _mapManager.FindGridsIntersecting(mapId, point, ref _gridsIntersecting);
+        _mapManager.FindGridsIntersecting(mapId, bounds, ref _gridsIntersecting);
         return _gridsIntersecting.Count > 0;
     }
 
@@ -564,7 +569,7 @@ public sealed class CellDescribeSystem : BaseWorldSystem
 
             // A ghost rock is filtered off radar, so it must not stop shots either: blocking
             // on something the players cannot see is an invisible wall.
-            if (record.BlockedAttempts >= DebrisMaterializeQueueSystem.MaxBlockedAttempts)
+            if (record.GaveUp)
                 return;
 
             // Coarse gate: closest distance from the record centre to the segment.

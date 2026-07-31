@@ -29,21 +29,8 @@ public sealed class DebrisMaterializeQueueSystem : BaseWorldSystem
     [Dependency] private readonly CellDescribeSystem _describe = default!;
     [Dependency] private readonly IConfigurationManager _cfg = default!;
     [Dependency] private readonly IGameTiming _timing = default!;
-    [Dependency] private readonly IMapManager _mapManager = default!;
     [Dependency] private readonly SharedPhysicsSystem _physics = default!;
     [Dependency] private readonly TransformSystem _xformSys = default!;
-
-    /// <summary>
-    ///     A record blocked this many times in a row stays dormant until its cell reloads.
-    ///     Something durable is parked on the point; retrying it every tick is wasted work.
-    /// </summary>
-    /// <summary>
-    ///     Spawn attempts a record gets before it is left alone for the rest of the load cycle.
-    ///     Internal because the contact channel has to know when a record has given up: a record
-    ///     that will not spawn must stop being painted. <see cref="EnqueueCell"/> zeroes the count
-    ///     on every cell load, so giving up is per load cycle rather than permanent.
-    /// </summary>
-    internal const byte MaxBlockedAttempts = 3;
 
     /// <summary>
     ///     Seconds between re-orderings of the queue. Sorting every tick charges an
@@ -71,7 +58,6 @@ public sealed class DebrisMaterializeQueueSystem : BaseWorldSystem
     ///     it. Live checks such as <see cref="WithinPanicRange"/> re-query the world themselves.
     /// </summary>
     private readonly List<(Vector2 Pos, Vector2 Vel)> _loaders = new();
-    private List<Entity<MapGridComponent>> _gridsIntersecting = new();
 
     public override void Initialize()
     {
@@ -359,9 +345,9 @@ public sealed class DebrisMaterializeQueueSystem : BaseWorldSystem
 
         // Something moved in while this was dormant. Skip rather than spawn a rock on top of a
         // parked ship; the point stays described and retries when the cell next loads.
-        if (HasCollisions(map.MapId, Box2.UnitCentered.Enlarged(placer.SafetyZoneRadius).Translated(record.Point)))
+        if (_describe.HasCollisions(map.MapId, Box2.UnitCentered.Enlarged(placer.SafetyZoneRadius).Translated(record.Point)))
         {
-            if (++record.BlockedAttempts < MaxBlockedAttempts)
+            if (++record.BlockedAttempts < DebrisRecord.MaxBlockedAttempts)
             {
                 record.Queued = true;
                 _queue.Add(record);
@@ -392,12 +378,5 @@ public sealed class DebrisMaterializeQueueSystem : BaseWorldSystem
         owned.LastKey = record.Point;
 
         EnsureComp<SpaceDebrisComponent>(ent);
-    }
-
-    private bool HasCollisions(MapId mapId, Box2 bounds)
-    {
-        _gridsIntersecting.Clear();
-        _mapManager.FindGridsIntersecting(mapId, bounds, ref _gridsIntersecting);
-        return _gridsIntersecting.Count > 0;
     }
 }

@@ -47,15 +47,22 @@ public sealed class SensedContactsSystem : EntitySystem
     // open console never sent a request and rendered nothing.
     private readonly Dictionary<NetEntity, TimeSpan> _lastRequestTime = new();
 
-    private readonly Dictionary<NetEntity, Dictionary<int, ClientContact>> _contacts = new();
+    /// <summary>
+    ///     The ids the server currently vouches for, per console. Ids only: the contact data
+    ///     itself lives once in <see cref="_chart"/>, and the live view is a filter over it, so
+    ///     the two can never disagree about what a rock looks like. A live id whose map entry is
+    ///     gone (map change mid-poll, map deletion) simply misses the lookup and draws nothing.
+    /// </summary>
+    private readonly Dictionary<NetEntity, HashSet<int>> _live = new();
+
     private readonly Dictionary<NetEntity, TimeSpan> _lastUpdated = new();
 
     /// <summary>
-    ///     The chart: everything any console was ever sent, per map, surviving range egress,
-    ///     console close, and link hiccups. Presentation memory, never authority: it only ever
-    ///     holds what the server legitimately sent, existence-scope removes evict from it, and a
-    ///     round restart or map deletion clears it wholesale. Keyed by map because contact
-    ///     positions are map coordinates and records never change maps.
+    ///     The single contact store, and the chart: everything any console was ever sent, per
+    ///     map, surviving range egress, console close, and link hiccups. Presentation memory,
+    ///     never authority: it only ever holds what the server legitimately sent, existence-scope
+    ///     removes evict from it, and a round restart or map deletion clears it wholesale. Keyed
+    ///     by map because contact positions are map coordinates and records never change maps.
     /// </summary>
     private readonly Dictionary<MapId, Dictionary<int, ClientContact>> _chart = new();
 
@@ -78,7 +85,6 @@ public sealed class SensedContactsSystem : EntitySystem
     ///     data or pure math.
     /// </summary>
     private readonly record struct ClientContact(
-        int Id,
         int Version,
         SensedContactArm Arm,
         Vector2 MapPosition,
@@ -99,7 +105,7 @@ public sealed class SensedContactsSystem : EntitySystem
     {
         // A new round is a new belt roll; everything below is round-scoped.
         _chart.Clear();
-        _contacts.Clear();
+        _live.Clear();
         _lastUpdated.Clear();
         _lastRequestTime.Clear();
         _shapes.Clear();
@@ -125,59 +131,60 @@ public sealed class SensedContactsSystem : EntitySystem
 
     private void OnDelta(SensedContactsDeltaEvent ev)
     {
-        if (!_contacts.TryGetValue(ev.Console, out var consoleContacts))
+        if (!_live.TryGetValue(ev.Console, out var live))
         {
-            consoleContacts = new Dictionary<int, ClientContact>();
-            _contacts[ev.Console] = consoleContacts;
+            live = new HashSet<int>();
+            _live[ev.Console] = live;
         }
 
         // A full reset resets what the server vouches for, not what we remember: the chart
         // surviving it is the point of the chart.
         if (ev.FullReset)
-            consoleContacts.Clear();
+            live.Clear();
 
-        // The chart is keyed by the console's map, resolved here at receipt: the server only ever
-        // serves records on the console's own map, so this is the map every id in this event
-        // lives on. No console entity means no way to place the entries; live view still applies.
+        // The map is stamped by the server, so receipt never resolves the console entity: a
+        // console can legitimately leave the client's view between request and reply, and
+        // dropping the adds in that window would hole this console's picture for good (the
+        // server's known-set already counts them as delivered).
         Dictionary<int, ClientContact>? mapChart = null;
-        if (TryGetEntity(ev.Console, out var consoleUid)
-            && Transform(consoleUid.Value).MapID is var mapId && mapId != MapId.Nullspace)
+        if (ev.Map != MapId.Nullspace && !_chart.TryGetValue(ev.Map, out mapChart))
         {
-            if (!_chart.TryGetValue(mapId, out mapChart))
-            {
-                mapChart = new Dictionary<int, ClientContact>();
-                _chart[mapId] = mapChart;
-            }
+            mapChart = new Dictionary<int, ClientContact>();
+            _chart[ev.Map] = mapChart;
         }
 
         foreach (var id in ev.Removes)
         {
             // Existence-scope: the rock is gone, so the memory of it goes too.
-            consoleContacts.Remove(id);
+            live.Remove(id);
             mapChart?.Remove(id);
         }
 
         foreach (var id in ev.Fades)
         {
             // View-scope: the rock exists but left this console's picture. Chart keeps it.
-            consoleContacts.Remove(id);
+            live.Remove(id);
         }
 
-        foreach (var contact in ev.Adds)
+        // A Nullspace-stamped delta carries no adds by construction: the server's visibility
+        // collection returns empty for an unmapped console, and the stamp comes from the same
+        // transform in the same method. This guard therefore only ever drops adds from a
+        // malformed event, which have no map to draw on anyway.
+        if (mapChart is not null)
         {
-            // Legend indices are only meaningful within the event that carried them, so they are
-            // resolved here at receipt, never stored. Out-of-range means a malformed event;
-            // dropping the contact beats throwing in a network handler.
-            if (contact.ProtoIndex < 0 || contact.ProtoIndex >= ev.Legend.Count)
-                continue;
+            foreach (var contact in ev.Adds)
+            {
+                // Legend indices are only meaningful within the event that carried them, so they
+                // are resolved here at receipt, never stored. Out-of-range means a malformed
+                // event; dropping the contact beats throwing in a network handler.
+                if (contact.ProtoIndex < 0 || contact.ProtoIndex >= ev.Legend.Count)
+                    continue;
 
-            var recipe = ev.Legend[contact.ProtoIndex];
-            var resolved = new ClientContact(contact.Id, contact.Version, contact.Arm,
-                contact.MapPosition, recipe, contact.Seed, contact.Outline, GetColor(recipe.ProtoId));
-
-            consoleContacts[contact.Id] = resolved;
-            if (mapChart is not null)
-                mapChart[contact.Id] = resolved;
+                var recipe = ev.Legend[contact.ProtoIndex];
+                mapChart[contact.Id] = new ClientContact(contact.Version, contact.Arm,
+                    contact.MapPosition, recipe, contact.Seed, contact.Outline, GetColor(recipe.ProtoId));
+                live.Add(contact.Id);
+            }
         }
 
         _lastUpdated[ev.Console] = _timing.CurTime;
@@ -210,22 +217,26 @@ public sealed class SensedContactsSystem : EntitySystem
     /// Streams the drawable contacts for the given console, deriving any outlines not yet rolled
     /// under the per-frame budget. Yields nothing if the console has no known contacts or its
     /// data hasn't been refreshed in a while (contacts are static, so a generous staleness window
-    /// is used to avoid flicker).
+    /// is used to avoid flicker). The map is a parameter for the same reasons as
+    /// <see cref="GetChart"/>, and it doubles as the map-change guard: live ids from before an
+    /// FTL jump belong to the old map's store, miss this one's, and draw nothing, rather than
+    /// painting old-map rocks through the new view until the next poll's fades land.
     /// </summary>
-    public IEnumerable<SensedContactView> GetContacts(EntityUid console)
+    public IEnumerable<SensedContactView> GetContacts(EntityUid console, MapId map)
     {
         var netConsole = GetNetEntity(console);
 
         if (!_lastUpdated.TryGetValue(netConsole, out var lastUpdate)
             || _timing.CurTime - lastUpdate > StaleAfter
-            || !_contacts.TryGetValue(netConsole, out var consoleContacts))
+            || !_live.TryGetValue(netConsole, out var live)
+            || !_chart.TryGetValue(map, out var mapChart))
         {
             yield break;
         }
 
-        foreach (var contact in consoleContacts.Values)
+        foreach (var id in live)
         {
-            if (TryGetShape(contact, out var outline))
+            if (mapChart.TryGetValue(id, out var contact) && TryGetShape(contact, out var outline))
                 yield return new SensedContactView(contact.MapPosition, outline, contact.Color);
         }
     }
@@ -245,11 +256,11 @@ public sealed class SensedContactsSystem : EntitySystem
             yield break;
 
         var netConsole = GetNetEntity(console);
-        _contacts.TryGetValue(netConsole, out var live);
+        _live.TryGetValue(netConsole, out var live);
 
-        foreach (var contact in mapChart.Values)
+        foreach (var (id, contact) in mapChart)
         {
-            if (live is not null && live.ContainsKey(contact.Id))
+            if (live is not null && live.Contains(id))
                 continue;
 
             if (TryGetShape(contact, out var outline))
@@ -260,7 +271,8 @@ public sealed class SensedContactsSystem : EntitySystem
     /// <summary>
     ///     Resolves a contact's outline, rolling and caching it if the frame budget allows.
     ///     False only for a not-yet-rolled shape past this frame's budget, an arm this client
-    ///     does not understand, or a roll that produced nothing (which the server never sends).
+    ///     does not understand, a roll that produced nothing (which the server never sends), or
+    ///     a trace past the vertex valve, which no shipping prototype reaches and which logs.
     /// </summary>
     private bool TryGetShape(in ClientContact contact, out Vector2i[] outline)
     {
@@ -296,11 +308,17 @@ public sealed class SensedContactsSystem : EntitySystem
         // materialize time; shared code and a shared seed are what make the painted silhouette
         // the rock that eventually loads in.
         var tiles = BlobShapeGen.Roll(new System.Random(contact.Seed), contact.Recipe);
+        var traced = tiles.Count == 0 ? null : TileOutline.Trace(tiles);
 
-        cached = tiles.Count == 0
-            ? Array.Empty<Vector2i>()
-            : TileOutline.Trace(tiles) ?? BlobShapeGen.ComputeHull(tiles);
+        // Empty is cached too, so a valve-tripping shape logs once instead of re-rolling and
+        // re-logging every frame the contact is on screen.
+        if (traced is null && tiles.Count > 0)
+        {
+            Log.Warning($"Outline for {contact.Recipe.ProtoId} seed {contact.Seed} exceeded the "
+                + $"trace valve ({TileOutline.MaxOutlineVerts} verts); contact will not draw.");
+        }
 
+        cached = traced ?? Array.Empty<Vector2i>();
         _shapes[key] = cached;
         outline = cached;
         return cached.Length > 2;

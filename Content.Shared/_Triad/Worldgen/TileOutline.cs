@@ -32,8 +32,9 @@ public static class TileOutline
     ///     Sanity valve, not a simplification ladder. The measured worst case over 15,500 rolls
     ///     across every shipping prototype is 252 vertices, so nothing in the game reaches this.
     ///     It exists so a shape nobody has produced yet cannot put an unbounded array on the wire:
-    ///     past this, the convex hull is used instead. Raise it if real content ever grows past it;
-    ///     do not lower it below the measured worst case without re-measuring.
+    ///     past this, Trace returns null and callers treat the shape as undrawable (the client
+    ///     logs it). Raise it if real content ever grows past it; do not lower it below the
+    ///     measured worst case without re-measuring.
     /// </summary>
     public const int MaxOutlineVerts = 512;
 
@@ -60,7 +61,7 @@ public static class TileOutline
     /// <summary>
     ///     The outer silhouette of <paramref name="tiles"/>, counter-clockwise, in grid-local tile
     ///     units. Returns null when the tile set is empty or the outline exceeds
-    ///     <see cref="MaxOutlineVerts"/>, in which case the caller should fall back to the hull.
+    ///     <see cref="MaxOutlineVerts"/>; callers treat null as undrawable.
     /// </summary>
     public static Vector2i[]? Trace(IReadOnlyList<BlobTile> tiles)
     {

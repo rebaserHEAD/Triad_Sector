@@ -56,16 +56,13 @@ public sealed class SensedContactsSystem : EntitySystem
     /// </summary>
     private readonly Dictionary<string, SensedProtoRecipe?> _recipeCache = new();
 
-    // Scratch, cleared at the top of every request rather than after the send: the delta event
-    // needs its own List copies anyway (see the comment in OnContactsRequested), so these only
-    // ever hold one request's intermediate state.
+    // Scan scratch only, cleared at the top of every request. The lists that ride the delta
+    // event are allocated fresh per send instead: the network layer serializes the event after
+    // this method returns, so a pooled list would be cleared out from under it by the very next
+    // request.
     private readonly List<DebrisRecord> _tempVisibleCache = new();
     private readonly HashSet<int> _tempVisibleIdsCache = new();
-    private readonly List<SensedProtoRecipe> _tempLegendCache = new();
     private readonly Dictionary<string, int> _tempLegendIndexCache = new();
-    private readonly List<SensedContactData> _tempAddsCache = new();
-    private readonly List<int> _tempRemovesCache = new();
-    private readonly List<int> _tempFadesCache = new();
     private readonly List<(ICommonSession Session, EntityUid Console)> _tempEvictCache = new();
 
     public override void Initialize()
@@ -151,11 +148,13 @@ public sealed class SensedContactsSystem : EntitySystem
 
         CollectVisible(consoleUid.Value, radar);
 
-        _tempAddsCache.Clear();
-        _tempRemovesCache.Clear();
-        _tempFadesCache.Clear();
-        _tempLegendCache.Clear();
         _tempLegendIndexCache.Clear();
+
+        // These ride the event, so they are allocated per send; see the scratch-field comment.
+        var legend = new List<SensedProtoRecipe>();
+        var adds = new List<SensedContactData>();
+        var removes = new List<int>();
+        var fades = new List<int>();
 
         foreach (var record in _tempVisibleCache)
         {
@@ -164,7 +163,7 @@ public sealed class SensedContactsSystem : EntitySystem
             if (knownIds.TryGetValue(record.Id, out var knownVersion) && knownVersion == record.Version)
                 continue;
 
-            if (_tempAddsCache.Count >= _addsPerPoll)
+            if (adds.Count >= _addsPerPoll)
                 break; // rest arrive on a later poll
 
             // CollectVisible only passes shaped records, and a record is only shaped if its
@@ -175,12 +174,12 @@ public sealed class SensedContactsSystem : EntitySystem
 
             if (!_tempLegendIndexCache.TryGetValue(record.Proto, out var protoIndex))
             {
-                protoIndex = _tempLegendCache.Count;
-                _tempLegendCache.Add(recipe);
+                protoIndex = legend.Count;
+                legend.Add(recipe);
                 _tempLegendIndexCache[record.Proto] = protoIndex;
             }
 
-            _tempAddsCache.Add(new SensedContactData(record.Id, record.Version, SensedContactArm.Pristine,
+            adds.Add(new SensedContactData(record.Id, record.Version, SensedContactArm.Pristine,
                 record.Point, protoIndex, record.Seed, null));
         }
 
@@ -194,15 +193,10 @@ public sealed class SensedContactsSystem : EntitySystem
             // is not out there, so it leaves the chart too. Still in the index but filtered out
             // of this console's picture (range, map, materialized handoff): the rock exists, the
             // console just cannot vouch for it right now, and the chart keeps the last known.
-            if (!_describe.Records.TryGetValue(id, out var gone)
-                || gone.BlockedAttempts >= DebrisMaterializeQueueSystem.MaxBlockedAttempts)
-            {
-                _tempRemovesCache.Add(id);
-            }
+            if (!_describe.Records.TryGetValue(id, out var gone) || gone.GaveUp)
+                removes.Add(id);
             else
-            {
-                _tempFadesCache.Add(id);
-            }
+                fades.Add(id);
         }
 
         // An empty delta is still sent, on purpose: the reply is the client's keepalive. The client
@@ -214,26 +208,20 @@ public sealed class SensedContactsSystem : EntitySystem
         // Reflect exactly what is about to be sent: capped adds included, uncapped removes and
         // fades included. Fades leave the known-set like removes do; if the rock re-enters view
         // it re-sends as an add and the client upserts by id.
-        foreach (var add in _tempAddsCache)
+        foreach (var add in adds)
             knownIds[add.Id] = add.Version;
-        foreach (var removed in _tempRemovesCache)
+        foreach (var removed in removes)
             knownIds.Remove(removed);
-        foreach (var faded in _tempFadesCache)
+        foreach (var faded in fades)
             knownIds.Remove(faded);
 
         _known[key] = knownIds;
 
-        // Fresh copies, not the pooled caches: those get cleared on this system's very next
-        // request, which can race the network layer's own serialization of this event.
-        var legend = new List<SensedProtoRecipe>(_tempLegendCache);
-        var adds = new List<SensedContactData>(_tempAddsCache);
-        var removes = new List<int>(_tempRemovesCache);
-        var fades = new List<int>(_tempFadesCache);
+        RaiseNetworkEvent(new SensedContactsDeltaEvent(ev.Console, Transform(consoleUid.Value).MapID, isNew,
+            legend, adds, removes, fades), args.SenderSession);
 
-        RaiseNetworkEvent(new SensedContactsDeltaEvent(ev.Console, isNew, legend, adds, removes, fades), args.SenderSession);
-
-        if (_tempAddsCache.Count > 0)
-            SensedMetrics.ContactsSent.Inc(_tempAddsCache.Count);
+        if (adds.Count > 0)
+            SensedMetrics.ContactsSent.Inc(adds.Count);
     }
 
     /// <summary>
@@ -266,11 +254,10 @@ public sealed class SensedContactsSystem : EntitySystem
             if (!record.Shaped || record.State != SensedState.Dormant || record.Map != consoleMap)
                 continue;
 
-            // A record that burned through its spawn attempts is obstructed by something durable
-            // and will not build for the rest of this load cycle. Painting it anyway is a ghost
-            // rock: you fly to the outline and there is nothing there. The count is zeroed by
-            // EnqueueCell on the next cell load, so the contact comes back if the way clears.
-            if (record.BlockedAttempts >= DebrisMaterializeQueueSystem.MaxBlockedAttempts)
+            // Painting a ghost rock means flying to an outline with nothing there. The count is
+            // zeroed by EnqueueCell on the next cell load, so the contact comes back if the way
+            // clears.
+            if (record.GaveUp)
                 continue;
 
             // Dormant debris is a navigation aid, not a sensor puzzle: if the describe sweep

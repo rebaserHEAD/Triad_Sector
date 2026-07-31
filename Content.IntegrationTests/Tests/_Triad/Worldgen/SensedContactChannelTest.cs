@@ -166,6 +166,19 @@ public sealed class SensedContactChannelTest
     }
 
     /// <summary>
+    ///     The console's map, resolved on the client's game thread. The read APIs take the map as
+    ///     a parameter precisely so assertions can call them off-thread; this is the one
+    ///     transform read each test needs first.
+    /// </summary>
+    private static async Task<MapId> MapOf(Content.IntegrationTests.Pair.TestPair pair, EntityUid clientConsole)
+    {
+        MapId map = default;
+        await pair.Client.WaitPost(() =>
+            map = pair.Client.EntMan.GetComponent<TransformComponent>(clientConsole).MapID);
+        return map;
+    }
+
+    /// <summary>
     ///     Drives one client poll cycle: ask for contacts on every console, then run enough ticks
     ///     for the request to reach the server and the reply to land. The client gates requests on
     ///     its own 500ms throttle, so this ticks past that rather than assuming a request went out.
@@ -208,12 +221,13 @@ public sealed class SensedContactChannelTest
 
         var clientConsole = pair.ToClientUid(consoles[0]);
         var cSys = client.System<ClientContacts>();
+        var consoleMap = await MapOf(pair, clientConsole);
 
         // Get the picture on screen first.
         await Poll(pair, new[] { clientConsole });
         await Poll(pair, new[] { clientConsole });
 
-        Assert.That(cSys.GetContacts(clientConsole), Is.Not.Empty,
+        Assert.That(cSys.GetContacts(clientConsole, consoleMap), Is.Not.Empty,
             "console never received the record it was in range of");
 
         // Now change nothing at all and keep polling well past the client's staleness window.
@@ -222,7 +236,7 @@ public sealed class SensedContactChannelTest
         for (var i = 0; i < 12; i++)
             await Poll(pair, new[] { clientConsole }, ticks: 20);
 
-        Assert.That(cSys.GetContacts(clientConsole), Is.Not.Empty,
+        Assert.That(cSys.GetContacts(clientConsole, consoleMap), Is.Not.Empty,
             "console blanked on a settled picture: the empty delta is the keepalive, so every poll must be answered");
 
         await Cleanup(pair, map);
@@ -251,6 +265,7 @@ public sealed class SensedContactChannelTest
 
         var clientConsoles = consoles.Select(pair.ToClientUid).ToList();
         var cSys = client.System<ClientContacts>();
+        var consoleMap = await MapOf(pair, clientConsoles[0]);
 
         // Both consoles ask on the same frame, every cycle, which is what a nav screen and a
         // gunnery screen open together actually do.
@@ -261,7 +276,7 @@ public sealed class SensedContactChannelTest
         {
             for (var i = 0; i < clientConsoles.Count; i++)
             {
-                Assert.That(cSys.GetContacts(clientConsoles[i]), Is.Not.Empty,
+                Assert.That(cSys.GetContacts(clientConsoles[i], consoleMap), Is.Not.Empty,
                     $"console {i} of {clientConsoles.Count} received nothing; the request gate is starving it");
             }
         });
@@ -293,10 +308,11 @@ public sealed class SensedContactChannelTest
 
         var clientConsole = pair.ToClientUid(consoles[0]);
         var cSys = client.System<ClientContacts>();
+        var consoleMap = await MapOf(pair, clientConsole);
 
         await Poll(pair, new[] { clientConsole });
         await Poll(pair, new[] { clientConsole });
-        Assert.That(cSys.GetContacts(clientConsole), Is.Not.Empty, "record never arrived");
+        Assert.That(cSys.GetContacts(clientConsole, consoleMap), Is.Not.Empty, "record never arrived");
 
         // Materialization hands the contact off to the real grid.
         await server.WaitPost(() => record.State = SensedState.Materialized);
@@ -304,15 +320,12 @@ public sealed class SensedContactChannelTest
         await Poll(pair, new[] { clientConsole });
         await Poll(pair, new[] { clientConsole });
 
-        Assert.That(cSys.GetContacts(clientConsole), Is.Empty,
+        Assert.That(cSys.GetContacts(clientConsole, consoleMap), Is.Empty,
             "materialized record still painting as a contact; the grid and the contact are now doubled");
 
         // Materialization is a FADE, not a remove: the rock still exists, it just left the live
         // view, so the chart must keep its last-known entry for the dimmed underlay.
-        MapId chartMap = default;
-        await client.WaitPost(() =>
-            chartMap = client.EntMan.GetComponent<TransformComponent>(clientConsole).MapID);
-        Assert.That(cSys.GetChart(clientConsole, chartMap), Is.Not.Empty,
+        Assert.That(cSys.GetChart(clientConsole, consoleMap), Is.Not.Empty,
             "a faded contact fell off the chart; fades must clear the live view only");
 
         await Cleanup(pair, map);
@@ -341,15 +354,13 @@ public sealed class SensedContactChannelTest
 
         var clientConsole = pair.ToClientUid(consoles[0]);
         var cSys = client.System<ClientContacts>();
+        var consoleMap = await MapOf(pair, clientConsole);
 
         await Poll(pair, new[] { clientConsole });
         await Poll(pair, new[] { clientConsole });
-        Assert.That(cSys.GetContacts(clientConsole), Is.Not.Empty, "record never arrived");
+        Assert.That(cSys.GetContacts(clientConsole, consoleMap), Is.Not.Empty, "record never arrived");
 
-        MapId chartMap = default;
-        await client.WaitPost(() =>
-            chartMap = client.EntMan.GetComponent<TransformComponent>(clientConsole).MapID);
-        Assert.That(cSys.GetChart(clientConsole, chartMap), Is.Empty,
+        Assert.That(cSys.GetChart(clientConsole, consoleMap), Is.Empty,
             "a contact in the live view is doubling onto the chart underlay");
 
         // Destroyed in play: gone from the record index entirely.
@@ -360,9 +371,9 @@ public sealed class SensedContactChannelTest
 
         Assert.Multiple(() =>
         {
-            Assert.That(cSys.GetContacts(clientConsole), Is.Empty,
+            Assert.That(cSys.GetContacts(clientConsole, consoleMap), Is.Empty,
                 "destroyed record still painting as a live contact");
-            Assert.That(cSys.GetChart(clientConsole, chartMap), Is.Empty,
+            Assert.That(cSys.GetChart(clientConsole, consoleMap), Is.Empty,
                 "destroyed record still on the chart; existence-scope removes must evict the memory too");
         });
 
@@ -400,15 +411,16 @@ public sealed class SensedContactChannelTest
         var opened = pair.ToClientUid(consoles[0]);
         var unopened = pair.ToClientUid(consoles[1]);
         var cSys = client.System<ClientContacts>();
+        var consoleMap = await MapOf(pair, opened);
 
         await Poll(pair, new[] { opened, unopened });
         await Poll(pair, new[] { opened, unopened });
 
         Assert.Multiple(() =>
         {
-            Assert.That(cSys.GetContacts(opened), Is.Not.Empty,
+            Assert.That(cSys.GetContacts(opened, consoleMap), Is.Not.Empty,
                 "the console the player actually has open received nothing; authorization is rejecting a legitimate request");
-            Assert.That(cSys.GetContacts(unopened), Is.Empty,
+            Assert.That(cSys.GetContacts(unopened, consoleMap), Is.Empty,
                 "a console the player never opened was served its contacts; any client can read any console's picture");
         });
 

@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 using System.Numerics;
+using Robust.Shared.Map;
 using Robust.Shared.Serialization;
 
 namespace Content.Shared._Triad.Worldgen;
@@ -22,6 +23,14 @@ public sealed class RequestSensedContactsEvent : EntityEventArgs
 public sealed class SensedContactsDeltaEvent : EntityEventArgs
 {
     public NetEntity Console;
+
+    /// <summary>
+    ///     The map every id in this event lives on, stamped by the server. Contacts are stored
+    ///     per map client-side, and carrying the map here means receipt never has to resolve the
+    ///     console entity, which can legitimately be outside the client's view by the time the
+    ///     reply lands.
+    /// </summary>
+    public MapId Map;
 
     /// <summary>
     /// Client clears its live set for this console before applying.
@@ -53,10 +62,11 @@ public sealed class SensedContactsDeltaEvent : EntityEventArgs
     /// </summary>
     public List<int> Fades;
 
-    public SensedContactsDeltaEvent(NetEntity console, bool fullReset, List<SensedProtoRecipe> legend,
-        List<SensedContactData> adds, List<int> removes, List<int> fades)
+    public SensedContactsDeltaEvent(NetEntity console, MapId map, bool fullReset,
+        List<SensedProtoRecipe> legend, List<SensedContactData> adds, List<int> removes, List<int> fades)
     {
         Console = console;
+        Map = map;
         FullReset = fullReset;
         Legend = legend;
         Adds = adds;
