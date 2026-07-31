@@ -89,6 +89,17 @@ public sealed class TriadCCVars
     public static readonly CVarDef<float> WorldgenDescribeLeadS =
         CVarDef.Create("triad.worldgen.describe_lead_s", 3f, CVar.SERVERONLY);
 
+    /// <summary>
+    /// Seconds a loaded cell must go unwanted before it unloads. Load and unload otherwise share
+    /// one boundary, so a ship sitting on a cell boundary line (or station-keeping, whose
+    /// thruster wobble moves the velocity-led sweep centre) rapidly cycles rim cells and pays
+    /// grid teardown and rebuild each flip. Zero restores the stock immediate unload. Applies to
+    /// both arms of the sensed switch: boundary thrash predates the tier and costs the stock
+    /// burst-spawn placer a full re-roll per cycle.
+    /// </summary>
+    public static readonly CVarDef<float> WorldgenUnloadGraceS =
+        CVarDef.Create("triad.worldgen.unload_grace_s", 3f, CVar.SERVERONLY);
+
     public static readonly CVarDef<int> WorldgenContactAddsPerPoll =
         CVarDef.Create("triad.worldgen.contact_adds_per_poll", 256, CVar.SERVERONLY);
 }

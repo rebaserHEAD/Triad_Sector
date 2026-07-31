@@ -44,12 +44,16 @@ public sealed class WorldControllerSystem : EntitySystem
     // stays off GetCVar's read lock and string-keyed lookup.
     private bool _sensedEnabled;
 
+    // Triad: unload grace, see WorldgenUnloadGraceS. Cached for the same reason as above.
+    private float _unloadGraceS;
+
     /// <inheritdoc />
     public override void Initialize()
     {
         _sawmill = _logManager.GetSawmill("world");
         // Triad: cache the sensed-tier switch instead of hitting GetCVar once per loader per sweep.
         Subs.CVar(_cfg, TriadCCVars.WorldgenSensedEnabled, v => _sensedEnabled = v, true);
+        Subs.CVar(_cfg, TriadCCVars.WorldgenUnloadGraceS, v => _unloadGraceS = v, true); // Triad
         SubscribeLocalEvent<LoadedChunkComponent, ComponentStartup>(OnChunkLoadedCore);
         SubscribeLocalEvent<LoadedChunkComponent, ComponentShutdown>(OnChunkUnloadedCore);
         SubscribeLocalEvent<WorldChunkComponent, ComponentShutdown>(OnChunkShutdown);
@@ -167,9 +171,10 @@ public sealed class WorldControllerSystem : EntitySystem
 
         var loadedEnum = EntityQueryEnumerator<LoadedChunkComponent, WorldChunkComponent>();
         var chunksUnloaded = 0;
+        var unloadBefore = _gameTiming.CurTime - TimeSpan.FromSeconds(_unloadGraceS); // Triad: unload grace
 
         // Make sure these chunks get unloaded at the end of the tick.
-        while (loadedEnum.MoveNext(out var uid, out var _, out var chunk))
+        while (loadedEnum.MoveNext(out var uid, out var loaded, out var chunk))
         {
             var coords = chunk.Coordinates;
 
@@ -181,6 +186,14 @@ public sealed class WorldControllerSystem : EntitySystem
             // unload, which is what this branch already does.
             if (!_chunksToLoad.TryGetValue(chunk.Map, out var mapChunks) || !mapChunks.ContainsKey(coords))
             {
+                // Triad: grace before unload. The wanted-set is quantized to each loader's own
+                // cell and velocity-led, so a ship sitting on a cell boundary (or wobbling on
+                // station-keeping thrusters) flips rim chunks out of the set for a pass at a
+                // time. Only unload once the chunk has been unwanted for the whole grace window;
+                // a wanted pass below re-stamps LastWanted and resets the clock.
+                if (loaded.LastWanted > unloadBefore)
+                    continue;
+
                 RemCompDeferred<LoadedChunkComponent>(uid);
                 chunksUnloaded++;
             }
@@ -210,7 +223,10 @@ public sealed class WorldControllerSystem : EntitySystem
                 }
 
                 if (c is not null)
+                {
                     c.Loaders = loaders;
+                    c.LastWanted = _gameTiming.CurTime; // Triad: resets the unload-grace clock
+                }
             }
         }
 
