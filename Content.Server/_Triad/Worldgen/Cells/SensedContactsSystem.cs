@@ -93,6 +93,27 @@ public sealed class SensedContactsSystem : EntitySystem
             _known.Clear();
     }
 
+    /// <summary>
+    ///     Whether <paramref name="actor"/> currently has any interface open on the console.
+    ///     Checked across every UI key rather than one named key on purpose: four separate controls
+    ///     request contacts (nav, radar, the Crescent drone console and the Mono fire-control
+    ///     console) and each opens its own key, so a named-key check would silently blank whichever
+    ///     one it forgot, and would blank a fifth the day someone adds it.
+    /// </summary>
+    private bool IsViewing(EntityUid console, EntityUid actor)
+    {
+        if (!TryComp<UserInterfaceComponent>(console, out var ui))
+            return false;
+
+        foreach (var actors in ui.Actors.Values)
+        {
+            if (actors.Contains(actor))
+                return true;
+        }
+
+        return false;
+    }
+
     private void OnContactsRequested(RequestSensedContactsEvent ev, EntitySessionEventArgs args)
     {
         SweepDeadConsoles();
@@ -101,6 +122,14 @@ public sealed class SensedContactsSystem : EntitySystem
             return;
 
         if (!TryGetEntity(ev.Console, out var consoleUid) || !TryComp<RadarConsoleComponent>(consoleUid, out var radar))
+            return;
+
+        // Authorize against the sender, not just the target. A NetEntity is a small sequential
+        // integer, so without this a modified client can walk the id space and pull the sensed
+        // picture off any radar console on any map without ever approaching one. Serving only
+        // consoles the sender actually has open reuses the range and access rules the UI system
+        // already enforced when it let them open it, rather than re-deriving a weaker copy here.
+        if (args.SenderSession.AttachedEntity is not { } actor || !IsViewing(consoleUid.Value, actor))
             return;
 
         var key = (args.SenderSession, consoleUid.Value);

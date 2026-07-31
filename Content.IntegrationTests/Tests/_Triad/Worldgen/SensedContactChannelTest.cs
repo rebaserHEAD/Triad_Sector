@@ -8,6 +8,7 @@ using System.Numerics;
 using System.Threading.Tasks;
 using Content.Server._Triad.Worldgen.Cells;
 using Content.Shared._Triad.CCVar;
+using Content.Shared.Shuttles.BUIStates;
 using Robust.Shared.Configuration;
 using Robust.Shared.GameObjects;
 using Robust.Shared.Map;
@@ -32,12 +33,23 @@ public sealed class SensedContactChannelTest
 {
     private const string ConsoleProto = "TriadContactTestConsole";
 
+    // The UserInterface is not decoration. The server authorizes a contact request against whether
+    // the sender has an interface open on that console, so a console without one is unreachable and
+    // every test here would silently assert on an empty picture.
     [TestPrototypes]
     private const string Prototypes = $@"
 - type: entity
   id: {ConsoleProto}
   components:
   - type: RadarConsole
+  - type: UserInterface
+    interfaces:
+      enum.RadarConsoleUiKey.Key:
+        type: RadarConsoleBoundUserInterface
+        # No range limit. The fixture spreads consoles out so they are distinguishable entities,
+        # which puts the far ones past the 2 m default and makes opening them fail on distance.
+        # Range enforcement is the UI system's own business and is not what these tests cover.
+        interactionRange: 0
 ";
 
     /// <summary>Ids well clear of anything <see cref="CellDescribeSystem"/> hands out in a test round.</summary>
@@ -69,16 +81,19 @@ public sealed class SensedContactChannelTest
 
     /// <summary>
     ///     A connected pair with a clean map, one console per requested slot, and the sensed tier
-    ///     switched on. Returns the map plus the server-side console uids.
+    ///     switched on. Every console is opened by the player unless <paramref name="openCount"/>
+    ///     says otherwise, since an unopened console is not authorized and returns nothing.
+    ///     Returns the map plus the server-side console uids.
     /// </summary>
     private static async Task<(EntityUid Map, List<EntityUid> Consoles)> Setup(
-        Content.IntegrationTests.Pair.TestPair pair, int consoleCount)
+        Content.IntegrationTests.Pair.TestPair pair, int consoleCount, int? openCount = null)
     {
         var server = pair.Server;
         var cfg = server.ResolveDependency<IConfigurationManager>();
 
         var map = await pair.CreateTestMap();
         var consoles = new List<EntityUid>();
+        var toOpen = openCount ?? consoleCount;
 
         await server.WaitPost(() =>
         {
@@ -93,6 +108,20 @@ public sealed class SensedContactChannelTest
                     ConsoleProto,
                     new MapCoordinates(new Vector2(i * 4f, 0f), map.MapId)));
             }
+
+            // A pooled pair runs the dummy ticker, so the session has no body at all. Authorization
+            // reads SenderSession.AttachedEntity, so give it one: a bare entity on the test map,
+            // which the map deletion at the end of each test takes away again.
+            var actor = server.EntMan.SpawnEntity(null, new MapCoordinates(Vector2.Zero, map.MapId));
+            server.PlayerMan.SetAttachedEntity(pair.Player!, actor);
+
+            // Open on the server, which is the side the authorization check reads: OpenUi puts the
+            // actor into UserInterfaceComponent.Actors regardless of what the client window does
+            // with it, so this does not depend on a real radar window standing up in the harness.
+            var ui = server.System<SharedUserInterfaceSystem>();
+
+            for (var i = 0; i < toOpen; i++)
+                ui.OpenUi(consoles[i], RadarConsoleUiKey.Key, actor);
         });
 
         await pair.RunTicksSync(5);
@@ -240,6 +269,52 @@ public sealed class SensedContactChannelTest
 
         Assert.That(cSys.GetContacts(clientConsole), Is.Empty,
             "materialized record still painting as a contact; the grid and the contact are now doubled");
+
+        await server.WaitPost(() => server.EntMan.DeleteEntity(map));
+        await pair.CleanReturnAsync();
+    }
+
+    /// <summary>
+    ///     A request names its console by NetEntity, and NetEntities are small sequential integers,
+    ///     so the server cannot serve on the strength of the id resolving to a radar console: a
+    ///     modified client would walk the id space and read the sensed picture off any console on
+    ///     any map without going near one. Only consoles the sender actually has open are answered.
+    ///
+    ///     Both consoles here are the same prototype on the same map at the same range from the same
+    ///     record, and the client asks for both in the same poll. The only thing separating them is
+    ///     authorization, so this fails if the check is dropped, weakened to a component test, or
+    ///     keyed on something the second console happens to satisfy.
+    /// </summary>
+    [Test]
+    public async Task UnopenedConsoleIsNotServed()
+    {
+        await using var pair = await PoolManager.GetServerClient(new PoolSettings { Connected = true });
+        var (server, client) = (pair.Server, pair.Client);
+
+        // Two consoles, only the first opened by the player.
+        var (map, consoles) = await Setup(pair, consoleCount: 2, openCount: 1);
+        var describe = server.System<CellDescribeSystem>();
+
+        await server.WaitPost(() =>
+        {
+            var record = MakeRecord(FirstTestRecordId, map, Vector2.Zero);
+            describe.Records[record.Id] = record;
+        });
+
+        var opened = pair.ToClientUid(consoles[0]);
+        var unopened = pair.ToClientUid(consoles[1]);
+        var cSys = client.System<ClientContacts>();
+
+        await Poll(pair, new[] { opened, unopened });
+        await Poll(pair, new[] { opened, unopened });
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(cSys.GetContacts(opened), Is.Not.Empty,
+                "the console the player actually has open received nothing; authorization is rejecting a legitimate request");
+            Assert.That(cSys.GetContacts(unopened), Is.Empty,
+                "a console the player never opened was served its contacts; any client can read any console's picture");
+        });
 
         await server.WaitPost(() => server.EntMan.DeleteEntity(map));
         await pair.CleanReturnAsync();
