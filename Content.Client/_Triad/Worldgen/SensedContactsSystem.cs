@@ -61,7 +61,7 @@ public sealed class SensedContactsSystem : EntitySystem
 
     /// <summary>
     ///     Derived outlines keyed by the roll identity. Version is part of the key so a
-    ///     re-versioned rock (persist-modified, later) re-derives instead of reusing the pristine
+    ///     re-versioned rock (blob-restored, later) re-derives instead of reusing the pristine
     ///     shape. Bounded by distinct rocks seen this round; dropped wholesale on round restart
     ///     once the chart layer lands, and a round's worth is at most a few MB.
     /// </summary>
@@ -276,7 +276,7 @@ public sealed class SensedContactsSystem : EntitySystem
             return true;
         }
 
-        // Unknown arms (Modified, or anything newer) are skipped rather than misdrawn.
+        // Unknown arms (anything newer than this client) are skipped rather than misdrawn.
         if (contact.Arm != SensedContactArm.Pristine)
             return false;
 
@@ -295,9 +295,7 @@ public sealed class SensedContactsSystem : EntitySystem
         // The same walk and trace the server rolled at describe time and the builder will roll at
         // materialize time; shared code and a shared seed are what make the painted silhouette
         // the rock that eventually loads in.
-        var recipe = contact.Recipe;
-        var tiles = BlobShapeGen.Roll(new System.Random(contact.Seed), recipe.Radius, recipe.FloorPlacements,
-            recipe.BlobDrawProb, Math.Max(1, recipe.TilesetCount));
+        var tiles = BlobShapeGen.Roll(new System.Random(contact.Seed), contact.Recipe);
 
         cached = tiles.Count == 0
             ? Array.Empty<Vector2i>()

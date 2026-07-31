@@ -3,9 +3,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 using System.Numerics;
-using Content.Server.Worldgen.Components.Debris;
-using Content.Shared._Mono.CCVar;
-using Content.Shared._Mono.Detection;
 using Content.Shared._Triad.CCVar;
 using Content.Shared._Triad.Worldgen;
 using Content.Shared.Shuttles.Components;
@@ -40,7 +37,6 @@ public sealed class SensedContactsSystem : EntitySystem
     private const int SweepInterval = 64;
 
     private bool _enabled;
-    private float _visualMul;
     private float _describeRange;
     private int _addsPerPoll;
     private int _sweepCounter;
@@ -79,7 +75,6 @@ public sealed class SensedContactsSystem : EntitySystem
         Subs.CVar(_cfg, TriadCCVars.WorldgenSensedEnabled, OnSensedEnabledChanged, true);
         Subs.CVar(_cfg, TriadCCVars.WorldgenContactAddsPerPoll, v => _addsPerPoll = v, true);
         Subs.CVar(_cfg, TriadCCVars.WorldgenDescribeRange, v => _describeRange = v, true);
-        Subs.CVar(_cfg, MonoCVars.VisualDetectionMultiplier, v => _visualMul = v, true);
 
         SubscribeNetworkEvent<RequestSensedContactsEvent>(OnContactsRequested);
         _playerManager.PlayerStatusChanged += OnPlayerStatusChanged;
@@ -242,10 +237,10 @@ public sealed class SensedContactsSystem : EntitySystem
     }
 
     /// <summary>
-    ///     Fills the visible-record scratch lists for one console: dormant, shaped records on the
-    ///     console's map within both hard radar range and the same visual-channel radius
-    ///     <see cref="DetectionSystem.IsGridDetected"/> would apply to the eventual grid. That
-    ///     math is duplicated here rather than shared because there is no grid yet to hand it.
+    ///     Fills the visible-record scratch lists for one console: dormant, shaped, non-ghost
+    ///     records on the console's map within radar range and the tier's describe radius.
+    ///     Deliberately flat gates and no sensor model: whether a rock paints is a draw
+    ///     decision, and real grids keep their own detection untouched.
     /// </summary>
     private void CollectVisible(EntityUid consoleUid, RadarConsoleComponent radar)
     {
@@ -264,12 +259,7 @@ public sealed class SensedContactsSystem : EntitySystem
 
         var consolePos = _xformSys.GetWorldPosition(consoleUid);
         var maxRangeSq = radar.MaxRange * radar.MaxRange;
-
-        // Not EnsureComp: this runs off a network request and most consoles never carry the
-        // component, in which case the multiplier is the prototype default of 1f.
-        TryComp<DetectionRangeMultiplierComponent>(consoleUid, out var consoleMul);
-        var visualMultiplier = consoleMul?.VisualMultiplier ?? 1f;
-        var alwaysDetect = consoleMul?.AlwaysDetect ?? false;
+        var describeRangeSq = _describeRange * _describeRange;
 
         foreach (var record in _describe.Records.Values)
         {
@@ -283,27 +273,17 @@ public sealed class SensedContactsSystem : EntitySystem
             if (record.BlockedAttempts >= DebrisMaterializeQueueSystem.MaxBlockedAttempts)
                 continue;
 
+            // Dormant debris is a navigation aid, not a sensor puzzle: if the describe sweep
+            // decided a rock is out there, it paints, capped by the console's MaxRange and the
+            // tier's own describe radius so the picture never reaches farther from the console
+            // than the picture it generates.
+            //
+            // This does not reopen a handoff seam: materialization happens inside the chunk-load
+            // radius, which is far closer than either cap, so a record always becomes a grid
+            // well within the range that grid draws its own blip at.
             var distSq = (consolePos - record.Point).LengthSquared();
-            if (distSq > maxRangeSq)
+            if (distSq > maxRangeSq || distSq > describeRangeSq)
                 continue;
-
-            if (!alwaysDetect)
-            {
-                // Dormant debris is a navigation aid, not a sensor puzzle: if the describe sweep
-                // decided a rock is out there, it is worth painting, so the detection formula only
-                // ever raises this floor rather than lowering it. Real grids keep their own
-                // detection untouched, and the console's own MaxRange still caps everything above.
-                //
-                // This does not reopen a handoff seam: materialization happens inside the chunk-load
-                // radius, which is far closer than any debris detection radius, so a record always
-                // becomes a grid well within the range that grid is detected at.
-                var detectRadius = MathF.Max(
-                    record.DetectSignature * visualMultiplier * _visualMul + record.DetectBias,
-                    _describeRange);
-
-                if (distSq > detectRadius * detectRadius)
-                    continue;
-            }
 
             _tempVisibleCache.Add(record);
             _tempVisibleIdsCache.Add(record.Id);
@@ -323,12 +303,8 @@ public sealed class SensedContactsSystem : EntitySystem
             return cached;
 
         SensedProtoRecipe? recipe = null;
-        if (_proto.TryIndex<EntityPrototype>(protoId, out var proto)
-            && proto.TryGetComponent<BlobFloorPlanBuilderComponent>("BlobFloorPlanBuilder", out var blob))
-        {
-            recipe = new SensedProtoRecipe(protoId, blob.Radius, blob.FloorPlacements, blob.BlobDrawProb,
-                Math.Max(1, blob.FloorTileset.Count));
-        }
+        if (_proto.TryIndex<EntityPrototype>(protoId, out var proto))
+            recipe = DebrisRecipe.TryFrom(proto);
 
         _recipeCache[protoId] = recipe;
         return recipe;

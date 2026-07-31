@@ -15,6 +15,15 @@ public readonly record struct BlobTile(Vector2i Pos, int TilesetIndex);
 /// </summary>
 public static class BlobShapeGen
 {
+    /// <summary>
+    ///     Rolls from a wire recipe: the single convention every recipe consumer shares, so the
+    ///     client preview, the server's collision tiles and the tests draw the identical stream.
+    ///     Owns the tileset floor of one that <see cref="Roll(System.Random,float,int,float,int)"/>
+    ///     would otherwise reject, matching how recipes are minted server-side.
+    /// </summary>
+    public static List<BlobTile> Roll(System.Random rng, in SensedProtoRecipe recipe)
+        => Roll(rng, recipe.Radius, recipe.FloorPlacements, recipe.BlobDrawProb, Math.Max(1, recipe.TilesetCount));
+
     public static List<BlobTile> Roll(System.Random rng, float radius, int floorPlacements, float blobDrawProb,
         int tilesetCount)
     {

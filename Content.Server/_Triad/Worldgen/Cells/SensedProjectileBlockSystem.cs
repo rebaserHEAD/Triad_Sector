@@ -52,8 +52,10 @@ public sealed class SensedProjectileBlockSystem : EntitySystem
             var pos = _xformSys.GetWorldPosition(xform);
             if (!_lastPos.TryGetValue(uid, out var last))
             {
-                // First sighting: no segment yet. Deliberately not swept from the muzzle,
-                // because the muzzle-to-here gap on spawn tick is inside the firing ship.
+                // First sighting: no segment yet, so the spawn tick's muzzle-to-here gap goes
+                // unswept. That gap is at most one tick of travel from a muzzle that is almost
+                // always in loaded space; sweeping it would need a muzzle position this system
+                // never sees. From the next tick on the segment chain is continuous.
                 _lastPos[uid] = pos;
                 continue;
             }

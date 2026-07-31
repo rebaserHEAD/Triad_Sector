@@ -26,26 +26,6 @@ public sealed class TileOutlineTest
     private static List<BlobTile> Tiles(params (int X, int Y)[] cells)
         => cells.Select(c => new BlobTile(new Vector2i(c.X, c.Y), 0)).ToList();
 
-    /// <summary>Twice the signed area. Integral input, so this is exact.</summary>
-    private static long DoubleArea(Vector2i[] poly)
-    {
-        long acc = 0;
-        for (var i = 0; i < poly.Length; i++)
-        {
-            var a = poly[i];
-            var b = poly[(i + 1) % poly.Length];
-            acc += (long) a.X * b.Y - (long) b.X * a.Y;
-        }
-
-        return acc;
-    }
-
-    /// <summary>
-    ///     Enclosed area in whole cells. The outline is rectilinear on the integer lattice, so its
-    ///     area is always a whole number of cells and comparing it to a cell count is exact.
-    /// </summary>
-    private static long EnclosedCells(Vector2i[] poly) => System.Math.Abs(DoubleArea(poly)) / 2;
-
     [Test]
     public void SingleTileIsItsOwnSquare()
     {
@@ -53,7 +33,7 @@ public sealed class TileOutlineTest
 
         Assert.That(outline, Is.Not.Null);
         Assert.That(outline!.Length, Is.EqualTo(4), "a single tile is a square, so four corners");
-        Assert.That(EnclosedCells(outline), Is.EqualTo(1));
+        Assert.That(OutlineMath.EnclosedCells(outline), Is.EqualTo(1));
     }
 
     /// <summary>
@@ -69,7 +49,7 @@ public sealed class TileOutlineTest
         var outline = TileOutline.Trace(Tiles((1, -1), (0, 0), (1, 0), (2, 0), (1, 1)));
 
         Assert.That(outline, Is.Not.Null);
-        Assert.That(EnclosedCells(outline!), Is.EqualTo(5),
+        Assert.That(OutlineMath.EnclosedCells(outline!), Is.EqualTo(5),
             "the outline paved over the corner pockets: a plus enclosing 9 cells is the bounding box, not the rock");
         Assert.That(outline!.Length, Is.EqualTo(12),
             "a plus has twelve corners, eight convex and four reflex");
@@ -82,7 +62,7 @@ public sealed class TileOutlineTest
         var outline = TileOutline.Trace(Tiles((0, 0), (1, 0), (2, 0), (1, 1)));
 
         Assert.That(outline, Is.Not.Null);
-        Assert.That(EnclosedCells(outline!), Is.EqualTo(4),
+        Assert.That(OutlineMath.EnclosedCells(outline!), Is.EqualTo(4),
             "enclosing 6 cells means the outline is the 3x2 bounding box and the shape is gone");
     }
 
@@ -96,7 +76,7 @@ public sealed class TileOutlineTest
         var outline = TileOutline.Trace(Tiles((0, 0), (1, 0), (2, 0), (0, 1), (2, 1)));
 
         Assert.That(outline, Is.Not.Null);
-        Assert.That(EnclosedCells(outline!), Is.EqualTo(5),
+        Assert.That(OutlineMath.EnclosedCells(outline!), Is.EqualTo(5),
             "the bay was bridged; a bay open to space is not enclosed and must not be filled");
         Assert.That(outline!.Length, Is.EqualTo(8),
             "walking down into the bay and back out is eight corners");
@@ -119,7 +99,7 @@ public sealed class TileOutlineTest
         var outline = TileOutline.Trace(ring);
 
         Assert.That(outline, Is.Not.Null);
-        Assert.That(EnclosedCells(outline!), Is.EqualTo(9),
+        Assert.That(OutlineMath.EnclosedCells(outline!), Is.EqualTo(9),
             "an enclosed void must be filled, giving one outer loop rather than a loop plus a hole");
         Assert.That(outline!.Length, Is.EqualTo(4), "the filled ring is a 3x3 square");
     }
@@ -165,8 +145,8 @@ public sealed class TileOutlineTest
             var solid = tiles.Select(t => t.Pos).ToHashSet();
             var expected = solid.Count + CountEnclosedVoids(solid);
 
-            Assert.That(EnclosedCells(outline!), Is.EqualTo((long) expected),
-                $"seed {seed}: outline encloses {EnclosedCells(outline!)} cells against {expected} of real rock");
+            Assert.That(OutlineMath.EnclosedCells(outline!), Is.EqualTo((long) expected),
+                $"seed {seed}: outline encloses {OutlineMath.EnclosedCells(outline!)} cells against {expected} of real rock");
         }
     }
 

@@ -84,8 +84,6 @@ public sealed class SensedContactChannelTest
             // and the RockProto recipe are all the client needs to roll a real outline, which is
             // exactly what GetContacts asserting Not.Empty exercises end to end.
             Shaped = true,
-            DetectSignature = 1f,
-            DetectBias = 0f,
             State = SensedState.Dormant,
         };
     }

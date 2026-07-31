@@ -119,11 +119,10 @@ public sealed class SensedTierTest
     private static Vector2i[] RollOutline(IPrototypeManager protoManager, DebrisRecord record)
     {
         if (!protoManager.TryIndex<EntityPrototype>(record.Proto, out var proto)
-            || !proto.TryGetComponent<BlobFloorPlanBuilderComponent>("BlobFloorPlanBuilder", out var blob))
+            || DebrisRecipe.TryFrom(proto) is not { } recipe)
             return null;
 
-        var tiles = BlobShapeGen.Roll(new System.Random(record.Seed), blob.Radius, blob.FloorPlacements,
-            blob.BlobDrawProb, System.Math.Max(1, blob.FloorTileset.Count));
+        var tiles = BlobShapeGen.Roll(new System.Random(record.Seed), recipe);
 
         if (tiles.Count == 0)
             return null;
@@ -156,8 +155,8 @@ public sealed class SensedTierTest
             // fewer than three vertices is not a polygon.
             Assert.That(shaped.All(r => RollOutline(protoManager, r) is { Length: > 2 and <= TileOutline.MaxOutlineVerts }),
                 "outlines must be bounded polygons, not degenerate or unbounded");
-            Assert.That(shaped.Any(r => r.DetectSignature > 0f),
-                "described debris carried no detection signature, so contacts could never resolve");
+            Assert.That(shaped.All(r => r.Bound > 0f),
+                "a shaped record must carry a collision bound, or the data-space segment gates never pass");
 
             var farDormant = records.Where(r => r.Point.Length() > 400f && r.State == SensedState.Dormant).ToList();
             Assert.That(farDormant, Is.Not.Empty,
@@ -303,7 +302,7 @@ public sealed class SensedTierTest
                     $"the outline painted at range is not inside the rock that loaded for {record.Proto}: "
                     + $"described {describedMin}..{describedMax} against {builtMin}..{builtMax} from the grid");
 
-                Assert.That(EnclosedCells(fromGrid!), Is.GreaterThanOrEqualTo(EnclosedCells(described)),
+                Assert.That(OutlineMath.EnclosedCells(fromGrid!), Is.GreaterThanOrEqualTo(OutlineMath.EnclosedCells(described)),
                     $"the materialized grid of {record.Proto} encloses less than the outline painted for it");
 
                 decorated++;
@@ -537,24 +536,6 @@ public sealed class SensedTierTest
         }
 
         return (min, max);
-    }
-
-    /// <summary>
-    ///     Enclosed area in whole cells. The outline is rectilinear on the integer lattice, so the
-    ///     shoelace area is always a whole number of cells and this stays exact.
-    /// </summary>
-    private static long EnclosedCells(Vector2i[] outline)
-    {
-        long acc = 0;
-
-        for (var i = 0; i < outline.Length; i++)
-        {
-            var a = outline[i];
-            var b = outline[(i + 1) % outline.Length];
-            acc += (long) a.X * b.Y - (long) b.X * a.Y;
-        }
-
-        return System.Math.Abs(acc) / 2;
     }
 
     /// <summary>

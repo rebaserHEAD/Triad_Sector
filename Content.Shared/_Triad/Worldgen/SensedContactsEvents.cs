@@ -66,9 +66,10 @@ public sealed class SensedContactsDeltaEvent : EntityEventArgs
 }
 
 /// <summary>
-///     How a contact's geometry reaches the client. The union is deliberately wider than what is
-///     produced today: <see cref="Modified"/> and <see cref="SensedContactData.Version"/> ship
-///     inert so that debris persistence later is a server-side feature with no protocol change.
+///     How a contact's geometry reaches the client. <see cref="SensedContactData.Version"/> ships
+///     inert so debris persistence later is a server-side feature with no protocol change: a
+///     blob-restored rock will arrive on the Explicit arm with a bumped version. Clients skip
+///     contacts carrying arm values they do not understand, so adding an arm is likewise free.
 /// </summary>
 [Serializable, NetSerializable]
 public enum SensedContactArm : byte
@@ -85,12 +86,6 @@ public enum SensedContactArm : byte
     ///     for anything not seed-derivable. No current producer.
     /// </summary>
     Explicit = 1,
-
-    /// <summary>
-    ///     Reserved: pristine roll plus a modification delta (transform, removed tiles), for
-    ///     persist-modified debris. Clients skip contacts carrying arms they do not understand.
-    /// </summary>
-    Modified = 2,
 }
 
 /// <summary>

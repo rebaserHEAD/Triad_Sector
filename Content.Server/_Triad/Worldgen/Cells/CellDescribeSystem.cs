@@ -10,7 +10,6 @@ using Content.Server.Worldgen.Components.Debris;
 using Content.Server.Worldgen.Systems;
 using Content.Server.Worldgen.Systems.Debris;
 using Content.Server.Worldgen.Tools;
-using Content.Shared._Mono.Detection;
 using Content.Shared._Triad.CCVar;
 using Content.Shared._Triad.Worldgen;
 using Content.Shared.Ghost;
@@ -313,8 +312,10 @@ public sealed class CellDescribeSystem : BaseWorldSystem
 
     /// <summary>
     ///     Works the pending list down a budget slice per tick, charged against the same per-tick
-    ///     pool as <see cref="EnsureDescribed"/> so sweep and demand describes together stay under
-    ///     describe_budget_ms on any single tick. Ticking the slice rather than running it once per
+    ///     pool as <see cref="EnsureDescribed"/>, capping describe work across both paths. The cap
+    ///     is soft by one cell: both paths check the pool before a describe rather than after, so a
+    ///     tick can run over by at most the single describe that drains it. Ticking the slice
+    ///     rather than running it once per
     ///     collect pass is what sets the fill rate: the opening picture around a spawn is roughly
     ///     2600 cells at shipping defaults, and a once-a-second slice took minutes to paint what a
     ///     slice a tick paints in seconds, at the identical worst case per tick.
@@ -470,39 +471,25 @@ public sealed class CellDescribeSystem : BaseWorldSystem
     }
 
     /// <summary>
-    ///     Computes the record's detection terms from its prototype and seed: the same size and
-    ///     bias <see cref="DetectionSystem"/> would apply to the real grid, so a contact appears
-    ///     at the range its grid would. Sized off the rolled blob, so a rock that later gets
-    ///     decorated reads marginally smaller here than the grid it becomes.
-    ///
-    ///     Detection terms only: no outline is kept server-side. The client re-rolls the shape
-    ///     from (Proto, Seed) through the shared generator, and the contact channel ships the
-    ///     recipe rather than geometry, so the walk here exists purely to size the tile AABB.
+    ///     Rolls the record's shape once, to mark it shaped and size its collision bound. No
+    ///     outline is kept server-side: the client re-rolls from (Proto, Seed) through the
+    ///     shared generator, and the contact channel ships the recipe rather than geometry.
     /// </summary>
     private void FillShape(DebrisRecord record)
     {
         if (!_proto.TryIndex<EntityPrototype>(record.Proto, out var proto))
             return;
 
-        if (proto.TryGetComponent<DetectedAtRangeMultiplierComponent>("DetectedAtRangeMultiplier", out var detect))
-            record.DetectBias = detect.VisualBias;
-        else
-            detect = null;
-
-        if (!proto.TryGetComponent<BlobFloorPlanBuilderComponent>("BlobFloorPlanBuilder", out var blob))
+        if (DebrisRecipe.TryFrom(proto) is not { } recipe)
             return;
 
-        var tiles = BlobShapeGen.Roll(new System.Random(record.Seed), blob.Radius, blob.FloorPlacements,
-            blob.BlobDrawProb, Math.Max(1, blob.FloorTileset.Count));
+        var tiles = BlobShapeGen.Roll(new System.Random(record.Seed), recipe);
 
         if (tiles.Count == 0)
             return;
 
         record.Shaped = true;
 
-        // DetectionSystem sizes a grid by its local AABB diagonal. Tiles are unit squares, so the
-        // box runs from the smallest tile origin to the largest tile origin plus one; that is the
-        // identical box the old traced outline spanned, keeping detection ranges unchanged.
         var minX = int.MaxValue;
         var minY = int.MaxValue;
         var maxX = int.MinValue;
@@ -514,10 +501,6 @@ public sealed class CellDescribeSystem : BaseWorldSystem
             maxX = Math.Max(maxX, tile.Pos.X);
             maxY = Math.Max(maxY, tile.Pos.Y);
         }
-
-        float sizeX = maxX + 1 - minX;
-        float sizeY = maxY + 1 - minY;
-        record.DetectSignature = MathF.Sqrt(sizeX * sizeX + sizeY * sizeY) * (detect?.VisualMultiplier ?? 1f);
 
         // Coarse collision gate: the farthest any tile corner sits from the blob origin. Corners
         // reach one past the largest tile origin on each axis.
@@ -655,10 +638,9 @@ public sealed class CellDescribeSystem : BaseWorldSystem
 
         HashSet<Vector2i>? tiles = null;
         if (_proto.TryIndex<EntityPrototype>(record.Proto, out var proto)
-            && proto.TryGetComponent<BlobFloorPlanBuilderComponent>("BlobFloorPlanBuilder", out var blob))
+            && DebrisRecipe.TryFrom(proto) is { } recipe)
         {
-            var rolled = BlobShapeGen.Roll(new System.Random(record.Seed), blob.Radius, blob.FloorPlacements,
-                blob.BlobDrawProb, Math.Max(1, blob.FloorTileset.Count));
+            var rolled = BlobShapeGen.Roll(new System.Random(record.Seed), recipe);
 
             tiles = new HashSet<Vector2i>(rolled.Count);
             foreach (var tile in rolled)
