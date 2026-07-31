@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 using System.Numerics;
+using Content.Server.GameTicking;
 using Content.Shared._Triad.CCVar;
 using Content.Shared._Triad.Worldgen;
 using Content.Shared.Shuttles.Components;
@@ -27,6 +28,7 @@ namespace Content.Server._Triad.Worldgen.Cells;
 public sealed class SensedContactsSystem : EntitySystem
 {
     [Dependency] private readonly CellDescribeSystem _describe = default!;
+    [Dependency] private readonly GameTicker _gameTicker = default!;
     [Dependency] private readonly IConfigurationManager _cfg = default!;
     [Dependency] private readonly IGameTiming _timing = default!;
     [Dependency] private readonly IPlayerManager _playerManager = default!;
@@ -217,8 +219,8 @@ public sealed class SensedContactsSystem : EntitySystem
 
         _known[key] = knownIds;
 
-        RaiseNetworkEvent(new SensedContactsDeltaEvent(ev.Console, Transform(consoleUid.Value).MapID, isNew,
-            legend, adds, removes, fades), args.SenderSession);
+        RaiseNetworkEvent(new SensedContactsDeltaEvent(ev.Console, Transform(consoleUid.Value).MapID,
+            _gameTicker.RoundId, isNew, legend, adds, removes, fades), args.SenderSession);
 
         if (adds.Count > 0)
             SensedMetrics.ContactsSent.Inc(adds.Count);

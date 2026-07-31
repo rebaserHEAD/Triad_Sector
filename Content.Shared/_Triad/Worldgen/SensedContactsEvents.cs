@@ -33,6 +33,13 @@ public sealed class SensedContactsDeltaEvent : EntityEventArgs
     public MapId Map;
 
     /// <summary>
+    ///     The server's current round id, for the client's reconnect chart file: the chart is
+    ///     round-scoped, and carrying the round on the channel itself means persistence never
+    ///     depends on lobby-state plumbing that a mid-round reconnect may not replay.
+    /// </summary>
+    public int RoundId;
+
+    /// <summary>
     /// Client clears its live set for this console before applying.
     /// </summary>
     public bool FullReset;
@@ -62,11 +69,12 @@ public sealed class SensedContactsDeltaEvent : EntityEventArgs
     /// </summary>
     public List<int> Fades;
 
-    public SensedContactsDeltaEvent(NetEntity console, MapId map, bool fullReset,
+    public SensedContactsDeltaEvent(NetEntity console, MapId map, int roundId, bool fullReset,
         List<SensedProtoRecipe> legend, List<SensedContactData> adds, List<int> removes, List<int> fades)
     {
         Console = console;
         Map = map;
+        RoundId = roundId;
         FullReset = fullReset;
         Legend = legend;
         Adds = adds;

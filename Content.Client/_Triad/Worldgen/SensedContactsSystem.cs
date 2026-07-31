@@ -3,13 +3,17 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 using System.Numerics;
+using Content.Shared.CCVar;
 using Content.Shared._Triad.Worldgen;
 using Content.Shared.GameTicking;
 using Content.Shared.Shuttles.Components;
+using Robust.Shared.Configuration;
+using Robust.Shared.ContentPack;
 using Robust.Shared.Map;
 using Robust.Shared.Map.Components;
 using Robust.Shared.Prototypes;
 using Robust.Shared.Timing;
+using Robust.Shared.Utility;
 
 namespace Content.Client._Triad.Worldgen;
 
@@ -22,8 +26,10 @@ public readonly record struct SensedContactView(Vector2 MapPosition, Vector2i[] 
 public sealed class SensedContactsSystem : EntitySystem
 {
     [Dependency] private readonly IComponentFactory _factory = default!;
+    [Dependency] private readonly IConfigurationManager _cfg = default!;
     [Dependency] private readonly IGameTiming _timing = default!;
     [Dependency] private readonly IPrototypeManager _proto = default!;
+    [Dependency] private readonly IResourceManager _resource = default!;
 
     // These two are coupled: the server answers every poll, so StaleAfter divided by
     // RequestThrottle is the number of consecutive dropped replies a console tolerates before it
@@ -76,6 +82,19 @@ public sealed class SensedContactsSystem : EntitySystem
 
     private readonly Dictionary<string, Color> _colors = new();
 
+    /// <summary>Seconds between chart-file flushes while the chart is dirty.</summary>
+    private const float FlushInterval = 15f;
+
+    /// <summary>
+    ///     The round the server last vouched for on the contact channel; the chart file is
+    ///     keyed to it. Zero until the first delta lands.
+    /// </summary>
+    private int _roundId;
+
+    private bool _chartFileMerged;
+    private bool _chartDirty;
+    private float _flushAccumulator;
+
     /// <summary>
     ///     A contact as stored: legend index and color both resolved at receipt, geometry not yet
     ///     derived. Color is resolved eagerly because prototype component lookups touch
@@ -103,13 +122,20 @@ public sealed class SensedContactsSystem : EntitySystem
 
     private void OnRoundRestart(RoundRestartCleanupEvent ev)
     {
-        // A new round is a new belt roll; everything below is round-scoped.
+        // A new round is a new belt roll; everything below is round-scoped. The old round's
+        // chart file is not worth a farewell flush: its round id makes it unloadable from here
+        // on, and the first flush of the new round overwrites it.
         _chart.Clear();
         _live.Clear();
         _lastUpdated.Clear();
         _lastRequestTime.Clear();
         _shapes.Clear();
         _colors.Clear();
+
+        _roundId = 0;
+        _chartFileMerged = false;
+        _chartDirty = false;
+        _flushAccumulator = 0f;
     }
 
     // Maps never surface MapRemovedEvent client-side; component-filtered termination is the
@@ -127,10 +153,38 @@ public sealed class SensedContactsSystem : EntitySystem
     {
         base.Update(frameTime);
         _derivesThisFrame = 0;
+
+        // Debounced write-behind: the chart survives a client crash to within FlushInterval.
+        // There is no shutdown hook worth trusting more than a steady cadence.
+        if (!_chartDirty)
+            return;
+
+        _flushAccumulator += frameTime;
+        if (_flushAccumulator < FlushInterval)
+            return;
+
+        _flushAccumulator = 0f;
+        _chartDirty = false;
+        FlushChartFile();
     }
 
     private void OnDelta(SensedContactsDeltaEvent ev)
     {
+        // First contact with a round: remember it, and merge the reconnect file exactly once.
+        // Merging BEFORE applying the delta is what keeps the rule simple: the file only ever
+        // fills gaps, and anything the server says in this or any later delta wins over it.
+        if (ev.RoundId != 0 && ev.RoundId != _roundId)
+        {
+            _roundId = ev.RoundId;
+            _chartFileMerged = false;
+        }
+
+        if (!_chartFileMerged && _roundId != 0)
+        {
+            _chartFileMerged = true;
+            MergeChartFile();
+        }
+
         if (!_live.TryGetValue(ev.Console, out var live))
         {
             live = new HashSet<int>();
@@ -187,7 +241,111 @@ public sealed class SensedContactsSystem : EntitySystem
             }
         }
 
+        if (mapChart is not null && (ev.Adds.Count > 0 || ev.Removes.Count > 0))
+            _chartDirty = true;
+
+        // Removes flush through immediately instead of riding the debounce. A stale file that
+        // outlives a crash would resurrect a destroyed rock at the next same-round merge, and
+        // the server can never re-remove an id this session never reported knowing. Destruction
+        // is rare, so the write costs nothing; the residual window (crashing between receipt
+        // and this write) is accepted paper-chart staleness: the entry was legitimately sent
+        // once, and flying there finds nothing.
+        if (_chartDirty && ev.Removes.Count > 0)
+        {
+            _chartDirty = false;
+            _flushAccumulator = 0f;
+            FlushChartFile();
+        }
+
         _lastUpdated[ev.Console] = _timing.CurTime;
+    }
+
+    /// <summary>
+    ///     The per-server reconnect file. Keyed by the server_id cvar (the changelog-marker
+    ///     precedent); a server without one shares the "local" slot, which only ever costs a
+    ///     dev-machine chart.
+    /// </summary>
+    private ResPath ChartFilePath()
+    {
+        var serverId = _cfg.GetCVar(CCVars.ServerId);
+        if (string.IsNullOrWhiteSpace(serverId))
+            serverId = "local";
+
+        var safe = new char[serverId.Length];
+        for (var i = 0; i < serverId.Length; i++)
+        {
+            var c = serverId[i];
+            safe[i] = char.IsLetterOrDigit(c) || c is '-' or '_' ? c : '_';
+        }
+
+        return new ResPath($"/triad_chart_{new string(safe)}.chart");
+    }
+
+    private void FlushChartFile()
+    {
+        var maps = new List<(MapId, IEnumerable<ChartEntry>)>();
+        foreach (var (map, contacts) in _chart)
+        {
+            var entries = new List<ChartEntry>();
+            foreach (var (id, contact) in contacts)
+            {
+                // Pristine only: the one arm whose whole payload re-derives from the recipe.
+                if (contact.Arm == SensedContactArm.Pristine)
+                    entries.Add(new ChartEntry(id, contact.Version, contact.MapPosition, contact.Seed, contact.Recipe));
+            }
+
+            if (entries.Count > 0)
+                maps.Add((map, entries));
+        }
+
+        try
+        {
+            using var writer = _resource.UserData.OpenWriteText(ChartFilePath());
+            writer.Write(ChartFile.Serialize(_roundId, maps));
+        }
+        catch (Exception e)
+        {
+            // A cache that cannot write is a cache, not a problem worth a crash.
+            Log.Warning($"Failed to write chart file: {e.Message}");
+        }
+    }
+
+    /// <summary>
+    ///     Merges the reconnect file into the chart: fill-only, never overwrite. The server's
+    ///     known-set was reset by the reconnect, so everything currently visible re-sends and
+    ///     supersedes the file entry by entry; what the file contributes is exactly the rocks
+    ///     the reconnected client is NOT near anymore, which is the chart's whole job.
+    /// </summary>
+    private void MergeChartFile()
+    {
+        if (!_resource.UserData.TryReadAllText(ChartFilePath(), out var text)
+            || !ChartFile.TryDeserialize(text, _roundId, out var maps))
+        {
+            return;
+        }
+
+        var merged = 0;
+        foreach (var (map, entries) in maps)
+        {
+            if (!_chart.TryGetValue(map, out var mapChart))
+            {
+                mapChart = new Dictionary<int, ClientContact>();
+                _chart[map] = mapChart;
+            }
+
+            foreach (var entry in entries)
+            {
+                if (mapChart.ContainsKey(entry.Id))
+                    continue;
+
+                mapChart[entry.Id] = new ClientContact(entry.Version, SensedContactArm.Pristine,
+                    entry.Position, entry.Recipe, entry.Seed, null, GetColor(entry.Recipe.ProtoId));
+                merged++;
+            }
+        }
+
+        if (merged > 0)
+            Log.Info($"Merged {merged} charted contact(s) from the reconnect file.");
     }
 
     /// <summary>

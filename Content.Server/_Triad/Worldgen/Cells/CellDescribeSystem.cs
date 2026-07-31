@@ -633,6 +633,56 @@ public sealed class CellDescribeSystem : BaseWorldSystem
     }
 
     /// <summary>
+    ///     Collects every shaped, dormant, non-ghost record whose bounding circle touches the
+    ///     box, clearing <paramref name="results"/> first. The coarse consumer query: FTL's
+    ///     clear-spot search and NPC steering both ask "what dormant rock is in this area"
+    ///     through here, treating each result as a circle at <see cref="DebrisRecord.Point"/>
+    ///     with radius <see cref="DebrisRecord.Bound"/>. Tile precision is deliberately not
+    ///     offered: both consumers want stand-off distance, not surface contact, and the tile
+    ///     sets stay unrolled.
+    ///
+    ///     Maps without a world controller return empty: records only exist under one.
+    /// </summary>
+    public void CollectIntersecting(EntityUid map, Box2 worldBox, List<DebrisRecord> results)
+    {
+        results.Clear();
+
+        if (!_enabled || !TryComp<WorldControllerComponent>(map, out var controller))
+            return;
+
+        var sensedQuery = GetEntityQuery<SensedCellComponent>();
+
+        // One cell of slack, which exceeds any shipping rock's Bound, so a record whose centre
+        // sits in a neighbouring cell but whose bulk reaches into the box is still consulted.
+        var box = worldBox.Enlarged(WorldGen.ChunkSize);
+        var min = WorldGen.WorldToChunkCoords(box.BottomLeft).Floored();
+        var max = WorldGen.WorldToChunkCoords(box.TopRight).Floored();
+
+        for (var cx = min.X; cx <= max.X; cx++)
+        {
+            for (var cy = min.Y; cy <= max.Y; cy++)
+            {
+                if (!controller.Chunks.TryGetValue(new Vector2i(cx, cy), out var cell)
+                    || !sensedQuery.TryComp(cell, out var sensed))
+                    continue;
+
+                foreach (var record in sensed.Records.Values)
+                {
+                    if (!record.Shaped || record.State != SensedState.Dormant || record.GaveUp)
+                        continue;
+
+                    // Circle-vs-box: closest point on the box to the record centre.
+                    var closest = Vector2.Clamp(record.Point, worldBox.BottomLeft, worldBox.TopRight);
+                    if ((record.Point - closest).LengthSquared() > record.Bound * record.Bound)
+                        continue;
+
+                    results.Add(record);
+                }
+            }
+        }
+    }
+
+    /// <summary>
     ///     The record's rolled tile set, cached. Null for records whose prototype lost its blob
     ///     builder between describe and query, which shipping content never does.
     /// </summary>
