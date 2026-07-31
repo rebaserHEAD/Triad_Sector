@@ -877,6 +877,7 @@ public partial class ShuttleNavControl : BaseShuttleControl // Mono
             }
         }
 
+        TriadDrawChartContacts(handle, worldToView, xform.MapID); // Triad: charted last-knowns, dimmed, under live
         TriadDrawSensedContacts(handle, worldToView); // Triad: sensed worldgen contacts
 
         // If we've set the controlling console, and it's on a different grid

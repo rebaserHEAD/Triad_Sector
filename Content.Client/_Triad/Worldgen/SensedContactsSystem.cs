@@ -4,7 +4,10 @@
 
 using System.Numerics;
 using Content.Shared._Triad.Worldgen;
+using Content.Shared.GameTicking;
 using Content.Shared.Shuttles.Components;
+using Robust.Shared.Map;
+using Robust.Shared.Map.Components;
 using Robust.Shared.Prototypes;
 using Robust.Shared.Timing;
 
@@ -48,6 +51,15 @@ public sealed class SensedContactsSystem : EntitySystem
     private readonly Dictionary<NetEntity, TimeSpan> _lastUpdated = new();
 
     /// <summary>
+    ///     The chart: everything any console was ever sent, per map, surviving range egress,
+    ///     console close, and link hiccups. Presentation memory, never authority: it only ever
+    ///     holds what the server legitimately sent, existence-scope removes evict from it, and a
+    ///     round restart or map deletion clears it wholesale. Keyed by map because contact
+    ///     positions are map coordinates and records never change maps.
+    /// </summary>
+    private readonly Dictionary<MapId, Dictionary<int, ClientContact>> _chart = new();
+
+    /// <summary>
     ///     Derived outlines keyed by the roll identity. Version is part of the key so a
     ///     re-versioned rock (persist-modified, later) re-derives instead of reusing the pristine
     ///     shape. Bounded by distinct rocks seen this round; dropped wholesale on round restart
@@ -79,6 +91,26 @@ public sealed class SensedContactsSystem : EntitySystem
     {
         base.Initialize();
         SubscribeNetworkEvent<SensedContactsDeltaEvent>(OnDelta);
+        SubscribeLocalEvent<RoundRestartCleanupEvent>(OnRoundRestart);
+        SubscribeLocalEvent<MapComponent, EntityTerminatingEvent>(OnMapTerminating);
+    }
+
+    private void OnRoundRestart(RoundRestartCleanupEvent ev)
+    {
+        // A new round is a new belt roll; everything below is round-scoped.
+        _chart.Clear();
+        _contacts.Clear();
+        _lastUpdated.Clear();
+        _lastRequestTime.Clear();
+        _shapes.Clear();
+        _colors.Clear();
+    }
+
+    // Maps never surface MapRemovedEvent client-side; component-filtered termination is the
+    // house pattern for dropping per-map state.
+    private void OnMapTerminating(EntityUid uid, MapComponent component, ref EntityTerminatingEvent args)
+    {
+        _chart.Remove(component.MapId);
     }
 
     // Tick, not FrameUpdate: a headless client (integration tests, replays) never renders a
@@ -99,11 +131,35 @@ public sealed class SensedContactsSystem : EntitySystem
             _contacts[ev.Console] = consoleContacts;
         }
 
+        // A full reset resets what the server vouches for, not what we remember: the chart
+        // surviving it is the point of the chart.
         if (ev.FullReset)
             consoleContacts.Clear();
 
+        // The chart is keyed by the console's map, resolved here at receipt: the server only ever
+        // serves records on the console's own map, so this is the map every id in this event
+        // lives on. No console entity means no way to place the entries; live view still applies.
+        Dictionary<int, ClientContact>? mapChart = null;
+        if (TryGetEntity(ev.Console, out var consoleUid)
+            && Transform(consoleUid.Value).MapID is var mapId && mapId != MapId.Nullspace)
+        {
+            if (!_chart.TryGetValue(mapId, out mapChart))
+            {
+                mapChart = new Dictionary<int, ClientContact>();
+                _chart[mapId] = mapChart;
+            }
+        }
+
         foreach (var id in ev.Removes)
         {
+            // Existence-scope: the rock is gone, so the memory of it goes too.
+            consoleContacts.Remove(id);
+            mapChart?.Remove(id);
+        }
+
+        foreach (var id in ev.Fades)
+        {
+            // View-scope: the rock exists but left this console's picture. Chart keeps it.
             consoleContacts.Remove(id);
         }
 
@@ -116,8 +172,12 @@ public sealed class SensedContactsSystem : EntitySystem
                 continue;
 
             var recipe = ev.Legend[contact.ProtoIndex];
-            consoleContacts[contact.Id] = new ClientContact(contact.Id, contact.Version, contact.Arm,
+            var resolved = new ClientContact(contact.Id, contact.Version, contact.Arm,
                 contact.MapPosition, recipe, contact.Seed, contact.Outline, GetColor(recipe.ProtoId));
+
+            consoleContacts[contact.Id] = resolved;
+            if (mapChart is not null)
+                mapChart[contact.Id] = resolved;
         }
 
         _lastUpdated[ev.Console] = _timing.CurTime;
@@ -165,6 +225,33 @@ public sealed class SensedContactsSystem : EntitySystem
 
         foreach (var contact in consoleContacts.Values)
         {
+            if (TryGetShape(contact, out var outline))
+                yield return new SensedContactView(contact.MapPosition, outline, contact.Color);
+        }
+    }
+
+    /// <summary>
+    /// Streams the charted contacts for a console's current map that are NOT in its live view:
+    /// last-known rocks the server is not currently vouching for, for the dimmed underlay. The
+    /// map is a parameter rather than resolved here so this stays plain data and pure math like
+    /// <see cref="GetContacts"/>; the radar control already has its view's map at draw time, and
+    /// passing it is also what keeps a console that changed maps from projecting another map's
+    /// chart through its own view transform. No staleness gate: a chart is exactly the thing
+    /// that should keep painting when the link drops.
+    /// </summary>
+    public IEnumerable<SensedContactView> GetChart(EntityUid console, MapId map)
+    {
+        if (!_chart.TryGetValue(map, out var mapChart))
+            yield break;
+
+        var netConsole = GetNetEntity(console);
+        _contacts.TryGetValue(netConsole, out var live);
+
+        foreach (var contact in mapChart.Values)
+        {
+            if (live is not null && live.ContainsKey(contact.Id))
+                continue;
+
             if (TryGetShape(contact, out var outline))
                 yield return new SensedContactView(contact.MapPosition, outline, contact.Color);
         }

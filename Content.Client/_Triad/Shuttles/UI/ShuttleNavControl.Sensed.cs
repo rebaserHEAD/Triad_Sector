@@ -5,6 +5,7 @@
 using System.Numerics;
 using Content.Client._Triad.Worldgen;
 using Robust.Client.Graphics;
+using Robust.Shared.Map;
 
 namespace Content.Client.Shuttles.UI;
 
@@ -23,6 +24,36 @@ public partial class ShuttleNavControl // Triad
             return;
 
         TriadSensedContacts.RequestContacts(console);
+    }
+
+    /// <summary>
+    ///     The chart underlay: last-known rocks the server is not currently vouching for, drawn
+    ///     dim beneath the live pass so stale reads as charted rather than confirmed. Runs its
+    ///     own full loop before the live loop because the two share the vertex buffer.
+    /// </summary>
+    private void TriadDrawChartContacts(DrawingHandleScreen handle, Matrix3x2 worldToView, MapId map)
+    {
+        if (_consoleEntity is not { } console)
+            return;
+
+        var cullBounds = new Box2(-64f, -64f, Size.X + 64f, Size.Y + 64f);
+
+        foreach (var contact in TriadSensedContacts.GetChart(console, map))
+        {
+            var viewPos = Vector2.Transform(contact.MapPosition, worldToView);
+            if (!cullBounds.Contains(viewPos))
+                continue;
+
+            _triadHullVertsBuffer.Clear();
+            foreach (var outlineVert in contact.Outline)
+            {
+                _triadHullVertsBuffer.Add(Vector2.Transform(contact.MapPosition + outlineVert, worldToView));
+            }
+
+            _triadHullVertsBuffer.Add(_triadHullVertsBuffer[0]);
+
+            handle.DrawPrimitives(DrawPrimitiveTopology.LineStrip, _triadHullVertsBuffer, contact.Color.WithAlpha(0.3f));
+        }
     }
 
     private void TriadDrawSensedContacts(DrawingHandleScreen handle, Matrix3x2 worldToView)

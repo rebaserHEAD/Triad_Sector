@@ -39,16 +39,29 @@ public sealed class SensedContactsDeltaEvent : EntityEventArgs
     public List<SensedProtoRecipe> Legend;
 
     public List<SensedContactData> Adds;
+
+    /// <summary>
+    ///     Existence-scope removals: the rock is gone (destroyed in play, cell retired, ghost
+    ///     rock). Drops from the live view AND the chart.
+    /// </summary>
     public List<int> Removes;
 
+    /// <summary>
+    ///     View-scope removals: the rock still exists but left this console's picture (out of
+    ///     range, other map, materialized into a real grid). Drops from the live view only; the
+    ///     chart keeps its last-known entry, which is the whole point of having one.
+    /// </summary>
+    public List<int> Fades;
+
     public SensedContactsDeltaEvent(NetEntity console, bool fullReset, List<SensedProtoRecipe> legend,
-        List<SensedContactData> adds, List<int> removes)
+        List<SensedContactData> adds, List<int> removes, List<int> fades)
     {
         Console = console;
         FullReset = fullReset;
         Legend = legend;
         Adds = adds;
         Removes = removes;
+        Fades = fades;
     }
 }
 

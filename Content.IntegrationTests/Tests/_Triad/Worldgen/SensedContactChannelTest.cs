@@ -309,6 +309,65 @@ public sealed class SensedContactChannelTest
         Assert.That(cSys.GetContacts(clientConsole), Is.Empty,
             "materialized record still painting as a contact; the grid and the contact are now doubled");
 
+        // Materialization is a FADE, not a remove: the rock still exists, it just left the live
+        // view, so the chart must keep its last-known entry for the dimmed underlay.
+        MapId chartMap = default;
+        await client.WaitPost(() =>
+            chartMap = client.EntMan.GetComponent<TransformComponent>(clientConsole).MapID);
+        Assert.That(cSys.GetChart(clientConsole, chartMap), Is.Not.Empty,
+            "a faded contact fell off the chart; fades must clear the live view only");
+
+        await Cleanup(pair, map);
+        await pair.CleanReturnAsync();
+    }
+
+    /// <summary>
+    ///     The other half of the fade/remove split: a record that stops existing (destroyed in
+    ///     play, retired cell, ghost rock) is an existence-scope remove and must leave the chart
+    ///     too, or radar remembers rocks that are provably gone.
+    /// </summary>
+    [Test]
+    public async Task DestroyedRecordDropsOffTheChart()
+    {
+        await using var pair = await PoolManager.GetServerClient(new PoolSettings { Connected = true });
+        var (server, client) = (pair.Server, pair.Client);
+
+        var (map, consoles) = await Setup(pair, 1);
+        var describe = server.System<CellDescribeSystem>();
+
+        await server.WaitPost(() =>
+        {
+            var record = MakeRecord(FirstTestRecordId, map, Vector2.Zero);
+            describe.Records[record.Id] = record;
+        });
+
+        var clientConsole = pair.ToClientUid(consoles[0]);
+        var cSys = client.System<ClientContacts>();
+
+        await Poll(pair, new[] { clientConsole });
+        await Poll(pair, new[] { clientConsole });
+        Assert.That(cSys.GetContacts(clientConsole), Is.Not.Empty, "record never arrived");
+
+        MapId chartMap = default;
+        await client.WaitPost(() =>
+            chartMap = client.EntMan.GetComponent<TransformComponent>(clientConsole).MapID);
+        Assert.That(cSys.GetChart(clientConsole, chartMap), Is.Empty,
+            "a contact in the live view is doubling onto the chart underlay");
+
+        // Destroyed in play: gone from the record index entirely.
+        await server.WaitPost(() => describe.Records.Remove(FirstTestRecordId));
+
+        await Poll(pair, new[] { clientConsole });
+        await Poll(pair, new[] { clientConsole });
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(cSys.GetContacts(clientConsole), Is.Empty,
+                "destroyed record still painting as a live contact");
+            Assert.That(cSys.GetChart(clientConsole, chartMap), Is.Empty,
+                "destroyed record still on the chart; existence-scope removes must evict the memory too");
+        });
+
         await Cleanup(pair, map);
         await pair.CleanReturnAsync();
     }

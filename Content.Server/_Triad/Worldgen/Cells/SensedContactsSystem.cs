@@ -69,6 +69,7 @@ public sealed class SensedContactsSystem : EntitySystem
     private readonly Dictionary<string, int> _tempLegendIndexCache = new();
     private readonly List<SensedContactData> _tempAddsCache = new();
     private readonly List<int> _tempRemovesCache = new();
+    private readonly List<int> _tempFadesCache = new();
     private readonly List<(ICommonSession Session, EntityUid Console)> _tempEvictCache = new();
 
     public override void Initialize()
@@ -157,6 +158,7 @@ public sealed class SensedContactsSystem : EntitySystem
 
         _tempAddsCache.Clear();
         _tempRemovesCache.Clear();
+        _tempFadesCache.Clear();
         _tempLegendCache.Clear();
         _tempLegendIndexCache.Clear();
 
@@ -189,8 +191,23 @@ public sealed class SensedContactsSystem : EntitySystem
 
         foreach (var id in knownIds.Keys)
         {
-            if (!_tempVisibleIdsCache.Contains(id))
+            if (_tempVisibleIdsCache.Contains(id))
+                continue;
+
+            // WHY the id left view decides what the client forgets. Gone from the record index
+            // entirely (destroyed in play, cell retired) or burned out as a ghost rock: the rock
+            // is not out there, so it leaves the chart too. Still in the index but filtered out
+            // of this console's picture (range, map, materialized handoff): the rock exists, the
+            // console just cannot vouch for it right now, and the chart keeps the last known.
+            if (!_describe.Records.TryGetValue(id, out var gone)
+                || gone.BlockedAttempts >= DebrisMaterializeQueueSystem.MaxBlockedAttempts)
+            {
                 _tempRemovesCache.Add(id);
+            }
+            else
+            {
+                _tempFadesCache.Add(id);
+            }
         }
 
         // An empty delta is still sent, on purpose: the reply is the client's keepalive. The client
@@ -199,11 +216,15 @@ public sealed class SensedContactsSystem : EntitySystem
         // station-keeping, or a nav UI reopened onto an unchanged set) produces no adds and no
         // removes forever, so staying quiet here reads as the debris having vanished.
 
-        // Reflect exactly what is about to be sent: capped adds included, uncapped removes included.
+        // Reflect exactly what is about to be sent: capped adds included, uncapped removes and
+        // fades included. Fades leave the known-set like removes do; if the rock re-enters view
+        // it re-sends as an add and the client upserts by id.
         foreach (var add in _tempAddsCache)
             knownIds[add.Id] = add.Version;
         foreach (var removed in _tempRemovesCache)
             knownIds.Remove(removed);
+        foreach (var faded in _tempFadesCache)
+            knownIds.Remove(faded);
 
         _known[key] = knownIds;
 
@@ -212,8 +233,9 @@ public sealed class SensedContactsSystem : EntitySystem
         var legend = new List<SensedProtoRecipe>(_tempLegendCache);
         var adds = new List<SensedContactData>(_tempAddsCache);
         var removes = new List<int>(_tempRemovesCache);
+        var fades = new List<int>(_tempFadesCache);
 
-        RaiseNetworkEvent(new SensedContactsDeltaEvent(ev.Console, isNew, legend, adds, removes), args.SenderSession);
+        RaiseNetworkEvent(new SensedContactsDeltaEvent(ev.Console, isNew, legend, adds, removes, fades), args.SenderSession);
 
         if (_tempAddsCache.Count > 0)
             SensedMetrics.ContactsSent.Inc(_tempAddsCache.Count);
