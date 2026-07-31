@@ -77,6 +77,13 @@ public sealed class CellDescribeSystem : BaseWorldSystem
     /// <summary>Flat id index over every live record, for the contact channel's diffing.</summary>
     public readonly Dictionary<int, DebrisRecord> Records = new();
 
+    /// <summary>
+    ///     Rolled tile sets per record id, for data-space collision. Filled the first time a
+    ///     query actually reaches a record's fine test, dropped when the record's cell retires,
+    ///     so it only ever holds rocks something interacted with.
+    /// </summary>
+    private readonly Dictionary<int, HashSet<Vector2i>?> _tileCache = new();
+
     public override void Initialize()
     {
         Subs.CVar(_cfg, TriadCCVars.WorldgenSensedEnabled, OnEnabledChanged, true);
@@ -135,6 +142,7 @@ public sealed class CellDescribeSystem : BaseWorldSystem
         foreach (var record in component.Records.Values)
         {
             Records.Remove(record.Id);
+            _tileCache.Remove(record.Id);
         }
     }
 
@@ -510,6 +518,12 @@ public sealed class CellDescribeSystem : BaseWorldSystem
         float sizeX = maxX + 1 - minX;
         float sizeY = maxY + 1 - minY;
         record.DetectSignature = MathF.Sqrt(sizeX * sizeX + sizeY * sizeY) * (detect?.VisualMultiplier ?? 1f);
+
+        // Coarse collision gate: the farthest any tile corner sits from the blob origin. Corners
+        // reach one past the largest tile origin on each axis.
+        var boundX = MathF.Max(MathF.Abs(minX), MathF.Abs(maxX + 1));
+        var boundY = MathF.Max(MathF.Abs(minY), MathF.Abs(maxY + 1));
+        record.Bound = MathF.Sqrt(boundX * boundX + boundY * boundY);
     }
 
     private List<Vector2> GeneratePointsInCell(float density, Vector2 coords)
@@ -532,6 +546,129 @@ public sealed class CellDescribeSystem : BaseWorldSystem
         _gridsIntersecting.Clear();
         _mapManager.FindGridsIntersecting(mapId, point, ref _gridsIntersecting);
         return _gridsIntersecting.Count > 0;
+    }
+
+    /// <summary>
+    ///     Resolves a world-space segment against dormant debris in data space: the first shaped,
+    ///     dormant, non-ghost record whose rolled tile set the segment enters. This is how a shot
+    ///     stops on a rock that radar promised was there while no entity for it exists.
+    ///
+    ///     Cost discipline: the cells are the spatial index. Only cells overlapping the segment's
+    ///     bounding box (plus one cell of slack, which exceeds any shipping rock's
+    ///     <see cref="DebrisRecord.Bound"/>) are consulted, each record passes a coarse
+    ///     point-to-segment gate before its tile set is rolled, and rolled sets are cached per
+    ///     record. A per-tick projectile segment touches one or two cells holding a handful of
+    ///     records; the flat <see cref="Records"/> index is never walked.
+    /// </summary>
+    public bool TryQuerySegment(EntityUid map, Vector2 start, Vector2 end,
+        out DebrisRecord? hit, out Vector2 hitPoint)
+    {
+        hit = null;
+        hitPoint = default;
+
+        if (!_enabled)
+            return false;
+
+        var delta = end - start;
+        var lengthSq = delta.LengthSquared();
+        var bestT = float.MaxValue;
+        DebrisRecord? best = null;
+
+        void TestRecord(DebrisRecord record)
+        {
+            if (!record.Shaped || record.State != SensedState.Dormant)
+                return;
+
+            // A ghost rock is filtered off radar, so it must not stop shots either: blocking
+            // on something the players cannot see is an invisible wall.
+            if (record.BlockedAttempts >= DebrisMaterializeQueueSystem.MaxBlockedAttempts)
+                return;
+
+            // Coarse gate: closest distance from the record centre to the segment.
+            var t = lengthSq > 0f ? Math.Clamp(Vector2.Dot(record.Point - start, delta) / lengthSq, 0f, 1f) : 0f;
+            var closest = start + delta * t;
+            if ((record.Point - closest).LengthSquared() > record.Bound * record.Bound)
+                return;
+
+            if (GetTiles(record) is not { } tiles)
+                return;
+
+            if (!TileWalk.TraceSegment(start - record.Point, end - record.Point, tiles,
+                    out _, out var hitT) || hitT >= bestT)
+                return;
+
+            bestT = hitT;
+            best = record;
+        }
+
+        if (TryComp<WorldControllerComponent>(map, out var controller))
+        {
+            var sensedQuery = GetEntityQuery<SensedCellComponent>();
+
+            var box = new Box2(Vector2.Min(start, end), Vector2.Max(start, end)).Enlarged(WorldGen.ChunkSize);
+            var min = WorldGen.WorldToChunkCoords(box.BottomLeft).Floored();
+            var max = WorldGen.WorldToChunkCoords(box.TopRight).Floored();
+
+            for (var cx = min.X; cx <= max.X; cx++)
+            {
+                for (var cy = min.Y; cy <= max.Y; cy++)
+                {
+                    if (!controller.Chunks.TryGetValue(new Vector2i(cx, cy), out var cell)
+                        || !sensedQuery.TryComp(cell, out var sensed))
+                        continue;
+
+                    foreach (var record in sensed.Records.Values)
+                    {
+                        TestRecord(record);
+                    }
+                }
+            }
+        }
+        else
+        {
+            // No world controller means no cell index; fall back to the flat record index
+            // filtered by map. Only non-worldgen maps land here, and they hold few or no
+            // records, so O(records) is fine where it matters and free where it does not.
+            foreach (var record in Records.Values)
+            {
+                if (record.Map == map)
+                    TestRecord(record);
+            }
+        }
+
+        if (best is null)
+            return false;
+
+        hit = best;
+        hitPoint = start + delta * bestT;
+        return true;
+    }
+
+    /// <summary>
+    ///     The record's rolled tile set, cached. Null for records whose prototype lost its blob
+    ///     builder between describe and query, which shipping content never does.
+    /// </summary>
+    private HashSet<Vector2i>? GetTiles(DebrisRecord record)
+    {
+        if (_tileCache.TryGetValue(record.Id, out var cached))
+            return cached;
+
+        HashSet<Vector2i>? tiles = null;
+        if (_proto.TryIndex<EntityPrototype>(record.Proto, out var proto)
+            && proto.TryGetComponent<BlobFloorPlanBuilderComponent>("BlobFloorPlanBuilder", out var blob))
+        {
+            var rolled = BlobShapeGen.Roll(new System.Random(record.Seed), blob.Radius, blob.FloorPlacements,
+                blob.BlobDrawProb, Math.Max(1, blob.FloorTileset.Count));
+
+            tiles = new HashSet<Vector2i>(rolled.Count);
+            foreach (var tile in rolled)
+            {
+                tiles.Add(tile.Pos);
+            }
+        }
+
+        _tileCache[record.Id] = tiles;
+        return tiles;
     }
 
     /// <summary>

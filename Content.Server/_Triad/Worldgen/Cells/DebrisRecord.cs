@@ -72,6 +72,13 @@ public sealed class DebrisRecord
     /// <summary>Hull AABB diagonal times the prototype's visual detection multiplier.</summary>
     public float DetectSignature;
 
+    /// <summary>
+    ///     Bounding radius of the rolled tiles around <see cref="Point"/>, in world units. The
+    ///     coarse gate for data-space collision queries: a segment farther than this from
+    ///     <see cref="Point"/> cannot touch the rock, so the tile set is never rolled for it.
+    /// </summary>
+    public float Bound;
+
     /// <summary>Flat visual detection bias from the prototype (asteroids carry 1024).</summary>
     public float DetectBias;
 

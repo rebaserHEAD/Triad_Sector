@@ -153,6 +153,27 @@ public sealed class DebrisMaterializeQueueSystem : BaseWorldSystem
     }
 
     /// <summary>
+    ///     A data-space hit confirmed this rock matters right now: build it, if its cell is
+    ///     loaded. A hit in an unloaded cell leaves the record dormant on purpose. The shot
+    ///     stopping is the promise; the grid is a consequence for whoever is close enough to see
+    ///     it, and a grid built in an unloaded cell would only be swept straight back out by the
+    ///     drain loop's own loaded-cell guard anyway.
+    /// </summary>
+    public void ExpediteHit(DebrisRecord record)
+    {
+        if (record.State != SensedState.Dormant || record.Queued)
+            return;
+
+        if (!HasComp<LoadedChunkComponent>(record.Cell))
+            return;
+
+        record.BlockedAttempts = 0;
+        record.Queued = true;
+        _queue.Add(record);
+        _sortAccumulator = SortInterval;
+    }
+
+    /// <summary>
     ///     Records whose entity died: gameplay destruction removes the record for good, while a
     ///     GC teardown on cell unload returns it to dormant so revisiting the same space finds
     ///     the same rock rather than a fresh roll. Same point, prototype and seed, so shape,
