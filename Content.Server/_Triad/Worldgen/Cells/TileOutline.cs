@@ -68,6 +68,9 @@ public static class TileOutline
             return null;
 
         var solid = new HashSet<Vector2i>(tiles.Count);
+
+        // Bounds of the ORIGINAL tiles. FillEnclosed only ever adds cells strictly inside this
+        // box, so it stays correct for the fill and is never used to pick the start vertex.
         var min = new Vector2i(int.MaxValue, int.MaxValue);
         var max = new Vector2i(int.MinValue, int.MinValue);
 
@@ -86,27 +89,20 @@ public static class TileOutline
         // convex corner. Starting there means the walk needs no closing fixup, can never begin on
         // a hole, and does not depend on set iteration order, which is the determinism requirement
         // since describe and materialize must agree exactly.
-        var start = min;
+        var start = default(Vector2i);
+        var haveStart = false;
+
         foreach (var cell in solid)
         {
-            if (cell.X < start.X || (cell.X == start.X && cell.Y < start.Y))
-                start = cell;
+            if (haveStart && !(cell.X < start.X || (cell.X == start.X && cell.Y < start.Y)))
+                continue;
+
+            start = cell;
+            haveStart = true;
         }
 
-        // Defensive: the scan above starts from the bounding-box corner, which need not be solid.
-        if (!solid.Contains(start))
-        {
-            start = default;
-            var found = false;
-            foreach (var cell in solid)
-            {
-                if (found && (cell.X > start.X || (cell.X == start.X && cell.Y > start.Y)))
-                    continue;
-
-                start = cell;
-                found = true;
-            }
-        }
+        if (!haveStart)
+            return null;
 
         var verts = WalkLoop(solid, start);
         return verts is null || verts.Length > MaxOutlineVerts ? null : verts;
