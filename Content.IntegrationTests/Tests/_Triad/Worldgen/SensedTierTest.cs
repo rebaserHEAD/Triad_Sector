@@ -11,6 +11,7 @@ using Content.Server.Worldgen;
 using Content.Server.Worldgen.Components;
 using Content.Server.Worldgen.Components.Debris;
 using Content.Server.Worldgen.Prototypes;
+using Content.Server.Worldgen.Systems;
 using Content.Shared._Triad.CCVar;
 using Robust.Shared.Configuration;
 using Robust.Shared.GameObjects;
@@ -289,6 +290,152 @@ public sealed class SensedTierTest
 
         await server.WaitPost(() => entManager.DeleteEntity(map));
         await pair.CleanReturnAsync();
+    }
+
+    /// <summary>
+    ///     The dormancy round-trip, which is the sensed tier's actual distinguishing behaviour and
+    ///     the one thing the fixture summary claimed that nothing asserted.
+    ///
+    ///     Stock worldgen is per-load-generation: unload a chunk, let the GC take the debris, come
+    ///     back, and the placer draws a fresh Poisson sample, so the belt you return to is a
+    ///     different belt. The sensed tier is persistent: the record outlives its entity, so the
+    ///     same rock comes back at the same point with the same seed and the same silhouette.
+    ///
+    ///     This drives the seam directly rather than flying a loader out of range and waiting on the
+    ///     worldgen GC queue. That queue only drains past a minimum depth, so going through it would
+    ///     make this slow and would hang the fork's central guarantee off unrelated GC tuning. What
+    ///     is simulated is exactly what the world controller does: drop LoadedChunkComponent, let
+    ///     the debris be deleted, then raise the same WorldChunkLoadedEvent on the way back in. The
+    ///     handlers under test (OnDebrisTerminating, OnCellLoaded, EnqueueCell) are the real ones.
+    /// </summary>
+    [Test]
+    public async Task UnloadedRockComesBackAsTheSameRock()
+    {
+        await using var pair = await PoolManager.GetServerClient();
+        var server = pair.Server;
+        await server.WaitIdleAsync();
+        var entManager = server.ResolveDependency<IEntityManager>();
+
+        var (map, _) = await SetupBelt(pair, sensedRange: 512f, loaderProto: FarLoader, needMaterialized: true);
+
+        var mapSystem = entManager.System<SharedMapSystem>();
+
+        // Identity of one materialized rock, plus the shape it actually built, captured before the
+        // unload so the comparison after it is against evidence rather than against the record.
+        var recordId = 0;
+        var seed = 0;
+        var proto = string.Empty;
+        var point = Vector2.Zero;
+        EntityUid cell = default;
+        var outlineBefore = System.Array.Empty<Vector2i>();
+
+        await server.WaitAssertion(() =>
+        {
+            var subject = RecordsOnMap(entManager, map).FirstOrDefault(r =>
+                r is { State: SensedState.Materialized, Hull: not null, Entity: not null }
+                && entManager.HasComponent<MapGridComponent>(r.Entity!.Value));
+
+            Assert.That(subject, Is.Not.Null, "no materialized blob debris to round-trip");
+
+            recordId = subject!.Id;
+            seed = subject.Seed;
+            proto = subject.Proto;
+            point = subject.Point;
+            cell = subject.Cell;
+            outlineBefore = TraceGrid(entManager, mapSystem, subject.Entity!.Value);
+
+            Assert.That(outlineBefore, Is.Not.Empty, "could not trace the rock before unloading it");
+        });
+
+        // Unload the cell, then let the debris go the way the GC would take it.
+        await server.WaitPost(() =>
+        {
+            entManager.RemoveComponent<LoadedChunkComponent>(cell);
+
+            var record = entManager.System<CellDescribeSystem>().Records[recordId];
+            entManager.DeleteEntity(record.Entity!.Value);
+        });
+
+        await server.WaitRunTicks(5);
+        await server.WaitIdleAsync();
+
+        await server.WaitAssertion(() =>
+        {
+            var describe = entManager.System<CellDescribeSystem>();
+
+            // The record surviving its entity is the whole mechanism. If the terminating handler
+            // took the destroyed-in-play branch instead, it would be gone from here and the rock
+            // would never come back.
+            Assert.That(describe.Records.ContainsKey(recordId), Is.True,
+                "the record was deleted when its cell unloaded; an unloaded rock is being treated as a destroyed one");
+
+            var record = describe.Records[recordId];
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(record.State, Is.EqualTo(SensedState.Dormant), "unloaded record did not return to dormant");
+                Assert.That(record.Entity, Is.Null, "dormant record still points at a dead entity");
+                Assert.That(record.Seed, Is.EqualTo(seed), "the seed moved, so the rock would rebuild as a different shape");
+                Assert.That(record.Point, Is.EqualTo(point), "the rock moved while it was away");
+                Assert.That(record.Proto, Is.EqualTo(proto), "the rock changed prototype while it was away");
+            });
+        });
+
+        // Back into loader range: same event the world controller raises.
+        await server.WaitPost(() =>
+        {
+            entManager.EnsureComponent<LoadedChunkComponent>(cell);
+
+            var coords = entManager.GetComponent<WorldChunkComponent>(cell).Coordinates;
+            var ev = new WorldChunkLoadedEvent(cell, coords);
+            entManager.EventBus.RaiseLocalEvent(cell, ref ev);
+        });
+
+        await PoolManager.WaitUntil(server, () =>
+        {
+            var records = entManager.System<CellDescribeSystem>().Records;
+            return records.TryGetValue(recordId, out var r) && r.State == SensedState.Materialized;
+        }, maxTicks: 900);
+
+        await server.WaitIdleAsync();
+
+        await server.WaitAssertion(() =>
+        {
+            var record = entManager.System<CellDescribeSystem>().Records[recordId];
+            var outlineAfter = TraceGrid(entManager, mapSystem, record.Entity!.Value);
+
+            Assert.That(outlineAfter, Is.Not.Empty, "could not trace the rock after it came back");
+            Assert.That(outlineAfter, Is.EqualTo(outlineBefore),
+                $"the rock that came back is not the rock that left for {proto}: "
+                + $"{outlineBefore.Length} verts before against {outlineAfter.Length} after");
+        });
+
+        await server.WaitPost(() => entManager.DeleteEntity(map));
+        await pair.CleanReturnAsync();
+    }
+
+    /// <summary>
+    ///     The traced silhouette of a live debris grid's own tiles. Empty rather than null when the
+    ///     entity is not a grid, has no tiles, or cannot be traced: this project is not in a nullable
+    ///     annotation context, and the callers only ever need "did we get a shape".
+    /// </summary>
+    private static Vector2i[] TraceGrid(IEntityManager entManager, SharedMapSystem mapSystem, EntityUid ent)
+    {
+        if (!entManager.TryGetComponent<MapGridComponent>(ent, out var grid))
+            return System.Array.Empty<Vector2i>();
+
+        var tiles = mapSystem.GetAllTilesEnumerator(ent, grid);
+        var gridTiles = new List<BlobTile>();
+
+        while (tiles.MoveNext(out var tile))
+        {
+            gridTiles.Add(new BlobTile(tile.Value.GridIndices, 0));
+        }
+
+        if (gridTiles.Count == 0)
+            return System.Array.Empty<Vector2i>();
+
+        return TileOutline.Trace(gridTiles) ?? System.Array.Empty<Vector2i>();
     }
 
     /// <summary>Inclusive integer bounding corners of an outline.</summary>
