@@ -96,14 +96,19 @@ public sealed class BlobFloorPlanBuilderSystem : BaseWorldSystem
         // _map.SetTiles(gridUid, grid, taken.Select(x => (x.Key, x.Value)).ToList());
 
         var seed = TryComp<PredeterminedShapeComponent>(gridUid, out var shape) ? shape.Seed : _random.Next();
-        var tiles = BlobShapeGen.Roll(new System.Random(seed), comp.Radius, comp.FloorPlacements, comp.BlobDrawProb,
+        var rng = new System.Random(seed);
+        var tiles = BlobShapeGen.Roll(rng, comp.Radius, comp.FloorPlacements, comp.BlobDrawProb,
             comp.FloorTileset.Count);
 
         var taken = new List<(Vector2i, Tile)>(tiles.Count);
         foreach (var tile in tiles)
         {
             var tileDef = _tileDefinition[comp.FloorTileset[tile.TilesetIndex]];
-            taken.Add((tile.Pos, new Tile(tileDef.TileId, 0, _tiles.PickVariant((ContentTileDefinition) tileDef))));
+            // Triad: variant picked by continuing the walk's own deterministic stream, not the
+            // shared RNG. The sprite variant is part of "the same rock comes back". This cannot
+            // disturb describe/client shape parity: those only consume Roll's returned tiles,
+            // and Roll's draw sequence is untouched; the variant draws happen after it returns.
+            taken.Add((tile.Pos, new Tile(tileDef.TileId, 0, _tiles.PickVariant((ContentTileDefinition) tileDef, rng))));
         }
 
         _map.SetTiles(gridUid, grid, taken);

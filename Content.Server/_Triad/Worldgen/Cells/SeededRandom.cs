@@ -20,6 +20,24 @@ public static class SeededRandom
     public const int ShapeStage = 0;
     public const int InteriorStage = 0x5f37;
     public const int DepositStage = 0x2b91;
+    public const int LootStage = 0x71c3;
+
+    /// <summary>
+    ///     Stable per-position sub-seed, so co-resident rolls in one stage (loot markers on
+    ///     different tiles of the same rock) do not share a stream. A fixed-constant mix rather
+    ///     than HashCode.Combine on purpose: that is randomized per process, and this value must
+    ///     stay reproducible for as long as a record can live.
+    /// </summary>
+    public static int SaltFor(int seed, int stage, Vector2i pos)
+    {
+        unchecked
+        {
+            var h = seed ^ stage;
+            h = h * 31 + pos.X;
+            h = h * 31 + pos.Y;
+            return h;
+        }
+    }
 
     /// <summary>
     ///     A seeded RNG for the given stage, or null when the entity is not pre-determined and
