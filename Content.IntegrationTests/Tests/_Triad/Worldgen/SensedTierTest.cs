@@ -25,7 +25,7 @@ namespace Content.IntegrationTests.Tests._Triad.Worldgen;
 /// <summary>
 ///     Covers the describe/materialize seam: cells get decided as data before any entity
 ///     exists, materialization builds the rock that was described, and a rock that unloads
-///     comes back identical rather than re-rolled.
+///     comes back from its stored record rather than being re-rolled.
 /// </summary>
 [TestFixture]
 public sealed class SensedTierTest

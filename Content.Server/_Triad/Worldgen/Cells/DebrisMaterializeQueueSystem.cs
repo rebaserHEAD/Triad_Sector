@@ -122,7 +122,9 @@ public sealed class DebrisMaterializeQueueSystem : BaseWorldSystem
     /// <summary>
     ///     Records whose entity died: gameplay destruction removes the record for good, while a
     ///     GC teardown on cell unload returns it to dormant so revisiting the same space finds
-    ///     the same rock rather than a fresh roll.
+    ///     the same rock rather than a fresh roll. Same point, prototype and seed, so shape,
+    ///     interior and deposits all rebuild identically; decoration that does not read the seed,
+    ///     chiefly RoomFill, re-rolls.
     /// </summary>
     private void OnDebrisTerminating(EntityUid uid, SensedDebrisComponent component, ref EntityTerminatingEvent args)
     {
