@@ -37,16 +37,33 @@ public sealed class BlobShapeGenTest
         Assert.That(a, Is.Not.EqualTo(b));
     }
 
+    /// <summary>
+    ///     The walk's real positional bound is radius + 1, not radius. Candidates are radius-checked
+    ///     as they are added, but the blobDrawProb branch places a picked tile's neighbours straight
+    ///     through PlaceTile with no check of their own, so a tile sitting on the radius can push one
+    ///     exactly one step past it. It cannot cascade: those neighbours only ever contribute
+    ///     candidates that are themselves radius-checked.
+    ///
+    ///     This asserted radius flat until 2026-07-30, which is a bound the generator does not hold.
+    ///     It passed only because the single seed it used never drew a boundary neighbour, so it was
+    ///     a latent failure waiting on any change to draw order rather than a guarantee. Swept across
+    ///     seeds now, because a property exercised by one seed is a coincidence.
+    /// </summary>
     [Test]
-    public void AllPositions_AreWithinRadiusOfOrigin()
+    public void AllPositions_AreWithinRadiusPlusOneOfOrigin()
     {
-        var tiles = BlobShapeGen.Roll(new System.Random(42), Radius, Placements, DrawProb, TilesetCount);
-        var radiusSq = (double) Radius * Radius;
+        var boundSq = (double) (Radius + 1) * (Radius + 1);
 
-        foreach (var tile in tiles)
+        for (var seed = 1; seed <= 64; seed++)
         {
-            var distSq = (double) tile.Pos.X * tile.Pos.X + (double) tile.Pos.Y * tile.Pos.Y;
-            Assert.That(distSq, Is.LessThanOrEqualTo(radiusSq));
+            var tiles = BlobShapeGen.Roll(new System.Random(seed), Radius, Placements, DrawProb, TilesetCount);
+
+            foreach (var tile in tiles)
+            {
+                var distSq = (double) tile.Pos.X * tile.Pos.X + (double) tile.Pos.Y * tile.Pos.Y;
+                Assert.That(distSq, Is.LessThanOrEqualTo(boundSq),
+                    $"seed {seed} placed a tile at {tile.Pos}, past radius + 1");
+            }
         }
     }
 

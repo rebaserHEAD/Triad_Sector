@@ -98,6 +98,10 @@ public static class BlobShapeGen
                 var east = point.Offset(Direction.East);
                 var west = point.Offset(Direction.West);
 
+                // Deliberately NOT radius-checked, matching the upstream walk: these go straight
+                // through PlaceTile. So the real bound on a tile's distance from origin is
+                // radius + 1, not radius. It does not cascade, since PlaceTile only contributes
+                // candidates that are radius-checked on the way in.
                 if (!taken.Contains(north) && rng.NextDouble() < blobDrawProb)
                     PlaceTile(north);
                 if (!taken.Contains(south) && rng.NextDouble() < blobDrawProb)
