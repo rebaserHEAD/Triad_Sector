@@ -75,13 +75,40 @@ public sealed class DebrisMaterializeQueueSystem : BaseWorldSystem
 
     public override void Initialize()
     {
-        Subs.CVar(_cfg, TriadCCVars.WorldgenSensedEnabled, v => _enabled = v, true);
+        Subs.CVar(_cfg, TriadCCVars.WorldgenSensedEnabled, OnEnabledChanged, true);
         Subs.CVar(_cfg, TriadCCVars.WorldgenMaterializeBudgetMs, v => _budgetMs = v, true);
         Subs.CVar(_cfg, TriadCCVars.WorldgenMaterializePanicRange, v => _panicRange = v, true);
 
         SubscribeLocalEvent<SensedCellComponent, WorldChunkLoadedEvent>(OnCellLoaded);
         SubscribeLocalEvent<WorldChunkComponent, WorldChunkLoadedEvent>(OnChunkLoaded);
         SubscribeLocalEvent<SensedDebrisComponent, EntityTerminatingEvent>(OnDebrisTerminating);
+    }
+
+    /// <summary>
+    ///     Drops the pending queue when the tier is switched off. Update returns early while
+    ///     disabled but does NOT clear the queue, so without this the records sitting in it drain on
+    ///     the first tick after the switch comes back on, building the sensed tier's roll on top of
+    ///     whatever the stock placer put there in the meantime. Records are retired separately by
+    ///     <see cref="CellDescribeSystem"/>; this only releases the queue's hold on them, which is
+    ///     why Queued is cleared rather than left for a drain that will never come.
+    /// </summary>
+    private void OnEnabledChanged(bool value)
+    {
+        if (value == _enabled)
+            return;
+
+        _enabled = value;
+
+        if (value)
+            return;
+
+        foreach (var record in _queue)
+        {
+            record.Queued = false;
+        }
+
+        _queue.Clear();
+        SensedMetrics.MaterializeQueueDepth.Set(0);
     }
 
     /// <summary>
@@ -140,7 +167,14 @@ public sealed class DebrisMaterializeQueueSystem : BaseWorldSystem
         record.Entity = null;
         record.State = SensedState.Dormant;
 
-        if (!HasComp<LoadedChunkComponent>(record.Cell) || Terminating(record.Cell))
+        // Presence of the component is not enough to say the cell is still loaded. The world
+        // controller unloads with RemCompDeferred, which runs the component's shutdown immediately
+        // but leaves it visible to HasComp until the end-of-tick cull. A debris grid deleted inside
+        // that window (the GC queue's overflow branch does exactly this) would read as "cell still
+        // loaded", take the destroyed-in-play branch, and delete a record that should have gone
+        // dormant and come back. Running goes false the moment the shutdown runs, so it closes the
+        // window without needing to know who did the deleting.
+        if (!TryComp<LoadedChunkComponent>(record.Cell, out var loaded) || !loaded.Running || Terminating(record.Cell))
             return;
 
         // Still loaded, so this was destroyed in play rather than collected: it is gone.
