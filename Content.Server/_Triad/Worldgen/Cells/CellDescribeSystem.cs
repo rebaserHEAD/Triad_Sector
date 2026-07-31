@@ -56,6 +56,10 @@ public sealed class CellDescribeSystem : BaseWorldSystem
     private float _describeLead;
 
     private float _accumulator;
+
+    /// <summary>Tick the inline-describe budget below is being counted against, and what it has spent.</summary>
+    private GameTick _inlineTick;
+    private TimeSpan _inlineSpent;
     private int _nextRecordId = 1;
 
     /// <summary>Cells wanted by loaders but not yet described, nearest-first per pass.</summary>
@@ -181,8 +185,20 @@ public sealed class CellDescribeSystem : BaseWorldSystem
         var controllerQuery = GetEntityQuery<WorldControllerComponent>();
         var sensedQuery = GetEntityQuery<SensedCellComponent>();
 
+        // Budgeted for the same reason the drain is. The scan is O(sources * (range/ChunkSize)^2),
+        // which at shipping defaults is roughly 2600 candidate coords per source with no cap on
+        // source count, and it lands as a single lump on whichever tick the 1 Hz accumulator fires.
+        // The drain being hard-capped while the scan that feeds it was not left the cvar unable to
+        // bound the pass it names.
+        var budget = TimeSpan.FromMilliseconds(_describeBudgetMs);
+        var start = _timing.RealTime;
+        var truncated = false;
+
         foreach (var (map, center, range) in _sources)
         {
+            if (truncated)
+                break;
+
             if (!controllerQuery.TryComp(map, out var controller))
                 continue;
 
@@ -191,6 +207,16 @@ public sealed class CellDescribeSystem : BaseWorldSystem
 
             while (chunks.MoveNext(out var chunk))
             {
+                // Truncating biases what got collected toward the sources scanned first, so the
+                // nearest-first sort below is only nearest-first among what was reached. That is
+                // the right trade for a valve that should almost never trip: the cells missed are
+                // still undescribed next second and get collected then.
+                if (_timing.RealTime - start > budget)
+                {
+                    truncated = true;
+                    break;
+                }
+
                 var coords = chunk.Value;
 
                 // Already-described cells are the overwhelming majority of any steady-state sweep,
@@ -303,13 +329,39 @@ public sealed class CellDescribeSystem : BaseWorldSystem
     ///     Describes a cell if it has not been described yet. Callers that need a cell's
     ///     contents right now (the materialization queue on a chunk load that outran the
     ///     sweep) use this instead of waiting for the next pass.
+    ///
+    ///     Budgeted per tick, because this bypasses the sweep's budget entirely and the number of
+    ///     callers in one tick is set by how many chunks entered load range together: a fast ship,
+    ///     several loaders, or players spread across a sector can stack whole describes into one
+    ///     tick, which is the exact hitch DrainPending's budget exists to prevent. Returning null
+    ///     past the budget is not a failure: the cell keeps no <see cref="SensedCellComponent"/>,
+    ///     so the next sweep collects it like any other undescribed cell, a second at most later.
+    ///
+    ///     It reuses describe_budget_ms but resets PER TICK, where the sweep spends it per second.
+    ///     Same number, different period, deliberately: this is demand work with someone already
+    ///     standing in the chunk, so it gets roughly thirty times the sweep's allowance per second
+    ///     while any single tick stays capped. Budgeting it at the sweep's rate would starve the
+    ///     path that exists precisely because the sweep cannot keep up with a fast approach.
     /// </summary>
     public SensedCellComponent? EnsureDescribed(EntityUid cell)
     {
         if (TryComp<SensedCellComponent>(cell, out var existing))
             return existing;
 
-        return Describe(cell);
+        if (_inlineTick != _timing.CurTick)
+        {
+            _inlineTick = _timing.CurTick;
+            _inlineSpent = TimeSpan.Zero;
+        }
+
+        if (_inlineSpent > TimeSpan.FromMilliseconds(_describeBudgetMs))
+            return null;
+
+        var start = _timing.RealTime;
+        var sensed = Describe(cell);
+        _inlineSpent += _timing.RealTime - start;
+
+        return sensed;
     }
 
     /// <summary>
