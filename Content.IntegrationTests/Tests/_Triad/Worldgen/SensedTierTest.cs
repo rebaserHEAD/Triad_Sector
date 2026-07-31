@@ -16,6 +16,7 @@ using Robust.Shared.Configuration;
 using Robust.Shared.GameObjects;
 using Robust.Shared.Map;
 using Robust.Shared.Map.Components;
+using Robust.Shared.Maths;
 using Robust.Shared.Prototypes;
 using Robust.Shared.Serialization.Manager;
 
@@ -23,7 +24,7 @@ namespace Content.IntegrationTests.Tests._Triad.Worldgen;
 
 /// <summary>
 ///     Covers the describe/materialize seam: cells get decided as data before any entity
-///     exists, materialization builds exactly what was described, and a rock that unloads
+///     exists, materialization builds the rock that was described, and a rock that unloads
 ///     comes back identical rather than re-rolled.
 /// </summary>
 [TestFixture]
@@ -195,11 +196,17 @@ public sealed class SensedTierTest
     }
 
     /// <summary>
-    ///     The radar promise, asserted on the shape rather than a proxy for it: the outline painted
-    ///     while dormant is the silhouette of the grid that eventually loads. Re-traces the
-    ///     materialized grid's own tiles and requires an exact match against what describe stored,
-    ///     so this fails on a seed desync, a generator drift, or an outline that stops following
-    ///     the rock.
+    ///     The radar promise, stated at the strength we actually make it: the outline painted while
+    ///     dormant is the silhouette of the ROCK that loads in, not of the finished grid. Describe
+    ///     models the shape roll and stops there. Decoration runs afterwards at build time and lays
+    ///     tiles of its own, chiefly the RoomFill markers in the NF debris tables, so a decorated
+    ///     grid traces to a slightly larger outline than the one describe stored.
+    ///
+    ///     So this asserts equality where nothing decorated the grid and growth-only where something
+    ///     did: what built may enclose more than what was painted, never less, and never somewhere
+    ///     else. That still catches everything an exact comparison caught, because a seed desync,
+    ///     drift between the describe and build generators, and an outline that stops tracking the
+    ///     rock all MOVE the shape rather than grow it, and a moved shape fails the bounds check.
     /// </summary>
     [Test]
     public async Task DescribedHullMatchesMaterializedGrid()
@@ -214,7 +221,8 @@ public sealed class SensedTierTest
         await server.WaitAssertion(() =>
         {
             var mapSystem = entManager.System<SharedMapSystem>();
-            var checkedAny = false;
+            var exact = 0;
+            var decorated = 0;
             var all = RecordsOnMap(entManager, map);
             var materializedCount = all.Count(r => r.State == SensedState.Materialized);
             var withHull = all.Count(r => r.State == SensedState.Materialized && r.Hull is not null);
@@ -223,43 +231,97 @@ public sealed class SensedTierTest
 
             foreach (var record in all)
             {
-                if (record is { State: SensedState.Materialized, Hull: not null, Entity: { } ent }
-                    && entManager.TryGetComponent<MapGridComponent>(ent, out var grid))
+                if (record is not { State: SensedState.Materialized, Hull: not null, Entity: { } ent }
+                    || !entManager.TryGetComponent<MapGridComponent>(ent, out var grid))
+                    continue;
+
+                // Take the grid's real tiles, not their bounding box. Comparing boxes only ever
+                // constrained four numbers out of a couple of hundred tiles and said nothing at
+                // all about shape.
+                var tiles = mapSystem.GetAllTilesEnumerator(ent, grid);
+                var gridTiles = new List<BlobTile>();
+
+                while (tiles.MoveNext(out var tile))
                 {
-                    // Take the grid's real tiles, not their bounding box. Comparing boxes only ever
-                    // constrained four numbers out of a couple of hundred tiles, and now that the
-                    // outline follows the silhouette we can assert the actual shape: re-trace the
-                    // materialized tiles and require the described outline to equal it exactly.
-                    var tiles = mapSystem.GetAllTilesEnumerator(ent, grid);
-                    var gridTiles = new List<BlobTile>();
-
-                    while (tiles.MoveNext(out var tile))
-                    {
-                        gridTiles.Add(new BlobTile(tile.Value.GridIndices, 0));
-                    }
-
-                    if (gridTiles.Count == 0)
-                        continue;
-
-                    var fromGrid = TileOutline.Trace(gridTiles);
-
-                    Assert.That(fromGrid, Is.Not.Null,
-                        $"could not trace the materialized grid of {record.Proto}");
-                    Assert.That(record.Hull, Is.EqualTo(fromGrid),
-                        $"the outline painted at range is not the shape that loaded in for {record.Proto}: "
-                        + $"described {record.Hull!.Length} verts against {fromGrid!.Length} traced from the grid");
-
-                    checkedAny = true;
+                    gridTiles.Add(new BlobTile(tile.Value.GridIndices, 0));
                 }
+
+                if (gridTiles.Count == 0)
+                    continue;
+
+                var fromGrid = TileOutline.Trace(gridTiles);
+
+                Assert.That(fromGrid, Is.Not.Null,
+                    $"could not trace the materialized grid of {record.Proto}");
+
+                if (record.Hull!.SequenceEqual(fromGrid!))
+                {
+                    exact++;
+                    continue;
+                }
+
+                // Decorated. The described silhouette still has to sit inside what actually built,
+                // and that is what separates "a room was laid on top of the rock" from "we described
+                // a different rock": decoration only ever adds tiles, so it can only push the
+                // outline outward. Anything that moves the shape breaks containment immediately.
+                var (describedMin, describedMax) = Bounds(record.Hull);
+                var (builtMin, builtMax) = Bounds(fromGrid!);
+
+                Assert.That(
+                    builtMin.X <= describedMin.X && builtMin.Y <= describedMin.Y
+                    && builtMax.X >= describedMax.X && builtMax.Y >= describedMax.Y, Is.True,
+                    $"the outline painted at range is not inside the rock that loaded for {record.Proto}: "
+                    + $"described {describedMin}..{describedMax} against {builtMin}..{builtMax} from the grid");
+
+                Assert.That(EnclosedCells(fromGrid!), Is.GreaterThanOrEqualTo(EnclosedCells(record.Hull)),
+                    $"the materialized grid of {record.Proto} encloses less than the outline painted for it");
+
+                decorated++;
             }
 
-            Assert.That(checkedAny, Is.True,
-                $"no materialized blob debris was available to compare against its hull " +
-                $"(records={all.Count} materialized={materializedCount} withHull={withHull} withGrid={withGrid})");
+            // At least one undecorated rock has to be in the sample, or the equality half of the
+            // promise is never exercised and this degenerates into the containment check alone.
+            Assert.That(exact, Is.GreaterThan(0),
+                $"no undecorated blob debris was available to compare exactly against its hull "
+                + $"(records={all.Count} materialized={materializedCount} withHull={withHull} "
+                + $"withGrid={withGrid} exact={exact} decorated={decorated})");
         });
 
         await server.WaitPost(() => entManager.DeleteEntity(map));
         await pair.CleanReturnAsync();
+    }
+
+    /// <summary>Inclusive integer bounding corners of an outline.</summary>
+    private static (Vector2i Min, Vector2i Max) Bounds(Vector2i[] outline)
+    {
+        var min = outline[0];
+        var max = outline[0];
+
+        foreach (var vert in outline)
+        {
+            min = new Vector2i(System.Math.Min(min.X, vert.X), System.Math.Min(min.Y, vert.Y));
+            max = new Vector2i(System.Math.Max(max.X, vert.X), System.Math.Max(max.Y, vert.Y));
+        }
+
+        return (min, max);
+    }
+
+    /// <summary>
+    ///     Enclosed area in whole cells. The outline is rectilinear on the integer lattice, so the
+    ///     shoelace area is always a whole number of cells and this stays exact.
+    /// </summary>
+    private static long EnclosedCells(Vector2i[] outline)
+    {
+        long acc = 0;
+
+        for (var i = 0; i < outline.Length; i++)
+        {
+            var a = outline[i];
+            var b = outline[(i + 1) % outline.Length];
+            acc += (long) a.X * b.Y - (long) b.X * a.Y;
+        }
+
+        return System.Math.Abs(acc) / 2;
     }
 
     /// <summary>

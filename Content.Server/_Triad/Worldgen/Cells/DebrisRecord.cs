@@ -22,7 +22,14 @@ public enum SensedState : byte
 /// <summary>
 ///     A pre-determined piece of worldgen debris. The record is the source of truth:
 ///     radar contacts are drawn from it while dormant, and materialization spawns the
-///     entity from it, so the shape seen at range is exactly the shape that loads in.
+///     entity from it, so the shape seen at range is the rock that loads in.
+///
+///     The rock, not the finished grid. Describe models the shape roll and stops there.
+///     Decoration runs later, at build time, and can lay tiles of its own: the RoomFill
+///     markers in the NF debris tables stamp a room template that may reach a few tiles
+///     past the rolled blob. That gap is known and accepted. This is a view, the excess is
+///     bounded by the room template size, and a rock always materializes well inside
+///     detection range, so nothing is ever navigated by the painted outline alone.
 /// </summary>
 public sealed class DebrisRecord
 {
@@ -47,9 +54,9 @@ public sealed class DebrisRecord
     public int Seed;
 
     /// <summary>
-    ///     Simplified convex outline in grid-local tile units relative to <see cref="Point"/>.
-    ///     Vertices are tile corners, so they are exactly integral. Null for non-blob debris
-    ///     (spawner markers etc.), which get no radar contact.
+    ///     Traced silhouette of the rolled blob, in grid-local tile units relative to
+    ///     <see cref="Point"/>. Vertices are tile corners, so they are exactly integral. Null for
+    ///     non-blob debris (spawner markers etc.), which get no radar contact.
     /// </summary>
     public Vector2i[]? Hull;
 

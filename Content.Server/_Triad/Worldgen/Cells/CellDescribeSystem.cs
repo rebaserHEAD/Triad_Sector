@@ -30,7 +30,11 @@ namespace Content.Server._Triad.Worldgen.Cells;
 ///     The describe service: decides what debris exists in a cell as data, ahead of and
 ///     independently of building any entity. Radar contacts and the materialization queue
 ///     both read the records this produces, which is what keeps the shape painted at range
-///     identical to the grid that eventually loads in.
+///     the shape of the rock that eventually loads in.
+///
+///     Scope: this models the shape roll. Build-time decoration that lays its own tiles is
+///     not modelled, so a decorated grid can end up a few tiles larger than what was painted.
+///     See <see cref="DebrisRecord"/> for why that is accepted rather than chased.
 /// </summary>
 public sealed class CellDescribeSystem : BaseWorldSystem
 {
@@ -334,9 +338,10 @@ public sealed class CellDescribeSystem : BaseWorldSystem
     }
 
     /// <summary>
-    ///     Computes the record's radar-facing data from its prototype and seed: hull outline,
-    ///     family colour, and the detection terms <see cref="DetectionSystem"/> would apply to
-    ///     the real grid, so a contact appears at exactly the range its grid would.
+    ///     Computes the record's radar-facing data from its prototype and seed: outline, family
+    ///     colour, and the detection terms <see cref="DetectionSystem"/> would apply to the real
+    ///     grid, so a contact appears at the range its grid would. Sized off the rolled blob, so a
+    ///     rock that later gets decorated reads marginally smaller here than the grid it becomes.
     /// </summary>
     private void FillShape(DebrisRecord record)
     {
