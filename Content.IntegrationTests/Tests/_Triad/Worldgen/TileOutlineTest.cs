@@ -4,7 +4,7 @@
 
 using System.Collections.Generic;
 using System.Linq;
-using Content.Server._Triad.Worldgen.Cells;
+using Content.Shared._Triad.Worldgen;
 using Robust.Shared.Maths;
 
 namespace Content.IntegrationTests.Tests._Triad.Worldgen;

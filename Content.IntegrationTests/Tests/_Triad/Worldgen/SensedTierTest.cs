@@ -8,6 +8,7 @@ using System.Numerics;
 using System.Threading.Tasks;
 using Content.Server._Triad.Worldgen.Cells;
 using Content.Server.Worldgen;
+using Content.Shared._Triad.Worldgen;
 using Content.Server.Worldgen.Components;
 using Content.Server.Worldgen.Components.Debris;
 using Content.Server.Worldgen.Prototypes;

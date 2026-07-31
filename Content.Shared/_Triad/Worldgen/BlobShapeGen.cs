@@ -4,7 +4,7 @@
 
 using System.Numerics;
 
-namespace Content.Server._Triad.Worldgen.Cells;
+namespace Content.Shared._Triad.Worldgen;
 
 public readonly record struct BlobTile(Vector2i Pos, int TilesetIndex);
 

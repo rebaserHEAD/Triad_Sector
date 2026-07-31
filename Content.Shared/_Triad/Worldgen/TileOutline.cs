@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-namespace Content.Server._Triad.Worldgen.Cells;
+namespace Content.Shared._Triad.Worldgen;
 
 /// <summary>
 ///     Traces the true silhouette of a rolled tile set: the polygon that follows the actual

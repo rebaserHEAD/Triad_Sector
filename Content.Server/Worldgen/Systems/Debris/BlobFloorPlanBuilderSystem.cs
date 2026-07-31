@@ -1,6 +1,7 @@
 // using System.Linq; // Triad: removed - only the original body below needed it, for the
 // .Select(...).ToList() at its tail. The replacement builds its tile list directly.
-using Content.Server._Triad.Worldgen.Cells; // Triad: extracted seed-deterministic shape walk
+using Content.Server._Triad.Worldgen.Cells; // Triad: PredeterminedShapeComponent
+using Content.Shared._Triad.Worldgen; // Triad: extracted seed-deterministic shape walk
 using Content.Server.Worldgen.Components.Debris;
 using Content.Shared.Maps;
 using Robust.Shared.Map;

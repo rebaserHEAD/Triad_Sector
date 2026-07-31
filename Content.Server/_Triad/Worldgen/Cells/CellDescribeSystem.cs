@@ -12,6 +12,7 @@ using Content.Server.Worldgen.Systems.Debris;
 using Content.Server.Worldgen.Tools;
 using Content.Shared._Mono.Detection;
 using Content.Shared._Triad.CCVar;
+using Content.Shared._Triad.Worldgen;
 using Content.Shared.Ghost;
 using Content.Shared.Mind.Components;
 using Content.Shared.Shuttles.Components;
