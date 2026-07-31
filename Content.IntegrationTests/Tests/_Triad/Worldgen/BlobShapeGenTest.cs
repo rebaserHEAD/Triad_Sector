@@ -6,6 +6,7 @@ using System.Numerics;
 using System.Security.Cryptography;
 using System.Text;
 using Content.Server._Triad.Worldgen.Cells;
+using Robust.Shared.Maths;
 
 namespace Content.IntegrationTests.Tests._Triad.Worldgen;
 
@@ -107,7 +108,9 @@ public sealed class BlobShapeGenTest
         var tiles = BlobShapeGen.Roll(new System.Random(42), Radius, Placements, DrawProb, TilesetCount);
         var hull = BlobShapeGen.ComputeHull(tiles);
 
-        Assert.That(hull.Length, Is.LessThanOrEqualTo(16));
+        // Tracks ComputeHull's maxVerts default. It was left at 16 when the cap moved to 24, which
+        // meant the assertion no longer said anything about the code it was guarding.
+        Assert.That(hull.Length, Is.LessThanOrEqualTo(24));
         Assert.That(IsConvexCcw(hull), Is.True, "Hull is not convex / not wound counter-clockwise.");
 
         foreach (var tile in tiles)
@@ -132,48 +135,51 @@ public sealed class BlobShapeGenTest
         Assert.That(hullA, Is.EqualTo(hullB));
     }
 
-    private static Vector2[] Corners(BlobTile tile)
+    private static Vector2i[] Corners(BlobTile tile)
     {
         var x = tile.Pos.X;
         var y = tile.Pos.Y;
         return new[]
         {
-            new Vector2(x, y),
-            new Vector2(x + 1, y),
-            new Vector2(x, y + 1),
-            new Vector2(x + 1, y + 1),
+            new Vector2i(x, y),
+            new Vector2i(x + 1, y),
+            new Vector2i(x, y + 1),
+            new Vector2i(x + 1, y + 1),
         };
     }
 
-    private static bool IsConvexCcw(Vector2[] hull)
+    private static bool IsConvexCcw(Vector2i[] hull)
     {
         for (var i = 0; i < hull.Length; i++)
         {
             var a = hull[i];
             var b = hull[(i + 1) % hull.Length];
             var c = hull[(i + 2) % hull.Length];
-            if (Cross(a, b, c) < -1e-6)
+            if (Cross(a, b, c) < 0)
                 return false;
         }
 
         return true;
     }
 
-    private static bool IsInsideOrOnHull(Vector2[] hull, Vector2 point)
+    private static bool IsInsideOrOnHull(Vector2i[] hull, Vector2i point)
     {
         for (var i = 0; i < hull.Length; i++)
         {
             var a = hull[i];
             var b = hull[(i + 1) % hull.Length];
-            if (Cross(a, b, point) < -1e-6)
+            if (Cross(a, b, point) < 0)
                 return false;
         }
 
         return true;
     }
 
-    private static double Cross(Vector2 o, Vector2 a, Vector2 b)
+    // Exact. The outline is integral, so these predicates need no epsilon, and dropping the
+    // tolerance means a vertex sitting exactly on an edge is judged on the edge rather than
+    // "close enough to it".
+    private static long Cross(Vector2i o, Vector2i a, Vector2i b)
     {
-        return (a.X - o.X) * (b.Y - o.Y) - (a.Y - o.Y) * (b.X - o.X);
+        return (long) (a.X - o.X) * (b.Y - o.Y) - (long) (a.Y - o.Y) * (b.X - o.X);
     }
 }

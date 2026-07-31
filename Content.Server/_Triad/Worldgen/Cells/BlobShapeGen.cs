@@ -119,17 +119,17 @@ public static class BlobShapeGen
     ///     fire in practice. That is deliberate: the trim is not outward-safe, so the cheapest
     ///     way to keep the outline a strict superset of the rock is to never need it.
     /// </summary>
-    public static Vector2[] ComputeHull(IReadOnlyList<BlobTile> tiles, int maxVerts = 24)
+    public static Vector2i[] ComputeHull(IReadOnlyList<BlobTile> tiles, int maxVerts = 24)
     {
-        var points = new List<Vector2>(tiles.Count * 4);
+        var points = new List<Vector2i>(tiles.Count * 4);
         foreach (var tile in tiles)
         {
             var x = tile.Pos.X;
             var y = tile.Pos.Y;
-            points.Add(new Vector2(x, y));
-            points.Add(new Vector2(x + 1, y));
-            points.Add(new Vector2(x, y + 1));
-            points.Add(new Vector2(x + 1, y + 1));
+            points.Add(new Vector2i(x, y));
+            points.Add(new Vector2i(x + 1, y));
+            points.Add(new Vector2i(x, y + 1));
+            points.Add(new Vector2i(x + 1, y + 1));
         }
 
         var hull = MonotoneChainHull(points);
@@ -143,24 +143,24 @@ public static class BlobShapeGen
         // outline can read smaller than the rock it stands for. The default maxVerts is set above
         // any observed hull size precisely so this loop stays unreached; if you lower it, the
         // outline stops being a strict superset and radar can report empty where rock is.
-        var minX = float.MaxValue;
-        var minY = float.MaxValue;
-        var maxX = float.MinValue;
-        var maxY = float.MinValue;
+        var minX = int.MaxValue;
+        var minY = int.MaxValue;
+        var maxX = int.MinValue;
+        var maxY = int.MinValue;
         foreach (var vert in hull)
         {
-            minX = MathF.Min(minX, vert.X);
-            minY = MathF.Min(minY, vert.Y);
-            maxX = MathF.Max(maxX, vert.X);
-            maxY = MathF.Max(maxY, vert.Y);
+            minX = Math.Min(minX, vert.X);
+            minY = Math.Min(minY, vert.Y);
+            maxX = Math.Max(maxX, vert.X);
+            maxY = Math.Max(maxY, vert.Y);
         }
 
-        bool IsExtreme(Vector2 v) => v.X == minX || v.X == maxX || v.Y == minY || v.Y == maxY;
+        bool IsExtreme(Vector2i v) => v.X == minX || v.X == maxX || v.Y == minY || v.Y == maxY;
 
         while (hull.Count > maxVerts)
         {
             var removeIdx = -1;
-            var smallestArea = double.MaxValue;
+            var smallestArea = long.MaxValue;
             for (var i = 0; i < hull.Count; i++)
             {
                 if (IsExtreme(hull[i]))
@@ -188,20 +188,26 @@ public static class BlobShapeGen
         return hull.ToArray();
     }
 
-    private static double TriangleArea2(Vector2 a, Vector2 b, Vector2 c)
+    // long, not double: tile corners are integers, so twice-the-area is exact in integer
+    // arithmetic. Coordinates stay well inside a byte for any shipping prototype, so this
+    // cannot overflow, and it removes the last floating-point comparison from the outline path.
+    private static long TriangleArea2(Vector2i a, Vector2i b, Vector2i c)
     {
-        return (b.X - a.X) * (c.Y - a.Y) - (b.Y - a.Y) * (c.X - a.X);
+        return (long) (b.X - a.X) * (c.Y - a.Y) - (long) (b.Y - a.Y) * (c.X - a.X);
     }
 
-    private static List<Vector2> MonotoneChainHull(List<Vector2> points)
+    private static List<Vector2i> MonotoneChainHull(List<Vector2i> points)
     {
-        var pts = new List<Vector2>(new HashSet<Vector2>(points));
+        // The HashSet only dedupes; the sort immediately after is what fixes the order, and it is
+        // total because the points are distinct after deduping. Set iteration order never reaches
+        // the output, which matters because describe and materialize must agree exactly.
+        var pts = new List<Vector2i>(new HashSet<Vector2i>(points));
         pts.Sort((a, b) => a.X != b.X ? a.X.CompareTo(b.X) : a.Y.CompareTo(b.Y));
 
         if (pts.Count < 3)
             return pts;
 
-        var lower = new List<Vector2>();
+        var lower = new List<Vector2i>();
         foreach (var p in pts)
         {
             while (lower.Count >= 2 && Cross(lower[^2], lower[^1], p) <= 0)
@@ -209,7 +215,7 @@ public static class BlobShapeGen
             lower.Add(p);
         }
 
-        var upper = new List<Vector2>();
+        var upper = new List<Vector2i>();
         for (var i = pts.Count - 1; i >= 0; i--)
         {
             var p = pts[i];
@@ -224,8 +230,8 @@ public static class BlobShapeGen
         return lower;
     }
 
-    private static double Cross(Vector2 o, Vector2 a, Vector2 b)
+    private static long Cross(Vector2i o, Vector2i a, Vector2i b)
     {
-        return (a.X - o.X) * (b.Y - o.Y) - (a.Y - o.Y) * (b.X - o.X);
+        return (long) (a.X - o.X) * (b.Y - o.Y) - (long) (a.Y - o.Y) * (b.X - o.X);
     }
 }

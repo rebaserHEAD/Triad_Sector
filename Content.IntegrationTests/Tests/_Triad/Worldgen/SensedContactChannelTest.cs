@@ -11,6 +11,7 @@ using Content.Shared._Triad.CCVar;
 using Robust.Shared.Configuration;
 using Robust.Shared.GameObjects;
 using Robust.Shared.Map;
+using Robust.Shared.Maths;
 using ClientContacts = Content.Client._Triad.Worldgen.SensedContactsSystem;
 
 namespace Content.IntegrationTests.Tests._Triad.Worldgen;
@@ -55,10 +56,10 @@ public sealed class SensedContactChannelTest
             // there is one. Records with a null hull are filtered out before they are sent.
             Hull = new[]
             {
-                new Vector2(0, 0),
-                new Vector2(1, 0),
-                new Vector2(1, 1),
-                new Vector2(0, 1),
+                new Vector2i(0, 0),
+                new Vector2i(1, 0),
+                new Vector2i(1, 1),
+                new Vector2i(0, 1),
             },
             DetectSignature = 1f,
             DetectBias = 0f,

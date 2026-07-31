@@ -125,7 +125,9 @@ public sealed class SensedTierTest
 
             var withHulls = records.Where(r => r.Hull is not null).ToList();
             Assert.That(withHulls, Is.Not.Empty, "no described debris carried a hull to paint on radar");
-            Assert.That(withHulls.All(r => r.Hull!.Length is > 2 and <= 16),
+            // Upper bound tracks ComputeHull's maxVerts default; it sat at 16 after the cap moved
+            // to 24, so it was asserting against a limit the code no longer had.
+            Assert.That(withHulls.All(r => r.Hull!.Length is > 2 and <= 24),
                 "hulls must be simplified polygons, not degenerate or unbounded");
             Assert.That(withHulls.Any(r => r.DetectSignature > 0f),
                 "described debris carried no detection signature, so contacts could never resolve");

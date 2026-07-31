@@ -47,10 +47,11 @@ public sealed class DebrisRecord
     public int Seed;
 
     /// <summary>
-    ///     Simplified convex outline in grid-local units relative to <see cref="Point"/>.
-    ///     Null for non-blob debris (spawner markers etc.), which get no radar contact.
+    ///     Simplified convex outline in grid-local tile units relative to <see cref="Point"/>.
+    ///     Vertices are tile corners, so they are exactly integral. Null for non-blob debris
+    ///     (spawner markers etc.), which get no radar contact.
     /// </summary>
-    public Vector2[]? Hull;
+    public Vector2i[]? Hull;
 
     public Color IffColor = Color.Gray;
 
