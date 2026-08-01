@@ -11,19 +11,19 @@ namespace Content.Client.Shuttles.UI;
 
 public partial class ShuttleNavControl // Triad
 {
-    private SensedContactsSystem? _triadSensedContacts;
+    private RecordContactsSystem? _triadRecordContacts;
 
-    private SensedContactsSystem TriadSensedContacts => _triadSensedContacts ??= EntManager.System<SensedContactsSystem>();
+    private RecordContactsSystem TriadRecordContacts => _triadRecordContacts ??= EntManager.System<RecordContactsSystem>();
 
     // reused across frames to avoid a per-contact allocation while drawing hull outlines
     private readonly List<Vector2> _triadHullVertsBuffer = new();
 
-    private void TriadRequestSensedContacts()
+    private void TriadRequestRecordContacts()
     {
         if (_consoleEntity is not { } console)
             return;
 
-        TriadSensedContacts.RequestContacts(console);
+        TriadRecordContacts.RequestContacts(console);
     }
 
     /// <summary>
@@ -36,10 +36,10 @@ public partial class ShuttleNavControl // Triad
         if (_consoleEntity is not { } console)
             return;
 
-        TriadDrawOutlines(handle, worldToView, TriadSensedContacts.GetChart(console, map), alpha: 0.3f);
+        TriadDrawOutlines(handle, worldToView, TriadRecordContacts.GetChart(console, map), alpha: 0.3f);
     }
 
-    private void TriadDrawSensedContacts(DrawingHandleScreen handle, Matrix3x2 worldToView, MapId map)
+    private void TriadDrawRecordContacts(DrawingHandleScreen handle, Matrix3x2 worldToView, MapId map)
     {
         if (_consoleEntity is not { } console)
             return;
@@ -47,11 +47,11 @@ public partial class ShuttleNavControl // Triad
         // GetContacts only yields contacts whose outline has been derived (the recipe wire format
         // means shapes are rolled client-side, budgeted per frame), so a cold picture fills in
         // over a few frames rather than hitching one.
-        TriadDrawOutlines(handle, worldToView, TriadSensedContacts.GetContacts(console, map), alpha: 0.8f);
+        TriadDrawOutlines(handle, worldToView, TriadRecordContacts.GetContacts(console, map), alpha: 0.8f);
     }
 
     private void TriadDrawOutlines(DrawingHandleScreen handle, Matrix3x2 worldToView,
-        IEnumerable<SensedContactView> contacts, float alpha)
+        IEnumerable<RecordContactView> contacts, float alpha)
     {
         var cullBounds = new Box2(-64f, -64f, Size.X + 64f, Size.Y + 64f);
 

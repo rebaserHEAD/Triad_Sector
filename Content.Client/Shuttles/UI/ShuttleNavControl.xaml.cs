@@ -486,7 +486,7 @@ public partial class ShuttleNavControl : BaseShuttleControl // Mono
             if (_consoleEntity != null)
             {
                 _blips.RequestBlips((EntityUid)_consoleEntity);
-                TriadRequestSensedContacts(); // Triad: sensed worldgen contacts
+                TriadRequestRecordContacts(); // Triad: worldgen record contacts
             }
         }
 
@@ -878,7 +878,7 @@ public partial class ShuttleNavControl : BaseShuttleControl // Mono
         }
 
         TriadDrawChartContacts(handle, worldToView, xform.MapID); // Triad: charted last-knowns, dimmed, under live
-        TriadDrawSensedContacts(handle, worldToView, xform.MapID); // Triad: sensed worldgen contacts
+        TriadDrawRecordContacts(handle, worldToView, xform.MapID); // Triad: worldgen record contacts
 
         // If we've set the controlling console, and it's on a different grid
         // to the shuttle itself, then draw an additional marker to help the

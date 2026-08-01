@@ -44,7 +44,7 @@ public sealed class BlobFloorPlanBuilderSystem : BaseWorldSystem
 
     private void PlaceFloorplanTiles(EntityUid gridUid, BlobFloorPlanBuilderComponent comp, MapGridComponent grid)
     {
-        // Triad: walk extracted to BlobShapeGen.Roll (seed-deterministic, so a radar-sensed shape
+        // Triad: walk extracted to BlobShapeGen.Roll (seed-deterministic, so a radar-painted shape
         // preview rolled ahead of materialization matches what actually gets built here). Original
         // body kept below, commented, so future upstream merges surface the conflict. Everything
         // from here down to the blank line above the replacement is upstream's, comments and all,

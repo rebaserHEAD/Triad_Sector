@@ -25,14 +25,14 @@ namespace Content.IntegrationTests.Tests._Triad.Worldgen;
 ///     from the seed). The untouched rock in the same belt proves the free rung stays free.
 /// </summary>
 [TestFixture]
-public sealed class SensedCaptureTest
+public sealed class RecordCaptureTest
 {
     private const string LoaderProto = "TriadCaptureTestLoader";
     private const string MarkerProto = "TriadCaptureTestMarker";
 
     [TestPrototypes]
     private const string Prototypes = $@"
-# 640 like SensedTierTest's far loader: materialization needs a wide loaded area to reliably
+# 640 like RecordsTest's far loader: materialization needs a wide loaded area to reliably
 # hold two shaped blob rocks, and a 128 loader only wakes a couple of cells.
 - type: entity
   id: {LoaderProto}
@@ -66,7 +66,7 @@ public sealed class SensedCaptureTest
 
         await server.WaitPost(() =>
         {
-            cfg.SetCVar(TriadCCVars.WorldgenSensedEnabled, true);
+            cfg.SetCVar(TriadCCVars.WorldgenRecordsEnabled, true);
             cfg.SetCVar(TriadCCVars.WorldgenDescribeRange, 512f);
             cfg.SetCVar(TriadCCVars.WorldgenDescribeBudgetMs, 500f);
             cfg.SetCVar(TriadCCVars.WorldgenMaterializeBudgetMs, 500f);
@@ -80,7 +80,7 @@ public sealed class SensedCaptureTest
         // Two materialized blob rocks near the loader: one to touch, one as the free-rung control.
         var map = mapUid;
         await PoolManager.WaitUntil(server, () => describe.Records.Values.Count(r =>
-            r.Map == map && r is { State: SensedState.Materialized, Shaped: true, Entity: not null }) >= 2,
+            r.Map == map && r is { State: RecordState.Materialized, Shaped: true, Entity: not null }) >= 2,
             maxTicks: 900);
         await server.WaitIdleAsync();
 
@@ -92,7 +92,7 @@ public sealed class SensedCaptureTest
         await server.WaitPost(() =>
         {
             var materialized = describe.Records.Values.Where(r =>
-                    r.Map == map && r is { State: SensedState.Materialized, Shaped: true, Entity: not null })
+                    r.Map == map && r is { State: RecordState.Materialized, Shaped: true, Entity: not null })
                 .ToList();
             touched = materialized[0];
             untouched = materialized[1];
@@ -159,7 +159,7 @@ public sealed class SensedCaptureTest
             }
         });
         await PoolManager.WaitUntil(server, () =>
-            touched.State == SensedState.Dormant && untouched.State == SensedState.Dormant, maxTicks: 60);
+            touched.State == RecordState.Dormant && untouched.State == RecordState.Dormant, maxTicks: 60);
 
         // Revisit: a fresh loader on the touched rock re-materializes it from the blob.
         await server.WaitPost(() =>
@@ -167,7 +167,7 @@ public sealed class SensedCaptureTest
             entManager.SpawnEntity(LoaderProto, new MapCoordinates(touched.Point, mapId));
         });
         await PoolManager.WaitUntil(server, () =>
-            touched is { State: SensedState.Materialized, Entity: not null }, maxTicks: 600);
+            touched is { State: RecordState.Materialized, Entity: not null }, maxTicks: 600);
 
         await server.WaitAssertion(() =>
         {
@@ -229,12 +229,12 @@ public sealed class SensedCaptureTest
             var bagContainer = containerSys.EnsureContainer<Robust.Shared.Containers.Container>(bag, "loot");
 
             capture.DebugSetTouched(grid, false);
-            var sensed = entManager.GetComponent<SensedDebrisComponent>(grid);
-            Assert.That(sensed.Touched, Is.False, "baseline reset failed; the classifier check proves nothing");
+            var recorded = entManager.GetComponent<RecordedDebrisComponent>(grid);
+            Assert.That(recorded.Touched, Is.False, "baseline reset failed; the classifier check proves nothing");
 
             Assert.That(containerSys.Insert(item, bagContainer), Is.True);
-            Assert.That(sensed.Touched, Is.True,
-                "container-to-container extraction off a sensed grid did not mark it touched; "
+            Assert.That(recorded.Touched, Is.True,
+                "container-to-container extraction off a recorded grid did not mark it touched; "
                 + "crate looting would regenerate on the free rung");
         });
 

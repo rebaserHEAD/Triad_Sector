@@ -13,7 +13,7 @@ using Robust.Shared.Configuration;
 using Robust.Shared.GameObjects;
 using Robust.Shared.Map;
 using Robust.Shared.Maths;
-using ClientContacts = Content.Client._Triad.Worldgen.SensedContactsSystem;
+using ClientContacts = Content.Client._Triad.Worldgen.RecordContactsSystem;
 
 namespace Content.IntegrationTests.Tests._Triad.Worldgen;
 
@@ -29,7 +29,7 @@ namespace Content.IntegrationTests.Tests._Triad.Worldgen;
 ///     these two rocks and nothing changes for six seconds", which is the whole point here.
 /// </summary>
 [TestFixture]
-public sealed class SensedContactChannelTest
+public sealed class RecordContactChannelTest
 {
     private const string ConsoleProto = "TriadContactTestConsole";
     private const string RockProto = "TriadContactTestRock";
@@ -84,12 +84,12 @@ public sealed class SensedContactChannelTest
             // and the RockProto recipe are all the client needs to roll a real outline, which is
             // exactly what GetContacts asserting Not.Empty exercises end to end.
             Shaped = true,
-            State = SensedState.Dormant,
+            State = RecordState.Dormant,
         };
     }
 
     /// <summary>
-    ///     A connected pair with a clean map, one console per requested slot, and the sensed tier
+    ///     A connected pair with a clean map, one console per requested slot, and records
     ///     switched on. Every console is opened by the player unless <paramref name="openCount"/>
     ///     says otherwise, since an unopened console is not authorized and returns nothing.
     ///     Returns the map plus the server-side console uids.
@@ -106,7 +106,7 @@ public sealed class SensedContactChannelTest
 
         await server.WaitPost(() =>
         {
-            cfg.SetCVar(TriadCCVars.WorldgenSensedEnabled, true);
+            cfg.SetCVar(TriadCCVars.WorldgenRecordsEnabled, true);
             cfg.SetCVar(TriadCCVars.WorldgenDescribeRange, 3072f);
 
             for (var i = 0; i < consoleCount; i++)
@@ -144,7 +144,7 @@ public sealed class SensedContactChannelTest
     ///     the map and rides a pooled server into whatever test runs next. Injecting into it without
     ///     cleaning up is the same class of leak as leaving the worldgen map behind: it is invisible
     ///     here and fails somewhere else. It surfaced exactly that way, as a phantom record 900001 in
-    ///     a SensedTierTest assertion about a completely different map.
+    ///     a RecordsTest assertion about a completely different map.
     /// </summary>
     private static async Task Cleanup(Content.IntegrationTests.Pair.TestPair pair, EntityUid map)
     {
@@ -315,7 +315,7 @@ public sealed class SensedContactChannelTest
         Assert.That(cSys.GetContacts(clientConsole, consoleMap), Is.Not.Empty, "record never arrived");
 
         // Materialization hands the contact off to the real grid.
-        await server.WaitPost(() => record.State = SensedState.Materialized);
+        await server.WaitPost(() => record.State = RecordState.Materialized);
 
         await Poll(pair, new[] { clientConsole });
         await Poll(pair, new[] { clientConsole });
@@ -384,7 +384,7 @@ public sealed class SensedContactChannelTest
     /// <summary>
     ///     A request names its console by NetEntity, and NetEntities are small sequential integers,
     ///     so the server cannot serve on the strength of the id resolving to a radar console: a
-    ///     modified client would walk the id space and read the sensed picture off any console on
+    ///     modified client would walk the id space and read the contact picture off any console on
     ///     any map without going near one. Only consoles the sender actually has open are answered.
     ///
     ///     Both consoles here are the same prototype on the same map at the same range from the same

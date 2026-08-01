@@ -23,7 +23,7 @@ namespace Content.Server._Triad.Worldgen.Cells;
 /// <summary>
 ///     The materialization queue: turns described debris records into real grids under a
 ///     per-tick time budget instead of building a whole cell's worth in the tick it loads.
-///     Nothing else spawns worldgen debris while the sensed tier is enabled.
+///     Nothing else spawns worldgen debris while records are enabled.
 /// </summary>
 public sealed class DebrisMaterializeQueueSystem : BaseWorldSystem
 {
@@ -63,24 +63,24 @@ public sealed class DebrisMaterializeQueueSystem : BaseWorldSystem
 
     public override void Initialize()
     {
-        Subs.CVar(_cfg, TriadCCVars.WorldgenSensedEnabled, OnEnabledChanged, true);
+        Subs.CVar(_cfg, TriadCCVars.WorldgenRecordsEnabled, OnEnabledChanged, true);
         Subs.CVar(_cfg, TriadCCVars.WorldgenMaterializeBudgetMs, v => _budgetMs = v, true);
         Subs.CVar(_cfg, TriadCCVars.WorldgenMaterializePanicRange, v => _panicRange = v, true);
 
-        SubscribeLocalEvent<SensedCellComponent, WorldChunkLoadedEvent>(OnCellLoaded);
+        SubscribeLocalEvent<CellRecordsComponent, WorldChunkLoadedEvent>(OnCellLoaded);
         SubscribeLocalEvent<WorldChunkComponent, WorldChunkLoadedEvent>(OnChunkLoaded);
-        SubscribeLocalEvent<SensedDebrisComponent, EntityTerminatingEvent>(OnDebrisTerminating);
+        SubscribeLocalEvent<RecordedDebrisComponent, EntityTerminatingEvent>(OnDebrisTerminating);
 
         // After the placer's own move handler, which re-parents OwnedDebris to the chunk the
         // grid actually sits in; this reads its answer rather than recomputing it.
-        SubscribeLocalEvent<SensedDebrisComponent, MoveEvent>(OnDebrisMoved,
+        SubscribeLocalEvent<RecordedDebrisComponent, MoveEvent>(OnDebrisMoved,
             after: [typeof(DebrisFeaturePlacerSystem)]);
     }
 
     /// <summary>
     ///     Drops the pending queue when the tier is switched off. Update returns early while
     ///     disabled but does NOT clear the queue, so without this the records sitting in it drain on
-    ///     the first tick after the switch comes back on, building the sensed tier's roll on top of
+    ///     the first tick after the switch comes back on, building the records system's roll on top of
     ///     whatever the stock placer put there in the meantime. Records are retired separately by
     ///     <see cref="CellDescribeSystem"/>; this only releases the queue's hold on them, which is
     ///     why Queued is cleared rather than left for a drain that will never come.
@@ -101,24 +101,24 @@ public sealed class DebrisMaterializeQueueSystem : BaseWorldSystem
         }
 
         _queue.Clear();
-        SensedMetrics.MaterializeQueueDepth.Set(0);
+        RecordMetrics.MaterializeQueueDepth.Set(0);
     }
 
     /// <summary>
     ///     A cell can load before the describe sweep reaches it: a small loader outruns its own
-    ///     sensed radius, or a projectile loads a chunk kilometres off any ship. Describe on the
+    ///     records radius, or a projectile loads a chunk kilometres off any ship. Describe on the
     ///     spot so records stay the only thing that decides what a cell contains.
     /// </summary>
     private void OnChunkLoaded(EntityUid uid, WorldChunkComponent component, ref WorldChunkLoadedEvent args)
     {
-        if (!_enabled || HasComp<SensedCellComponent>(uid))
+        if (!_enabled || HasComp<CellRecordsComponent>(uid))
             return;
 
-        if (_describe.EnsureDescribed(uid) is { } sensed)
-            EnqueueCell(sensed);
+        if (_describe.EnsureDescribed(uid) is { } records)
+            EnqueueCell(records);
     }
 
-    private void OnCellLoaded(EntityUid uid, SensedCellComponent component, ref WorldChunkLoadedEvent args)
+    private void OnCellLoaded(EntityUid uid, CellRecordsComponent component, ref WorldChunkLoadedEvent args)
     {
         if (!_enabled)
             return;
@@ -126,11 +126,11 @@ public sealed class DebrisMaterializeQueueSystem : BaseWorldSystem
         EnqueueCell(component);
     }
 
-    private void EnqueueCell(SensedCellComponent cell)
+    private void EnqueueCell(CellRecordsComponent cell)
     {
         foreach (var record in cell.Records.Values)
         {
-            if (record.State != SensedState.Dormant || record.Queued)
+            if (record.State != RecordState.Dormant || record.Queued)
                 continue;
 
             record.BlockedAttempts = 0;
@@ -154,7 +154,7 @@ public sealed class DebrisMaterializeQueueSystem : BaseWorldSystem
     /// </summary>
     public void ExpediteHit(DebrisRecord record)
     {
-        if (record.State != SensedState.Dormant || record.Queued)
+        if (record.State != RecordState.Dormant || record.Queued)
             return;
 
         if (!HasComp<LoadedChunkComponent>(record.Cell))
@@ -173,13 +173,13 @@ public sealed class DebrisMaterializeQueueSystem : BaseWorldSystem
     ///     interior and deposits all rebuild identically; decoration that does not read the seed,
     ///     chiefly RoomFill, re-rolls.
     /// </summary>
-    private void OnDebrisTerminating(EntityUid uid, SensedDebrisComponent component, ref EntityTerminatingEvent args)
+    private void OnDebrisTerminating(EntityUid uid, RecordedDebrisComponent component, ref EntityTerminatingEvent args)
     {
         if (component.Record is not { } record || record.Entity != uid)
             return;
 
         record.Entity = null;
-        record.State = SensedState.Dormant;
+        record.State = RecordState.Dormant;
 
         // Presence of the component is not enough to say the cell is still loaded. The world
         // controller unloads with RemCompDeferred, which runs the component's shutdown immediately
@@ -193,7 +193,7 @@ public sealed class DebrisMaterializeQueueSystem : BaseWorldSystem
 
         // Still loaded, so this was destroyed in play rather than collected: it is gone,
         // and any captured blob goes with it. Destroyed rocks stay destroyed.
-        if (TryComp<SensedCellComponent>(record.Cell, out var cell))
+        if (TryComp<CellRecordsComponent>(record.Cell, out var cell))
             cell.Records.Remove(record.Point);
 
         _describe.Records.Remove(record.Id);
@@ -208,7 +208,7 @@ public sealed class DebrisMaterializeQueueSystem : BaseWorldSystem
     ///     a routine unload (and later resurrects the dead rock from its blob), and the old
     ///     cell's unload captures a grid the new cell still has in play.
     /// </summary>
-    private void OnDebrisMoved(EntityUid uid, SensedDebrisComponent component, ref MoveEvent args)
+    private void OnDebrisMoved(EntityUid uid, RecordedDebrisComponent component, ref MoveEvent args)
     {
         if (!_enabled || component.Record is not { } record || record.Entity != uid)
             return;
@@ -234,7 +234,7 @@ public sealed class DebrisMaterializeQueueSystem : BaseWorldSystem
             return;
         }
 
-        if (TryComp<SensedCellComponent>(record.Cell, out var oldCell))
+        if (TryComp<CellRecordsComponent>(record.Cell, out var oldCell))
             oldCell.Records.Remove(record.Point);
 
         record.Cell = newCell;
@@ -247,7 +247,7 @@ public sealed class DebrisMaterializeQueueSystem : BaseWorldSystem
             // Arm the next pass to sort. A queue refilling from empty is in insertion order, and
             // the accumulator does not advance while we are returning early here.
             _sortAccumulator = SortInterval;
-            SensedMetrics.MaterializeQueueDepth.Set(_queue.Count);
+            RecordMetrics.MaterializeQueueDepth.Set(_queue.Count);
             return;
         }
 
@@ -285,7 +285,7 @@ public sealed class DebrisMaterializeQueueSystem : BaseWorldSystem
 
             record.Queued = false;
 
-            if (record.State != SensedState.Dormant)
+            if (record.State != RecordState.Dormant)
                 continue;
 
             // The loader turned away and the cell drained; leave the record dormant.
@@ -298,10 +298,10 @@ public sealed class DebrisMaterializeQueueSystem : BaseWorldSystem
         if (index > 0)
         {
             _queue.RemoveRange(0, index);
-            SensedMetrics.MaterializeBatch.Observe((_timing.RealTime - start).TotalSeconds);
+            RecordMetrics.MaterializeBatch.Observe((_timing.RealTime - start).TotalSeconds);
         }
 
-        SensedMetrics.MaterializeQueueDepth.Set(_queue.Count);
+        RecordMetrics.MaterializeQueueDepth.Set(_queue.Count);
     }
 
     /// <summary>
@@ -383,7 +383,7 @@ public sealed class DebrisMaterializeQueueSystem : BaseWorldSystem
 
     private void Materialize(DebrisRecord record)
     {
-        if (!TryComp<SensedCellComponent>(record.Cell, out var cell))
+        if (!TryComp<CellRecordsComponent>(record.Cell, out var cell))
             return;
 
         if (!TryComp<DebrisFeaturePlacerControllerComponent>(record.Cell, out var placer))
@@ -434,11 +434,11 @@ public sealed class DebrisMaterializeQueueSystem : BaseWorldSystem
         }
 
         record.Entity = ent;
-        record.State = SensedState.Materialized;
+        record.State = RecordState.Materialized;
         record.BlockedAttempts = 0;
 
-        var sensedDebris = EnsureComp<SensedDebrisComponent>(ent);
-        sensedDebris.Record = record;
+        var recordedDebris = EnsureComp<RecordedDebrisComponent>(ent);
+        recordedDebris.Record = record;
 
         // Hand the spawn to the upstream placer's bookkeeping so cell unload GCs it, moved
         // debris re-parents, and GC cancellation on reload all keep working untouched.

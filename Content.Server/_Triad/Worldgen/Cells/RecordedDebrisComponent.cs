@@ -14,7 +14,7 @@ namespace Content.Server._Triad.Worldgen.Cells;
 /// </summary>
 [RegisterComponent, UnsavedComponent]
 [Access(typeof(DebrisMaterializeQueueSystem), typeof(DebrisCaptureSystem))]
-public sealed partial class SensedDebrisComponent : Component
+public sealed partial class RecordedDebrisComponent : Component
 {
     public DebrisRecord? Record;
 

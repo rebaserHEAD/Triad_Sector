@@ -46,16 +46,16 @@ public sealed class TriadCCVars
     public static readonly CVarDef<string> NightVisionColor =
         CVarDef.Create("triad.night_vision_color", "#00FF00", CVar.CLIENTONLY | CVar.ARCHIVE, "The tint/phosphor color of night vision.");
 
-    // Triad: worldgen sensed tier
+    // Triad: worldgen records
     /// <summary>
-    /// Master switch for the sensed worldgen tier (describe service, radar contacts, JIT
+    /// Master switch for the worldgen records (describe service, radar contacts, JIT
     /// materialization). Off restores the stock burst-spawn placer and the stock chunk-load
     /// radius, but not stock asteroid shapes: BlobFloorPlanBuilderSystem routes its tile walk
     /// through the seed-deterministic BlobShapeGen either way, so debris geometry stays on the
     /// Triad generator regardless of this switch.
     /// </summary>
-    public static readonly CVarDef<bool> WorldgenSensedEnabled =
-        CVarDef.Create("triad.worldgen.sensed_enabled", true, CVar.SERVERONLY);
+    public static readonly CVarDef<bool> WorldgenRecordsEnabled =
+        CVarDef.Create("triad.worldgen.records_enabled", true, CVar.SERVERONLY);
 
     /// <summary>
     /// Radius around anything present (ship, person, station) in which cells are described, making
@@ -94,7 +94,7 @@ public sealed class TriadCCVars
     /// one boundary, so a ship sitting on a cell boundary line (or station-keeping, whose
     /// thruster wobble moves the velocity-led sweep centre) rapidly cycles rim cells and pays
     /// grid teardown and rebuild each flip. Zero restores the stock immediate unload. Applies to
-    /// both arms of the sensed switch: boundary thrash predates the tier and costs the stock
+    /// both arms of the records switch: boundary thrash predates the tier and costs the stock
     /// burst-spawn placer a full re-roll per cycle.
     /// </summary>
     public static readonly CVarDef<float> WorldgenUnloadGraceS =

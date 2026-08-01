@@ -30,7 +30,7 @@ public sealed class RandomEntityPopulatorSystem : BaseWorldSystem
             return;
 
         // Triad: pre-determined debris derives its deposits from the record seed so they survive
-        // an unload/reload cycle. Debris spawned outside the sensed tier rolls as before.
+        // an unload/reload cycle. Debris spawned outside the records system rolls as before.
         var rand = SeededRandom.ForStage(EntityManager, ent.Owner, SeededRandom.DepositStage) ?? _random;
 
         var placeables = new List<string?>(4);

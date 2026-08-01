@@ -105,19 +105,19 @@ public sealed class DebrisCaptureSystem : EntitySystem
         // Before the placer: its handler queues these grids for GC, and enqueue-then-collect is
         // the honest order. Not load-bearing, though: the GC hold below vouches on the Touched
         // flag itself, so a grid is protected even if its pending entry lands late.
-        SubscribeLocalEvent<SensedCellComponent, WorldChunkUnloadedEvent>(OnCellUnloaded,
+        SubscribeLocalEvent<CellRecordsComponent, WorldChunkUnloadedEvent>(OnCellUnloaded,
             before: [typeof(DebrisFeaturePlacerSystem)]);
 
         // The hold that makes deferred capture safe: a queued or retrying grid cancels its own
         // collection until the capture resolves. Distinct (component, event) pair from the
         // placer's OwnedDebris handler, so both get asked and either can cancel.
-        SubscribeLocalEvent<SensedDebrisComponent, TryCancelGC>(OnTryCancelGC);
+        SubscribeLocalEvent<RecordedDebrisComponent, TryCancelGC>(OnTryCancelGC);
 
-        SubscribeLocalEvent<SensedDebrisComponent, TileChangedEvent>(OnTileChanged);
+        SubscribeLocalEvent<RecordedDebrisComponent, TileChangedEvent>(OnTileChanged);
         SubscribeLocalEvent<EntParentChangedMessage>(OnParentChanged);
         SubscribeLocalEvent<AnchorStateChangedEvent>(OnAnchorChanged);
 
-        // The interaction funnel: clicks on anything aboard a sensed grid. This is what catches
+        // The interaction funnel: clicks on anything aboard a recorded grid. This is what catches
         // in-place depletion (siphoning a canister, draining a battery, emptying a solution),
         // which mutates component data without moving a tile, an anchor or a parent.
         SubscribeLocalEvent<ActivateInWorldEvent>(OnActivateInWorld);
@@ -156,8 +156,8 @@ public sealed class DebrisCaptureSystem : EntitySystem
     /// </summary>
     public void DebugSetTouched(EntityUid gridUid, bool value)
     {
-        if (TryComp<SensedDebrisComponent>(gridUid, out var sensed))
-            sensed.Touched = value;
+        if (TryComp<RecordedDebrisComponent>(gridUid, out var recorded))
+            recorded.Touched = value;
     }
 
     public void Drop(int recordId)
@@ -166,8 +166,8 @@ public sealed class DebrisCaptureSystem : EntitySystem
             return;
 
         _totalBytes -= entry.Data.Length;
-        SensedMetrics.CaptureBlobs.Set(_blobs.Count);
-        SensedMetrics.CaptureBytes.Set(_totalBytes);
+        RecordMetrics.CaptureBlobs.Set(_blobs.Count);
+        RecordMetrics.CaptureBytes.Set(_totalBytes);
     }
 
     private void OnRoundRestart(RoundRestartCleanupEvent ev)
@@ -177,8 +177,8 @@ public sealed class DebrisCaptureSystem : EntitySystem
         _pendingIds.Clear();
         _evictOrder.Clear();
         _totalBytes = 0;
-        SensedMetrics.CaptureBlobs.Set(0);
-        SensedMetrics.CaptureBytes.Set(0);
+        RecordMetrics.CaptureBlobs.Set(0);
+        RecordMetrics.CaptureBytes.Set(0);
     }
 
     // Cell retirement (the kill switch, map teardown) drops this store's blobs from
@@ -189,11 +189,11 @@ public sealed class DebrisCaptureSystem : EntitySystem
     //
     // All three triggers share a natural spawn guard: initial population (blob builder tiles,
     // interior spawns, blob restore) happens inside the spawn or load call, before
-    // SensedDebrisComponent is added to the grid, so building the rock never marks it touched.
+    // RecordedDebrisComponent is added to the grid, so building the rock never marks it touched.
     // A spawner that defers past that window costs one false-positive blob, which is the
     // accepted direction.
 
-    private void OnTileChanged(EntityUid uid, SensedDebrisComponent component, ref TileChangedEvent args)
+    private void OnTileChanged(EntityUid uid, RecordedDebrisComponent component, ref TileChangedEvent args)
     {
         component.Touched = true;
     }
@@ -210,12 +210,12 @@ public sealed class DebrisCaptureSystem : EntitySystem
         if (args.Transform.GridUid is not { } grid)
             return;
 
-        if (TryComp<SensedDebrisComponent>(grid, out var sensed) && !Terminating(grid))
-            sensed.Touched = true;
+        if (TryComp<RecordedDebrisComponent>(grid, out var recorded) && !Terminating(grid))
+            recorded.Touched = true;
     }
 
     /// <summary>
-    ///     Anything re-parenting under a sensed grid, checked at grid altitude rather than
+    ///     Anything re-parenting under a recorded grid, checked at grid altitude rather than
     ///     direct-parent altitude on purpose: taking loot from a crate reparents crate-to-hand
     ///     and the grid never appears as either parent, so comparing parents directly misses
     ///     every container transfer, and a refilled crate is exactly the duplication this system
@@ -236,7 +236,7 @@ public sealed class DebrisCaptureSystem : EntitySystem
     }
 
     // The interaction funnel's three broadcast events (all raised with broadcast on in
-    // SharedInteractionSystem): clicking anything aboard a sensed grid marks it, whether or not
+    // SharedInteractionSystem): clicking anything aboard a recorded grid marks it, whether or not
     // a handler claims the click. This is deliberately blunt; per the classifier's asymmetry, a
     // wasted blob beats a regenerated canister. Verb-only paths that mutate state without a
     // click or any other trigger remain the known, accepted gap.
@@ -268,20 +268,20 @@ public sealed class DebrisCaptureSystem : EntitySystem
         if (mover == grid)
             return;
 
-        if (TryComp<SensedDebrisComponent>(grid, out var sensed) && !Terminating(grid))
-            sensed.Touched = true;
+        if (TryComp<RecordedDebrisComponent>(grid, out var recorded) && !Terminating(grid))
+            recorded.Touched = true;
     }
 
     // ---- Capture at unload -----------------------------------------------------------------
 
-    private void OnCellUnloaded(EntityUid uid, SensedCellComponent cell, ref WorldChunkUnloadedEvent args)
+    private void OnCellUnloaded(EntityUid uid, CellRecordsComponent cell, ref WorldChunkUnloadedEvent args)
     {
         foreach (var record in cell.Records.Values)
         {
-            if (record.State != SensedState.Materialized || record.Entity is not { } ent || !Exists(ent))
+            if (record.State != RecordState.Materialized || record.Entity is not { } ent || !Exists(ent))
                 continue;
 
-            if (!TryComp<SensedDebrisComponent>(ent, out var sensed) || !sensed.Touched)
+            if (!TryComp<RecordedDebrisComponent>(ent, out var recorded) || !recorded.Touched)
                 continue;
 
             // Only grids capture: TryLoadGrid is the restore path and it loads grids. Non-grid
@@ -307,12 +307,12 @@ public sealed class DebrisCaptureSystem : EntitySystem
     ///     the hold releases and the loss is loud, because pinning an entity forever against a
     ///     deterministically failing serializer is a worse leak than a logged regen.
     /// </summary>
-    private void OnTryCancelGC(EntityUid uid, SensedDebrisComponent sensed, ref TryCancelGC args)
+    private void OnTryCancelGC(EntityUid uid, RecordedDebrisComponent recorded, ref TryCancelGC args)
     {
-        if (!sensed.Touched || sensed.CaptureAttempts >= MaxCaptureAttempts)
+        if (!recorded.Touched || recorded.CaptureAttempts >= MaxCaptureAttempts)
             return;
 
-        if (sensed.Record is not { } record || record.Entity != uid)
+        if (recorded.Record is not { } record || record.Entity != uid)
             return;
 
         // Non-grid debris never captures (no blob to owe), so it never holds either.
@@ -320,7 +320,7 @@ public sealed class DebrisCaptureSystem : EntitySystem
             return;
 
         args.Cancelled = true;
-        sensed.GcHeld = true;
+        recorded.GcHeld = true;
         TryEnqueue(record);
     }
 
@@ -353,22 +353,22 @@ public sealed class DebrisCaptureSystem : EntitySystem
 
             // Anything that died or retired while queued resolved its own bookkeeping
             // (OnDebrisTerminating, cell retire); the queue just lets go.
-            if (record.State != SensedState.Materialized || record.Entity is not { } ent || !Exists(ent))
+            if (record.State != RecordState.Materialized || record.Entity is not { } ent || !Exists(ent))
                 continue;
 
-            if (!TryComp<SensedDebrisComponent>(ent, out var sensed))
+            if (!TryComp<RecordedDebrisComponent>(ent, out var recorded))
                 continue;
 
-            if (!sensed.Touched)
+            if (!recorded.Touched)
             {
                 // Captured by an earlier pass while this entry sat queued; nothing owed.
-                ReleaseHold(ent, sensed);
+                ReleaseHold(ent, recorded);
                 continue;
             }
 
             if (!TryComp<MapGridComponent>(ent, out var grid))
             {
-                ReleaseHold(ent, sensed);
+                ReleaseHold(ent, recorded);
                 continue;
             }
 
@@ -384,20 +384,20 @@ public sealed class DebrisCaptureSystem : EntitySystem
                 continue;
             }
 
-            if (Capture(record, ent, grid, sensed))
+            if (Capture(record, ent, grid, recorded))
             {
-                sensed.CaptureAttempts = 0;
-                ReleaseHold(ent, sensed);
+                recorded.CaptureAttempts = 0;
+                ReleaseHold(ent, recorded);
                 continue;
             }
 
-            sensed.CaptureAttempts++;
-            if (sensed.CaptureAttempts >= MaxCaptureAttempts)
+            recorded.CaptureAttempts++;
+            if (recorded.CaptureAttempts >= MaxCaptureAttempts)
             {
                 Log.Error($"Giving up on capturing debris {ToPrettyString(ent)} (record {record.Id}) "
                     + $"after {MaxCaptureAttempts} attempts; its changes regenerate on next materialize.");
-                SensedMetrics.CaptureGiveUps.Inc();
-                ReleaseHold(ent, sensed);
+                RecordMetrics.CaptureGiveUps.Inc();
+                ReleaseHold(ent, recorded);
                 continue;
             }
 
@@ -407,17 +407,17 @@ public sealed class DebrisCaptureSystem : EntitySystem
     }
 
     /// <summary>Pays back the GC debt taken on by <see cref="OnTryCancelGC"/>.</summary>
-    private void ReleaseHold(EntityUid ent, SensedDebrisComponent sensed)
+    private void ReleaseHold(EntityUid ent, RecordedDebrisComponent recorded)
     {
-        if (!sensed.GcHeld)
+        if (!recorded.GcHeld)
             return;
 
-        sensed.GcHeld = false;
+        recorded.GcHeld = false;
         _gc.TryGCEntity(ent);
     }
 
     /// <returns>Whether the blob was stored; false keeps any earlier blob and Touched set.</returns>
-    private bool Capture(DebrisRecord record, EntityUid ent, MapGridComponent grid, SensedDebrisComponent sensed)
+    private bool Capture(DebrisRecord record, EntityUid ent, MapGridComponent grid, RecordedDebrisComponent recorded)
     {
         string yaml;
         try
@@ -477,11 +477,11 @@ public sealed class DebrisCaptureSystem : EntitySystem
         var outline = TraceOutline(tiles);
         _describe.ApplyCapture(record, tiles, outline);
 
-        sensed.Touched = false;
+        recorded.Touched = false;
 
-        SensedMetrics.Captures.Inc();
-        SensedMetrics.CaptureBlobs.Set(_blobs.Count);
-        SensedMetrics.CaptureBytes.Set(_totalBytes);
+        RecordMetrics.Captures.Inc();
+        RecordMetrics.CaptureBlobs.Set(_blobs.Count);
+        RecordMetrics.CaptureBytes.Set(_totalBytes);
         return true;
     }
 
@@ -496,7 +496,7 @@ public sealed class DebrisCaptureSystem : EntitySystem
                 continue;
 
             Drop(oldestId);
-            SensedMetrics.CaptureEvictions.Inc();
+            RecordMetrics.CaptureEvictions.Inc();
 
             // The record must fall back with its projections in step, or it paints the captured
             // shape while materializing the pristine one.
@@ -510,10 +510,10 @@ public sealed class DebrisCaptureSystem : EntitySystem
             // The live grid still holds the true state: re-arm Touched and the next unload
             // recaptures fresh, instead of the untouched fast path silently keeping the
             // pristine revert and regenerating everything at the visit after.
-            if (evicted.State == SensedState.Materialized && evicted.Entity is { } live
-                && TryComp<SensedDebrisComponent>(live, out var liveSensed))
+            if (evicted.State == RecordState.Materialized && evicted.Entity is { } live
+                && TryComp<RecordedDebrisComponent>(live, out var liveRecorded))
             {
-                liveSensed.Touched = true;
+                liveRecorded.Touched = true;
                 Log.Warning($"Capture store over budget: evicted blob for live record {oldestId}; "
                     + "it recaptures at next unload. Raise triad.worldgen.capture_budget_mb.");
                 continue;
@@ -598,7 +598,7 @@ public sealed class DebrisCaptureSystem : EntitySystem
 
             if (!_mapLoader.TryLoadGrid(mapId, textReader, $"triad-debris-{record.Id}", out var grid, opts))
             {
-                SensedMetrics.CaptureRestoreFailures.Inc();
+                RecordMetrics.CaptureRestoreFailures.Inc();
                 return false;
             }
 
@@ -608,7 +608,7 @@ public sealed class DebrisCaptureSystem : EntitySystem
         catch (Exception e)
         {
             Log.Error($"Failed to restore debris blob for record {record.Id}: {e}");
-            SensedMetrics.CaptureRestoreFailures.Inc();
+            RecordMetrics.CaptureRestoreFailures.Inc();
             return false;
         }
     }

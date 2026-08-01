@@ -21,8 +21,8 @@ namespace Content.IntegrationTests.Tests._Triad.Worldgen;
 [TestOf(typeof(ChartFile))]
 public sealed class ChartFileTest
 {
-    private static readonly SensedProtoRecipe RecipeA = new("TriadRockSmall", 6f, 14, 0.5f, 1);
-    private static readonly SensedProtoRecipe RecipeB = new("TriadRockLarge", 26f, 324, 0.9f, 8);
+    private static readonly DebrisProtoRecipe RecipeA = new("TriadRockSmall", 6f, 14, 0.5f, 1);
+    private static readonly DebrisProtoRecipe RecipeB = new("TriadRockLarge", 26f, 324, 0.9f, 8);
 
     private static List<(MapId, IEnumerable<ChartEntry>)> SampleMaps()
     {

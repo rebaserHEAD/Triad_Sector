@@ -30,11 +30,11 @@ namespace Content.IntegrationTests.Tests._Triad.Worldgen;
 ///     comes back from its stored record rather than being re-rolled.
 /// </summary>
 [TestFixture]
-public sealed class SensedTierTest
+public sealed class RecordsTest
 {
     private const string WorldgenConfig = "NFDefault";
-    private const string NearLoader = "TriadSensedTestLoaderNear";
-    private const string FarLoader = "TriadSensedTestLoaderFar";
+    private const string NearLoader = "TriadRecordsTestLoaderNear";
+    private const string FarLoader = "TriadRecordsTestLoaderFar";
 
     // WorldLoaderComponent.Radius is write-locked to WorldControllerSystem, so the two loader
     // sizes the tests need come from prototypes rather than field pokes.
@@ -58,7 +58,7 @@ public sealed class SensedTierTest
     ///     origin, then ticks until the describe pass has run.
     /// </summary>
     private static async Task<(EntityUid Map, EntityUid Loader)> SetupBelt(
-        Content.IntegrationTests.Pair.TestPair pair, float sensedRange, string loaderProto,
+        Content.IntegrationTests.Pair.TestPair pair, float describeRange, string loaderProto,
         bool needMaterialized)
     {
         var server = pair.Server;
@@ -73,8 +73,8 @@ public sealed class SensedTierTest
 
         await server.WaitPost(() =>
         {
-            cfg.SetCVar(TriadCCVars.WorldgenSensedEnabled, true);
-            cfg.SetCVar(TriadCCVars.WorldgenDescribeRange, sensedRange);
+            cfg.SetCVar(TriadCCVars.WorldgenRecordsEnabled, true);
+            cfg.SetCVar(TriadCCVars.WorldgenDescribeRange, describeRange);
             // Budgets high enough that a test map describes and materializes in a few ticks.
             cfg.SetCVar(TriadCCVars.WorldgenDescribeBudgetMs, 500f);
             cfg.SetCVar(TriadCCVars.WorldgenMaterializeBudgetMs, 500f);
@@ -95,8 +95,8 @@ public sealed class SensedTierTest
                 .ToList();
 
             return needMaterialized
-                ? records.Any(r => r is { State: SensedState.Materialized, Shaped: true })
-                : records.Any(r => r is { State: SensedState.Dormant, Shaped: true });
+                ? records.Any(r => r is { State: RecordState.Materialized, Shaped: true })
+                : records.Any(r => r is { State: RecordState.Dormant, Shaped: true });
         }, maxTicks: 900);
 
         await server.WaitIdleAsync();
@@ -140,7 +140,7 @@ public sealed class SensedTierTest
         var protoManager = server.ResolveDependency<IPrototypeManager>();
 
         // Sense far, load near: the gap between the two is the whole point of the tier.
-        var (map, _) = await SetupBelt(pair, sensedRange: 1024f, loaderProto: NearLoader, needMaterialized: false);
+        var (map, _) = await SetupBelt(pair, describeRange: 1024f, loaderProto: NearLoader, needMaterialized: false);
 
         await server.WaitAssertion(() =>
         {
@@ -158,9 +158,9 @@ public sealed class SensedTierTest
             Assert.That(shaped.All(r => r.Bound > 0f),
                 "a shaped record must carry a collision bound, or the data-space segment gates never pass");
 
-            var farDormant = records.Where(r => r.Point.Length() > 400f && r.State == SensedState.Dormant).ToList();
+            var farDormant = records.Where(r => r.Point.Length() > 400f && r.State == RecordState.Dormant).ToList();
             Assert.That(farDormant, Is.Not.Empty,
-                "everything described near the loader materialized; nothing is left sensed-only to draw at range");
+                "everything described near the loader materialized; nothing is left data-only to draw at range");
 
             foreach (var record in farDormant)
             {
@@ -182,12 +182,12 @@ public sealed class SensedTierTest
         await server.WaitIdleAsync();
         var entManager = server.ResolveDependency<IEntityManager>();
 
-        var (map, _) = await SetupBelt(pair, sensedRange: 512f, loaderProto: FarLoader, needMaterialized: true);
+        var (map, _) = await SetupBelt(pair, describeRange: 512f, loaderProto: FarLoader, needMaterialized: true);
 
         await server.WaitAssertion(() =>
         {
             var materialized = RecordsOnMap(entManager, map)
-                .Where(r => r.State == SensedState.Materialized)
+                .Where(r => r.State == RecordState.Materialized)
                 .ToList();
 
             Assert.That(materialized, Is.Not.Empty, "nothing materialized inside the loader radius");
@@ -240,7 +240,7 @@ public sealed class SensedTierTest
         var entManager = server.ResolveDependency<IEntityManager>();
         var protoManager = server.ResolveDependency<IPrototypeManager>();
 
-        var (map, _) = await SetupBelt(pair, sensedRange: 512f, loaderProto: FarLoader, needMaterialized: true);
+        var (map, _) = await SetupBelt(pair, describeRange: 512f, loaderProto: FarLoader, needMaterialized: true);
 
         await server.WaitAssertion(() =>
         {
@@ -248,14 +248,14 @@ public sealed class SensedTierTest
             var exact = 0;
             var decorated = 0;
             var all = RecordsOnMap(entManager, map);
-            var materializedCount = all.Count(r => r.State == SensedState.Materialized);
-            var withShape = all.Count(r => r.State == SensedState.Materialized && r.Shaped);
-            var withGrid = all.Count(r => r.State == SensedState.Materialized && r.Entity is { } e
+            var materializedCount = all.Count(r => r.State == RecordState.Materialized);
+            var withShape = all.Count(r => r.State == RecordState.Materialized && r.Shaped);
+            var withGrid = all.Count(r => r.State == RecordState.Materialized && r.Entity is { } e
                                           && entManager.HasComponent<MapGridComponent>(e));
 
             foreach (var record in all)
             {
-                if (record is not { State: SensedState.Materialized, Shaped: true, Entity: { } ent }
+                if (record is not { State: RecordState.Materialized, Shaped: true, Entity: { } ent }
                     || !entManager.TryGetComponent<MapGridComponent>(ent, out var grid))
                     continue;
 
@@ -321,12 +321,12 @@ public sealed class SensedTierTest
     }
 
     /// <summary>
-    ///     The dormancy round-trip, which is the sensed tier's actual distinguishing behaviour and
+    ///     The dormancy round-trip, which is the records system's actual distinguishing behaviour and
     ///     the one thing the fixture summary claimed that nothing asserted.
     ///
     ///     Stock worldgen is per-load-generation: unload a chunk, let the GC take the debris, come
     ///     back, and the placer draws a fresh Poisson sample, so the belt you return to is a
-    ///     different belt. The sensed tier is persistent: the record outlives its entity, so the
+    ///     different belt. The records are persistent: the record outlives its entity, so the
     ///     same rock comes back at the same point with the same seed and the same silhouette.
     ///
     ///     This drives the seam directly rather than flying a loader out of range and waiting on the
@@ -344,7 +344,7 @@ public sealed class SensedTierTest
         await server.WaitIdleAsync();
         var entManager = server.ResolveDependency<IEntityManager>();
 
-        var (map, _) = await SetupBelt(pair, sensedRange: 512f, loaderProto: FarLoader, needMaterialized: true);
+        var (map, _) = await SetupBelt(pair, describeRange: 512f, loaderProto: FarLoader, needMaterialized: true);
 
         var mapSystem = entManager.System<SharedMapSystem>();
 
@@ -360,7 +360,7 @@ public sealed class SensedTierTest
         await server.WaitAssertion(() =>
         {
             var subject = RecordsOnMap(entManager, map).FirstOrDefault(r =>
-                r is { State: SensedState.Materialized, Shaped: true, Entity: not null }
+                r is { State: RecordState.Materialized, Shaped: true, Entity: not null }
                 && entManager.HasComponent<MapGridComponent>(r.Entity!.Value));
 
             Assert.That(subject, Is.Not.Null, "no materialized blob debris to round-trip");
@@ -401,7 +401,7 @@ public sealed class SensedTierTest
 
             Assert.Multiple(() =>
             {
-                Assert.That(record.State, Is.EqualTo(SensedState.Dormant), "unloaded record did not return to dormant");
+                Assert.That(record.State, Is.EqualTo(RecordState.Dormant), "unloaded record did not return to dormant");
                 Assert.That(record.Entity, Is.Null, "dormant record still points at a dead entity");
                 Assert.That(record.Seed, Is.EqualTo(seed), "the seed moved, so the rock would rebuild as a different shape");
                 Assert.That(record.Point, Is.EqualTo(point), "the rock moved while it was away");
@@ -422,7 +422,7 @@ public sealed class SensedTierTest
         await PoolManager.WaitUntil(server, () =>
         {
             var records = entManager.System<CellDescribeSystem>().Records;
-            return records.TryGetValue(recordId, out var r) && r.State == SensedState.Materialized;
+            return records.TryGetValue(recordId, out var r) && r.State == RecordState.Materialized;
         }, maxTicks: 900);
 
         await server.WaitIdleAsync();
@@ -464,7 +464,7 @@ public sealed class SensedTierTest
         var entManager = server.ResolveDependency<IEntityManager>();
         var cfg = server.ResolveDependency<IConfigurationManager>();
 
-        var (map, _) = await SetupBelt(pair, sensedRange: 512f, loaderProto: FarLoader, needMaterialized: false);
+        var (map, _) = await SetupBelt(pair, describeRange: 512f, loaderProto: FarLoader, needMaterialized: false);
 
         await server.WaitAssertion(() =>
         {
@@ -472,16 +472,16 @@ public sealed class SensedTierTest
                 "nothing was described, so flipping the switch would prove nothing");
         });
 
-        await server.WaitPost(() => cfg.SetCVar(TriadCCVars.WorldgenSensedEnabled, false));
+        await server.WaitPost(() => cfg.SetCVar(TriadCCVars.WorldgenRecordsEnabled, false));
         await server.WaitRunTicks(5);
         await server.WaitIdleAsync();
 
         await server.WaitAssertion(() =>
         {
-            var stillSensed = 0;
-            var query = entManager.EntityQueryEnumerator<SensedCellComponent>();
+            var stillDormant = 0;
+            var query = entManager.EntityQueryEnumerator<CellRecordsComponent>();
             while (query.MoveNext(out _, out _))
-                stillSensed++;
+                stillDormant++;
 
             Assert.Multiple(() =>
             {
@@ -490,7 +490,7 @@ public sealed class SensedTierTest
                 Assert.That(RecordsOnMap(entManager, map), Is.Empty,
                     "records survived the kill switch; switching back on would build this roll on top of "
                     + "whatever the stock placer spawned while it was off");
-                Assert.That(stillSensed, Is.Zero,
+                Assert.That(stillDormant, Is.Zero,
                     "cells are still marked described after the tier was switched off, so they would never be re-rolled");
             });
         });
@@ -550,13 +550,13 @@ public sealed class SensedTierTest
         await server.WaitIdleAsync();
         var entManager = server.ResolveDependency<IEntityManager>();
 
-        var (map, _) = await SetupBelt(pair, sensedRange: 512f, loaderProto: FarLoader, needMaterialized: true);
+        var (map, _) = await SetupBelt(pair, describeRange: 512f, loaderProto: FarLoader, needMaterialized: true);
 
         var recordId = 0;
         await server.WaitPost(() =>
         {
             var record = RecordsOnMap(entManager, map)
-                .First(r => r.State == SensedState.Materialized && r.Entity is not null);
+                .First(r => r.State == RecordState.Materialized && r.Entity is not null);
 
             recordId = record.Id;
             entManager.DeleteEntity(record.Entity!.Value);
@@ -596,7 +596,7 @@ public sealed class SensedTierTest
         EntityUid mapUid = default;
         await server.WaitPost(() =>
         {
-            cfg.SetCVar(TriadCCVars.WorldgenSensedEnabled, false);
+            cfg.SetCVar(TriadCCVars.WorldgenRecordsEnabled, false);
 
             mapUid = mapSystem.CreateMap(out var mapId);
             protoManager.Index<WorldgenConfigPrototype>(WorldgenConfig).Apply(mapUid, serManager, entManager);
@@ -622,10 +622,10 @@ public sealed class SensedTierTest
         await server.WaitAssertion(() =>
         {
             Assert.That(RecordsOnMap(entManager, mapUid), Is.Empty,
-                "the describe service ran with the sensed tier disabled");
+                "the describe service ran with records disabled");
 
             // Scoped to this map: a pooled server carries cells from whichever test ran before.
-            var cells = entManager.EntityQueryEnumerator<SensedCellComponent, TransformComponent>();
+            var cells = entManager.EntityQueryEnumerator<CellRecordsComponent, TransformComponent>();
             while (cells.MoveNext(out _, out _, out var xform))
             {
                 Assert.That(xform.MapUid, Is.Not.EqualTo(mapUid), "cells were described with the tier disabled");
@@ -639,7 +639,7 @@ public sealed class SensedTierTest
                 stockSpawned = xform.MapUid == mapUid;
             }
 
-            Assert.That(stockSpawned, Is.True, "the stock placer spawned nothing with the sensed tier disabled");
+            Assert.That(stockSpawned, Is.True, "the stock placer spawned nothing with records disabled");
         });
 
         await server.WaitPost(() => entManager.DeleteEntity(mapUid));

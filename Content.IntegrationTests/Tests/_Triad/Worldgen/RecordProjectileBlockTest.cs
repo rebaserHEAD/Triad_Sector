@@ -17,7 +17,7 @@ namespace Content.IntegrationTests.Tests._Triad.Worldgen;
 ///     makes the segment exact; ballistics are the gun system's business, not this fixture's.
 /// </summary>
 [TestFixture]
-public sealed class SensedProjectileBlockTest
+public sealed class RecordProjectileBlockTest
 {
     private const string RockProto = "TriadBlockTestRock";
     private const string ShotProto = "TriadBlockTestShot";
@@ -94,7 +94,7 @@ public sealed class SensedProjectileBlockTest
         DebrisRecord record = null!;
         await server.WaitPost(() =>
         {
-            cfg.SetCVar(Content.Shared._Triad.CCVar.TriadCCVars.WorldgenSensedEnabled, true);
+            cfg.SetCVar(Content.Shared._Triad.CCVar.TriadCCVars.WorldgenRecordsEnabled, true);
 
             // Injected straight into the flat index, like the contact channel fixture: the test
             // map has no world controller, so the query's flat fallback serves it. Every blob
@@ -109,7 +109,7 @@ public sealed class SensedProjectileBlockTest
                 Seed = 999,
                 Shaped = true,
                 Bound = 12f,
-                State = SensedState.Dormant,
+                State = RecordState.Dormant,
             };
             describe.Records[record.Id] = record;
         });

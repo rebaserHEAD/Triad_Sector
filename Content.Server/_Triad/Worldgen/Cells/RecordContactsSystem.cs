@@ -25,7 +25,7 @@ namespace Content.Server._Triad.Worldgen.Cells;
 ///     <see cref="DebrisMaterializeQueueSystem"/> spawns it, so the contact hands off to the
 ///     grid instead of doubling it.
 /// </summary>
-public sealed class SensedContactsSystem : EntitySystem
+public sealed class RecordContactsSystem : EntitySystem
 {
     [Dependency] private readonly CellDescribeSystem _describe = default!;
     [Dependency] private readonly GameTicker _gameTicker = default!;
@@ -56,7 +56,7 @@ public sealed class SensedContactsSystem : EntitySystem
     ///     BlobFloorPlanBuilder component. Null entries cache the misses too. Never invalidated:
     ///     prototypes are static for the round.
     /// </summary>
-    private readonly Dictionary<string, SensedProtoRecipe?> _recipeCache = new();
+    private readonly Dictionary<string, DebrisProtoRecipe?> _recipeCache = new();
 
     // Scan scratch only, cleared at the top of every request. The lists that ride the delta
     // event are allocated fresh per send instead: the network layer serializes the event after
@@ -71,11 +71,11 @@ public sealed class SensedContactsSystem : EntitySystem
     {
         base.Initialize();
 
-        Subs.CVar(_cfg, TriadCCVars.WorldgenSensedEnabled, OnSensedEnabledChanged, true);
+        Subs.CVar(_cfg, TriadCCVars.WorldgenRecordsEnabled, OnRecordsEnabledChanged, true);
         Subs.CVar(_cfg, TriadCCVars.WorldgenContactAddsPerPoll, v => _addsPerPoll = v, true);
         Subs.CVar(_cfg, TriadCCVars.WorldgenDescribeRange, v => _describeRange = v, true);
 
-        SubscribeNetworkEvent<RequestSensedContactsEvent>(OnContactsRequested);
+        SubscribeNetworkEvent<RequestRecordContactsEvent>(OnContactsRequested);
         _playerManager.PlayerStatusChanged += OnPlayerStatusChanged;
     }
 
@@ -94,7 +94,7 @@ public sealed class SensedContactsSystem : EntitySystem
     ///     not a visual fix: record ids never recycle and removes are uncapped, so a stale set
     ///     would converge on its own.
     /// </summary>
-    private void OnSensedEnabledChanged(bool value)
+    private void OnRecordsEnabledChanged(bool value)
     {
         if (value == _enabled)
             return;
@@ -126,7 +126,7 @@ public sealed class SensedContactsSystem : EntitySystem
         return false;
     }
 
-    private void OnContactsRequested(RequestSensedContactsEvent ev, EntitySessionEventArgs args)
+    private void OnContactsRequested(RequestRecordContactsEvent ev, EntitySessionEventArgs args)
     {
         SweepDeadConsoles();
 
@@ -137,7 +137,7 @@ public sealed class SensedContactsSystem : EntitySystem
             return;
 
         // Authorize against the sender, not just the target. A NetEntity is a small sequential
-        // integer, so without this a modified client can walk the id space and pull the sensed
+        // integer, so without this a modified client can walk the id space and pull the record
         // picture off any radar console on any map without ever approaching one. Serving only
         // consoles the sender actually has open reuses the range and access rules the UI system
         // already enforced when it let them open it, rather than re-deriving a weaker copy here.
@@ -153,8 +153,8 @@ public sealed class SensedContactsSystem : EntitySystem
         _tempLegendIndexCache.Clear();
 
         // These ride the event, so they are allocated per send; see the scratch-field comment.
-        var legend = new List<SensedProtoRecipe>();
-        var adds = new List<SensedContactData>();
+        var legend = new List<DebrisProtoRecipe>();
+        var adds = new List<RecordContactData>();
         var removes = new List<int>();
         var fades = new List<int>();
 
@@ -184,9 +184,9 @@ public sealed class SensedContactsSystem : EntitySystem
             }
 
             adds.Add(record.Captured
-                ? new SensedContactData(record.Id, record.Version, SensedContactArm.Explicit,
+                ? new RecordContactData(record.Id, record.Version, RecordContactArm.Explicit,
                     record.Point, protoIndex, record.Seed, record.CapturedOutline)
-                : new SensedContactData(record.Id, record.Version, SensedContactArm.Pristine,
+                : new RecordContactData(record.Id, record.Version, RecordContactArm.Pristine,
                     record.Point, protoIndex, record.Seed, null));
         }
 
@@ -224,11 +224,11 @@ public sealed class SensedContactsSystem : EntitySystem
 
         _known[key] = knownIds;
 
-        RaiseNetworkEvent(new SensedContactsDeltaEvent(ev.Console, Transform(consoleUid.Value).MapID,
+        RaiseNetworkEvent(new RecordContactsDeltaEvent(ev.Console, Transform(consoleUid.Value).MapID,
             _gameTicker.RoundId, isNew, legend, adds, removes, fades), args.SenderSession);
 
         if (adds.Count > 0)
-            SensedMetrics.ContactsSent.Inc(adds.Count);
+            RecordMetrics.ContactsSent.Inc(adds.Count);
     }
 
     /// <summary>
@@ -250,7 +250,7 @@ public sealed class SensedContactsSystem : EntitySystem
         // consoles x live records, twice a second. If the perception side ever starts eating the
         // residency win, it shows up here first.
         var scanStart = _timing.RealTime;
-        SensedMetrics.ContactScanRecords.Observe(_describe.Records.Count);
+        RecordMetrics.ContactScanRecords.Observe(_describe.Records.Count);
 
         var consolePos = _xformSys.GetWorldPosition(consoleUid);
         var maxRangeSq = radar.MaxRange * radar.MaxRange;
@@ -258,7 +258,7 @@ public sealed class SensedContactsSystem : EntitySystem
 
         foreach (var record in _describe.Records.Values)
         {
-            if (!record.Shaped || record.State != SensedState.Dormant || record.Map != consoleMap)
+            if (!record.Shaped || record.State != RecordState.Dormant || record.Map != consoleMap)
                 continue;
 
             // Painting a ghost rock means flying to an outline with nothing there. The count is
@@ -291,7 +291,7 @@ public sealed class SensedContactsSystem : EntitySystem
             _tempVisibleIdsCache.Add(record.Id);
         }
 
-        SensedMetrics.ContactScan.Observe((_timing.RealTime - scanStart).TotalSeconds);
+        RecordMetrics.ContactScan.Observe((_timing.RealTime - scanStart).TotalSeconds);
     }
 
     /// <summary>
@@ -299,12 +299,12 @@ public sealed class SensedContactsSystem : EntitySystem
     ///     component so the client can re-run the identical walk. Null for prototypes without a
     ///     blob builder, whose records are never shaped and never reach the adds loop.
     /// </summary>
-    private SensedProtoRecipe? GetRecipe(string protoId)
+    private DebrisProtoRecipe? GetRecipe(string protoId)
     {
         if (_recipeCache.TryGetValue(protoId, out var cached))
             return cached;
 
-        SensedProtoRecipe? recipe = null;
+        DebrisProtoRecipe? recipe = null;
         if (_proto.TryIndex<EntityPrototype>(protoId, out var proto))
             recipe = DebrisRecipe.TryFrom(proto);
 

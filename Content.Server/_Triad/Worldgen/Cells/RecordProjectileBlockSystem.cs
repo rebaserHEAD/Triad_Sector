@@ -25,7 +25,7 @@ namespace Content.Server._Triad.Worldgen.Cells;
 ///     one frame with no entity to sweep and are a separate, currently unhandled integration
 ///     point.
 /// </summary>
-public sealed class SensedProjectileBlockSystem : EntitySystem
+public sealed class RecordProjectileBlockSystem : EntitySystem
 {
     [Dependency] private readonly CellDescribeSystem _describe = default!;
     [Dependency] private readonly DebrisMaterializeQueueSystem _queue = default!;

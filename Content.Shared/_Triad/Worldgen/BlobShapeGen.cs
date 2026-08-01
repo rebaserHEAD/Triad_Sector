@@ -11,7 +11,7 @@ public readonly record struct BlobTile(Vector2i Pos, int TilesetIndex);
 /// <summary>
 ///     Pure, seed-deterministic random-walk blob shape generator. Extracted from
 ///     <c>BlobFloorPlanBuilderSystem.PlaceFloorplanTiles</c> so the same walk can be rolled
-///     ahead of grid materialization (e.g. for radar-sensed shape previews).
+///     ahead of grid materialization (e.g. for radar-painted shape previews).
 /// </summary>
 public static class BlobShapeGen
 {
@@ -21,7 +21,7 @@ public static class BlobShapeGen
     ///     Owns the tileset floor of one that <see cref="Roll(System.Random,float,int,float,int)"/>
     ///     would otherwise reject, matching how recipes are minted server-side.
     /// </summary>
-    public static List<BlobTile> Roll(System.Random rng, in SensedProtoRecipe recipe)
+    public static List<BlobTile> Roll(System.Random rng, in DebrisProtoRecipe recipe)
         => Roll(rng, recipe.Radius, recipe.FloorPlacements, recipe.BlobDrawProb, Math.Max(1, recipe.TilesetCount));
 
     public static List<BlobTile> Roll(System.Random rng, float radius, int floorPlacements, float blobDrawProb,

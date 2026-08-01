@@ -21,9 +21,9 @@ namespace Content.Client._Triad.Worldgen;
 ///     A dormant contact ready to draw: position, derived outline, derived color. The wire never
 ///     carries geometry on the common path; this is what the recipe resolves into locally.
 /// </summary>
-public readonly record struct SensedContactView(Vector2 MapPosition, Vector2i[] Outline, Color Color);
+public readonly record struct RecordContactView(Vector2 MapPosition, Vector2i[] Outline, Color Color);
 
-public sealed class SensedContactsSystem : EntitySystem
+public sealed class RecordContactsSystem : EntitySystem
 {
     [Dependency] private readonly IComponentFactory _factory = default!;
     [Dependency] private readonly IConfigurationManager _cfg = default!;
@@ -105,9 +105,9 @@ public sealed class SensedContactsSystem : EntitySystem
     /// </summary>
     private readonly record struct ClientContact(
         int Version,
-        SensedContactArm Arm,
+        RecordContactArm Arm,
         Vector2 MapPosition,
-        SensedProtoRecipe Recipe,
+        DebrisProtoRecipe Recipe,
         int Seed,
         Vector2i[]? Outline,
         Color Color);
@@ -115,7 +115,7 @@ public sealed class SensedContactsSystem : EntitySystem
     public override void Initialize()
     {
         base.Initialize();
-        SubscribeNetworkEvent<SensedContactsDeltaEvent>(OnDelta);
+        SubscribeNetworkEvent<RecordContactsDeltaEvent>(OnDelta);
         SubscribeLocalEvent<RoundRestartCleanupEvent>(OnRoundRestart);
         SubscribeLocalEvent<MapComponent, EntityTerminatingEvent>(OnMapTerminating);
     }
@@ -168,7 +168,7 @@ public sealed class SensedContactsSystem : EntitySystem
         FlushChartFile();
     }
 
-    private void OnDelta(SensedContactsDeltaEvent ev)
+    private void OnDelta(RecordContactsDeltaEvent ev)
     {
         // First contact with a round: remember it, and merge the reconnect file exactly once.
         // Merging BEFORE applying the delta is what keeps the rule simple: the file only ever
@@ -290,7 +290,7 @@ public sealed class SensedContactsSystem : EntitySystem
             foreach (var (id, contact) in contacts)
             {
                 // Pristine only: the one arm whose whole payload re-derives from the recipe.
-                if (contact.Arm == SensedContactArm.Pristine)
+                if (contact.Arm == RecordContactArm.Pristine)
                     entries.Add(new ChartEntry(id, contact.Version, contact.MapPosition, contact.Seed, contact.Recipe));
             }
 
@@ -338,7 +338,7 @@ public sealed class SensedContactsSystem : EntitySystem
                 if (mapChart.ContainsKey(entry.Id))
                     continue;
 
-                mapChart[entry.Id] = new ClientContact(entry.Version, SensedContactArm.Pristine,
+                mapChart[entry.Id] = new ClientContact(entry.Version, RecordContactArm.Pristine,
                     entry.Position, entry.Recipe, entry.Seed, null, GetColor(entry.Recipe.ProtoId));
                 merged++;
             }
@@ -349,7 +349,7 @@ public sealed class SensedContactsSystem : EntitySystem
     }
 
     /// <summary>
-    /// Requests a refresh of sensed contacts for the given console, throttled to one network
+    /// Requests a refresh of record contacts for the given console, throttled to one network
     /// send per <see cref="RequestThrottle"/> per console. Each console gates independently, so
     /// several radar screens can be open at once without starving one another.
     /// </summary>
@@ -368,7 +368,7 @@ public sealed class SensedContactsSystem : EntitySystem
 
         _lastRequestTime[netConsole] = _timing.CurTime;
 
-        RaiseNetworkEvent(new RequestSensedContactsEvent(netConsole));
+        RaiseNetworkEvent(new RequestRecordContactsEvent(netConsole));
     }
 
     /// <summary>
@@ -380,7 +380,7 @@ public sealed class SensedContactsSystem : EntitySystem
     /// FTL jump belong to the old map's store, miss this one's, and draw nothing, rather than
     /// painting old-map rocks through the new view until the next poll's fades land.
     /// </summary>
-    public IEnumerable<SensedContactView> GetContacts(EntityUid console, MapId map)
+    public IEnumerable<RecordContactView> GetContacts(EntityUid console, MapId map)
     {
         var netConsole = GetNetEntity(console);
 
@@ -395,7 +395,7 @@ public sealed class SensedContactsSystem : EntitySystem
         foreach (var id in live)
         {
             if (mapChart.TryGetValue(id, out var contact) && TryGetShape(contact, out var outline))
-                yield return new SensedContactView(contact.MapPosition, outline, contact.Color);
+                yield return new RecordContactView(contact.MapPosition, outline, contact.Color);
         }
     }
 
@@ -408,7 +408,7 @@ public sealed class SensedContactsSystem : EntitySystem
     /// chart through its own view transform. No staleness gate: a chart is exactly the thing
     /// that should keep painting when the link drops.
     /// </summary>
-    public IEnumerable<SensedContactView> GetChart(EntityUid console, MapId map)
+    public IEnumerable<RecordContactView> GetChart(EntityUid console, MapId map)
     {
         if (!_chart.TryGetValue(map, out var mapChart))
             yield break;
@@ -422,7 +422,7 @@ public sealed class SensedContactsSystem : EntitySystem
                 continue;
 
             if (TryGetShape(contact, out var outline))
-                yield return new SensedContactView(contact.MapPosition, outline, contact.Color);
+                yield return new RecordContactView(contact.MapPosition, outline, contact.Color);
         }
     }
 
@@ -437,7 +437,7 @@ public sealed class SensedContactsSystem : EntitySystem
         outline = Array.Empty<Vector2i>();
 
         // The Explicit arm carries its geometry verbatim; nothing to roll.
-        if (contact.Arm == SensedContactArm.Explicit)
+        if (contact.Arm == RecordContactArm.Explicit)
         {
             if (contact.Outline is not { Length: > 2 })
                 return false;
@@ -447,7 +447,7 @@ public sealed class SensedContactsSystem : EntitySystem
         }
 
         // Unknown arms (anything newer than this client) are skipped rather than misdrawn.
-        if (contact.Arm != SensedContactArm.Pristine)
+        if (contact.Arm != RecordContactArm.Pristine)
             return false;
 
         var key = (contact.Recipe.ProtoId, contact.Seed, contact.Version);

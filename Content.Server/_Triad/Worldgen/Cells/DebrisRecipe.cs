@@ -9,7 +9,7 @@ using Robust.Shared.Prototypes;
 namespace Content.Server._Triad.Worldgen.Cells;
 
 /// <summary>
-///     The one place a prototype's blob parameters become a <see cref="SensedProtoRecipe"/>.
+///     The one place a prototype's blob parameters become a <see cref="DebrisProtoRecipe"/>.
 ///     Describe sizing, the contact channel's legend, the collision tile cache and the tests all
 ///     roll shapes from a recipe minted here, so a builder field that matters to the roll gets
 ///     picked up everywhere or nowhere. Game thread only: the by-name component lookup resolves
@@ -18,7 +18,7 @@ namespace Content.Server._Triad.Worldgen.Cells;
 public static class DebrisRecipe
 {
     /// <summary>Null for prototypes without a blob builder, which never shape a record.</summary>
-    public static SensedProtoRecipe? TryFrom(EntityPrototype proto)
+    public static DebrisProtoRecipe? TryFrom(EntityPrototype proto)
     {
         if (!proto.TryGetComponent<BlobFloorPlanBuilderComponent>("BlobFloorPlanBuilder", out var blob))
             return null;
@@ -26,7 +26,7 @@ public static class DebrisRecipe
         // Floor of one because Roll rejects a tileset count below it. A proto shipping an empty
         // tileset still rolls a shape for radar here; it fails at materialize, where the missing
         // tiles actually matter.
-        return new SensedProtoRecipe(proto.ID, blob.Radius, blob.FloorPlacements, blob.BlobDrawProb,
+        return new DebrisProtoRecipe(proto.ID, blob.Radius, blob.FloorPlacements, blob.BlobDrawProb,
             Math.Max(1, blob.FloorTileset.Count));
     }
 }

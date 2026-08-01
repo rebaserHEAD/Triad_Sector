@@ -9,18 +9,18 @@ using Robust.Shared.Serialization;
 namespace Content.Shared._Triad.Worldgen;
 
 [Serializable, NetSerializable]
-public sealed class RequestSensedContactsEvent : EntityEventArgs
+public sealed class RequestRecordContactsEvent : EntityEventArgs
 {
     public NetEntity Console;
 
-    public RequestSensedContactsEvent(NetEntity console)
+    public RequestRecordContactsEvent(NetEntity console)
     {
         Console = console;
     }
 }
 
 [Serializable, NetSerializable]
-public sealed class SensedContactsDeltaEvent : EntityEventArgs
+public sealed class RecordContactsDeltaEvent : EntityEventArgs
 {
     public NetEntity Console;
 
@@ -46,15 +46,15 @@ public sealed class SensedContactsDeltaEvent : EntityEventArgs
 
     /// <summary>
     ///     Shape recipes for the prototypes referenced by <see cref="Adds"/>, indexed by
-    ///     <see cref="SensedContactData.ProtoIndex"/>. Rebuilt per event, so indices are only
+    ///     <see cref="RecordContactData.ProtoIndex"/>. Rebuilt per event, so indices are only
     ///     meaningful within the delta that carried them. A legend instead of a proto id per
     ///     contact because NetSerializer has no string dedup on the wire: a belt repeats the same
     ///     handful of prototypes hundreds of times, and re-encoding a ~20 byte string per contact
     ///     is the single largest avoidable cost in the old format. An index is one varint byte.
     /// </summary>
-    public List<SensedProtoRecipe> Legend;
+    public List<DebrisProtoRecipe> Legend;
 
-    public List<SensedContactData> Adds;
+    public List<RecordContactData> Adds;
 
     /// <summary>
     ///     Existence-scope removals: the rock is gone (destroyed in play, cell retired, ghost
@@ -69,8 +69,8 @@ public sealed class SensedContactsDeltaEvent : EntityEventArgs
     /// </summary>
     public List<int> Fades;
 
-    public SensedContactsDeltaEvent(NetEntity console, MapId map, int roundId, bool fullReset,
-        List<SensedProtoRecipe> legend, List<SensedContactData> adds, List<int> removes, List<int> fades)
+    public RecordContactsDeltaEvent(NetEntity console, MapId map, int roundId, bool fullReset,
+        List<DebrisProtoRecipe> legend, List<RecordContactData> adds, List<int> removes, List<int> fades)
     {
         Console = console;
         Map = map;
@@ -84,13 +84,13 @@ public sealed class SensedContactsDeltaEvent : EntityEventArgs
 }
 
 /// <summary>
-///     How a contact's geometry reaches the client. <see cref="SensedContactData.Version"/> ships
+///     How a contact's geometry reaches the client. <see cref="RecordContactData.Version"/> ships
 ///     inert so debris persistence later is a server-side feature with no protocol change: a
 ///     blob-restored rock will arrive on the Explicit arm with a bumped version. Clients skip
 ///     contacts carrying arm values they do not understand, so adding an arm is likewise free.
 /// </summary>
 [Serializable, NetSerializable]
-public enum SensedContactArm : byte
+public enum RecordContactArm : byte
 {
     /// <summary>
     ///     The client rolls the shape itself from (recipe, seed) through the shared
@@ -100,7 +100,7 @@ public enum SensedContactArm : byte
     Pristine = 0,
 
     /// <summary>
-    ///     Outline carried verbatim in <see cref="SensedContactData.Outline"/>: the escape hatch
+    ///     Outline carried verbatim in <see cref="RecordContactData.Outline"/>: the escape hatch
     ///     for anything not seed-derivable. No current producer.
     /// </summary>
     Explicit = 1,
@@ -113,7 +113,7 @@ public enum SensedContactArm : byte
 ///     prototype's copy of these numbers is invisible client-side.
 /// </summary>
 [Serializable, NetSerializable]
-public readonly record struct SensedProtoRecipe(
+public readonly record struct DebrisProtoRecipe(
     string ProtoId,
     float Radius,
     int FloorPlacements,
@@ -124,16 +124,16 @@ public readonly record struct SensedProtoRecipe(
 ///     One dormant rock as the radar learns of it. The wire carries the recipe, not the geometry:
 ///     roughly 20 bytes per contact against ~350-850 for the traced outline it replaces. Color is
 ///     not carried at all; the client derives it from the prototype's IFF component.
-///     <paramref name="Outline"/> is populated only on the <see cref="SensedContactArm.Explicit"/>
+///     <paramref name="Outline"/> is populated only on the <see cref="RecordContactArm.Explicit"/>
 ///     arm, in grid-local tile units relative to <paramref name="MapPosition"/> (tile corners are
 ///     integral, and NetSerializer writes an int as a zigzag varint but a float as four fixed
 ///     bytes); a null array costs a single sentinel byte on every other arm.
 /// </summary>
 [Serializable, NetSerializable]
-public readonly record struct SensedContactData(
+public readonly record struct RecordContactData(
     int Id,
     int Version,
-    SensedContactArm Arm,
+    RecordContactArm Arm,
     Vector2 MapPosition,
     int ProtoIndex,
     int Seed,

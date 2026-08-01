@@ -86,12 +86,12 @@ public sealed class CellDescribeSystem : BaseWorldSystem
 
     public override void Initialize()
     {
-        Subs.CVar(_cfg, TriadCCVars.WorldgenSensedEnabled, OnEnabledChanged, true);
+        Subs.CVar(_cfg, TriadCCVars.WorldgenRecordsEnabled, OnEnabledChanged, true);
         Subs.CVar(_cfg, TriadCCVars.WorldgenDescribeRange, v => _describeRange = v, true);
         Subs.CVar(_cfg, TriadCCVars.WorldgenDescribeBudgetMs, v => _describeBudgetMs = v, true);
         Subs.CVar(_cfg, TriadCCVars.WorldgenDescribeLeadS, v => _describeLead = v, true);
 
-        SubscribeLocalEvent<SensedCellComponent, ComponentShutdown>(OnCellShutdown);
+        SubscribeLocalEvent<CellRecordsComponent, ComponentShutdown>(OnCellShutdown);
     }
 
     /// <summary>
@@ -104,7 +104,7 @@ public sealed class CellDescribeSystem : BaseWorldSystem
     ///     the population in every cell that was visited in between, charged to PVS and broadphase
     ///     for the rest of the round with nothing to clear it.
     ///
-    ///     Dropping <see cref="SensedCellComponent"/> is the whole of it. <see cref="OnCellShutdown"/>
+    ///     Dropping <see cref="CellRecordsComponent"/> is the whole of it. <see cref="OnCellShutdown"/>
     ///     already drains that cell's entries out of the flat index, so there is no second
     ///     bookkeeping path to keep in step, and a cell with no component is one Describe will roll
     ///     again from scratch if the tier comes back.
@@ -120,7 +120,7 @@ public sealed class CellDescribeSystem : BaseWorldSystem
             return;
 
         var cells = new List<EntityUid>();
-        var query = EntityQueryEnumerator<SensedCellComponent>();
+        var query = EntityQueryEnumerator<CellRecordsComponent>();
 
         while (query.MoveNext(out var uid, out _))
         {
@@ -131,13 +131,13 @@ public sealed class CellDescribeSystem : BaseWorldSystem
         // live over the same component set.
         foreach (var uid in cells)
         {
-            RemComp<SensedCellComponent>(uid);
+            RemComp<CellRecordsComponent>(uid);
         }
 
-        SensedMetrics.Records.Set(Records.Count);
+        RecordMetrics.Records.Set(Records.Count);
     }
 
-    private void OnCellShutdown(EntityUid uid, SensedCellComponent component, ComponentShutdown args)
+    private void OnCellShutdown(EntityUid uid, CellRecordsComponent component, ComponentShutdown args)
     {
         // The blob drop rides here rather than in a capture-system handler because directed
         // events allow one subscription per (component, event) pair, and this is it.
@@ -156,10 +156,10 @@ public sealed class CellDescribeSystem : BaseWorldSystem
         {
             _accumulator -= UpdateInterval;
 
-            // Counted above the enabled gate, deliberately. This gauge exists to compare the sensed
+            // Counted above the enabled gate, deliberately. This gauge exists to compare the records
             // tier against the stock burst-spawn placer, so it has to keep reporting when the tier is
             // switched off; a metric that goes dark in one arm of the comparison cannot make it.
-            SensedMetrics.ResidentDebris.Set(CountResidentDebris());
+            RecordMetrics.ResidentDebris.Set(CountResidentDebris());
 
             if (_enabled)
                 CollectPending();
@@ -172,7 +172,7 @@ public sealed class CellDescribeSystem : BaseWorldSystem
         // way, so ticking it thirty times a second is what sets the fill rate, not the hitch.
         DrainPending();
 
-        SensedMetrics.Records.Set(Records.Count);
+        RecordMetrics.Records.Set(Records.Count);
     }
 
     /// <summary>
@@ -204,7 +204,7 @@ public sealed class CellDescribeSystem : BaseWorldSystem
         CollectSources();
 
         var controllerQuery = GetEntityQuery<WorldControllerComponent>();
-        var sensedQuery = GetEntityQuery<SensedCellComponent>();
+        var recordsQuery = GetEntityQuery<CellRecordsComponent>();
 
         // Budgeted for the same reason the drain is. The scan is O(sources * (range/ChunkSize)^2),
         // which at shipping defaults is roughly 2600 candidate coords per source with no cap on
@@ -245,7 +245,7 @@ public sealed class CellDescribeSystem : BaseWorldSystem
                 // the sort over it proportional to the work actually left instead of to the total
                 // area ever described. A coord with no chunk entity yet has necessarily never been
                 // described, so it stays pending.
-                if (controller.Chunks.TryGetValue(coords, out var existing) && sensedQuery.HasComp(existing))
+                if (controller.Chunks.TryGetValue(coords, out var existing) && recordsQuery.HasComp(existing))
                     continue;
 
                 if (!_pendingSet.Add((map, coords)))
@@ -264,7 +264,7 @@ public sealed class CellDescribeSystem : BaseWorldSystem
     ///     Everything that makes the space around it real, all at the same reach. Presence decides
     ///     what exists: a ship, a person, or a station anchors the world identically, and debris is
     ///     there whether or not anything is pointed at it. No sensor is consulted here. A radar
-    ///     decides what a console is *told* about (see <see cref="SensedContactsSystem"/>); it never
+    ///     decides what a console is *told* about (see <see cref="RecordContactsSystem"/>); it never
     ///     decides what is out there, or a drifting ghost would be minting asteroids.
     /// </summary>
     private void CollectSources()
@@ -347,7 +347,7 @@ public sealed class CellDescribeSystem : BaseWorldSystem
             // old: EnsureDescribed or an earlier slice may have got here first. GetOrCreateChunk can
             // also mint the chunk entity for a coord that had none at collection time.
             var cell = GetOrCreateChunk(coords, map);
-            if (cell is not null && !HasComp<SensedCellComponent>(cell.Value))
+            if (cell is not null && !HasComp<CellRecordsComponent>(cell.Value))
             {
                 Describe(cell.Value);
                 described++;
@@ -358,8 +358,8 @@ public sealed class CellDescribeSystem : BaseWorldSystem
 
         if (described > 0)
         {
-            SensedMetrics.CellsDescribed.Inc(described);
-            SensedMetrics.DescribePass.Observe((_timing.RealTime - sliceStart).TotalSeconds);
+            RecordMetrics.CellsDescribed.Inc(described);
+            RecordMetrics.DescribePass.Observe((_timing.RealTime - sliceStart).TotalSeconds);
         }
     }
 
@@ -372,16 +372,16 @@ public sealed class CellDescribeSystem : BaseWorldSystem
     ///     entered load range together: a fast ship, several loaders, or players spread across a
     ///     sector can stack whole describes into one tick, which is the exact hitch the budget
     ///     exists to prevent. Returning null past the budget is not a failure: the cell keeps no
-    ///     <see cref="SensedCellComponent"/>, so the next sweep collects it like any other
+    ///     <see cref="CellRecordsComponent"/>, so the next sweep collects it like any other
     ///     undescribed cell, a second at most later.
     ///
     ///     The pool is shared with <see cref="DrainPending"/>: demand describes and the sweep's
     ///     per-tick slice draw down the same describe_budget_ms, so the cap on describe work in
     ///     any single tick holds no matter how the two paths interleave.
     /// </summary>
-    public SensedCellComponent? EnsureDescribed(EntityUid cell)
+    public CellRecordsComponent? EnsureDescribed(EntityUid cell)
     {
-        if (TryComp<SensedCellComponent>(cell, out var existing))
+        if (TryComp<CellRecordsComponent>(cell, out var existing))
             return existing;
 
         RollInlineBudget();
@@ -390,10 +390,10 @@ public sealed class CellDescribeSystem : BaseWorldSystem
             return null;
 
         var start = _timing.RealTime;
-        var sensed = Describe(cell);
+        var records = Describe(cell);
         _inlineSpent += _timing.RealTime - start;
 
-        return sensed;
+        return records;
     }
 
     /// <summary>Resets the shared per-tick describe pool when the tick has advanced.</summary>
@@ -412,7 +412,7 @@ public sealed class CellDescribeSystem : BaseWorldSystem
     ///     clip/cancel rolls, same carver and selector events, so gating the placer changes what
     ///     builds entities without changing what the belt contains.
     /// </summary>
-    private SensedCellComponent? Describe(EntityUid cell)
+    private CellRecordsComponent? Describe(EntityUid cell)
     {
         if (!TryComp<WorldChunkComponent>(cell, out var chunk))
             return null;
@@ -421,16 +421,16 @@ public sealed class CellDescribeSystem : BaseWorldSystem
         if (!TryComp<MapComponent>(map, out var mapComp))
             return null;
 
-        var sensed = AddComp<SensedCellComponent>(cell);
+        var records = AddComp<CellRecordsComponent>(cell);
 
         // No placer on this chunk means the biome puts no debris here: described and empty.
         if (!TryComp<DebrisFeaturePlacerControllerComponent>(cell, out var placer))
-            return sensed;
+            return records;
 
         var densityChannel = placer.DensityNoiseChannel;
         var density = _noiseIndex.Evaluate(cell, densityChannel, chunk.Coordinates + new Vector2(0.5f, 0.5f));
         if (density == 0)
-            return sensed;
+            return records;
 
         var points = GeneratePointsInCell(density, chunk.Coordinates);
         var safetyBounds = Box2.UnitCentered.Enlarged(placer.SafetyZoneRadius);
@@ -467,11 +467,11 @@ public sealed class CellDescribeSystem : BaseWorldSystem
             };
 
             FillShape(record);
-            sensed.Records[point] = record;
+            records.Records[point] = record;
             Records[record.Id] = record;
         }
 
-        return sensed;
+        return records;
     }
 
     /// <summary>
@@ -568,7 +568,7 @@ public sealed class CellDescribeSystem : BaseWorldSystem
 
         void TestRecord(DebrisRecord record)
         {
-            if (!record.Shaped || record.State != SensedState.Dormant)
+            if (!record.Shaped || record.State != RecordState.Dormant)
                 return;
 
             // A ghost rock is filtered off radar, so it must not stop shots either: blocking
@@ -595,7 +595,7 @@ public sealed class CellDescribeSystem : BaseWorldSystem
 
         if (TryComp<WorldControllerComponent>(map, out var controller))
         {
-            var sensedQuery = GetEntityQuery<SensedCellComponent>();
+            var recordsQuery = GetEntityQuery<CellRecordsComponent>();
 
             var box = new Box2(Vector2.Min(start, end), Vector2.Max(start, end)).Enlarged(WorldGen.ChunkSize);
             var min = WorldGen.WorldToChunkCoords(box.BottomLeft).Floored();
@@ -606,10 +606,10 @@ public sealed class CellDescribeSystem : BaseWorldSystem
                 for (var cy = min.Y; cy <= max.Y; cy++)
                 {
                     if (!controller.Chunks.TryGetValue(new Vector2i(cx, cy), out var cell)
-                        || !sensedQuery.TryComp(cell, out var sensed))
+                        || !recordsQuery.TryComp(cell, out var records))
                         continue;
 
-                    foreach (var record in sensed.Records.Values)
+                    foreach (var record in records.Records.Values)
                     {
                         TestRecord(record);
                     }
@@ -654,7 +654,7 @@ public sealed class CellDescribeSystem : BaseWorldSystem
         if (!_enabled || !TryComp<WorldControllerComponent>(map, out var controller))
             return;
 
-        var sensedQuery = GetEntityQuery<SensedCellComponent>();
+        var recordsQuery = GetEntityQuery<CellRecordsComponent>();
 
         // One cell of slack, which exceeds any shipping rock's Bound, so a record whose centre
         // sits in a neighbouring cell but whose bulk reaches into the box is still consulted.
@@ -667,12 +667,12 @@ public sealed class CellDescribeSystem : BaseWorldSystem
             for (var cy = min.Y; cy <= max.Y; cy++)
             {
                 if (!controller.Chunks.TryGetValue(new Vector2i(cx, cy), out var cell)
-                    || !sensedQuery.TryComp(cell, out var sensed))
+                    || !recordsQuery.TryComp(cell, out var records))
                     continue;
 
-                foreach (var record in sensed.Records.Values)
+                foreach (var record in records.Records.Values)
                 {
-                    if (!record.Shaped || record.State != SensedState.Dormant || record.GaveUp)
+                    if (!record.Shaped || record.State != RecordState.Dormant || record.GaveUp)
                         continue;
 
                     // Circle-vs-box: closest point on the box to the record centre.

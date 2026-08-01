@@ -6,7 +6,7 @@ using System.Numerics;
 
 namespace Content.Server._Triad.Worldgen.Cells;
 
-public enum SensedState : byte
+public enum RecordState : byte
 {
     /// <summary>
     ///     Described only: the debris exists as data and a radar contact, no entity.
@@ -93,7 +93,7 @@ public sealed class DebrisRecord
     /// </summary>
     public float Bound;
 
-    public SensedState State = SensedState.Dormant;
+    public RecordState State = RecordState.Dormant;
 
     public EntityUid? Entity;
 

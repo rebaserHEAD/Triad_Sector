@@ -12,7 +12,7 @@ using Robust.Shared.Map.Components; // Triad: loader hull extent
 using Robust.Shared.Physics.Systems;
 using Robust.Shared.Timing;
 using Robust.Shared.Configuration; // HL: for IConfigurationManager
-using Content.Shared._Triad.CCVar; // Triad: sensed-tier master switch
+using Content.Shared._Triad.CCVar; // Triad: records master switch
 
 // Mono maint note - this system no longer exists upstream and // Mono comments are not a requirement for that reason
 namespace Content.Server.Worldgen.Systems;
@@ -36,13 +36,13 @@ public sealed class WorldControllerSystem : EntitySystem
     // </Mono>
 
     private ISawmill _sawmill = default!;
-    // Triad: _cfg also feeds the sensed-tier switch cached in _sensedEnabled below.
+    // Triad: _cfg also feeds the records switch cached in _recordsEnabled below.
     [Dependency] private readonly IConfigurationManager _cfg = default!; // HL: to gate debug logs
 
-    // Triad: cached copy of triad.worldgen.sensed_enabled, kept current by the Subs.CVar
+    // Triad: cached copy of triad.worldgen.records_enabled, kept current by the Subs.CVar
     // subscription in Initialize. TryAddChunkLoader reads it once per loader per sweep, so it
     // stays off GetCVar's read lock and string-keyed lookup.
-    private bool _sensedEnabled;
+    private bool _recordsEnabled;
 
     // Triad: unload grace, see WorldgenUnloadGraceS. Cached for the same reason as above.
     private float _unloadGraceS;
@@ -51,8 +51,8 @@ public sealed class WorldControllerSystem : EntitySystem
     public override void Initialize()
     {
         _sawmill = _logManager.GetSawmill("world");
-        // Triad: cache the sensed-tier switch instead of hitting GetCVar once per loader per sweep.
-        Subs.CVar(_cfg, TriadCCVars.WorldgenSensedEnabled, v => _sensedEnabled = v, true);
+        // Triad: cache the records switch instead of hitting GetCVar once per loader per sweep.
+        Subs.CVar(_cfg, TriadCCVars.WorldgenRecordsEnabled, v => _recordsEnabled = v, true);
         Subs.CVar(_cfg, TriadCCVars.WorldgenUnloadGraceS, v => _unloadGraceS = v, true); // Triad
         SubscribeLocalEvent<LoadedChunkComponent, ComponentStartup>(OnChunkLoadedCore);
         SubscribeLocalEvent<LoadedChunkComponent, ComponentShutdown>(OnChunkUnloadedCore);
@@ -316,10 +316,10 @@ public sealed class WorldControllerSystem : EntitySystem
         // Triad: a loader measures from wherever its console sits, so the far end of a long hull
         // can leave the loaded region. Grow the radius by the loader's distance to its own grid's
         // farthest corner; ship size stops deciding how much space is real around you.
-        // Gated on the sensed tier, because only its budgeted materialize queue can absorb the
+        // Gated on the records switch, because only its budgeted materialize queue can absorb the
         // extra chunks. With the tier off the stock burst-spawn placer is what fills them, so the
         // kill switch has to hand back the stock radius as well as the stock placer.
-        if (_sensedEnabled)
+        if (_recordsEnabled)
             radius += GetGridExtentChunks(xform);
         var coords = WorldGen.WorldToChunkCoords(wc);
         var chunks = new GridPointsNearEnumerator(coords.Floored(), radius);

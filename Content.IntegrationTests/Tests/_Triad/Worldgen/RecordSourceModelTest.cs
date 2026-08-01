@@ -27,12 +27,12 @@ namespace Content.IntegrationTests.Tests._Triad.Worldgen;
 ///     anchors the world at the same reach, whether it is a ship, a person, or a station.
 /// </summary>
 [TestFixture]
-public sealed class SensedSourceModelTest
+public sealed class RecordSourceModelTest
 {
     private const string WorldgenConfig = "NFDefault";
-    private const string RadarOnly = "TriadSensedTestRadarOnly";
-    private const string Anchor = "TriadSensedTestAnchor";
-    private const string ShortAnchor = "TriadSensedTestAnchorShort";
+    private const string RadarOnly = "TriadRecordsTestRadarOnly";
+    private const string Anchor = "TriadRecordsTestAnchor";
+    private const string ShortAnchor = "TriadRecordsTestAnchorShort";
 
     private const float DescribeRange = 1024f;
 
@@ -77,7 +77,7 @@ public sealed class SensedSourceModelTest
 
         await server.WaitPost(() =>
         {
-            cfg.SetCVar(TriadCCVars.WorldgenSensedEnabled, true);
+            cfg.SetCVar(TriadCCVars.WorldgenRecordsEnabled, true);
             cfg.SetCVar(TriadCCVars.WorldgenDescribeRange, DescribeRange);
             cfg.SetCVar(TriadCCVars.WorldgenDescribeBudgetMs, 500f);
             cfg.SetCVar(TriadCCVars.WorldgenMaterializeBudgetMs, 500f);
@@ -106,7 +106,7 @@ public sealed class SensedSourceModelTest
     private static List<Vector2i> DescribedCells(IEntityManager entManager, EntityUid map)
     {
         var result = new List<Vector2i>();
-        var cells = entManager.EntityQueryEnumerator<SensedCellComponent, WorldChunkComponent>();
+        var cells = entManager.EntityQueryEnumerator<CellRecordsComponent, WorldChunkComponent>();
         while (cells.MoveNext(out _, out _, out var chunk))
         {
             if (chunk.Map == map)

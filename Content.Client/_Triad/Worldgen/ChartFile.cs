@@ -15,7 +15,7 @@ namespace Content.Client._Triad.Worldgen;
 ///     client cannot re-derive. Color and outline are deliberately absent; both re-derive from
 ///     the recipe and seed on load, exactly as they do at receipt.
 /// </summary>
-public readonly record struct ChartEntry(int Id, int Version, Vector2 Position, int Seed, SensedProtoRecipe Recipe);
+public readonly record struct ChartEntry(int Id, int Version, Vector2 Position, int Seed, DebrisProtoRecipe Recipe);
 
 /// <summary>
 ///     Serialization for the client chart's reconnect file: a line-based, culture-invariant
@@ -127,7 +127,7 @@ public static class ChartFile
                 continue;
             }
 
-            var recipe = new SensedProtoRecipe(parts[10].Trim(), radius, placements, prob, tilesetCount);
+            var recipe = new DebrisProtoRecipe(parts[10].Trim(), radius, placements, prob, tilesetCount);
             current.Add(new ChartEntry(id, entryVersion, new Vector2(x, y), seed, recipe));
         }
 

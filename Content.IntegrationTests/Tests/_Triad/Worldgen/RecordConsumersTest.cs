@@ -26,7 +26,7 @@ namespace Content.IntegrationTests.Tests._Triad.Worldgen;
 ///     ask through honours the same shaped/dormant/ghost gates as everything else.
 /// </summary>
 [TestFixture]
-public sealed class SensedConsumersTest
+public sealed class RecordConsumersTest
 {
     private const string RockProto = "TriadConsumerTestRock";
     private const string BeamProto = "TriadConsumerTestBeam";
@@ -90,10 +90,10 @@ public sealed class SensedConsumersTest
 
         await server.WaitPost(() =>
         {
-            cfg.SetCVar(TriadCCVars.WorldgenSensedEnabled, true);
+            cfg.SetCVar(TriadCCVars.WorldgenRecordsEnabled, true);
 
             // Every blob roll contains tile (0, 0), so centring the record at y = -0.5 makes a
-            // y = 0 beam a guaranteed hit regardless of seed; see SensedProjectileBlockTest.
+            // y = 0 beam a guaranteed hit regardless of seed; see RecordProjectileBlockTest.
             record = new DebrisRecord
             {
                 Id = RecordId,
@@ -103,7 +103,7 @@ public sealed class SensedConsumersTest
                 Seed = 999,
                 Shaped = true,
                 Bound = 12f,
-                State = SensedState.Dormant,
+                State = RecordState.Dormant,
             };
             describe.Records[record.Id] = record;
 
@@ -178,7 +178,7 @@ public sealed class SensedConsumersTest
 
         await server.WaitPost(() =>
         {
-            cfg.SetCVar(TriadCCVars.WorldgenSensedEnabled, true);
+            cfg.SetCVar(TriadCCVars.WorldgenRecordsEnabled, true);
             cfg.SetCVar(TriadCCVars.WorldgenDescribeRange, 512f);
             cfg.SetCVar(TriadCCVars.WorldgenDescribeBudgetMs, 500f);
             cfg.SetCVar(TriadCCVars.WorldgenMaterializeBudgetMs, 500f);
@@ -191,7 +191,7 @@ public sealed class SensedConsumersTest
         // A dormant rock well outside the loader's materialization range, so it stays data.
         var map = mapUid;
         await PoolManager.WaitUntil(server, () => describe.Records.Values.Any(r =>
-            r.Map == map && r is { State: SensedState.Dormant, Shaped: true } && !r.GaveUp
+            r.Map == map && r is { State: RecordState.Dormant, Shaped: true } && !r.GaveUp
             && r.Point.Length() > 300f), maxTicks: 900);
         await server.WaitIdleAsync();
 
@@ -201,7 +201,7 @@ public sealed class SensedConsumersTest
         await server.WaitAssertion(() =>
         {
             target = describe.Records.Values.First(r =>
-                r.Map == map && r is { State: SensedState.Dormant, Shaped: true } && !r.GaveUp
+                r.Map == map && r is { State: RecordState.Dormant, Shaped: true } && !r.GaveUp
                 && r.Point.Length() > 300f);
 
             describe.CollectIntersecting(map, Box2.CenteredAround(target.Point, new Vector2(10f, 10f)), results);

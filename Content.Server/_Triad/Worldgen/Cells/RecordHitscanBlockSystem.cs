@@ -13,7 +13,7 @@ namespace Content.Server._Triad.Worldgen.Cells;
 
 /// <summary>
 ///     Stops ship-grade hitscan beams on described-but-unmaterialized debris, closing the gap
-///     <see cref="SensedProjectileBlockSystem"/> leaves: a beam resolves in one frame with no
+///     <see cref="RecordProjectileBlockSystem"/> leaves: a beam resolves in one frame with no
 ///     entity to sweep per tick, so it is blocked at the raycast result instead.
 ///
 ///     The mechanism is interception, not duplication. The basic raycast system publishes its
@@ -27,7 +27,7 @@ namespace Content.Server._Triad.Worldgen.Cells;
 ///     Server-only, like everything that reads records. A predicting client may briefly draw an
 ///     overshooting beam; ship artillery fire is server-driven, so in practice it does not.
 /// </summary>
-public sealed class SensedHitscanBlockSystem : EntitySystem
+public sealed class RecordHitscanBlockSystem : EntitySystem
 {
     [Dependency] private readonly CellDescribeSystem _describe = default!;
     [Dependency] private readonly DebrisMaterializeQueueSystem _queue = default!;

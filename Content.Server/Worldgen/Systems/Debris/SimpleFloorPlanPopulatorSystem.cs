@@ -35,7 +35,7 @@ public sealed class SimpleFloorPlanPopulatorSystem : BaseWorldSystem
         // Triad: pre-determined debris derives its interior from the record seed, so a rock that
         // unloads and reloads comes back with the entities this pass spawned. A RoomFill marker
         // can be one of them, and the room it goes on to stamp is picked on the shared RNG, so
-        // that much does re-roll. Anything spawned outside the sensed tier keeps rolling on the
+        // that much does re-roll. Anything spawned outside the records system keeps rolling on the
         // shared RNG too.
         var rand = SeededRandom.ForStage(EntityManager, uid, SeededRandom.InteriorStage) ?? _random;
         TryComp<PredeterminedShapeComponent>(uid, out var shape); // Triad: loot-marker seeds
