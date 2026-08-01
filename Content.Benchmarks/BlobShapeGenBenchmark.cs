@@ -6,7 +6,7 @@ using System;
 using System.Collections.Generic;
 using System.Numerics;
 using BenchmarkDotNet.Attributes;
-using Content.Server._Triad.Worldgen.Cells;
+using Content.Shared._Triad.Worldgen;
 using Robust.Shared.Analyzers;
 using Robust.Shared.Maths;
 
