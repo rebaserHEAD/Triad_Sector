@@ -63,11 +63,28 @@ public sealed class DebrisRecord
 
     /// <summary>
     ///     Bumped whenever the record's client-facing data changes, so the contact channel
-    ///     re-sends on version mismatch. Nothing bumps it yet: unload is a rollback today, so 0
-    ///     means "pristine roll from <see cref="Seed"/>" for the life of the round. The bump
-    ///     site, when debris persistence lands, is unload capture in the materialize queue.
+    ///     re-sends on version mismatch. A pure wire cache-buster: capture bumps it, and the
+    ///     pristine-vs-captured decision reads <see cref="Captured"/>, never this.
     /// </summary>
     public int Version;
+
+    /// <summary>
+    ///     A blob-captured record: the rock was touched while materialized, so unload serialized
+    ///     the grid instead of rolling it back, and the dormant projections (contact outline,
+    ///     data-space tiles, bound) describe the as-captured state rather than the seed roll.
+    ///     Set by <see cref="CellDescribeSystem.ApplyCapture"/>, cleared only by the restore
+    ///     failure valve (<see cref="CellDescribeSystem.RevertCapture"/>).
+    /// </summary>
+    public bool Captured;
+
+    /// <summary>
+    ///     The as-captured silhouette for the contact channel's Explicit arm, traced from the
+    ///     grid's real tiles at capture time in the dormant frame (axis-aligned tile units around
+    ///     <see cref="Point"/>). Null on a captured record means the trace failed, and the rock
+    ///     then neither paints nor blocks in data space: the two must agree, or the block is an
+    ///     invisible wall.
+    /// </summary>
+    public Vector2i[]? CapturedOutline;
 
     /// <summary>
     ///     Bounding radius of the rolled tiles around <see cref="Point"/>, in world units. The

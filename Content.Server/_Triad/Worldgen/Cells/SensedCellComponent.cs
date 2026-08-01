@@ -12,7 +12,7 @@ namespace Content.Server._Triad.Worldgen.Cells;
 ///     an empty record set is a described-and-empty cell, not an undescribed one.
 /// </summary>
 [RegisterComponent]
-[Access(typeof(CellDescribeSystem), typeof(DebrisMaterializeQueueSystem))]
+[Access(typeof(CellDescribeSystem), typeof(DebrisMaterializeQueueSystem), typeof(DebrisCaptureSystem))]
 public sealed partial class SensedCellComponent : Component
 {
     public readonly Dictionary<Vector2, DebrisRecord> Records = new();

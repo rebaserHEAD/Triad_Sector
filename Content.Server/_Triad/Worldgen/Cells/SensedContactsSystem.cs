@@ -170,7 +170,9 @@ public sealed class SensedContactsSystem : EntitySystem
 
             // CollectVisible only passes shaped records, and a record is only shaped if its
             // prototype carried a blob builder, so the recipe lookup cannot miss in practice.
-            // Guarded anyway: a contact the client cannot roll is worse than no contact.
+            // Guarded anyway: a contact the client cannot roll is worse than no contact. The
+            // Explicit arm still rides the legend: the client resolves color from the recipe's
+            // prototype id even when the geometry arrives verbatim.
             if (GetRecipe(record.Proto) is not { } recipe)
                 continue;
 
@@ -181,8 +183,11 @@ public sealed class SensedContactsSystem : EntitySystem
                 _tempLegendIndexCache[record.Proto] = protoIndex;
             }
 
-            adds.Add(new SensedContactData(record.Id, record.Version, SensedContactArm.Pristine,
-                record.Point, protoIndex, record.Seed, null));
+            adds.Add(record.Captured
+                ? new SensedContactData(record.Id, record.Version, SensedContactArm.Explicit,
+                    record.Point, protoIndex, record.Seed, record.CapturedOutline)
+                : new SensedContactData(record.Id, record.Version, SensedContactArm.Pristine,
+                    record.Point, protoIndex, record.Seed, null));
         }
 
         foreach (var id in knownIds.Keys)
@@ -260,6 +265,14 @@ public sealed class SensedContactsSystem : EntitySystem
             // zeroed by EnqueueCell on the next cell load, so the contact comes back if the way
             // clears.
             if (record.GaveUp)
+                continue;
+
+            // A captured record whose outline trace failed blocks nothing in data space (the
+            // describe side installed no tiles), so it must not paint either. Filtering here
+            // rather than at the add makes it FADE for clients already holding the pristine
+            // shape: the rock exists and restores on approach, so the chart keeping its
+            // last-known silhouette is honest paper memory, but the live layer stops vouching.
+            if (record.Captured && record.CapturedOutline is null)
                 continue;
 
             // Dormant debris is a navigation aid, not a sensor puzzle: if the describe sweep

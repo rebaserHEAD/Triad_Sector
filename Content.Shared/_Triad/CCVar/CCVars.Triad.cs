@@ -102,4 +102,22 @@ public sealed class TriadCCVars
 
     public static readonly CVarDef<int> WorldgenContactAddsPerPoll =
         CVarDef.Create("triad.worldgen.contact_adds_per_poll", 256, CVar.SERVERONLY);
+
+    /// <summary>
+    /// Memory budget for captured debris blobs, in megabytes. A touched rock serializes to a few
+    /// KB compressed, so the default holds thousands; when the budget is exceeded the oldest
+    /// capture is evicted and that one rock falls back to its pristine roll on next materialize,
+    /// logged loudly since eviction is data loss for whoever touched it.
+    /// </summary>
+    public static readonly CVarDef<int> WorldgenCaptureBudgetMb =
+        CVarDef.Create("triad.worldgen.capture_budget_mb", 64, CVar.SERVERONLY);
+
+    /// <summary>
+    /// Per-tick time budget for capturing touched debris to blobs, in milliseconds. Captures
+    /// queue at cell unload and drain against this, so a fleet leaving a belt spreads its
+    /// serialization over ticks instead of stacking it into one. The grid is held against
+    /// garbage collection until its capture resolves, so the deferral never loses state.
+    /// </summary>
+    public static readonly CVarDef<float> WorldgenCaptureBudgetMs =
+        CVarDef.Create("triad.worldgen.capture_budget_ms", 2f, CVar.SERVERONLY);
 }

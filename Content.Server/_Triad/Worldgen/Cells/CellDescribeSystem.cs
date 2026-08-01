@@ -37,6 +37,7 @@ namespace Content.Server._Triad.Worldgen.Cells;
 /// </summary>
 public sealed class CellDescribeSystem : BaseWorldSystem
 {
+    [Dependency] private readonly DebrisCaptureSystem _capture = default!;
     [Dependency] private readonly IConfigurationManager _cfg = default!;
     [Dependency] private readonly IGameTiming _timing = default!;
     [Dependency] private readonly IMapManager _mapManager = default!;
@@ -138,10 +139,13 @@ public sealed class CellDescribeSystem : BaseWorldSystem
 
     private void OnCellShutdown(EntityUid uid, SensedCellComponent component, ComponentShutdown args)
     {
+        // The blob drop rides here rather than in a capture-system handler because directed
+        // events allow one subscription per (component, event) pair, and this is it.
         foreach (var record in component.Records.Values)
         {
             Records.Remove(record.Id);
             _tileCache.Remove(record.Id);
+            _capture.Drop(record.Id);
         }
     }
 
@@ -683,6 +687,59 @@ public sealed class CellDescribeSystem : BaseWorldSystem
     }
 
     /// <summary>
+    ///     Installs a capture's dormant projection: the real tile set and traced outline replace
+    ///     the seed roll, the bound is recomputed from what is actually there (construction can
+    ///     grow a rock past its rolled bound, mining shrinks it), and the version bump makes
+    ///     every viewer's next poll re-send the contact. A null outline is the trace-failure
+    ///     valve, and it nulls the tile cache with it: the rock then neither paints nor blocks
+    ///     in data space, so the radar/collision agreement law holds even for a shape the
+    ///     tracer cannot follow. Caching the tiles anyway would block shots nothing paints,
+    ///     which is the invisible wall this valve exists to prevent.
+    /// </summary>
+    public void ApplyCapture(DebrisRecord record, HashSet<Vector2i>? tiles, Vector2i[]? outline)
+    {
+        record.Captured = true;
+        record.Version++;
+        record.CapturedOutline = outline;
+        _tileCache[record.Id] = outline is null ? null : tiles;
+
+        if (tiles is not { Count: > 0 })
+            return; // keep the old bound: coarse stand-off consumers still avoid the real grid
+
+        var minX = int.MaxValue;
+        var minY = int.MaxValue;
+        var maxX = int.MinValue;
+        var maxY = int.MinValue;
+        foreach (var tile in tiles)
+        {
+            minX = Math.Min(minX, tile.X);
+            minY = Math.Min(minY, tile.Y);
+            maxX = Math.Max(maxX, tile.X);
+            maxY = Math.Max(maxY, tile.Y);
+        }
+
+        var boundX = MathF.Max(MathF.Abs(minX), MathF.Abs(maxX + 1));
+        var boundY = MathF.Max(MathF.Abs(minY), MathF.Abs(maxY + 1));
+        record.Bound = MathF.Sqrt(boundX * boundX + boundY * boundY);
+    }
+
+    /// <summary>
+    ///     The restore failure valve: a captured blob that will not load falls back to the
+    ///     pristine roll, and this puts every projection back in step with that fallback so the
+    ///     painted shape is once again the rock that spawns. The version bump re-sends the
+    ///     contact on its pristine arm. Regenerating whatever was taken is the accepted cost of
+    ///     a corrupt blob; a rock that paints one shape and materializes another is not.
+    /// </summary>
+    public void RevertCapture(DebrisRecord record)
+    {
+        record.Captured = false;
+        record.Version++;
+        record.CapturedOutline = null;
+        _tileCache.Remove(record.Id);
+        FillShape(record);
+    }
+
+    /// <summary>
     ///     The record's rolled tile set, cached. Null for records whose prototype lost its blob
     ///     builder between describe and query, which shipping content never does.
     /// </summary>
@@ -690,6 +747,13 @@ public sealed class CellDescribeSystem : BaseWorldSystem
     {
         if (_tileCache.TryGetValue(record.Id, out var cached))
             return cached;
+
+        // A captured record's tiles are whatever ApplyCapture installed; the seed roll below
+        // would resurrect the pristine shape (a mined-out tunnel would block shots again). The
+        // cache entry lives exactly as long as the record does, so a miss here is only ever the
+        // trace-failure valve, which blocks nothing on purpose.
+        if (record.Captured)
+            return null;
 
         HashSet<Vector2i>? tiles = null;
         if (_proto.TryIndex<EntityPrototype>(record.Proto, out var proto)

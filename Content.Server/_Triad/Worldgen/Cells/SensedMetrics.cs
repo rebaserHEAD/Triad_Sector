@@ -74,4 +74,38 @@ public static class SensedMetrics
         {
             Buckets = Histogram.ExponentialBuckets(64, 2, 12)
         });
+
+    public static readonly Gauge CaptureBlobs = Metrics.CreateGauge(
+        "ss14_sensed_capture_blobs",
+        "Captured debris blobs currently held in the round-scoped store.");
+
+    public static readonly Gauge CaptureBytes = Metrics.CreateGauge(
+        "ss14_sensed_capture_bytes",
+        "Compressed bytes currently held by the debris capture store.");
+
+    public static readonly Counter Captures = Metrics.CreateCounter(
+        "ss14_sensed_captures_total",
+        "Total debris grids captured to blobs at cell unload.");
+
+    /// <summary>
+    ///     Each eviction is one touched rock reverting to its pristine roll: data loss for
+    ///     whoever touched it, tolerated only because the alternative is unbounded memory.
+    ///     Anything above zero in production means the budget cvar is undersized.
+    /// </summary>
+    public static readonly Counter CaptureEvictions = Metrics.CreateCounter(
+        "ss14_sensed_capture_evictions_total",
+        "Captured debris blobs evicted by the capture store's memory budget.");
+
+    public static readonly Counter CaptureRestoreFailures = Metrics.CreateCounter(
+        "ss14_sensed_capture_restore_failures_total",
+        "Captured debris blobs that failed to deserialize at materialize time.");
+
+    /// <summary>
+    ///     A touched grid whose serialization failed every retry and was released to the GC
+    ///     uncaptured: its changes regenerate on next materialize. Like evictions, anything
+    ///     above zero is an alarm bell, but this one means a serializer bug, not a budget knob.
+    /// </summary>
+    public static readonly Counter CaptureGiveUps = Metrics.CreateCounter(
+        "ss14_sensed_capture_giveups_total",
+        "Touched debris grids released to GC after exhausting capture retries.");
 }

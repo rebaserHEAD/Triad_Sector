@@ -8,6 +8,7 @@ using Content.Server.Worldgen;
 using Content.Server.Worldgen.Components;
 using Content.Server.Worldgen.Components.Debris;
 using Content.Server.Worldgen.Systems;
+using Content.Server.Worldgen.Systems.Debris;
 using Content.Shared._Triad.CCVar;
 using Robust.Server.GameObjects;
 using Robust.Shared.Configuration;
@@ -27,6 +28,7 @@ namespace Content.Server._Triad.Worldgen.Cells;
 public sealed class DebrisMaterializeQueueSystem : BaseWorldSystem
 {
     [Dependency] private readonly CellDescribeSystem _describe = default!;
+    [Dependency] private readonly DebrisCaptureSystem _capture = default!;
     [Dependency] private readonly IConfigurationManager _cfg = default!;
     [Dependency] private readonly IGameTiming _timing = default!;
     [Dependency] private readonly SharedPhysicsSystem _physics = default!;
@@ -68,6 +70,11 @@ public sealed class DebrisMaterializeQueueSystem : BaseWorldSystem
         SubscribeLocalEvent<SensedCellComponent, WorldChunkLoadedEvent>(OnCellLoaded);
         SubscribeLocalEvent<WorldChunkComponent, WorldChunkLoadedEvent>(OnChunkLoaded);
         SubscribeLocalEvent<SensedDebrisComponent, EntityTerminatingEvent>(OnDebrisTerminating);
+
+        // After the placer's own move handler, which re-parents OwnedDebris to the chunk the
+        // grid actually sits in; this reads its answer rather than recomputing it.
+        SubscribeLocalEvent<SensedDebrisComponent, MoveEvent>(OnDebrisMoved,
+            after: [typeof(DebrisFeaturePlacerSystem)]);
     }
 
     /// <summary>
@@ -184,11 +191,53 @@ public sealed class DebrisMaterializeQueueSystem : BaseWorldSystem
         if (!TryComp<LoadedChunkComponent>(record.Cell, out var loaded) || !loaded.Running || Terminating(record.Cell))
             return;
 
-        // Still loaded, so this was destroyed in play rather than collected: it is gone.
+        // Still loaded, so this was destroyed in play rather than collected: it is gone,
+        // and any captured blob goes with it. Destroyed rocks stay destroyed.
         if (TryComp<SensedCellComponent>(record.Cell, out var cell))
             cell.Records.Remove(record.Point);
 
         _describe.Records.Remove(record.Id);
+        _capture.Drop(record.Id);
+    }
+
+    /// <summary>
+    ///     Keeps a record filed under the cell its grid actually occupies. A rammed or towed
+    ///     rock that drifts across a chunk boundary otherwise leaves its record pointing at the
+    ///     old cell forever, and every load-state decision made against that stale cell goes
+    ///     wrong at once: <see cref="OnDebrisTerminating"/> misreads a destroyed-in-play kill as
+    ///     a routine unload (and later resurrects the dead rock from its blob), and the old
+    ///     cell's unload captures a grid the new cell still has in play.
+    /// </summary>
+    private void OnDebrisMoved(EntityUid uid, SensedDebrisComponent component, ref MoveEvent args)
+    {
+        if (!_enabled || component.Record is not { } record || record.Entity != uid)
+            return;
+
+        if (!TryComp<OwnedDebrisComponent>(uid, out var owned))
+            return;
+
+        var newCell = owned.OwningController;
+        if (newCell == record.Cell || !Exists(newCell))
+            return;
+
+        // Describe the destination if the sweep never reached it: filing a record into a bare
+        // chunk would make it read as described-and-nearly-empty, hiding whatever the roll
+        // would have put there.
+        if (_describe.EnsureDescribed(newCell) is not { } destination)
+            return;
+
+        if (!destination.Records.TryAdd(record.Point, record))
+        {
+            // Two records on the same point key cannot happen between honest describe rolls;
+            // leave the stale filing rather than orphan whoever is already there.
+            Log.Error($"Record {record.Id} could not migrate to cell {ToPrettyString(newCell)}: point key collision.");
+            return;
+        }
+
+        if (TryComp<SensedCellComponent>(record.Cell, out var oldCell))
+            oldCell.Records.Remove(record.Point);
+
+        record.Cell = newCell;
     }
 
     public override void Update(float frameTime)
@@ -356,12 +405,33 @@ public sealed class DebrisMaterializeQueueSystem : BaseWorldSystem
             return;
         }
 
-        var overrides = new ComponentRegistry();
-        var shape = new PredeterminedShapeComponent { Seed = record.Seed };
-        overrides[EntityManager.ComponentFactory.GetComponentName(typeof(PredeterminedShapeComponent))] =
-            new EntityPrototype.ComponentRegistryEntry(shape, new());
+        EntityUid ent;
+        if (record.Captured && _capture.TryRestore(record, map.MapId, out var restored))
+        {
+            // The blob is the rock: whatever was mined, looted, built or left aboard comes back
+            // exactly as captured, already map-initialized, so no spawner or fill runs again.
+            ent = restored;
+        }
+        else
+        {
+            // A captured record landing here lost its blob (restore failure, store eviction
+            // during a session the record outlived). Falling back to the seed roll regenerates
+            // whatever was taken, which is the accepted failure valve; reverting first keeps
+            // the painted shape the shape that spawns.
+            if (record.Captured)
+            {
+                Log.Error($"Captured record {record.Id} has no usable blob; reverting to the pristine roll.");
+                _capture.Drop(record.Id);
+                _describe.RevertCapture(record);
+            }
 
-        var ent = EntityManager.SpawnAttachedTo(record.Proto, new EntityCoordinates(record.Map, record.Point), overrides);
+            var overrides = new ComponentRegistry();
+            var shape = new PredeterminedShapeComponent { Seed = record.Seed };
+            overrides[EntityManager.ComponentFactory.GetComponentName(typeof(PredeterminedShapeComponent))] =
+                new EntityPrototype.ComponentRegistryEntry(shape, new());
+
+            ent = EntityManager.SpawnAttachedTo(record.Proto, new EntityCoordinates(record.Map, record.Point), overrides);
+        }
 
         record.Entity = ent;
         record.State = SensedState.Materialized;

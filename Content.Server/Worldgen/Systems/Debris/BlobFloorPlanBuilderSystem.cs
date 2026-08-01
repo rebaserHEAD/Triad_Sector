@@ -29,7 +29,17 @@ public sealed class BlobFloorPlanBuilderSystem : BaseWorldSystem
     private void OnBlobFloorPlanBuilderStartup(EntityUid uid, BlobFloorPlanBuilderComponent component,
         ComponentStartup args)
     {
-        PlaceFloorplanTiles(uid, component, Comp<MapGridComponent>(uid));
+        var grid = Comp<MapGridComponent>(uid);
+
+        // Triad: startup fires for deserialized entities too, and a deserialized debris grid (a
+        // captured blob restoring, a mapper-saved rock) arrives with its chunk data already
+        // loaded. Re-rolling here would lay the seed shape straight over that state, which is
+        // how a restored rock got its mined-out tiles back. The builder's job is to put a floor
+        // plan where none exists; a grid that already has tiles is built, whoever built it.
+        if (grid.ChunkCount > 0)
+            return;
+
+        PlaceFloorplanTiles(uid, component, grid);
     }
 
     private void PlaceFloorplanTiles(EntityUid gridUid, BlobFloorPlanBuilderComponent comp, MapGridComponent grid)
