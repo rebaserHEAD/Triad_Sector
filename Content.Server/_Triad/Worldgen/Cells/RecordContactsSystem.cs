@@ -12,6 +12,7 @@ using Robust.Server.Player;
 using Robust.Shared.Configuration;
 using Robust.Shared.Enums;
 using Robust.Shared.Player;
+using Robust.Shared.Profiling;
 using Robust.Shared.Prototypes;
 using Robust.Shared.Timing;
 
@@ -34,6 +35,10 @@ public sealed class RecordContactsSystem : EntitySystem
     [Dependency] private readonly IPlayerManager _playerManager = default!;
     [Dependency] private readonly IPrototypeManager _proto = default!;
     [Dependency] private readonly TransformSystem _xformSys = default!;
+
+    // Not readonly: engine convention for ProfManager injection, and RA0051 flags readonly
+    // [Dependency] fields.
+    [Dependency] private ProfManager _prof = default!;
 
     /// <summary>Requests between opportunistic sweeps for known-sets whose console died.</summary>
     private const int SweepInterval = 64;
@@ -144,6 +149,11 @@ public sealed class RecordContactsSystem : EntitySystem
         if (args.SenderSession.AttachedEntity is not { } actor || !IsViewing(consoleUid.Value, actor))
             return;
 
+        // Opened past the authorization gates so rejected requests do not pad the capture. This
+        // runs off a client poll, not the tick loop, so it lands wherever the net thread drains
+        // into the frame; a zone is the only way to see it against the tick it interrupts.
+        using var zone = _prof.Group("worldgen.contacts", WorldgenProfiling.ZoneColor);
+
         var key = (args.SenderSession, consoleUid.Value);
         var isNew = !_known.TryGetValue(key, out var knownIds);
         knownIds ??= new Dictionary<int, int>();
@@ -229,6 +239,14 @@ public sealed class RecordContactsSystem : EntitySystem
 
         if (adds.Count > 0)
             RecordMetrics.ContactsSent.Inc(adds.Count);
+
+        // Guarded on the flag rather than leaning on EmitText's null check: the interpolated
+        // string would still be built on every poll otherwise, Tracy running or not.
+        if (_prof.IsTracyEnabled)
+        {
+            zone.EmitText($"scanned={_describe.Records.Count} visible={_tempVisibleCache.Count} " +
+                          $"adds={adds.Count} removes={removes.Count} fades={fades.Count}");
+        }
     }
 
     /// <summary>
@@ -248,7 +266,9 @@ public sealed class RecordContactsSystem : EntitySystem
 
         // Timed because this walk is unindexed and its input never shrinks in-round: cost is
         // consoles x live records, twice a second. If the perception side ever starts eating the
-        // residency win, it shows up here first.
+        // residency win, it shows up here first. The histogram is the production signal; the zone
+        // is what puts the same walk on a frame timeline next to whatever tick it landed in.
+        using var _scan = _prof.Group("worldgen.contacts.scan");
         var scanStart = _timing.RealTime;
         RecordMetrics.ContactScanRecords.Observe(_describe.Records.Count);
 

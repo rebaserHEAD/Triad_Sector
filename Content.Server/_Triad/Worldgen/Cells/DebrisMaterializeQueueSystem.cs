@@ -10,11 +10,13 @@ using Content.Server.Worldgen.Components.Debris;
 using Content.Server.Worldgen.Systems;
 using Content.Server.Worldgen.Systems.Debris;
 using Content.Shared._Triad.CCVar;
+using Content.Shared._Triad.Worldgen;
 using Robust.Server.GameObjects;
 using Robust.Shared.Configuration;
 using Robust.Shared.Map;
 using Robust.Shared.Map.Components;
 using Robust.Shared.Physics.Systems;
+using Robust.Shared.Profiling;
 using Robust.Shared.Prototypes;
 using Robust.Shared.Timing;
 
@@ -33,6 +35,10 @@ public sealed class DebrisMaterializeQueueSystem : BaseWorldSystem
     [Dependency] private readonly IGameTiming _timing = default!;
     [Dependency] private readonly SharedPhysicsSystem _physics = default!;
     [Dependency] private readonly TransformSystem _xformSys = default!;
+
+    // Not readonly: engine convention for ProfManager injection, and RA0051 flags readonly
+    // [Dependency] fields.
+    [Dependency] private ProfManager _prof = default!;
 
     /// <summary>
     ///     Seconds between re-orderings of the queue. Sorting every tick charges an
@@ -251,6 +257,10 @@ public sealed class DebrisMaterializeQueueSystem : BaseWorldSystem
             return;
         }
 
+        // Opened past the early return so a settled queue does not stamp an empty zone on every
+        // tick of the capture; what we are hunting here is the burst, not the idle.
+        using var zone = _prof.Group("worldgen.materialize", WorldgenProfiling.ZoneColor);
+
         var budget = TimeSpan.FromMilliseconds(_budgetMs);
         var panicSq = _panicRange * _panicRange;
 
@@ -258,6 +268,11 @@ public sealed class DebrisMaterializeQueueSystem : BaseWorldSystem
         if (_sortAccumulator >= SortInterval)
         {
             _sortAccumulator -= SortInterval;
+
+            // Its own zone because the sort is deliberately excluded from the spawn budget below.
+            // If it ever grows back into the frame, that has to be visible as its own bar rather
+            // than smeared across the batch it is not charged to.
+            using var _sort = _prof.Group("worldgen.materialize.sort");
             SortByArrival();
         }
 
@@ -272,6 +287,7 @@ public sealed class DebrisMaterializeQueueSystem : BaseWorldSystem
         // sit past this bound and get their next attempt on the next pass, one per pass.
         var count = _queue.Count;
 
+        var built = 0;
         var index = 0;
         for (; index < count; index++)
         {
@@ -293,6 +309,7 @@ public sealed class DebrisMaterializeQueueSystem : BaseWorldSystem
                 continue;
 
             Materialize(record);
+            built++;
         }
 
         if (index > 0)
@@ -302,6 +319,11 @@ public sealed class DebrisMaterializeQueueSystem : BaseWorldSystem
         }
 
         RecordMetrics.MaterializeQueueDepth.Set(_queue.Count);
+
+        // Guarded on the flag rather than leaning on EmitText's null check: the interpolated
+        // string would still be built every tick otherwise, Tracy running or not.
+        if (_prof.IsTracyEnabled)
+            zone.EmitText($"built={built} walked={index} remaining={_queue.Count}");
     }
 
     /// <summary>

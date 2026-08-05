@@ -4,13 +4,20 @@
 
 using System.Numerics;
 using Content.Client._Triad.Worldgen;
+using Content.Shared._Triad.Worldgen;
 using Robust.Client.Graphics;
+using Robust.Shared.IoC;
 using Robust.Shared.Map;
+using Robust.Shared.Profiling;
 
 namespace Content.Client.Shuttles.UI;
 
 public partial class ShuttleNavControl // Triad
 {
+    // Not readonly: engine convention for ProfManager injection, and RA0051 flags readonly
+    // [Dependency] fields.
+    [Dependency] private ProfManager _prof = default!;
+
     private RecordContactsSystem? _recordContacts;
 
     private RecordContactsSystem RecordContacts => _recordContacts ??= EntManager.System<RecordContactsSystem>();
@@ -53,7 +60,13 @@ public partial class ShuttleNavControl // Triad
     private void DrawRecordOutlines(DrawingHandleScreen handle, Matrix3x2 worldToView,
         IEnumerable<RecordContactView> contacts, float alpha)
     {
+        // Covers more than the draw: the contact sequences are lazy, so the per-frame-budgeted
+        // shape roll (BlobShapeGen plus the outline trace) runs inside this enumeration. That
+        // roll, not the line strips, is the client-side cost worth watching.
+        using var zone = _prof.Group("worldgen.records.draw", WorldgenProfiling.ZoneColor);
+
         var cullBounds = new Box2(-64f, -64f, Size.X + 64f, Size.Y + 64f);
+        var drawn = 0;
 
         foreach (var contact in contacts)
         {
@@ -70,6 +83,12 @@ public partial class ShuttleNavControl // Triad
             _hullVertsBuffer.Add(_hullVertsBuffer[0]);
 
             handle.DrawPrimitives(DrawPrimitiveTopology.LineStrip, _hullVertsBuffer, contact.Color.WithAlpha(alpha));
+            drawn++;
         }
+
+        // Guarded on the flag rather than leaning on EmitText's null check: the interpolated
+        // string would still be built every frame otherwise, Tracy running or not.
+        if (_prof.IsTracyEnabled)
+            zone.EmitText($"drawn={drawn} alpha={alpha}");
     }
 }

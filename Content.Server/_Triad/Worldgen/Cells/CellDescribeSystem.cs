@@ -19,6 +19,7 @@ using Robust.Shared.Configuration;
 using Robust.Shared.Map;
 using Robust.Shared.Map.Components;
 using Robust.Shared.Physics.Systems;
+using Robust.Shared.Profiling;
 using Robust.Shared.Prototypes;
 using Robust.Shared.Random;
 using Robust.Shared.Timing;
@@ -47,6 +48,10 @@ public sealed class CellDescribeSystem : BaseWorldSystem
     [Dependency] private readonly PoissonDiskSampler _sampler = default!;
     [Dependency] private readonly SharedPhysicsSystem _physics = default!;
     [Dependency] private readonly TransformSystem _xformSys = default!;
+
+    // Not readonly: engine convention for ProfManager injection, and RA0051 flags readonly
+    // [Dependency] fields.
+    [Dependency] private ProfManager _prof = default!;
 
     private const float UpdateInterval = 1f;
 
@@ -151,6 +156,8 @@ public sealed class CellDescribeSystem : BaseWorldSystem
 
     public override void Update(float frameTime)
     {
+        using var _ = _prof.Group("worldgen.describe", WorldgenProfiling.ZoneColor);
+
         _accumulator += frameTime;
         if (_accumulator >= UpdateInterval)
         {
@@ -162,7 +169,13 @@ public sealed class CellDescribeSystem : BaseWorldSystem
             RecordMetrics.ResidentDebris.Set(CountResidentDebris());
 
             if (_enabled)
+            {
+                // Split from the drain because they answer different questions: collect is the
+                // 1 Hz cell sweep whose cost scales with loaders, drain is the per-tick
+                // budget-capped fill. A single zone would average the spike into the floor.
+                using var _collect = _prof.Group("worldgen.describe.collect");
                 CollectPending();
+            }
         }
 
         if (!_enabled)
@@ -170,7 +183,10 @@ public sealed class CellDescribeSystem : BaseWorldSystem
 
         // Every tick, not just on the 1 Hz collect: the drain is budget-capped per tick either
         // way, so ticking it thirty times a second is what sets the fill rate, not the hitch.
-        DrainPending();
+        using (_prof.Group("worldgen.describe.drain"))
+        {
+            DrainPending();
+        }
 
         RecordMetrics.Records.Set(Records.Count);
     }
