@@ -1,4 +1,5 @@
 using System.Numerics;
+using Content.Server._Triad.Worldgen.Cells; // Triad: PredeterminedSpawnComponent
 using Content.Server.GameTicking;
 using Content.Server.Spawners.Components;
 using Content.Shared.EntityTable;
@@ -77,9 +78,26 @@ namespace Content.Server.Spawners.EntitySystems
             }
         }
 
+        // Triad: markers stamped with PredeterminedSpawnComponent (loot on pre-determined
+        // worldgen debris) roll on their own salted stream, so the same rock re-materializes
+        // with the same loot. Every other marker keeps the shared RNG: this system serves
+        // dungeons, salvage missions and ghost roles game-wide, and their behaviour must not
+        // change.
+        private IRobustRandom RandFor(EntityUid uid)
+        {
+            if (!TryComp<PredeterminedSpawnComponent>(uid, out var pre))
+                return _robustRandom;
+
+            var rand = new RobustRandom();
+            rand.SetSeed(pre.Seed);
+            return rand;
+        }
+
         private void Spawn(EntityUid uid, ConditionalSpawnerComponent component)
         {
-            if (component.Chance != 1.0f && !_robustRandom.Prob(component.Chance))
+            var rand = RandFor(uid); // Triad
+
+            if (component.Chance != 1.0f && !rand.Prob(component.Chance))
                 return;
 
             if (component.Prototypes.Count == 0)
@@ -89,18 +107,20 @@ namespace Content.Server.Spawners.EntitySystems
             }
 
             if (!Deleted(uid))
-                EntityManager.SpawnEntity(_robustRandom.Pick(component.Prototypes), Transform(uid).Coordinates);
+                EntityManager.SpawnEntity(rand.Pick(component.Prototypes), Transform(uid).Coordinates);
         }
 
         private void Spawn(EntityUid uid, RandomSpawnerComponent component)
         {
-            if (component.RarePrototypes.Count > 0 && (component.RareChance == 1.0f || _robustRandom.Prob(component.RareChance)))
+            var rand = RandFor(uid); // Triad
+
+            if (component.RarePrototypes.Count > 0 && (component.RareChance == 1.0f || rand.Prob(component.RareChance)))
             {
-                EntityManager.SpawnEntity(_robustRandom.Pick(component.RarePrototypes), Transform(uid).Coordinates);
+                EntityManager.SpawnEntity(rand.Pick(component.RarePrototypes), Transform(uid).Coordinates);
                 return;
             }
 
-            if (component.Chance != 1.0f && !_robustRandom.Prob(component.Chance))
+            if (component.Chance != 1.0f && !rand.Prob(component.Chance))
                 return;
 
             if (component.Prototypes.Count == 0)
@@ -113,12 +133,12 @@ namespace Content.Server.Spawners.EntitySystems
                 return;
 
             var offset = component.Offset;
-            var xOffset = _robustRandom.NextFloat(-offset, offset);
-            var yOffset = _robustRandom.NextFloat(-offset, offset);
+            var xOffset = rand.NextFloat(-offset, offset);
+            var yOffset = rand.NextFloat(-offset, offset);
 
             var coordinates = Transform(uid).Coordinates.Offset(new Vector2(xOffset, yOffset));
 
-            EntityManager.SpawnEntity(_robustRandom.Pick(component.Prototypes), coordinates);
+            EntityManager.SpawnEntity(rand.Pick(component.Prototypes), coordinates);
         }
 
         private void Spawn(Entity<EntityTableSpawnerComponent> ent)
@@ -126,13 +146,15 @@ namespace Content.Server.Spawners.EntitySystems
             if (TerminatingOrDeleted(ent) || !Exists(ent))
                 return;
 
+            var rand = RandFor(ent); // Triad
+
             var coords = Transform(ent).Coordinates;
 
-            var spawns = _entityTable.GetSpawns(ent.Comp.Table);
+            var spawns = _entityTable.GetSpawns(ent.Comp.Table, rand.GetRandom()); // Triad: seedable overload
             foreach (var proto in spawns)
             {
-                var xOffset = _robustRandom.NextFloat(-ent.Comp.Offset, ent.Comp.Offset);
-                var yOffset = _robustRandom.NextFloat(-ent.Comp.Offset, ent.Comp.Offset);
+                var xOffset = rand.NextFloat(-ent.Comp.Offset, ent.Comp.Offset);
+                var yOffset = rand.NextFloat(-ent.Comp.Offset, ent.Comp.Offset);
                 var trueCoords = coords.Offset(new Vector2(xOffset, yOffset));
 
                 Spawn(proto, trueCoords);

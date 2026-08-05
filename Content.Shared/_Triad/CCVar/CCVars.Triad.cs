@@ -45,4 +45,79 @@ public sealed class TriadCCVars
 
     public static readonly CVarDef<string> NightVisionColor =
         CVarDef.Create("triad.night_vision_color", "#00FF00", CVar.CLIENTONLY | CVar.ARCHIVE, "The tint/phosphor color of night vision.");
+
+    // Triad: worldgen records
+    /// <summary>
+    /// Master switch for the worldgen records (describe service, radar contacts, JIT
+    /// materialization). Off restores the stock burst-spawn placer and the stock chunk-load
+    /// radius, but not stock asteroid shapes: BlobFloorPlanBuilderSystem routes its tile walk
+    /// through the seed-deterministic BlobShapeGen either way, so debris geometry stays on the
+    /// Triad generator regardless of this switch.
+    /// </summary>
+    public static readonly CVarDef<bool> WorldgenRecordsEnabled =
+        CVarDef.Create("triad.worldgen.records_enabled", true, CVar.SERVERONLY);
+
+    /// <summary>
+    /// Radius around anything present (ship, person, station) in which cells are described, making
+    /// debris radar-visible before any entity exists. Sensors do not extend this; they only decide
+    /// how much of it a given console is shown. Defaults to the stock radar range, since a console
+    /// can only paint what has been described and anything shorter puts a hard ring on the screen.
+    /// </summary>
+    public static readonly CVarDef<float> WorldgenDescribeRange =
+        CVarDef.Create("triad.worldgen.describe_range", 3072f, CVar.SERVERONLY);
+
+    /// <summary>
+    /// Milliseconds of describe work allowed per tick, spent from one pool by both the sweep's
+    /// per-tick slice and on-demand describes from chunk loads. Governs how fast the radar picture
+    /// fills, not whether it fills: cells past the budget stay pending and are worked next tick.
+    /// </summary>
+    public static readonly CVarDef<float> WorldgenDescribeBudgetMs =
+        CVarDef.Create("triad.worldgen.describe_budget_ms", 1.5f, CVar.SERVERONLY);
+
+    public static readonly CVarDef<float> WorldgenMaterializeBudgetMs =
+        CVarDef.Create("triad.worldgen.materialize_budget_ms", 2f, CVar.SERVERONLY);
+
+    /// <summary>
+    /// Dormant debris within this range of any loader spawns immediately, ignoring the budget.
+    /// </summary>
+    public static readonly CVarDef<float> WorldgenMaterializePanicRange =
+        CVarDef.Create("triad.worldgen.materialize_panic_range", 96f, CVar.SERVERONLY);
+
+    /// <summary>
+    /// Seconds of loader velocity lead applied to the describe sweep center.
+    /// </summary>
+    public static readonly CVarDef<float> WorldgenDescribeLeadS =
+        CVarDef.Create("triad.worldgen.describe_lead_s", 3f, CVar.SERVERONLY);
+
+    /// <summary>
+    /// Seconds a loaded cell must go unwanted before it unloads. Load and unload otherwise share
+    /// one boundary, so a ship sitting on a cell boundary line (or station-keeping, whose
+    /// thruster wobble moves the velocity-led sweep centre) rapidly cycles rim cells and pays
+    /// grid teardown and rebuild each flip. Zero restores the stock immediate unload. Applies to
+    /// both arms of the records switch: boundary thrash predates the tier and costs the stock
+    /// burst-spawn placer a full re-roll per cycle.
+    /// </summary>
+    public static readonly CVarDef<float> WorldgenUnloadGraceS =
+        CVarDef.Create("triad.worldgen.unload_grace_s", 3f, CVar.SERVERONLY);
+
+    public static readonly CVarDef<int> WorldgenContactAddsPerPoll =
+        CVarDef.Create("triad.worldgen.contact_adds_per_poll", 256, CVar.SERVERONLY);
+
+    /// <summary>
+    /// Memory budget for captured debris blobs, in megabytes. A touched rock serializes to a few
+    /// KB compressed, so the default holds thousands; when the budget is exceeded the oldest
+    /// capture is evicted and that one rock falls back to its pristine roll on next materialize,
+    /// logged loudly since eviction is data loss for whoever touched it.
+    /// </summary>
+    public static readonly CVarDef<int> WorldgenCaptureBudgetMb =
+        CVarDef.Create("triad.worldgen.capture_budget_mb", 64, CVar.SERVERONLY);
+
+    /// <summary>
+    /// Per-tick time budget for capturing touched debris to blobs, in milliseconds. Captures
+    /// queue at cell unload and drain against this, so a fleet leaving a belt spreads its
+    /// serialization over ticks instead of stacking it into one. The grid is held against
+    /// garbage collection until its capture resolves, so the deferral never loses state.
+    /// </summary>
+    public static readonly CVarDef<float> WorldgenCaptureBudgetMs =
+        CVarDef.Create("triad.worldgen.capture_budget_ms", 2f, CVar.SERVERONLY);
 }

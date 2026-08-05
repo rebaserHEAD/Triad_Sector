@@ -418,6 +418,7 @@
   id: PhalanxLaser
   categories: [ HideSpawnMenu ]
   components:
+  - type: ShipWeaponHitscan # Triad: ship beam, blocks on described debris
   - type: HitscanBasicVisuals
     muzzleFlash:
       sprite: Objects/Weapons/Guns/Projectiles/projectiles.rsi
@@ -445,6 +446,7 @@
   id: ApolloLaser
   categories: [ HideSpawnMenu ]
   components:
+  - type: ShipWeaponHitscan # Triad: ship beam, blocks on described debris
   - type: HitscanBasicVisuals
     muzzleFlash:
       sprite: Objects/Weapons/Guns/Projectiles/projectiles.rsi
@@ -490,6 +492,7 @@
   id: TachyonLaser
   categories: [ HideSpawnMenu ]
   components:
+  - type: ShipWeaponHitscan # Triad: ship beam, blocks on described debris
   - type: HitscanBasicVisuals
     muzzleFlash:
       sprite: _Mono/Objects/Weapons/Guns/Projectiles/lasers.rsi
@@ -519,6 +522,7 @@
   id: SunderLaser
   categories: [ HideSpawnMenu ]
   components:
+  - type: ShipWeaponHitscan # Triad: ship beam, blocks on described debris
   - type: HitscanBasicVisuals
     muzzleFlash:
       sprite: _Mono/Objects/Weapons/Guns/Projectiles/lasers.rsi
@@ -548,6 +552,7 @@
   id: GaussRound
   categories: [ HideSpawnMenu ]
   components:
+  - type: ShipWeaponHitscan # Triad: ship beam, blocks on described debris
   - type: HitscanBasicVisuals
     muzzleFlash:
       sprite: _Mono/Objects/Weapons/Guns/Projectiles/lasers.rsi

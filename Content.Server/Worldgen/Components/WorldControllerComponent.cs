@@ -8,7 +8,9 @@ namespace Content.Server.Worldgen.Components;
 ///     This is used for controlling overall world loading, containing an index of all chunks in the map.
 /// </summary>
 [RegisterComponent]
-[Access(typeof(WorldControllerSystem))]
+// Triad: the describe sweep reads this index to skip cells it has already described, rather than
+// calling GetOrCreateChunk on every coord in range and minting chunk entities to find out.
+[Access(typeof(WorldControllerSystem), typeof(Content.Server._Triad.Worldgen.Cells.CellDescribeSystem))]
 public sealed partial class WorldControllerComponent : Component
 {
     /// <summary>

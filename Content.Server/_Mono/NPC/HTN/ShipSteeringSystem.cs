@@ -30,6 +30,7 @@ public sealed partial class ShipSteeringSystem : EntitySystem
     [Dependency] private SharedTransformSystem _transform = default!;
     [Dependency] private ShuttleSystem _shuttle = default!;
     [Dependency] private TargetSeekingSystem _seeking = default!;
+    [Dependency] private Content.Server._Triad.Worldgen.Cells.CellDescribeSystem _describe = default!; // Triad
 
     [Dependency] private EntityQuery<MapGridComponent> _gridQuery;
     [Dependency] private EntityQuery<ProjectileGridPhaseComponent> _phaseQuery;
@@ -45,6 +46,7 @@ public sealed partial class ShipSteeringSystem : EntitySystem
     private HashSet<Entity<ShipWeaponProjectileComponent>> _avoidProjs = new();
     private List<(EntityUid Uid, bool IsGrid)> _avoidPotentialEnts = new();
     private List<ObstacleCandidate> _avoidEnts = new();
+    private List<Content.Server._Triad.Worldgen.Cells.DebrisRecord> _avoidRecords = new(); // Triad
 
     // collision evasion input consideration sectors: 24 outer, 12 inner, 1 zero-input
     private List<EvadeCandidate> _sectors = new();
@@ -391,9 +393,38 @@ public sealed partial class ShipSteeringSystem : EntitySystem
                     threat = 1f;
             }
 
-            _avoidEnts.Add(new((ent, otherXform, obstacleBody), obsPos, obsRadius, threat));
+            // Triad: lifetime snapshotted here; the avoidance pass no longer touches components
+            var lifetime = _timedQuery.TryComp(ent, out var timed) ? timed.Lifetime : float.PositiveInfinity;
+            _avoidEnts.Add(new(obsPos, obsRadius, threat, obstacleBody.LinearVelocity, lifetime));
         }
 
+        // Triad: dormant worldgen debris joins the obstacle pool as circles at record Point with
+        // radius Bound, zero velocity, infinite lifetime. Without this an NPC ship plots through
+        // a belt that materializes onto it at chunk-load range. Threat mirrors the grid formula's
+        // shape with Bound^2 standing in for tile count; it only weights sector choice when every
+        // sector is already blocked. A ship steered AT a charted rock behaves exactly as it would
+        // against the real grid: the rock materializes well outside avoidance range anyway.
+        if (config.AvoidCollisions && ctx.ShipXform.MapUid is { } mapUid)
+        {
+            _describe.CollectIntersecting(mapUid, scanBoundsWorld.CalcBoundingBox(), _avoidRecords);
+
+            foreach (var record in _avoidRecords)
+            {
+                // The box query coarse-gathered against the rotated corridor's enclosing AABB,
+                // which bulges past the corridor at off-axis headings. Re-test the record circle
+                // against the true rotated box, so a rock out on an AABB wing does not join a
+                // pool that a grid at the same world position would correctly be excluded from.
+                var local = scanBoundsWorld.Origin
+                    + (-scanBoundsWorld.Rotation).RotateVec(record.Point - scanBoundsWorld.Origin);
+                var closest = Vector2.Clamp(local, scanBoundsWorld.Box.BottomLeft, scanBoundsWorld.Box.TopRight);
+                if ((local - closest).LengthSquared() > record.Bound * record.Bound)
+                    continue;
+
+                var threat = config.GridThreat * shipVel.LengthSquared() * (record.Bound * record.Bound);
+                _avoidEnts.Add(new(record.Point, record.Bound, threat, Vector2.Zero, float.PositiveInfinity));
+            }
+        }
+        // End Triad
     }
 
     private record struct AvoidanceResult(Vector2? AvoidVec, bool AllBad);
@@ -448,16 +479,13 @@ public sealed partial class ShipSteeringSystem : EntitySystem
         {
             var obsRadius = obstacle.Radius;
             var sumRadius = obsRadius + shipRadius;
-            var obsXform = obstacle.Ent.Comp1;
             var obsPos = obstacle.Pos;
-            var obsVel = obstacle.Ent.Comp2.LinearVelocity;
+            var obsVel = obstacle.Vel; // Triad: snapshotted at scan time; see ObstacleCandidate
             var relVel = shipVel - obsVel;
             var toObsVec = obsPos - shipPos;
             var toObsDir = toObsVec.Normalized();
             // see if it's a temporary-lived obstacle
-            var lifetime = float.PositiveInfinity;
-            if (_timedQuery.TryComp(obstacle.Ent, out var timed))
-                lifetime = timed.Lifetime;
+            var lifetime = obstacle.Lifetime; // Triad: snapshotted at scan time
 
             // Distances to bounding planes
             var obsDistanceFront = MathF.Max(toObsVec.Length() - sumRadius, 1f);
@@ -822,7 +850,11 @@ public sealed partial class ShipSteeringSystem : EntitySystem
 
     private readonly record struct BrakeContext(float BrakeAccel, float BrakePath, float LeftoverBrakePath);
 
-    private readonly record struct ObstacleCandidate(Entity<TransformComponent, PhysicsComponent> Ent, Vector2 Pos, float Radius, float Threat);
+    // Triad: candidates snapshot velocity and lifetime at scan time instead of holding live
+    // component refs. Behaviour-identical (the scan and the avoidance calculation run
+    // back-to-back in the same refresh), and it lets entity-less obstacles join the list:
+    // dormant worldgen debris exists as records, not entities, until something gets close.
+    private readonly record struct ObstacleCandidate(Vector2 Pos, float Radius, float Threat, Vector2 Vel, float Lifetime);
 
     private record struct EvadeCandidate(Vector2 Input, Vector2 Accel, float Scale, float? ImpactTime = null, float Threat = 0f);
 }

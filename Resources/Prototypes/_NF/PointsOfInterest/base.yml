@@ -18,6 +18,9 @@
   - type: IFF
     color: "#ffa600"
     readOnly: true
+  # Triad: a station holds the space around it real the way a crewed ship does. Without this a POI
+  # sits in undescribed space until somebody flies out to it, and its own radar would paint nothing.
+  - type: DescribeAnchor
 
 - type: pointOfInterest
   parent: BaseMobilePOI

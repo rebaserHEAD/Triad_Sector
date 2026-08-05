@@ -1162,6 +1162,15 @@ public sealed partial class ShuttleSystem
     /// </summary>
     /// <param name="minOffset">Min offset for the final FTL.</param>
     /// <param name="maxOffset">Max offset for the final FTL from the box we spawn.</param>
+    // Triad: FTL arrival consults the worldgen records, so the clear-spot search slides away
+    // from dormant rocks exactly as it slides away from live grids. Without this a ship can
+    // arrive inside a described-but-unbuilt asteroid: it degrades safely (the rock burns its
+    // spawn attempts and ghosts), but a ghost rock is a hole in the belt nobody asked for.
+    [Dependency] private readonly Content.Server._Triad.Worldgen.Cells.CellDescribeSystem _triadDescribe = default!;
+    private readonly List<Content.Server._Triad.Worldgen.Cells.DebrisRecord> _triadFtlRecords = new();
+    private readonly List<Box2> _triadCollidingBoxes = new();
+    // End Triad
+
     private bool TryGetFTLProximity(
         EntityUid shuttleUid,
         EntityCoordinates targetCoordinates,
@@ -1254,13 +1263,30 @@ public sealed partial class ShuttleSystem
         {
             grids.Clear();
             _mapSystem.FindGridsIntersecting(targetXform.MapID, targetAABB, ref grids);
-            if (grids.Count == 0)
+            // Triad: dormant worldgen debris carves the arrival spot exactly like a grid does.
+            // Records are circles at Point with radius Bound; their enclosing boxes ride the
+            // same slide arithmetic as grid AABBs below.
+            _triadDescribe.CollectIntersecting(targetXform.MapUid.Value, targetAABB, _triadFtlRecords);
+            if (grids.Count == 0 && _triadFtlRecords.Count == 0) // Triad: was grids.Count == 0 only
                 break;
 
-            // Adjust our requested position to be clear of intersecting grids along our randomly chosen direction.
+            _triadCollidingBoxes.Clear();
             foreach (var grid in grids)
             {
-                var collidingBox = _transform.GetWorldMatrix(grid).TransformBox(Comp<MapGridComponent>(grid).LocalAABB);
+                _triadCollidingBoxes.Add(_transform.GetWorldMatrix(grid).TransformBox(Comp<MapGridComponent>(grid).LocalAABB));
+            }
+
+            foreach (var record in _triadFtlRecords)
+            {
+                _triadCollidingBoxes.Add(Box2.CenteredAround(record.Point, new Vector2(record.Bound * 2f, record.Bound * 2f)));
+            }
+            // End Triad
+
+            // Adjust our requested position to be clear of intersecting grids along our randomly chosen direction.
+            // foreach (var grid in grids) // Triad: loop now runs over grid AND record boxes, pooled above
+            foreach (var collidingBox in _triadCollidingBoxes) // Triad
+            {
+                // var collidingBox = _transform.GetWorldMatrix(grid).TransformBox(Comp<MapGridComponent>(grid).LocalAABB); // Triad: computed above
 
                 if (positiveX == true)
                 {

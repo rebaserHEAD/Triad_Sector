@@ -6,10 +6,13 @@ using Content.Shared.Ghost;
 using Content.Shared.Mind.Components;
 using JetBrains.Annotations;
 using Robust.Server.GameObjects;
+using System.Numerics; // Triad: loader hull extent
 using Robust.Shared.Map;
+using Robust.Shared.Map.Components; // Triad: loader hull extent
 using Robust.Shared.Physics.Systems;
 using Robust.Shared.Timing;
 using Robust.Shared.Configuration; // HL: for IConfigurationManager
+using Content.Shared._Triad.CCVar; // Triad: records master switch
 
 // Mono maint note - this system no longer exists upstream and // Mono comments are not a requirement for that reason
 namespace Content.Server.Worldgen.Systems;
@@ -33,12 +36,24 @@ public sealed class WorldControllerSystem : EntitySystem
     // </Mono>
 
     private ISawmill _sawmill = default!;
+    // Triad: _cfg also feeds the records switch cached in _recordsEnabled below.
     [Dependency] private readonly IConfigurationManager _cfg = default!; // HL: to gate debug logs
+
+    // Triad: cached copy of triad.worldgen.records_enabled, kept current by the Subs.CVar
+    // subscription in Initialize. TryAddChunkLoader reads it once per loader per sweep, so it
+    // stays off GetCVar's read lock and string-keyed lookup.
+    private bool _recordsEnabled;
+
+    // Triad: unload grace, see WorldgenUnloadGraceS. Cached for the same reason as above.
+    private float _unloadGraceS;
 
     /// <inheritdoc />
     public override void Initialize()
     {
         _sawmill = _logManager.GetSawmill("world");
+        // Triad: cache the records switch instead of hitting GetCVar once per loader per sweep.
+        Subs.CVar(_cfg, TriadCCVars.WorldgenRecordsEnabled, v => _recordsEnabled = v, true);
+        Subs.CVar(_cfg, TriadCCVars.WorldgenUnloadGraceS, v => _unloadGraceS = v, true); // Triad
         SubscribeLocalEvent<LoadedChunkComponent, ComponentStartup>(OnChunkLoadedCore);
         SubscribeLocalEvent<LoadedChunkComponent, ComponentShutdown>(OnChunkUnloadedCore);
         SubscribeLocalEvent<WorldChunkComponent, ComponentShutdown>(OnChunkShutdown);
@@ -156,14 +171,29 @@ public sealed class WorldControllerSystem : EntitySystem
 
         var loadedEnum = EntityQueryEnumerator<LoadedChunkComponent, WorldChunkComponent>();
         var chunksUnloaded = 0;
+        var unloadBefore = _gameTiming.CurTime - TimeSpan.FromSeconds(_unloadGraceS); // Triad: unload grace
 
         // Make sure these chunks get unloaded at the end of the tick.
-        while (loadedEnum.MoveNext(out var uid, out var _, out var chunk))
+        while (loadedEnum.MoveNext(out var uid, out var loaded, out var chunk))
         {
             var coords = chunk.Coordinates;
 
-            if (!_chunksToLoad[chunk.Map].ContainsKey(coords))
+            // Triad: TryGetValue, not the indexer. _chunksToLoad is rebuilt each pass from maps
+            // that currently have a WorldControllerComponent, while this enumeration walks chunk
+            // entities. A deleted map loses its controller before its chunks finish being torn
+            // down, so the indexer threw KeyNotFoundException for every surviving chunk on every
+            // tick of that window. A chunk whose map is loading nothing is exactly a chunk to
+            // unload, which is what this branch already does.
+            if (!_chunksToLoad.TryGetValue(chunk.Map, out var mapChunks) || !mapChunks.ContainsKey(coords))
             {
+                // Triad: grace before unload. The wanted-set is quantized to each loader's own
+                // cell and velocity-led, so a ship sitting on a cell boundary (or wobbling on
+                // station-keeping thrusters) flips rim chunks out of the set for a pass at a
+                // time. Only unload once the chunk has been unwanted for the whole grace window;
+                // a wanted pass below re-stamps LastWanted and resets the clock.
+                if (loaded.LastWanted > unloadBefore)
+                    continue;
+
                 RemCompDeferred<LoadedChunkComponent>(uid);
                 chunksUnloaded++;
             }
@@ -193,7 +223,10 @@ public sealed class WorldControllerSystem : EntitySystem
                 }
 
                 if (c is not null)
+                {
                     c.Loaders = loaders;
+                    c.LastWanted = _gameTiming.CurTime; // Triad: resets the unload-grace clock
+                }
             }
         }
 
@@ -280,6 +313,14 @@ public sealed class WorldControllerSystem : EntitySystem
         // Mono - load ahead a little
         var mapVel = _physics.GetMapLinearVelocity(uid, xform: xform);
         wc += mapVel * _updateInterval;
+        // Triad: a loader measures from wherever its console sits, so the far end of a long hull
+        // can leave the loaded region. Grow the radius by the loader's distance to its own grid's
+        // farthest corner; ship size stops deciding how much space is real around you.
+        // Gated on the records switch, because only its budgeted materialize queue can absorb the
+        // extra chunks. With the tier off the stock burst-spawn placer is what fills them, so the
+        // kill switch has to hand back the stock radius as well as the stock placer.
+        if (_recordsEnabled)
+            radius += GetGridExtentChunks(xform);
         var coords = WorldGen.WorldToChunkCoords(wc);
         var chunks = new GridPointsNearEnumerator(coords.Floored(), radius);
 
@@ -293,6 +334,24 @@ public sealed class WorldControllerSystem : EntitySystem
         }
 
         return true;
+    }
+
+    // Triad: loader-to-hull-corner distance, in whole chunks, for the radius inflation above.
+    private int GetGridExtentChunks(TransformComponent xform)
+    {
+        if (xform.GridUid is not { } grid || !TryComp<MapGridComponent>(grid, out var gridComp))
+            return 0;
+
+        var local = Vector2.Transform(_xformSys.GetWorldPosition(xform), _xformSys.GetInvWorldMatrix(grid));
+        var aabb = gridComp.LocalAABB;
+
+        var extent = MathF.Max(
+            (aabb.BottomLeft - local).Length(),
+            MathF.Max(
+                (aabb.TopRight - local).Length(),
+                MathF.Max((aabb.TopLeft - local).Length(), (aabb.BottomRight - local).Length())));
+
+        return (int) MathF.Ceiling(extent / WorldGen.ChunkSize);
     }
 }
 

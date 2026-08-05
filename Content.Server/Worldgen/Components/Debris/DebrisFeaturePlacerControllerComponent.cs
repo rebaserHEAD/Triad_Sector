@@ -9,7 +9,9 @@ namespace Content.Server.Worldgen.Components.Debris;
 ///     This is used for controlling the debris feature placer.
 /// </summary>
 [RegisterComponent]
-[Access(typeof(DebrisFeaturePlacerSystem))]
+// Triad: the materialization queue registers its spawns in OwnedDebris so the placer's unload,
+// move, and GC-cancel handling keeps owning them exactly as if the placer had spawned them.
+[Access(typeof(DebrisFeaturePlacerSystem), typeof(Content.Server._Triad.Worldgen.Cells.DebrisMaterializeQueueSystem))]
 public sealed partial class DebrisFeaturePlacerControllerComponent : Component
 {
     /// <summary>
