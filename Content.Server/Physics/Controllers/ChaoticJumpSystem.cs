@@ -60,11 +60,9 @@ public sealed class ChaoticJumpSystem : VirtualController
         var range = _random.NextFloat(component.RangeMin, component.RangeMax);
         var translation = dir * range;
 
-        // Triad: replaced the zero-width raycast + 1-tile offset below with a footprint shape-sweep.
-        // The zero-width ray could thread sub-tile gaps (containment-field corner slots) and the teleport
-        // ignored physics entirely, so the tesla could escape a correctly-built cage. Sweeping the body's
-        // own circle stops it on anything it could not physically pass through. A circle is rotation-
-        // invariant, so the origin transform's rotation is irrelevant. Old logic preserved:
+        // Triad: replaced the zero-width raycast + 1-tile offset below with two probes along the jump path.
+        // The teleport ignores physics entirely, so whatever these probes miss, the entity escapes through.
+        // Old logic preserved:
         // var ray = new CollisionRay(startPos, direction.ToVec(), component.CollisionMask);
         // var rayCastResults = _physics.IntersectRay(xform.MapID, ray, range, uid, returnOnFirstHit: false).FirstOrNull();
         // if (rayCastResults != null)
@@ -76,20 +74,43 @@ public sealed class ChaoticJumpSystem : VirtualController
         // {
         //     targetPos = new Vector2(startPos.X + range * (float) Math.Cos(direction), startPos.Y + range * (float) Math.Sin(direction));
         // }
-        var shape = new PhysShapeCircle(component.SweepRadius);
         var filter = new QueryFilter
         {
             MaskBits = component.CollisionMask,
             IsIgnored = entity => entity == uid,
         };
 
-        var result = _rayCast.CastShape(xform.MapID, shape, origin, translation, filter, RayCastSystem.RayCastClosestCallback);
+        // Fraction of the jump the entity is allowed to travel. Each probe can only tighten this.
+        var fraction = 1f;
+        var blocked = false;
+
+        // Probe 1, zero-width ray along the centre line. A point start cannot overlap, so this stays
+        // valid in gaps narrower than the swept footprint, where probe 2 goes blind. This is what holds
+        // a cage whose interior is tighter than the body.
+        var rayResult = _rayCast.CastRayClosest(xform.MapID, startPos, translation, filter);
+        if (rayResult.Hit)
+        {
+            fraction = MathF.Min(fraction, rayResult.Results[0].Fraction);
+            blocked = true;
+        }
+
+        // Probe 2, the body's own swept footprint. Catches sub-tile gaps (containment-field corner slots)
+        // that the centre line threads but the body could not fit through. Note that a shape cast which
+        // starts already overlapping reports NO hit rather than fraction 0, so this probe silently goes
+        // blind whenever the entity is in contact. That is exactly why probe 1 has to carry the floor.
+        var shape = new PhysShapeCircle(component.SweepRadius);
+        var shapeResult = _rayCast.CastShape(xform.MapID, shape, origin, translation, filter, RayCastSystem.RayCastClosestCallback);
+        if (shapeResult.Hit)
+        {
+            fraction = MathF.Min(fraction, shapeResult.Results[0].Fraction);
+            blocked = true;
+        }
 
         Vector2 targetPos;
-        if (result.Hit)
+        if (blocked)
         {
-            // Land just short of the first solid contact along the sweep.
-            var stopDistance = MathF.Max(0f, range * result.Results[0].Fraction - component.SweepSkin);
+            // Land just short of the first solid contact along the path.
+            var stopDistance = MathF.Max(0f, range * fraction - component.SweepSkin);
             targetPos = startPos + dir * stopDistance;
         }
         else

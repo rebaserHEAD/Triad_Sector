@@ -53,8 +53,10 @@ public sealed partial class ChaoticJumpComponent : Component
     public EntProtoId Effect = "EffectEmpPulse";
 
     /// <summary>
-    /// Triad: radius of the footprint swept along the jump path. The jump cannot land the entity past a
-    /// gap narrower than this, which is what stops it teleporting through containment-field corner slots.
+    /// Triad: radius of the footprint swept along the jump path, used to reject gaps the body could not
+    /// physically fit through (containment-field corner slots). This only applies while the entity starts
+    /// the jump clear of contact; a sweep that begins overlapping reports no hit at all, so the centre-line
+    /// ray in <see cref="ChaoticJumpSystem"/> is what enforces the floor in gaps tighter than this radius.
     /// </summary>
     [DataField, ViewVariables(VVAccess.ReadWrite)]
     public float SweepRadius = 0.35f;
