@@ -101,8 +101,26 @@ public sealed class TeslaContainmentTest
         await pair.CleanReturnAsync();
     }
 
+    /// <summary>
+    /// Isolates the teleport: with the bodies pinned static, nothing but ChaoticJump can move
+    /// them, so any displacement convicts the jump rather than the solver.
+    /// </summary>
     [Test]
-    public async Task BallCannotJumpOutOfOneWideCage()
+    public Task BallCannotJumpOutOfOneWideCage() => RunCageFleet(pinStatic: true);
+
+    /// <summary>
+    /// End to end with physics live: the cage should hold a tesla whether it leaves by teleport or
+    /// by the solver shoving it through a wall it was already penetrating.
+    ///
+    /// Note the ball's collider is 1.1 tiles across, so it cannot fit a one-wide gap and sits
+    /// permanently penetrating the fields here. That is deliberate: it is the harshest case for the
+    /// jump probes. It is not the intended build, which is 3-wide (see the wild-tesla decay tuning
+    /// on TeslaEnergyBall, derived from the ball's wander in a 3-wide cage).
+    /// </summary>
+    [Test]
+    public Task BallStaysContainedWithPhysicsLive() => RunCageFleet(pinStatic: false);
+
+    private async Task RunCageFleet(bool pinStatic)
     {
         await using var pair = await PoolManager.GetServerClient();
         var server = pair.Server;
@@ -148,11 +166,11 @@ public sealed class TeslaContainmentTest
                     testMap.Grid.Owner, testMap.Grid.Comp, new Vector2i(bx + 1, InteriorYMin + 1));
                 var ball = entMan.SpawnEntity("TeslaEnergyBall", centre);
 
-                // The ball is 1.1 tiles across, so in a one-wide cage it permanently overlaps the
-                // fields and the solver sits in penetration resolution, which can eject it on its
-                // own. Pinning the body static removes every source of motion except ChaoticJump,
-                // so any displacement below is unambiguously a teleport rather than physics.
-                physics.SetBodyType(ball, BodyType.Static);
+                // Pinning the body static removes every source of motion except ChaoticJump, so
+                // any displacement below is unambiguously a teleport rather than physics.
+                if (pinStatic)
+                    physics.SetBodyType(ball, BodyType.Static);
+
                 balls[i] = ball;
             }
         });
@@ -190,10 +208,12 @@ public sealed class TeslaContainmentTest
 
         await server.WaitAssertion(() =>
         {
+            var how = pinStatic
+                ? "The body is static, so this can only be ChaoticJump"
+                : "Physics is live, so this is either a teleport or the solver ejecting a ball that " +
+                  "does not fit its cage";
             Assert.That(escapePos, Is.Null,
-                $"Tesla ball in cage {escapedCage} teleported out to {escapePos}. The body is static, " +
-                "so this can only be ChaoticJump: containment must hold even when the swept-footprint " +
-                "probe is blinded by starting contact.");
+                $"Tesla ball in cage {escapedCage} escaped to {escapePos}. {how}.");
         });
 
         await pair.CleanReturnAsync();
