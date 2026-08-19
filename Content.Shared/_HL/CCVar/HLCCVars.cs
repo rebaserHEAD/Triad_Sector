@@ -34,11 +34,13 @@ public sealed class HLCCVars
     public static readonly CVarDef<bool> RoundPersistenceStationRecords =
         CVarDef.Create("hardlight.round_persistence.station_records", true, CVar.SERVERONLY);
 
-    /// <summary>
-    /// Enable ship IFF and association persistence
-    /// </summary>
-    public static readonly CVarDef<bool> RoundPersistenceShipData =
-        CVarDef.Create("hardlight.round_persistence.ship_data", true, CVar.SERVERONLY);
+    // Triad: removed - never wired. No C# read site and no config preset sets it; the ship-save
+    // replacement makes it moot. Kept commented so an upstream merge surfaces a conflict.
+    // /// <summary>
+    // /// Enable ship IFF and association persistence
+    // /// </summary>
+    // public static readonly CVarDef<bool> RoundPersistenceShipData =
+    //     CVarDef.Create("hardlight.round_persistence.ship_data", true, CVar.SERVERONLY);
 
     /// <summary>
     /// Enable player payment data persistence
@@ -68,33 +70,39 @@ public sealed class HLCCVars
     public static readonly CVarDef<int> VendingRestockTickMs =
         CVarDef.Create("hardlight.vending.restock_tick_ms", 250, CVar.SERVERONLY, desc: "Interval in ms between vending restock ticks.");
 
-    // Exclude vending machines from shuttle save files to avoid load-time spikes
-    public static readonly CVarDef<bool> ExcludeVendingInShipSave =
-        CVarDef.Create("hardlight.vending.exclude_in_ship_save", true, CVar.SERVERONLY,
-            desc: "If true, vending machines are omitted from shuttle save files to reduce load hitches.");
+    // Triad: removed - never wired. No C# read site and no config preset sets it; vending exclusion
+    // is decided by the sanitizer's FilteredTypes table instead. Kept commented for merge visibility.
+    // // Exclude vending machines from shuttle save files to avoid load-time spikes
+    // public static readonly CVarDef<bool> ExcludeVendingInShipSave =
+    //     CVarDef.Create("hardlight.vending.exclude_in_ship_save", true, CVar.SERVERONLY,
+    //         desc: "If true, vending machines are omitted from shuttle save files to reduce load hitches.");
 
     // World chunk logging / behavior
     public static readonly CVarDef<bool> WorldChunkDebugLogs =
         CVarDef.Create("hardlight.world.debug_chunk_logs", false, CVar.SERVERONLY, desc: "Enable world chunk load/unload debug logs.");
 
-    // Ship load performance controls
-    public static readonly CVarDef<bool> ShipLoadAsync =
-        CVarDef.Create("hardlight.shipload.async", false, CVar.SERVERONLY, desc: "Load ships asynchronously over multiple ticks.");
-
-    public static readonly CVarDef<int> ShipLoadBatchNonContained =
-        CVarDef.Create("hardlight.shipload.batch_noncontained", 64, CVar.SERVERONLY, desc: "Max non-contained entities to spawn per tick during ship load.");
-
-    public static readonly CVarDef<int> ShipLoadBatchContained =
-        CVarDef.Create("hardlight.shipload.batch_contained", 96, CVar.SERVERONLY, desc: "Max contained entities to spawn/insert per tick during ship load.");
-
-    public static readonly CVarDef<int> ShipLoadTimeBudgetMs =
-        CVarDef.Create("hardlight.shipload.time_budget_ms", 8, CVar.SERVERONLY, desc: "Soft time budget per tick for ship load processing (ms).");
-
-    public static readonly CVarDef<bool> ShipLoadDecals =
-        CVarDef.Create("hardlight.shipload.load_decals", false, CVar.SERVERONLY, desc: "If true, restore decals when loading ships (can be expensive).");
-
-    public static readonly CVarDef<bool> ShipLoadLogProgress =
-        CVarDef.Create("hardlight.shipload.log_progress", false, CVar.SERVERONLY, desc: "Log ship load progress each tick.");
+    // Triad: removed - the whole async ship-load pipeline these six knobs configure was never
+    // implemented here. None has a C# read site and none is set by any config preset, so every
+    // one of them is inert: ship load is synchronous regardless of what these say. Superseded by
+    // the ship-storage replacement. Kept commented so an upstream merge surfaces a conflict.
+    // // Ship load performance controls
+    // public static readonly CVarDef<bool> ShipLoadAsync =
+    //     CVarDef.Create("hardlight.shipload.async", false, CVar.SERVERONLY, desc: "Load ships asynchronously over multiple ticks.");
+    //
+    // public static readonly CVarDef<int> ShipLoadBatchNonContained =
+    //     CVarDef.Create("hardlight.shipload.batch_noncontained", 64, CVar.SERVERONLY, desc: "Max non-contained entities to spawn per tick during ship load.");
+    //
+    // public static readonly CVarDef<int> ShipLoadBatchContained =
+    //     CVarDef.Create("hardlight.shipload.batch_contained", 96, CVar.SERVERONLY, desc: "Max contained entities to spawn/insert per tick during ship load.");
+    //
+    // public static readonly CVarDef<int> ShipLoadTimeBudgetMs =
+    //     CVarDef.Create("hardlight.shipload.time_budget_ms", 8, CVar.SERVERONLY, desc: "Soft time budget per tick for ship load processing (ms).");
+    //
+    // public static readonly CVarDef<bool> ShipLoadDecals =
+    //     CVarDef.Create("hardlight.shipload.load_decals", false, CVar.SERVERONLY, desc: "If true, restore decals when loading ships (can be expensive).");
+    //
+    // public static readonly CVarDef<bool> ShipLoadLogProgress =
+    //     CVarDef.Create("hardlight.shipload.log_progress", false, CVar.SERVERONLY, desc: "Log ship load progress each tick.");
 
     /// <summary>
     ///     Goobstation: Whether or not to allow mech weaponry to be used out of mechs.
