@@ -19,11 +19,15 @@ using Robust.Shared.Serialization.TypeSerializers.Interfaces;
 namespace Content.IntegrationTests.Tests._Triad.Drydock
 {
     /// <summary>
-    /// THE DENOMINATOR: walks every registered component's [DataField]s and reports every
+    /// THE DENOMINATOR: walks every registered component's [DataField]s and finds every
     /// field whose type the engine YAML serializer cannot write — the complete, authoritative
     /// set of state the drydock must capture/strip/rehydrate itself. Static and exhaustive:
     /// no ship-by-ship discovery, no waiting for a populated grid to trip it. The empirical
     /// roster sweep test (ported with the drydock systems) is the cross-check on this predictor.
+    ///
+    /// It is a GATE, not a report: the result is asserted against <see cref="ExpectedLeaves"/>,
+    /// so a merge that adds or removes a serializer path fails here and forces a decision,
+    /// instead of quietly changing what a stored ship keeps.
     ///
     /// Writability models the engine's own write dispatch (SerializationManager.Writing):
     /// primitives / string / enum / ISelfSerialize / arrays / generic collections
@@ -43,6 +47,23 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             var serialization = server.ResolveDependency<ISerializationManager>();
 
             var serializerTypes = CollectRegisteredWriterTypes();
+
+            // STEP 0 (control), before anything is measured: prove both stages still detect a
+            // gap they cannot miss. The empirical probe reads the engine's own exception wording,
+            // which has already drifted once (287 throws through two doors). A silently broken
+            // probe reports zero gaps, which reads as "everything serializes" — the worst
+            // available false negative for a system whose whole job is knowing what does not
+            // survive a write.
+            var controlLeaf = FindUnwritableLeaf(typeof(AuditControlUnwritable), serializerTypes, new HashSet<Type>());
+            Assert.That(controlLeaf, Is.EqualTo(typeof(AuditControlUnwritable)),
+                "Static predictor failed its control: a type with no serializer and no data definition was not flagged.");
+
+            var controlConfirmed = false;
+            await server.WaitPost(() => controlConfirmed = IsConfirmedUnwritable(serialization, typeof(AuditControlUnwritable)));
+            Assert.That(controlConfirmed, Is.True,
+                "Empirical probe failed its control: the live serializer did not report a gap for a type it cannot possibly "
+                + "write. The engine's exception type or wording has drifted. Fix IsConfirmedUnwritable before trusting any "
+                + "result this test produces.");
 
             // STEP 1 (static): the predictor's candidate leaves. Over-reports — it can't
             // see every path Robust makes a type writable (implicit-data-def-for-inheritors,
@@ -88,11 +109,126 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             foreach (var l in lines)
                 TestContext.Out.WriteLine($"[serializability-audit] {l}");
 
+            var confirmed = byLeaf.Keys.ToDictionary(StableName, t => byLeaf[t]);
+            var candidateCount = candidates.Count;
+
             await pair.CleanReturnAsync();
 
-            // Enumeration pass: always report, never fail. Becomes a gate (assert against a
-            // categorized allow-list) once each leaf is bucketed capture/strip/rehydrate.
-            Assert.Pass($"Audit complete: {byLeaf.Count} unserializable leaf types. See [serializability-audit] output.");
+            // Discrimination control: the empirical stage exists to clear static candidates the
+            // predictor cannot know are writable. If it ever confirms every one of them, it has
+            // stopped filtering and the set below is meaningless even when it happens to match.
+            Assert.That(confirmed, Has.Count.LessThan(candidateCount),
+                "Empirical probe confirmed every static candidate; it is no longer discriminating.");
+
+            var appeared = confirmed.Keys.Where(n => !ExpectedLeaves.ContainsKey(n)).OrderBy(n => n).ToList();
+            var vanished = ExpectedLeaves.Keys.Where(n => !confirmed.ContainsKey(n)).OrderBy(n => n).ToList();
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(appeared, Is.Empty,
+                    "A component [DataField] now bottoms out in a type the serializer cannot write, and nobody has decided "
+                    + "what the drydock does with it. Read the type, decide capture or strip, then record the verdict on the "
+                    + "Drydock State Fidelity Design wiki page and add it below. Field sites: "
+                    + string.Join("; ", appeared.Select(n => $"{n} -> {string.Join(", ", confirmed[n])}")));
+
+                Assert.That(vanished, Is.Empty,
+                    "A type the drydock plans around now serializes natively. If it was on the capture list, capturing it by "
+                    + "hand is now redundant work that will drift from the engine's own output. Re-read it and update both "
+                    + "the list below and the Drydock State Fidelity Design wiki page.");
+            });
+        }
+
+        /// <summary>
+        /// The audit's locked verdict, one entry per confirmed unserializable leaf type, keyed by
+        /// <see cref="StableName"/>. Established 2026-08-25 against engine 287; the reasoning for
+        /// every entry is on the Drydock State Fidelity Design wiki page and belongs there, not here.
+        ///
+        /// Field counts are deliberately NOT gated. Upstream adds and removes fields of these types
+        /// constantly and it changes nothing: the verdict is per type, so a new
+        /// <c>EntityCoordinates</c> field inherits the existing strip decision. What must never
+        /// change silently is the set of types itself.
+        ///
+        /// The <see cref="Verdict.Capture"/> entries are the fidelity layer's capture manifest.
+        /// When that manifest lands as a real constant, assert it equals this set rather than
+        /// maintaining the two by hand.
+        /// </summary>
+        private static readonly Dictionary<string, Verdict> ExpectedLeaves = new()
+        {
+            // Captured by hand: player-authored state on a ship, with no engine path to write it.
+            ["Content.Shared._NF.Market.MarketData"] = Verdict.Capture,
+            ["Content.Shared.Lathe.LatheRecipeBatch"] = Verdict.Capture,
+
+            // Stripped: round-scoped positions of things in motion.
+            ["Robust.Shared.Map.EntityCoordinates"] = Verdict.Strip,
+            ["Robust.Shared.Map.MapCoordinates"] = Verdict.Strip,
+
+            // Stripped: console and playback state that repopulates or simply stops.
+            ["Content.Shared.StationRecords.StationRecordsFilter"] = Verdict.Strip,
+            ["Content.Shared.Instruments.MidiTrack"] = Verdict.Strip,
+            ["Content.Shared._Triad.ContrabandPermit.ContrabandPermitConsoleEntry"] = Verdict.Strip,
+
+            // Stripped: mob-scoped state on occupants the store evicts.
+            ["Content.Shared._Common.Consent.PlayerConsentSettings"] = Verdict.Strip,
+            ["Content.Shared.Alert.AlertKey"] = Verdict.Strip,
+
+            // Stripped: sector-level records that live off-grid and never ride a blob.
+            ["Content.Shared._NF.BountyContracts.BountyContract"] = Verdict.Strip,
+            ["Content.Shared._NF.ShuttleRecords.ShuttleRecord"] = Verdict.Strip,
+            ["Content.Shared.MassMedia.Systems.NewsArticle"] = Verdict.Strip,
+
+            // Stripped: dead across rounds whether captured or not, or regenerated per tick.
+            ["Content.Shared.StationRecords.StationRecordKey"] = Verdict.Strip,
+            ["Robust.Shared.GameObjects.Entity<Content.Server.Spreader.EdgeSpreaderComponent>"] = Verdict.Strip,
+            ["System.Collections.Generic.Dictionary+Enumerator<Robust.Shared.GameObjects.EntityUid,Content.Shared.Climbing.Components.BonkableComponent>"] = Verdict.Strip,
+            ["System.ValueTuple<System.Single,System.Numerics.Vector2,System.Single>"] = Verdict.Strip,
+        };
+
+        private enum Verdict
+        {
+            /// <summary>The fidelity layer serializes and restores this itself.</summary>
+            Capture,
+
+            /// <summary>Dropped on store, by decision, with the reasoning recorded on the wiki.</summary>
+            Strip,
+        }
+
+        /// <summary>
+        /// Assembly-version-free type identity. <see cref="Type.FullName"/> embeds the assembly
+        /// version of every generic argument, so keying on it would churn this list on each engine
+        /// bump for reasons that have nothing to do with serializability.
+        /// </summary>
+        private static string StableName(Type type)
+        {
+            if (type.IsGenericParameter)
+                return type.Name;
+            if (type.IsArray)
+                return StableName(type.GetElementType()!) + "[]";
+
+            var name = Unticked(type.Name);
+            for (var declaring = type.DeclaringType; declaring != null; declaring = declaring.DeclaringType)
+                name = Unticked(declaring.Name) + "+" + name;
+            if (!string.IsNullOrEmpty(type.Namespace))
+                name = type.Namespace + "." + name;
+            if (type.IsGenericType)
+                name += "<" + string.Join(",", type.GetGenericArguments().Select(StableName)) + ">";
+
+            return name;
+        }
+
+        private static string Unticked(string name)
+        {
+            var tick = name.IndexOf('`');
+            return tick < 0 ? name : name[..tick];
+        }
+
+        /// <summary>
+        /// The control the probe must trip: no serializer, no data definition, no path to write it.
+        /// Declared here rather than found in content so the control never depends on content
+        /// staying broken in some particular way.
+        /// </summary>
+        private sealed class AuditControlUnwritable
+        {
+            public int Value = 1;
         }
 
         // Ground truth: does the LIVE serializer actually fail to write this type? Only a
