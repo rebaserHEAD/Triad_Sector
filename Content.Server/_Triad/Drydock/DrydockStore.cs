@@ -175,6 +175,34 @@ public sealed class DrydockStore
         }, ct);
     }
 
+    /// <summary>
+    /// Reads one specific revision and its blob, which is what the retrieve fallback walks when the
+    /// current revision fails to decompress or fails its checksum. Null when that revision has no
+    /// blob left, which is the ordinary outcome once pruning has been past it.
+    /// </summary>
+    public Task<DrydockLoad?> LoadRevision(Guid shipGuid, int revision, CancellationToken ct = default)
+    {
+        return _db.RunTriadDbCommand(async (db, token) =>
+        {
+            var ship = await db.DrydockShip.AsNoTracking()
+                .SingleOrDefaultAsync(s => s.ShipGuid == shipGuid, token);
+
+            if (ship == null)
+                return null;
+
+            var row = await db.DrydockRevision.AsNoTracking()
+                .SingleOrDefaultAsync(r => r.ShipGuid == shipGuid && r.Revision == revision, token);
+
+            if (row == null)
+                return null;
+
+            var blob = await db.DrydockBlob.AsNoTracking()
+                .SingleOrDefaultAsync(b => b.ShipGuid == shipGuid && b.Revision == revision, token);
+
+            return blob == null ? null : new DrydockLoad(ship, row, blob.Blob);
+        }, ct);
+    }
+
     /// <summary>The stored-ship list for a console, drawn from the display cache alone.</summary>
     public Task<List<DrydockShip>> GetShipsByOwner(Guid ownerUserId, CancellationToken ct = default)
     {
@@ -186,12 +214,27 @@ public sealed class DrydockStore
     }
 
     /// <summary>
-    /// Moves a ship's state and records why. State changes and their audit rows are written together
-    /// so the timeline can never disagree with the row it describes.
+    /// Moves a ship's state and records why, as a single conditional update.
+    ///
+    /// <para>The condition is the point. Retrieve gates on this transition, so "is it stored" and
+    /// "mark it checked out" have to be one statement: read-then-write lets two concurrent retrieves
+    /// both read <see cref="DrydockShipState.Stored"/> and both proceed, which is a duplicated ship.
+    /// SQLite serializes writers and would never show it; Postgres at read committed would. The
+    /// database is the only thing that can close this window, since a process-local guard does not
+    /// survive a restart and does not span two server processes.</para>
+    ///
+    /// <para>The audit row is written only when the update actually moved something, so the timeline
+    /// can never claim a change that did not happen.</para>
     /// </summary>
-    /// <returns>False when the ship is unknown, or when it is already in the requested state.</returns>
-    public Task<bool> SetState(
+    /// <param name="expected">
+    /// The state the ship must currently be in for the move to happen. Null means the caller does
+    /// not care, which is right for administrative actions and wrong for anything racing.
+    /// </param>
+    /// <returns>False when the ship is unknown, is not in <paramref name="expected"/>, or is already
+    /// in the requested state.</returns>
+    public Task<bool> TrySetState(
         Guid shipGuid,
+        DrydockShipState? expected,
         DrydockShipState state,
         DrydockAuditAction action,
         Guid? actorUserId,
@@ -203,27 +246,41 @@ public sealed class DrydockStore
         {
             await using var tx = await db.Database.BeginTransactionAsync(token);
 
-            var ship = await db.DrydockShip.SingleOrDefaultAsync(s => s.ShipGuid == shipGuid, token);
-            if (ship == null || ship.State == state)
+            var snapshot = await db.DrydockShip
+                .AsNoTracking()
+                .Where(s => s.ShipGuid == shipGuid)
+                .Select(s => new { s.ShipName, s.CurrentRevision })
+                .SingleOrDefaultAsync(token);
+
+            if (snapshot == null)
                 return false;
 
             var now = DateTime.UtcNow;
 
-            ship.State = state;
-            ship.StateChangedAt = now;
-            ship.UpdatedAt = now;
-
             // Only a checkout records a round. Coming back clears it, so "checked out in round N and
             // never came back" stays answerable from the row rather than by reading the timeline.
-            ship.CheckedOutRoundId = state == DrydockShipState.CheckedOut ? roundId : null;
+            var checkedOutRound = state == DrydockShipState.CheckedOut ? roundId : null;
+
+            var query = db.DrydockShip.Where(s => s.ShipGuid == shipGuid && s.State != state);
+            if (expected is { } required)
+                query = query.Where(s => s.State == required);
+
+            var moved = await query.ExecuteUpdateAsync(setters => setters
+                .SetProperty(s => s.State, state)
+                .SetProperty(s => s.StateChangedAt, now)
+                .SetProperty(s => s.UpdatedAt, now)
+                .SetProperty(s => s.CheckedOutRoundId, checkedOutRound), token);
+
+            if (moved == 0)
+                return false;
 
             db.DrydockAudit.Add(new DrydockAudit
             {
                 ShipGuid = shipGuid,
-                ShipName = ship.ShipName,
+                ShipName = snapshot.ShipName,
                 Action = action,
                 ActorUserId = actorUserId,
-                Revision = ship.CurrentRevision,
+                Revision = snapshot.CurrentRevision,
                 RoundId = roundId,
                 Reason = reason,
                 CreatedAt = now,

@@ -131,14 +131,24 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             await InsertPlayer(db, owner);
             await store.FileRevision(Request(shipId, owner, "Harrier"), Encoding.UTF8.GetBytes("doc"), keepBlobs: 2);
 
-            var moved = await store.SetState(shipId, DrydockShipState.CheckedOut, DrydockAuditAction.Retrieve, owner, null, null);
+            // The retrieve gate: only a stored ship can be checked out, and the check and the move
+            // are one statement so two of them cannot both win.
+            var moved = await store.TrySetState(shipId, DrydockShipState.Stored, DrydockShipState.CheckedOut,
+                DrydockAuditAction.Retrieve, owner, null, null);
             Assert.That(moved, Is.True);
 
-            var again = await store.SetState(shipId, DrydockShipState.CheckedOut, DrydockAuditAction.Retrieve, owner, null, null);
-            Assert.That(again, Is.False, "Moving to the state a ship is already in is not a state change and must not log one.");
+            var raced = await store.TrySetState(shipId, DrydockShipState.Stored, DrydockShipState.CheckedOut,
+                DrydockAuditAction.Retrieve, owner, null, null);
+            Assert.That(raced, Is.False, "A second retrieve of a checked-out ship must lose, which is what stops a duplicate.");
 
-            var held = await store.SetState(shipId, DrydockShipState.Held, DrydockAuditAction.Hold, null, null, "under investigation");
+            // An administrative hold does not care what state the ship was in.
+            var held = await store.TrySetState(shipId, null, DrydockShipState.Held,
+                DrydockAuditAction.Hold, null, null, "under investigation");
             Assert.That(held, Is.True);
+
+            var heldAgain = await store.TrySetState(shipId, null, DrydockShipState.Held,
+                DrydockAuditAction.Hold, null, null, "again");
+            Assert.That(heldAgain, Is.False, "Moving to the state a ship is already in is not a change and must not log one.");
 
             var audit = await store.GetAudit(shipId);
             Assert.Multiple(() =>
