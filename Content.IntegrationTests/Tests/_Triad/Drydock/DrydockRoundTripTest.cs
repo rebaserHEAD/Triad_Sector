@@ -16,10 +16,14 @@ using Content.Server.Station.Systems;
 using Content.Server.Shuttles.Components;
 using Content.Server.Wires;
 using Content.Shared._Triad.CCVar;
+using Content.Shared.Damage;
+using Content.Shared.Damage.Prototypes;
+using Content.Shared.FixedPoint;
 using Robust.Shared.Configuration;
 using Robust.Shared.GameObjects;
 using Robust.Shared.Map;
 using Robust.Shared.Maths;
+using Robust.Shared.Prototypes;
 
 namespace Content.IntegrationTests.Tests._Triad.Drydock
 {
@@ -62,47 +66,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             var owner = Guid.NewGuid();
             await InsertPlayer(db, owner);
 
-            var map = await pair.CreateTestMap();
-
-            EntityUid station = default;
-            EntityUid shipGrid = default;
-            EntityUid airlock = default;
-
-            await server.WaitPost(() =>
-            {
-                cfg.SetCVar(TriadCCVars.DrydockEnabled, true);
-                cfg.SetCVar(TriadCCVars.DrydockReadOnly, false);
-
-                // Retrieve refuses without a staging map, and nothing in a test pair creates one.
-                shipyard.SetupShipyardIfNeeded();
-
-                // The dock target. As far as the retrieve gate is concerned a station is a
-                // StationData component with a grid in it, which is what GetLargestGrid reads.
-                station = entMan.Spawn();
-                entMan.AddComponent<StationDataComponent>(station);
-                stationSys.AddGridToStation(station, map.Grid.Owner);
-
-                // The ship, on the same map but its own grid, so storing it cannot disturb the
-                // dock target.
-                var ship = mapSys.CreateGridEntity(map.MapId);
-                shipGrid = ship.Owner;
-
-                var tile = new Tile(1);
-                for (var x = 0; x < 3; x++)
-                {
-                    for (var y = 0; y < 3; y++)
-                    {
-                        mapSys.SetTile(ship.Owner, ship.Comp, new Vector2i(x, y), tile);
-                    }
-                }
-
-                entMan.EnsureComponent<ShuttleComponent>(shipGrid);
-                entMan.System<MetaDataSystem>().SetEntityName(shipGrid, "Kestrel");
-
-                airlock = entMan.SpawnEntity(AirlockProtoId, new EntityCoordinates(shipGrid, new Vector2(1f, 1f)));
-            });
-
-            await pair.RunTicksSync(5);
+            var (station, shipGrid, airlock) = await BuildShipAndStation(pair);
 
             // What the ship is made of, before it goes anywhere. Compared against the same census
             // afterwards this catches a drop, a duplicate, and a substitution that keeps the count
@@ -153,6 +117,134 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                 "WiresList is not a data field, so this passes only because Revive rebuilt the layout by hand.");
 
             await pair.CleanReturnAsync();
+        }
+
+        /// <summary>
+        /// Damage is the second reason a ship needs a fidelity layer at all, and it is a different
+        /// reason from the first. <c>DamageableComponent.Damage</c> is not unserializable, it is
+        /// declared read-only to the serializer, so it is never written and a shot-up hull comes
+        /// back pristine. That is a free repair on every combat vessel in a fork whose ships get
+        /// shot at, which is why the sidecar carries the raw damage dictionary across.
+        /// </summary>
+        [Test]
+        public async Task DamageSurvivesTheRoundTrip()
+        {
+            await using var pair = await PoolManager.GetServerClient();
+            var server = pair.Server;
+            var entMan = server.EntMan;
+
+            var db = server.ResolveDependency<IServerDbManager>();
+            var drydock = server.System<DrydockSystem>();
+            var damageSys = server.System<DamageableSystem>();
+            var protoMan = server.ResolveDependency<IPrototypeManager>();
+
+            var owner = Guid.NewGuid();
+            await InsertPlayer(db, owner);
+
+            var (station, shipGrid, airlock) = await BuildShipAndStation(pair);
+
+            FixedPoint2 damageBefore = default;
+
+            await server.WaitPost(() =>
+            {
+                var blunt = protoMan.Index<DamageTypePrototype>("Blunt");
+                var specifier = new DamageSpecifier(blunt, FixedPoint2.New(37));
+                damageSys.TryChangeDamage(airlock, specifier, ignoreResistances: true);
+            });
+
+            await pair.RunTicksSync(5);
+
+            await server.WaitAssertion(() =>
+            {
+                damageBefore = entMan.GetComponent<DamageableComponent>(airlock).TotalDamage;
+                Assert.That(damageBefore, Is.GreaterThan(FixedPoint2.Zero),
+                    "The control: the airlock has to actually be damaged, or the comparison after the round trip proves nothing.");
+            });
+
+            var (result, shipId) = await RunOnServer(pair, () => drydock.TryStoreShip(shipGrid, owner, null));
+            Assert.That(result, Is.EqualTo(DrydockStoreResult.Success));
+
+            await pair.RunTicksSync(5);
+
+            var retrieved = await RunOnServer(pair, () => drydock.TryRetrieveShip(shipId!.Value, owner, station, null));
+            Assert.That(retrieved, Is.Not.Null);
+
+            await pair.RunTicksSync(5);
+
+            var retrievedAirlock = await FindChildWithComponent<WiresComponent>(pair, retrieved!.Value);
+            Assert.That(retrievedAirlock, Is.Not.Null);
+
+            await server.WaitAssertion(() =>
+            {
+                Assert.That(entMan.GetComponent<DamageableComponent>(retrievedAirlock!.Value).TotalDamage,
+                    Is.EqualTo(damageBefore),
+                    "Damage is read-only to the serializer, so this passes only because the sidecar carried it and the rehydrate pass applied it.");
+
+                Assert.That(entMan.HasComponent<DrydockDamageSidecarComponent>(retrievedAirlock.Value), Is.False,
+                    "The sidecar is scaffolding for the crossing. Leaving it aboard would re-apply the same damage on the next retrieve.");
+            });
+
+            await pair.CleanReturnAsync();
+        }
+
+        /// <summary>
+        /// A three-by-three plated grid carrying one airlock, plus a station to dock it at. The
+        /// tiles are laid before anything is spawned on them: a spawn at grid-local coordinates
+        /// that are not on a set tile silently reparents to the map, and a grid census then reads
+        /// the wrong parent.
+        /// </summary>
+        private static async Task<(EntityUid Station, EntityUid ShipGrid, EntityUid Airlock)> BuildShipAndStation(TestPair pair)
+        {
+            var server = pair.Server;
+            var entMan = server.EntMan;
+            var cfg = server.ResolveDependency<IConfigurationManager>();
+            var shipyard = server.System<ShipyardSystem>();
+            var stationSys = server.System<StationSystem>();
+            var mapSys = server.System<SharedMapSystem>();
+
+            var map = await pair.CreateTestMap();
+
+            EntityUid station = default;
+            EntityUid shipGrid = default;
+            EntityUid airlock = default;
+
+            await server.WaitPost(() =>
+            {
+                cfg.SetCVar(TriadCCVars.DrydockEnabled, true);
+                cfg.SetCVar(TriadCCVars.DrydockReadOnly, false);
+
+                // Retrieve refuses without a staging map, and nothing in a test pair creates one.
+                shipyard.SetupShipyardIfNeeded();
+
+                // The dock target. As far as the retrieve gate is concerned a station is a
+                // StationData component with a grid in it, which is what GetLargestGrid reads.
+                station = entMan.Spawn();
+                entMan.AddComponent<StationDataComponent>(station);
+                stationSys.AddGridToStation(station, map.Grid.Owner);
+
+                // The ship, on the same map but its own grid, so storing it cannot disturb the
+                // dock target.
+                var ship = mapSys.CreateGridEntity(map.MapId);
+                shipGrid = ship.Owner;
+
+                var tile = new Tile(1);
+                for (var x = 0; x < 3; x++)
+                {
+                    for (var y = 0; y < 3; y++)
+                    {
+                        mapSys.SetTile(ship.Owner, ship.Comp, new Vector2i(x, y), tile);
+                    }
+                }
+
+                entMan.EnsureComponent<ShuttleComponent>(shipGrid);
+                entMan.System<MetaDataSystem>().SetEntityName(shipGrid, "Kestrel");
+
+                airlock = entMan.SpawnEntity(AirlockProtoId, new EntityCoordinates(shipGrid, new Vector2(1f, 1f)));
+            });
+
+            await pair.RunTicksSync(5);
+
+            return (station, shipGrid, airlock);
         }
 
         /// <summary>
