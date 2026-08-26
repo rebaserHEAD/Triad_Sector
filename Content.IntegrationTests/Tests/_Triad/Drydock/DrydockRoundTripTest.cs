@@ -1,0 +1,262 @@
+#nullable enable
+
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Net;
+using System.Numerics;
+using System.Threading;
+using System.Threading.Tasks;
+using Content.IntegrationTests.Pair;
+using Content.Server._NF.Shipyard.Systems;
+using Content.Server._Triad.Drydock;
+using Content.Server.Database;
+using Content.Server.Station.Components;
+using Content.Server.Station.Systems;
+using Content.Server.Shuttles.Components;
+using Content.Server.Wires;
+using Content.Shared._Triad.CCVar;
+using Robust.Shared.Configuration;
+using Robust.Shared.GameObjects;
+using Robust.Shared.Map;
+using Robust.Shared.Maths;
+
+namespace Content.IntegrationTests.Tests._Triad.Drydock
+{
+    /// <summary>
+    /// The first thing that ever moves a ship through the drydock. Everything either pipeline half
+    /// does is unproven until this runs: the six Revive steps, both sidecars, the validation
+    /// backstop, the manifest, and the claim.
+    ///
+    /// <para>It builds a ship rather than loading a roster vessel on purpose. A hand-built grid
+    /// fails for one reason at a time, which is what you want from the test that establishes the
+    /// round trip at all. The roster sweep is the separate test that answers whether real content
+    /// survives, and breadth is its job rather than this one's.</para>
+    ///
+    /// <para>The airlock is not decoration. Its wire layout is the sharpest available probe of the
+    /// map-init boundary: <c>WiresComponent.WiresList</c> is not a data field and the only thing
+    /// that ever builds it is the map-init handler, which never fires again for a restored entity.
+    /// Without the Revive step every panel on a retrieved ship opens empty, and nothing else about
+    /// the ship looks wrong.</para>
+    /// </summary>
+    [TestFixture]
+    [TestOf(typeof(DrydockSystem))]
+    public sealed class DrydockRoundTripTest
+    {
+        private const string AirlockProtoId = "Airlock";
+
+        [Test]
+        public async Task AShipStoredComesBackWithItsContentsAndItsWires()
+        {
+            await using var pair = await PoolManager.GetServerClient();
+            var server = pair.Server;
+            var entMan = server.EntMan;
+
+            var cfg = server.ResolveDependency<IConfigurationManager>();
+            var db = server.ResolveDependency<IServerDbManager>();
+            var drydock = server.System<DrydockSystem>();
+            var shipyard = server.System<ShipyardSystem>();
+            var stationSys = server.System<StationSystem>();
+            var mapSys = server.System<SharedMapSystem>();
+
+            var owner = Guid.NewGuid();
+            await InsertPlayer(db, owner);
+
+            var map = await pair.CreateTestMap();
+
+            EntityUid station = default;
+            EntityUid shipGrid = default;
+            EntityUid airlock = default;
+
+            await server.WaitPost(() =>
+            {
+                cfg.SetCVar(TriadCCVars.DrydockEnabled, true);
+                cfg.SetCVar(TriadCCVars.DrydockReadOnly, false);
+
+                // Retrieve refuses without a staging map, and nothing in a test pair creates one.
+                shipyard.SetupShipyardIfNeeded();
+
+                // The dock target. As far as the retrieve gate is concerned a station is a
+                // StationData component with a grid in it, which is what GetLargestGrid reads.
+                station = entMan.Spawn();
+                entMan.AddComponent<StationDataComponent>(station);
+                stationSys.AddGridToStation(station, map.Grid.Owner);
+
+                // The ship, on the same map but its own grid, so storing it cannot disturb the
+                // dock target.
+                var ship = mapSys.CreateGridEntity(map.MapId);
+                shipGrid = ship.Owner;
+
+                var tile = new Tile(1);
+                for (var x = 0; x < 3; x++)
+                {
+                    for (var y = 0; y < 3; y++)
+                    {
+                        mapSys.SetTile(ship.Owner, ship.Comp, new Vector2i(x, y), tile);
+                    }
+                }
+
+                entMan.EnsureComponent<ShuttleComponent>(shipGrid);
+                entMan.System<MetaDataSystem>().SetEntityName(shipGrid, "Kestrel");
+
+                airlock = entMan.SpawnEntity(AirlockProtoId, new EntityCoordinates(shipGrid, new Vector2(1f, 1f)));
+            });
+
+            await pair.RunTicksSync(5);
+
+            // What the ship is made of, before it goes anywhere. Compared against the same census
+            // afterwards this catches a drop, a duplicate, and a substitution that keeps the count
+            // the same.
+            var before = await CensusGrid(pair, shipGrid);
+            Assert.That(before.Values.Sum(), Is.GreaterThan(0), "The test ship has to actually carry something.");
+
+            var wiresBefore = await ReadWireCount(pair, airlock);
+            Assert.That(wiresBefore, Is.GreaterThan(0),
+                "A live airlock must have a populated wire layout, or this test cannot prove Revive rebuilt one.");
+
+            var (result, shipId) = await RunOnServer(pair, () => drydock.TryStoreShip(shipGrid, owner, null));
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(result, Is.EqualTo(DrydockStoreResult.Success));
+                Assert.That(shipId, Is.Not.Null, "A successful store names the hull it filed.");
+            });
+
+            await pair.RunTicksSync(5);
+            Assert.That(entMan.Deleted(shipGrid), Is.True,
+                "The grid is despawned only after the document is filed, so a live grid here means a half-committed store.");
+
+            var retrieved = await RunOnServer(pair, () => drydock.TryRetrieveShip(shipId!.Value, owner, station, null));
+            Assert.That(retrieved, Is.Not.Null, "The ship went in, so it has to come out.");
+
+            await pair.RunTicksSync(5);
+
+            await server.WaitAssertion(() =>
+            {
+                Assert.That(entMan.TryGetComponent<DrydockIdentityComponent>(retrieved!.Value, out var identity), Is.True,
+                    "Identity is the one piece of state nothing else on the grid can reconstruct.");
+                Assert.That(identity!.ShipId, Is.EqualTo(shipId!.Value),
+                    "A retrieve must return the same hull, not a new one that looks similar.");
+            });
+
+            var after = await CensusGrid(pair, retrieved!.Value);
+            Assert.That(after, Is.EqualTo(before),
+                "Every prototype aboard comes back, exactly once each. A difference is a drop, a duplicate or a substitution.");
+
+            // The map-init boundary, made concrete. This is the assertion the whole census on the
+            // wiki exists to justify.
+            var retrievedAirlock = await FindChildWithComponent<WiresComponent>(pair, retrieved.Value);
+            Assert.That(retrievedAirlock, Is.Not.Null, "The airlock came back, or the census above would have failed.");
+
+            var wiresAfter = await ReadWireCount(pair, retrievedAirlock!.Value);
+            Assert.That(wiresAfter, Is.EqualTo(wiresBefore),
+                "WiresList is not a data field, so this passes only because Revive rebuilt the layout by hand.");
+
+            await pair.CleanReturnAsync();
+        }
+
+        /// <summary>
+        /// Starts a server-side async operation on the game thread and pumps the pair until it
+        /// finishes. Both pipelines await database work, so the continuation has to come back to a
+        /// ticking server; awaiting the task from the test thread alone would never let it resume.
+        /// </summary>
+        private static async Task<T> RunOnServer<T>(TestPair pair, Func<Task<T>> start)
+        {
+            Task<T>? task = null;
+            await pair.Server.WaitPost(() => task = start());
+
+            for (var i = 0; i < 600 && !task!.IsCompleted; i++)
+            {
+                await pair.RunTicksSync(1);
+            }
+
+            Assert.That(task!.IsCompleted, Is.True,
+                "The drydock operation never completed: either it is blocked on the database, or a continuation never came back to the game thread.");
+
+            return await task;
+        }
+
+        /// <summary>
+        /// Every entity parented under the grid, counted per prototype. Recursive, because the
+        /// interesting losses live inside containers rather than on the floor.
+        /// </summary>
+        private static async Task<Dictionary<string, int>> CensusGrid(TestPair pair, EntityUid grid)
+        {
+            var census = new Dictionary<string, int>();
+            var entMan = pair.Server.EntMan;
+
+            await pair.Server.WaitPost(() =>
+            {
+                var stack = new Stack<EntityUid>();
+                stack.Push(grid);
+
+                while (stack.Count > 0)
+                {
+                    var current = stack.Pop();
+
+                    var children = entMan.GetComponent<TransformComponent>(current).ChildEnumerator;
+                    while (children.MoveNext(out var child))
+                    {
+                        var proto = entMan.GetComponent<MetaDataComponent>(child).EntityPrototype?.ID ?? "<no prototype>";
+                        census[proto] = census.GetValueOrDefault(proto) + 1;
+                        stack.Push(child);
+                    }
+                }
+            });
+
+            return census;
+        }
+
+        private static async Task<int> ReadWireCount(TestPair pair, EntityUid uid)
+        {
+            var count = -1;
+            await pair.Server.WaitPost(() =>
+            {
+                count = pair.Server.EntMan.GetComponent<WiresComponent>(uid).WiresList.Count;
+            });
+            return count;
+        }
+
+        private static async Task<EntityUid?> FindChildWithComponent<T>(TestPair pair, EntityUid grid) where T : IComponent
+        {
+            EntityUid? found = null;
+            var entMan = pair.Server.EntMan;
+
+            await pair.Server.WaitPost(() =>
+            {
+                var children = entMan.GetComponent<TransformComponent>(grid).ChildEnumerator;
+                while (children.MoveNext(out var child))
+                {
+                    if (!entMan.HasComponent<T>(child))
+                        continue;
+
+                    found = child;
+                    return;
+                }
+            });
+
+            return found;
+        }
+
+        /// <summary>
+        /// The owner column is a real foreign key, so a ship cannot be filed for a player who does
+        /// not exist.
+        /// </summary>
+        private static Task InsertPlayer(IServerDbManager db, Guid userId)
+        {
+            return db.RunTriadDbCommand(async (context, token) =>
+            {
+                context.Player.Add(new Player
+                {
+                    UserId = userId,
+                    LastSeenUserName = $"drydock-roundtrip-{userId:N}",
+                    FirstSeenTime = DateTime.UtcNow,
+                    LastSeenTime = DateTime.UtcNow,
+                    LastSeenAddress = IPAddress.Loopback,
+                });
+
+                await context.SaveChangesAsync(token);
+            }, CancellationToken.None);
+        }
+    }
+}
