@@ -978,6 +978,232 @@ namespace Content.Server.Database.Migrations.Postgres
                     b.ToTable("consent_toggle", (string)null);
                 });
 
+            modelBuilder.Entity("Content.Server.Database.DrydockAudit", b =>
+                {
+                    b.Property<long>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint")
+                        .HasColumnName("drydock_audit_id");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<long>("Id"));
+
+                    b.Property<int>("Action")
+                        .HasColumnType("integer")
+                        .HasColumnName("action");
+
+                    b.Property<Guid?>("ActorUserId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("actor_user_id");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at");
+
+                    b.Property<string>("Reason")
+                        .HasColumnType("text")
+                        .HasColumnName("reason");
+
+                    b.Property<int?>("Revision")
+                        .HasColumnType("integer")
+                        .HasColumnName("revision");
+
+                    b.Property<int?>("RoundId")
+                        .HasColumnType("integer")
+                        .HasColumnName("round_id");
+
+                    b.Property<Guid>("ShipGuid")
+                        .HasColumnType("uuid")
+                        .HasColumnName("ship_guid");
+
+                    b.Property<string>("ShipName")
+                        .HasColumnType("text")
+                        .HasColumnName("ship_name");
+
+                    b.Property<Guid?>("SubjectUserId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("subject_user_id");
+
+                    b.HasKey("Id")
+                        .HasName("PK_drydock_audit");
+
+                    b.HasIndex("ActorUserId");
+
+                    b.HasIndex("ShipGuid", "CreatedAt");
+
+                    b.ToTable("drydock_audit", (string)null);
+                });
+
+            modelBuilder.Entity("Content.Server.Database.DrydockBlob", b =>
+                {
+                    b.Property<Guid>("ShipGuid")
+                        .HasColumnType("uuid")
+                        .HasColumnName("ship_guid");
+
+                    b.Property<int>("Revision")
+                        .HasColumnType("integer")
+                        .HasColumnName("revision");
+
+                    b.Property<byte[]>("Blob")
+                        .IsRequired()
+                        .HasColumnType("bytea")
+                        .HasColumnName("blob");
+
+                    b.HasKey("ShipGuid", "Revision")
+                        .HasName("PK_drydock_blob");
+
+                    b.ToTable("drydock_blob", (string)null);
+                });
+
+            modelBuilder.Entity("Content.Server.Database.DrydockRevision", b =>
+                {
+                    b.Property<Guid>("ShipGuid")
+                        .HasColumnType("uuid")
+                        .HasColumnName("ship_guid");
+
+                    b.Property<int>("Revision")
+                        .HasColumnType("integer")
+                        .HasColumnName("revision");
+
+                    b.Property<Guid?>("ActorUserId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("actor_user_id");
+
+                    b.Property<byte[]>("CapturedKeyHash")
+                        .IsRequired()
+                        .HasColumnType("bytea")
+                        .HasColumnName("captured_key_hash");
+
+                    b.Property<byte[]>("Checksum")
+                        .IsRequired()
+                        .HasColumnType("bytea")
+                        .HasColumnName("checksum");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at");
+
+                    b.Property<int?>("CreatedRoundId")
+                        .HasColumnType("integer")
+                        .HasColumnName("created_round_id");
+
+                    b.Property<int?>("DerivedFromRevision")
+                        .HasColumnType("integer")
+                        .HasColumnName("derived_from_revision");
+
+                    b.Property<int>("DrydockFormatVer")
+                        .HasColumnType("integer")
+                        .HasColumnName("drydock_format_ver");
+
+                    b.Property<int>("EngineFormatVer")
+                        .HasColumnType("integer")
+                        .HasColumnName("engine_format_ver");
+
+                    b.Property<int>("Kind")
+                        .HasColumnType("integer")
+                        .HasColumnName("kind");
+
+                    b.Property<string>("Manifest")
+                        .IsRequired()
+                        .HasColumnType("jsonb")
+                        .HasColumnName("manifest");
+
+                    b.Property<byte[]>("ProtoFingerprint")
+                        .IsRequired()
+                        .HasColumnType("bytea")
+                        .HasColumnName("proto_fingerprint");
+
+                    b.Property<int>("RebakeVersion")
+                        .HasColumnType("integer")
+                        .HasColumnName("rebake_version");
+
+                    b.Property<int>("SizeBytes")
+                        .HasColumnType("integer")
+                        .HasColumnName("size_bytes");
+
+                    b.HasKey("ShipGuid", "Revision")
+                        .HasName("PK_drydock_revision");
+
+                    b.HasIndex("ActorUserId");
+
+                    b.HasIndex("CreatedRoundId")
+                        .HasDatabaseName("IX_drydock_revision_created_round_id");
+
+                    b.HasIndex("Manifest");
+
+                    NpgsqlIndexBuilderExtensions.HasMethod(b.HasIndex("Manifest"), "GIN");
+
+                    b.ToTable("drydock_revision", (string)null);
+                });
+
+            modelBuilder.Entity("Content.Server.Database.DrydockShip", b =>
+                {
+                    b.Property<Guid>("ShipGuid")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("ship_guid");
+
+                    b.Property<string>("AdminNotes")
+                        .HasColumnType("text")
+                        .HasColumnName("admin_notes");
+
+                    b.Property<int?>("CheckedOutRoundId")
+                        .HasColumnType("integer")
+                        .HasColumnName("checked_out_round_id");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at");
+
+                    b.Property<int>("CurrentRevision")
+                        .HasColumnType("integer")
+                        .HasColumnName("current_revision");
+
+                    b.Property<bool>("Investigating")
+                        .HasColumnType("boolean")
+                        .HasColumnName("investigating");
+
+                    b.Property<Guid>("OwnerUserId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("owner_user_id");
+
+                    b.Property<string>("ShipName")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("ship_name");
+
+                    b.Property<string>("SizeClass")
+                        .HasColumnType("text")
+                        .HasColumnName("size_class");
+
+                    b.Property<int>("State")
+                        .HasColumnType("integer")
+                        .HasColumnName("state");
+
+                    b.Property<DateTime>("StateChangedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("state_changed_at");
+
+                    b.Property<DateTime>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("updated_at");
+
+                    b.Property<string>("VesselProto")
+                        .HasColumnType("text")
+                        .HasColumnName("vessel_proto");
+
+                    b.HasKey("ShipGuid")
+                        .HasName("PK_drydock_ship");
+
+                    b.HasIndex("CheckedOutRoundId")
+                        .HasDatabaseName("IX_drydock_ship_checked_out_round_id");
+
+                    b.HasIndex("OwnerUserId");
+
+                    b.HasIndex("State", "StateChangedAt");
+
+                    b.ToTable("drydock_ship", (string)null);
+                });
+
             modelBuilder.Entity("Content.Server.Database.IPIntelCache", b =>
                 {
                     b.Property<int>("Id")
@@ -2184,6 +2410,66 @@ namespace Content.Server.Database.Migrations.Postgres
                     b.Navigation("ConsentSettings");
                 });
 
+            modelBuilder.Entity("Content.Server.Database.DrydockBlob", b =>
+                {
+                    b.HasOne("Content.Server.Database.DrydockRevision", "RevisionRow")
+                        .WithOne("Blob")
+                        .HasForeignKey("Content.Server.Database.DrydockBlob", "ShipGuid", "Revision")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired()
+                        .HasConstraintName("FK_drydock_blob_drydock_revision_revision_row_temp_id");
+
+                    b.Navigation("RevisionRow");
+                });
+
+            modelBuilder.Entity("Content.Server.Database.DrydockRevision", b =>
+                {
+                    b.HasOne("Content.Server.Database.Player", "Actor")
+                        .WithMany()
+                        .HasForeignKey("ActorUserId")
+                        .HasPrincipalKey("UserId")
+                        .OnDelete(DeleteBehavior.SetNull)
+                        .HasConstraintName("FK_drydock_revision_player_actor_id");
+
+                    b.HasOne("Content.Server.Database.Round", "CreatedRound")
+                        .WithMany()
+                        .HasForeignKey("CreatedRoundId")
+                        .HasConstraintName("FK_drydock_revision_round_created_round_id");
+
+                    b.HasOne("Content.Server.Database.DrydockShip", "Ship")
+                        .WithMany("Revisions")
+                        .HasForeignKey("ShipGuid")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired()
+                        .HasConstraintName("FK_drydock_revision_drydock_ship_ship_temp_id");
+
+                    b.Navigation("Actor");
+
+                    b.Navigation("CreatedRound");
+
+                    b.Navigation("Ship");
+                });
+
+            modelBuilder.Entity("Content.Server.Database.DrydockShip", b =>
+                {
+                    b.HasOne("Content.Server.Database.Round", "CheckedOutRound")
+                        .WithMany()
+                        .HasForeignKey("CheckedOutRoundId")
+                        .HasConstraintName("FK_drydock_ship_round_checked_out_round_id");
+
+                    b.HasOne("Content.Server.Database.Player", "Owner")
+                        .WithMany()
+                        .HasForeignKey("OwnerUserId")
+                        .HasPrincipalKey("UserId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired()
+                        .HasConstraintName("FK_drydock_ship_player_owner_id");
+
+                    b.Navigation("CheckedOutRound");
+
+                    b.Navigation("Owner");
+                });
+
             modelBuilder.Entity("Content.Server.Database.Job", b =>
                 {
                     b.HasOne("Content.Server.Database.Profile", "Profile")
@@ -2406,6 +2692,16 @@ namespace Content.Server.Database.Migrations.Postgres
                     b.Navigation("ConsentToggles");
 
                     b.Navigation("ReadReceipts");
+                });
+
+            modelBuilder.Entity("Content.Server.Database.DrydockRevision", b =>
+                {
+                    b.Navigation("Blob");
+                });
+
+            modelBuilder.Entity("Content.Server.Database.DrydockShip", b =>
+                {
+                    b.Navigation("Revisions");
                 });
 
             modelBuilder.Entity("Content.Server.Database.Player", b =>

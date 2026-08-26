@@ -6,6 +6,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Reflection;
 using System.Threading.Tasks;
+using Content.Server._Triad.Drydock;
 using Robust.Shared.GameObjects;
 using Robust.Shared.Serialization;
 using Robust.Shared.Serialization.Manager;
@@ -58,8 +59,9 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             await server.WaitPost(() => controlConfirmed = IsConfirmedUnwritable(serialization, typeof(AuditControlUnwritable)));
             Assert.That(controlConfirmed, Is.True,
                 "Empirical probe failed its control: the live serializer did not report a gap for a type it cannot possibly "
-                + "write. The engine's exception type or wording has drifted. Fix IsConfirmedUnwritable before trusting any "
-                + "result this test produces.");
+                + "write. The engine's exception type or wording has drifted. Fix "
+                + "DrydockSerializationGap.IsNoCoverage before trusting any result this test produces, and note that "
+                + "the fidelity layer's store path is reading the same broken classification right now.");
 
             // STEP 1 (static): the predictor's candidate leaves. Over-reports — it can't
             // see every path Robust makes a type writable (implicit-data-def-for-inheritors,
@@ -124,7 +126,8 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                 Assert.That(appeared, Is.Empty,
                     "A component [DataField] now bottoms out in a type the serializer cannot write, and nobody has decided "
                     + "what the drydock does with it. Read the type, decide capture or strip, then record the verdict on the "
-                    + "Drydock State Fidelity Design wiki page and add it below. Field sites: "
+                    + "Drydock State Fidelity Design wiki page, then add it to StrippedLeaves here or to "
+                    + "DrydockSerializationGap.CapturedTypes. Field sites: "
                     + string.Join("; ", appeared.Select(n => $"{n} -> {string.Join(", ", confirmed[n])}")));
 
                 Assert.That(vanished, Is.Empty,
@@ -148,35 +151,61 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
         /// When that manifest lands as a real constant, assert it equals this set rather than
         /// maintaining the two by hand.
         /// </summary>
-        private static readonly Dictionary<string, Verdict> ExpectedLeaves = new()
+        private static readonly Dictionary<string, Verdict> ExpectedLeaves = BuildExpectedLeaves();
+
+        /// <summary>
+        /// The capture half comes from <see cref="DrydockSerializationGap.CapturedTypes"/> rather
+        /// than being restated here, so the store path and this gate cannot disagree about what is
+        /// captured. The strip half is the audit's own record: those types have no runtime
+        /// representation at all, since stripping is what happens when nothing captures them.
+        /// </summary>
+        private static Dictionary<string, Verdict> BuildExpectedLeaves()
         {
-            // Captured by hand: player-authored state on a ship, with no engine path to write it.
-            ["Content.Shared._NF.Market.MarketData"] = Verdict.Capture,
-            ["Content.Shared.Lathe.LatheRecipeBatch"] = Verdict.Capture,
+            var expected = new Dictionary<string, Verdict>();
 
-            // Stripped: round-scoped positions of things in motion.
-            ["Robust.Shared.Map.EntityCoordinates"] = Verdict.Strip,
-            ["Robust.Shared.Map.MapCoordinates"] = Verdict.Strip,
+            foreach (var captured in DrydockSerializationGap.CapturedTypes)
+                expected[StableName(captured)] = Verdict.Capture;
 
-            // Stripped: console and playback state that repopulates or simply stops.
-            ["Content.Shared.StationRecords.StationRecordsFilter"] = Verdict.Strip,
-            ["Content.Shared.Instruments.MidiTrack"] = Verdict.Strip,
-            ["Content.Shared._Triad.ContrabandPermit.ContrabandPermitConsoleEntry"] = Verdict.Strip,
+            foreach (var stripped in StrippedLeaves)
+            {
+                // A type cannot be both, and a merge that lands it in both lists would otherwise
+                // resolve silently to whichever ran last.
+                Assert.That(expected.ContainsKey(stripped), Is.False,
+                    $"{stripped} is on the capture manifest and on the strip list at once.");
+                expected[stripped] = Verdict.Strip;
+            }
 
-            // Stripped: mob-scoped state on occupants the store evicts.
-            ["Content.Shared._Common.Consent.PlayerConsentSettings"] = Verdict.Strip,
-            ["Content.Shared.Alert.AlertKey"] = Verdict.Strip,
+            return expected;
+        }
 
-            // Stripped: sector-level records that live off-grid and never ride a blob.
-            ["Content.Shared._NF.BountyContracts.BountyContract"] = Verdict.Strip,
-            ["Content.Shared._NF.ShuttleRecords.ShuttleRecord"] = Verdict.Strip,
-            ["Content.Shared.MassMedia.Systems.NewsArticle"] = Verdict.Strip,
+        // A property, not a static field: a static field is initialized in textual order, so
+        // ExpectedLeaves would read it as null from above. Evaluating on access removes the
+        // hazard instead of relying on these two staying in the right order forever.
+        private static IReadOnlyList<string> StrippedLeaves => new[]
+        {
+            // Round-scoped positions of things in motion.
+            "Robust.Shared.Map.EntityCoordinates",
+            "Robust.Shared.Map.MapCoordinates",
 
-            // Stripped: dead across rounds whether captured or not, or regenerated per tick.
-            ["Content.Shared.StationRecords.StationRecordKey"] = Verdict.Strip,
-            ["Robust.Shared.GameObjects.Entity<Content.Server.Spreader.EdgeSpreaderComponent>"] = Verdict.Strip,
-            ["System.Collections.Generic.Dictionary+Enumerator<Robust.Shared.GameObjects.EntityUid,Content.Shared.Climbing.Components.BonkableComponent>"] = Verdict.Strip,
-            ["System.ValueTuple<System.Single,System.Numerics.Vector2,System.Single>"] = Verdict.Strip,
+            // console and playback state that repopulates or simply stops.
+            "Content.Shared.StationRecords.StationRecordsFilter",
+            "Content.Shared.Instruments.MidiTrack",
+            "Content.Shared._Triad.ContrabandPermit.ContrabandPermitConsoleEntry",
+
+            // mob-scoped state on occupants the store evicts.
+            "Content.Shared._Common.Consent.PlayerConsentSettings",
+            "Content.Shared.Alert.AlertKey",
+
+            // sector-level records that live off-grid and never ride a blob.
+            "Content.Shared._NF.BountyContracts.BountyContract",
+            "Content.Shared._NF.ShuttleRecords.ShuttleRecord",
+            "Content.Shared.MassMedia.Systems.NewsArticle",
+
+            // dead across rounds whether captured or not, or regenerated per tick.
+            "Content.Shared.StationRecords.StationRecordKey",
+            "Robust.Shared.GameObjects.Entity<Content.Server.Spreader.EdgeSpreaderComponent>",
+            "System.Collections.Generic.Dictionary+Enumerator<Robust.Shared.GameObjects.EntityUid,Content.Shared.Climbing.Components.BonkableComponent>",
+            "System.ValueTuple<System.Single,System.Numerics.Vector2,System.Single>",
         };
 
         private enum Verdict
@@ -245,21 +274,12 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                 serialization.WriteValue(type, instance, alwaysWrite: true);
                 return false; // wrote fine -> serializable.
             }
-            // Engine 287 throws the gap through two doors: the generated data-definition
-            // path (InvalidOperationException) and WriteNoSerializer's no-path fallback
-            // (ArgumentException). Both wordings are the exact gap; anything else is a bad
-            // sample, not a serializability gap.
-            catch (InvalidOperationException e) when (e.Message.Contains("No data definition found"))
+            catch (Exception e)
             {
-                return true;
-            }
-            catch (ArgumentException e) when (e.Message.Contains("No type serializer or data definition found"))
-            {
-                return true;
-            }
-            catch
-            {
-                return false;
+                // The classification lives with the store path, not here. Sharing it is the point:
+                // this test's control is what proves the classification still works, and that proof
+                // is only worth something while the fidelity layer asks the same code.
+                return DrydockSerializationGap.IsNoCoverage(e);
             }
         }
 
