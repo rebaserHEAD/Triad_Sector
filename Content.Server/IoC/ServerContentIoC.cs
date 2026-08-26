@@ -4,6 +4,9 @@ using Content.Server._NF.Auth;
 using Content.Server._Triad.Shipyard.Admin;
 using Content.Server._Triad.Shipyard.Persistence;
 // End Triad
+// Triad: drydock
+using Content.Server._Triad.Drydock;
+// End Triad
 using Content.Server.Administration;
 using Content.Server.Administration.Logs;
 using Content.Server.Administration.Managers;
@@ -99,6 +102,10 @@ namespace Content.Server.IoC
             // Tracks open tamper admin panels so a single audit-write signal updates every one,
             // letting multiple admins watch the live feed without re-opening it.
             IoCManager.Register<TriadTamperAdminEuiRegistry>();
+            // End Triad
+
+            // Triad: drydock
+            IoCManager.Register<DrydockStore>();
             // End Triad
         }
     }

@@ -59,4 +59,30 @@ public sealed class TriadCCVars
     /// </summary>
     public static readonly CVarDef<bool> AllowMapGasExtraction =
         CVarDef.Create("triad.atmos.allow_map_gas_extraction", false, CVar.SERVER | CVar.REPLICATED);
+
+    // Triad: drydock
+    /// <summary>
+    /// Master switch for the drydock. Off means the console offers neither store nor retrieve and
+    /// the maintenance ladder does not run. Stored ships are untouched either way.
+    /// </summary>
+    public static readonly CVarDef<bool> DrydockEnabled =
+        CVarDef.Create("triad.drydock.enabled", false, CVar.SERVERONLY);
+
+    /// <summary>
+    /// Retrieve is allowed, store is refused, and the re-bake ladder pauses. This is the switch to
+    /// reach for when a build is suspected of writing bad revisions: the deploy pipeline is a daily
+    /// cron with no rollback path, so refusing loudly for a day beats filing a day of bad blobs
+    /// while still letting people fly the ships they already own.
+    /// </summary>
+    public static readonly CVarDef<bool> DrydockReadOnly =
+        CVarDef.Create("triad.drydock.read_only", false, CVar.SERVERONLY);
+
+    /// <summary>
+    /// How many revisions keep their blob. Revision history itself is kept indefinitely; this only
+    /// bounds the documents, and the current revision is never pruned regardless of this value.
+    /// Zero or less prunes nothing at all, which is the safe direction to misconfigure.
+    /// </summary>
+    public static readonly CVarDef<int> DrydockKeepBlobs =
+        CVarDef.Create("triad.drydock.keep_blobs", 3, CVar.SERVERONLY);
+    // End Triad
 }
