@@ -56,6 +56,12 @@ namespace Content.Server.Database
         public DbSet<TriadShipyardAuditEvent>       TriadShipyardAuditEvents        { get; set; } = default!;
         public DbSet<TriadShipyardMigrationPermit>  TriadShipyardMigrationPermits   { get; set; } = default!;
         // End Triad
+        // Triad: drydock (see Model.Drydock.cs)
+        public DbSet<DrydockShip>     DrydockShip     { get; set; } = default!;
+        public DbSet<DrydockRevision> DrydockRevision { get; set; } = default!;
+        public DbSet<DrydockBlob>     DrydockBlob     { get; set; } = default!;
+        public DbSet<DrydockAudit>    DrydockAudit    { get; set; } = default!;
+        // End Triad
         public DbSet<CompanyMember> CompanyMembers { get; set; } = null!;
 
         protected override void OnModelCreating(ModelBuilder modelBuilder)
@@ -348,6 +354,9 @@ namespace Content.Server.Database
             modelBuilder.Entity<TriadShipyardMigrationPermit>()
                 .HasIndex(p => p.PlayerUserId)
                 .IsUnique();
+            // End Triad
+            // Triad: drydock
+            ModelDrydock.OnModelCreating(modelBuilder);
             // End Triad
             // Mono
             modelBuilder.Entity<CompanyMember>()
