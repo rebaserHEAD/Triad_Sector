@@ -81,4 +81,15 @@ public sealed partial class ShipyardConsoleComponent : Component
     /// </summary>
     [DataField]
     public EntityWhitelist? ShipSaveBlacklist;
+
+    /// <summary>
+    /// Triad: the drydock tab's stored-ship list for whoever is currently at this console.
+    ///
+    /// <para>A cache rather than a lookup because the list comes from the database and the state
+    /// builder that has to publish it is synchronous. The drydock handlers fill this from an
+    /// awaited read and then push the state; every other refresh path just re-sends whatever is
+    /// here. Not a <c>DataField</c>: it is per-operator scratch, and persisting one player's ship
+    /// list onto a mapped console would show it to the next person who opened it.</para>
+    /// </summary>
+    public List<BUI.StoredShipInfo> CachedStoredShips = new();
 }

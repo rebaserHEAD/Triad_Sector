@@ -16,6 +16,14 @@ public sealed class ShipyardConsoleInterfaceState : BoundUserInterfaceState
     public readonly string ShipyardName;
     public readonly bool FreeListings;
     public readonly float SellRate;
+    public readonly List<StoredShipInfo> StoredShips; // Triad: drydock tab
+
+    /// <summary>
+    /// Triad: whether the drydock tab is offered at all. The master switch is server-only, so the
+    /// client cannot read it and has to be told; without this the console would show a tab whose
+    /// every button comes back refused.
+    /// </summary>
+    public readonly bool DrydockEnabled;
 
     public ShipyardConsoleInterfaceState(
         int balance,
@@ -27,7 +35,9 @@ public sealed class ShipyardConsoleInterfaceState : BoundUserInterfaceState
         (List<string> available, List<string> unavailable) shipyardPrototypes,
         string shipyardName,
         bool freeListings,
-        float sellRate)
+        float sellRate,
+        List<StoredShipInfo> storedShips, // Triad: drydock tab
+        bool drydockEnabled) // Triad: drydock tab
     {
         Balance = balance;
         AccessGranted = accessGranted;
@@ -39,5 +49,7 @@ public sealed class ShipyardConsoleInterfaceState : BoundUserInterfaceState
         ShipyardName = shipyardName;
         FreeListings = freeListings;
         SellRate = sellRate;
+        StoredShips = storedShips; // Triad: drydock tab
+        DrydockEnabled = drydockEnabled; // Triad: drydock tab
     }
 }

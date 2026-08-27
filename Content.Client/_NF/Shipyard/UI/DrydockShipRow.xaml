@@ -1,0 +1,32 @@
+<!-- Triad: drydock tab. One stored ship in the retrieve list. -->
+<PanelContainer xmlns="https://spacestation14.io"
+                xmlns:gfx="clr-namespace:Robust.Client.Graphics;assembly=Robust.Client"
+                HorizontalExpand="True"
+                SetHeight="40"
+                MaxWidth="590">
+    <PanelContainer.PanelOverride>
+        <gfx:StyleBoxFlat BorderThickness="3" BorderColor="#101010" BackgroundColor="#242424"/>
+    </PanelContainer.PanelOverride>
+    <BoxContainer Orientation="Horizontal"
+                  HorizontalExpand="True">
+        <Label Name="ShipName"
+            Access="Public"
+            HorizontalExpand="True"
+            HorizontalAlignment="Left"
+            Margin="5 0 2 0" />
+        <Label Name="SizeClassLabel"
+            Access="Public"
+            MinWidth="80"
+            Align="Right"
+            Margin="0 0 5 0"
+            Modulate="#999999"
+            HorizontalAlignment="Right" />
+        <Button Name="RetrieveButton"
+            Access="Public"
+            Text="{Loc 'shipyard-console-retrieve-button'}"
+            StyleClasses="ButtonSquare"
+            MinWidth="130"
+            Margin="0 0 12 0"
+            HorizontalAlignment="Right" />
+    </BoxContainer>
+</PanelContainer>

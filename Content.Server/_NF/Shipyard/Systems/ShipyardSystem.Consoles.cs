@@ -6,6 +6,7 @@ using Content.Server._NF.Shipyard.Components;
 using Content.Server._NF.ShuttleRecords;
 using Content.Shared._NF.Bank.Components;
 using Content.Shared._NF.Shipyard;
+using Content.Shared._Triad.CCVar; // Triad: drydock tab
 using Content.Shared._NF.Shipyard.Events;
 using Content.Shared._NF.Shipyard.BUI;
 using Content.Shared._NF.Shipyard.Prototypes;
@@ -900,7 +901,13 @@ public sealed partial class ShipyardSystem : SharedShipyardSystem
             GetAvailableShuttles(uid, uiKey, targetId: targetId),
             uiKey.ToString(),
             freeListings,
-            CalculateSellRate(uid));
+            CalculateSellRate(uid),
+            // Triad: drydock tab. Whatever the drydock handlers last read from the database; empty
+            // until one of them runs, so an unrelated refresh cannot blank a list that is showing.
+            TryComp<ShipyardConsoleComponent>(uid, out var drydockConsole)
+                ? drydockConsole.CachedStoredShips
+                : new(),
+            _configManager.GetCVar(TriadCCVars.DrydockEnabled)); // Triad: drydock tab
 
         _ui.SetUiState(uid, uiKey, newState);
     }

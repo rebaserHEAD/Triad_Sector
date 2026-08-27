@@ -23,6 +23,10 @@ public sealed partial class ShipyardConsoleMenu : FancyWindow
     public event Action<ButtonEventArgs>? OnOrderApproved;
     public event Action<ButtonEventArgs>? OnUnassignDeed;
     public event Action<string>? OnRenameShip;
+    // Triad: drydock tab. Store carries nothing because the server resolves the ship from the card
+    // in the slot; retrieve carries the id of the row that was clicked.
+    public event Action? OnStore;
+    public event Action<Guid>? OnRetrieve;
     private readonly List<VesselSize> _categoryStrings = new();
     private readonly List<VesselClass> _classStrings = new();
     private readonly List<VesselEngine> _engineStrings = new();
@@ -47,6 +51,11 @@ public sealed partial class ShipyardConsoleMenu : FancyWindow
         SellShipButton.OnPressed += (args) => { OnSellShip?.Invoke(args); };
         UnassignDeedButton.OnPressed += (args) => { OnUnassignDeed?.Invoke(args); };
         RenameButton.OnPressed += OnRenameButtonPressed;
+
+        // Triad: drydock tab
+        Tabs.SetTabTitle(0, Loc.GetString("shipyard-console-tab-purchase"));
+        Tabs.SetTabTitle(1, Loc.GetString("shipyard-console-tab-drydock"));
+        StoreButton.OnPressed += _ => OnStore?.Invoke();
         SaveShipButton.OnPressed += (args) => { OnSaveShip?.Invoke(args); };
     }
 
@@ -335,5 +344,26 @@ public sealed partial class ShipyardConsoleMenu : FancyWindow
         _freeListings = state.FreeListings;
         _validId = state.IsTargetIdPresent;
         PopulateProducts(_lastAvailableProtos, _lastUnavailableProtos, _freeListings, _validId);
+
+        // Triad: drydock tab. Hidden outright when the master switch is off, rather than shown with
+        // buttons that would every one of them come back refused.
+        Tabs.SetTabVisible(1, state.DrydockEnabled);
+        PopulateStoredShips(state.StoredShips);
+    }
+
+    /// <summary>
+    /// Triad: rebuilds the retrieve list from the server's stored-ship index. The list is whatever
+    /// the server last read for this operator, so it is empty until a drydock action fills it.
+    /// </summary>
+    public void PopulateStoredShips(List<StoredShipInfo> ships)
+    {
+        StoredShips.RemoveAllChildren();
+
+        foreach (var ship in ships)
+        {
+            var row = new DrydockShipRow(ship);
+            row.RetrieveButton.OnPressed += _ => OnRetrieve?.Invoke(row.ShipId);
+            StoredShips.AddChild(row);
+        }
     }
 }

@@ -102,3 +102,17 @@ shipyard-console-load-success-debt = Ship "{$ship}" loaded successfully. {$cost}
 # Mono start
 shipyard-console-engine-NFR = NFR
 # Mono end
+
+# Triad: drydock tab
+shipyard-console-tab-purchase = Purchase
+shipyard-console-tab-drydock = Drydock
+shipyard-console-store-button = Store ship on deed
+shipyard-console-retrieve-button = Retrieve
+shipyard-console-store-success = Ship stored. Retrieve it from any shipyard console.
+shipyard-console-store-not-owner = That ship is registered to another account.
+shipyard-console-store-organics = Someone is still aboard. Everyone has to be off the ship.
+shipyard-console-store-hazard = Something aboard is armed or unstable. Make it safe first.
+shipyard-console-store-disabled = The drydock is not accepting ships right now.
+shipyard-console-store-failed = The drydock could not store that ship. Try again shortly.
+shipyard-console-retrieve-success = Ship retrieved and docked.
+shipyard-console-retrieve-failed = That ship could not be retrieved. It may already be out.

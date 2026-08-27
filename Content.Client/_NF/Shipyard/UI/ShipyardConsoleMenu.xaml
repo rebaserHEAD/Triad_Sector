@@ -11,6 +11,8 @@
             <PanelContainer.PanelOverride>
                 <gfx:StyleBoxFlat BorderThickness="2" BorderColor="#333333" BackgroundColor="#181818"/>
             </PanelContainer.PanelOverride>
+    <!-- Triad: the purchase UI was the whole window; it is now the first tab, with drydock second -->
+    <TabContainer Name="Tabs" VerticalExpand="True" HorizontalExpand="True">
     <BoxContainer Orientation="Vertical" Margin="5 0 5 0">
         <PanelContainer VerticalExpand="False" HorizontalExpand="True" Margin="0 8 0 2">
             <PanelContainer.PanelOverride>
@@ -169,6 +171,20 @@
             </BoxContainer>
         </BoxContainer>
     </BoxContainer>
+    <!-- Triad: drydock tab. Store acts on the deed in the console's card slot, so it needs no
+         selection; the list below is the operator's own stored ships, filled by the server. -->
+    <BoxContainer Name="DrydockTab" Orientation="Vertical" Margin="5 0 5 0">
+        <Button Name="StoreButton" Text="{Loc 'shipyard-console-store-button'}" Margin="0 8 0 4" />
+        <ScrollContainer HorizontalExpand="True" VerticalExpand="True">
+            <BoxContainer Name="StoredShips"
+                          Orientation="Vertical"
+                          HorizontalExpand="True"
+                          VerticalExpand="True">
+                <!-- Rows are added by PopulateStoredShips -->
+            </BoxContainer>
+        </ScrollContainer>
+    </BoxContainer>
+    </TabContainer>
         </PanelContainer>
     </PanelContainer>
 </controls:FancyWindow>
