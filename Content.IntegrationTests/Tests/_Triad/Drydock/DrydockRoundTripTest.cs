@@ -21,7 +21,9 @@ using Content.Shared.Damage;
 using Content.Shared.Damage.Prototypes;
 using Content.Shared.DeviceNetwork.Components;
 using Content.Shared.FixedPoint;
+using Content.Shared.Lathe;
 using Content.Shared.Research.Components;
+using Content.Shared.Research.Prototypes;
 using Robust.Shared.Configuration;
 using Robust.Shared.GameObjects;
 using Robust.Shared.Map;
@@ -53,6 +55,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
         private const string AirlockProtoId = "Airlock";
         private const string ResearchServerProtoId = "ResearchAndDevelopmentServer";
         private const string LatheProtoId = "Protolathe";
+        private const string LatheRecipeId = "SheetSteel";
 
         [Test]
         public async Task AShipStoredComesBackWithItsContentsAndItsWires()
@@ -306,6 +309,81 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
 
                 Assert.That(entMan.HasComponent<ResearchServerComponent>(client.Server!.Value), Is.True,
                     "And it has to be pointed at a real server, not merely non-null.");
+            });
+
+            await pair.CleanReturnAsync();
+        }
+
+        /// <summary>
+        /// The capture manifest, finally carrying something. Everything above tests state the
+        /// serializer could write and something forgot to re-run; this tests state the serializer
+        /// cannot write at all.
+        ///
+        /// <para>A lathe queue is a <c>[DataField]</c> whose element type has no serializer
+        /// anywhere, which is the exact failure the fidelity probe exists to find. The field is
+        /// captured into a sidecar, cleared so the map serializer does not choke on it, and put
+        /// back on arrival. Without that the store does not merely lose the queue: the serializer
+        /// aborts the whole grid, so this is also the difference between a ship that stores and one
+        /// that refuses.</para>
+        ///
+        /// <para>The other manifest entry is market data, which needs a market to be meaningful.
+        /// This covers the mechanism; that entry rides the same code path.</para>
+        /// </summary>
+        [Test]
+        public async Task AQueuedLatheRecipeSurvivesTheRoundTrip()
+        {
+            await using var pair = await PoolManager.GetServerClient();
+            var server = pair.Server;
+            var entMan = server.EntMan;
+
+            var db = server.ResolveDependency<IServerDbManager>();
+            var drydock = server.System<DrydockSystem>();
+            var protoMan = server.ResolveDependency<IPrototypeManager>();
+
+            var owner = Guid.NewGuid();
+            await InsertPlayer(db, owner);
+
+            var (station, shipGrid, _) = await BuildShipAndStation(pair);
+
+            await server.WaitPost(() =>
+            {
+                var lathe = entMan.SpawnEntity(LatheProtoId, new EntityCoordinates(shipGrid, new Vector2(2f, 2f)));
+                var recipe = protoMan.Index<LatheRecipePrototype>(LatheRecipeId);
+
+                entMan.GetComponent<LatheComponent>(lathe).Queue.Add(
+                    new LatheRecipeBatch(recipe, itemsPrinted: 1, itemsRequested: 5, actor: null));
+            });
+
+            await pair.RunTicksSync(5);
+
+            var (result, shipId) = await RunOnServer(pair, () => drydock.TryStoreShip(shipGrid, owner, null));
+            Assert.That(result, Is.EqualTo(DrydockStoreResult.Success),
+                "A populated queue must not fail the store. If the probe stopped recognising the gap this would come back SerializeFailed.");
+
+            await pair.RunTicksSync(5);
+
+            var retrieved = await RunOnServer(pair, () => drydock.TryRetrieveShip(shipId!.Value, owner, station, null));
+            Assert.That(retrieved, Is.Not.Null);
+
+            await pair.RunTicksSync(5);
+
+            var retrievedLathe = await FindChildWithComponent<LatheComponent>(pair, retrieved!.Value);
+            Assert.That(retrievedLathe, Is.Not.Null, "The lathe came back with the ship.");
+
+            await server.WaitAssertion(() =>
+            {
+                var queue = entMan.GetComponent<LatheComponent>(retrievedLathe!.Value).Queue;
+
+                Assert.That(queue, Has.Count.EqualTo(1),
+                    "The queue is carried by the capture sidecar, so an empty one here means it was stripped rather than captured, or never restored.");
+
+                Assert.Multiple(() =>
+                {
+                    Assert.That(queue[0].Recipe.ID, Is.EqualTo(LatheRecipeId));
+                    Assert.That(queue[0].ItemsRequested, Is.EqualTo(5));
+                    Assert.That(queue[0].ItemsPrinted, Is.EqualTo(1),
+                        "Progress through a batch is part of what a player would notice losing.");
+                });
             });
 
             await pair.CleanReturnAsync();
