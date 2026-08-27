@@ -11,6 +11,7 @@ using Content.IntegrationTests.Pair;
 using Content.Server._NF.Shipyard.Systems;
 using Content.Server._Triad.Drydock;
 using Content.Server.Database;
+using Content.Server.DeviceNetwork.Systems;
 using Content.Server.Station.Components;
 using Content.Server.Station.Systems;
 using Content.Server.Shuttles.Components;
@@ -18,7 +19,9 @@ using Content.Server.Wires;
 using Content.Shared._Triad.CCVar;
 using Content.Shared.Damage;
 using Content.Shared.Damage.Prototypes;
+using Content.Shared.DeviceNetwork.Components;
 using Content.Shared.FixedPoint;
+using Content.Shared.Research.Components;
 using Robust.Shared.Configuration;
 using Robust.Shared.GameObjects;
 using Robust.Shared.Map;
@@ -48,6 +51,8 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
     public sealed class DrydockRoundTripTest
     {
         private const string AirlockProtoId = "Airlock";
+        private const string ResearchServerProtoId = "ResearchAndDevelopmentServer";
+        private const string LatheProtoId = "Protolathe";
 
         [Test]
         public async Task AShipStoredComesBackWithItsContentsAndItsWires()
@@ -182,6 +187,125 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
 
                 Assert.That(entMan.HasComponent<DrydockDamageSidecarComponent>(retrievedAirlock.Value), Is.False,
                     "The sidecar is scaffolding for the crossing. Leaving it aboard would re-apply the same damage on the next retrieve.");
+            });
+
+            await pair.CleanReturnAsync();
+        }
+
+        /// <summary>
+        /// The second of the three Revive steps the map-init census added. Device network
+        /// membership is registration held by the network system rather than state on the device,
+        /// and joining happens on map init, which never fires again for a restored entity. Without
+        /// the step a retrieved ship's alarms, sensors and consoles come back present, powered, and
+        /// deaf: nothing about them looks wrong from the outside.
+        /// </summary>
+        [Test]
+        public async Task DeviceNetworkMembershipComesBack()
+        {
+            await using var pair = await PoolManager.GetServerClient();
+            var server = pair.Server;
+            var entMan = server.EntMan;
+
+            var db = server.ResolveDependency<IServerDbManager>();
+            var drydock = server.System<DrydockSystem>();
+            var deviceNet = server.System<DeviceNetworkSystem>();
+
+            var owner = Guid.NewGuid();
+            await InsertPlayer(db, owner);
+
+            // The airlock the wires assertion uses carries DeviceNetwork too, so one entity covers
+            // both steps.
+            var (station, shipGrid, airlock) = await BuildShipAndStation(pair);
+
+            await server.WaitAssertion(() =>
+            {
+                var device = entMan.GetComponent<DeviceNetworkComponent>(airlock);
+                Assert.That(deviceNet.IsDeviceConnected(airlock, device), Is.True,
+                    "The control: a live airlock has to be on its network, or the check after the round trip means nothing.");
+            });
+
+            var (result, shipId) = await RunOnServer(pair, () => drydock.TryStoreShip(shipGrid, owner, null));
+            Assert.That(result, Is.EqualTo(DrydockStoreResult.Success));
+
+            await pair.RunTicksSync(5);
+
+            var retrieved = await RunOnServer(pair, () => drydock.TryRetrieveShip(shipId!.Value, owner, station, null));
+            Assert.That(retrieved, Is.Not.Null);
+
+            await pair.RunTicksSync(5);
+
+            var retrievedAirlock = await FindChildWithComponent<WiresComponent>(pair, retrieved!.Value);
+            Assert.That(retrievedAirlock, Is.Not.Null);
+
+            await server.WaitAssertion(() =>
+            {
+                var device = entMan.GetComponent<DeviceNetworkComponent>(retrievedAirlock!.Value);
+                Assert.That(deviceNet.IsDeviceConnected(retrievedAirlock.Value, device), Is.True,
+                    "Membership is not serialized state, so this passes only because Revive re-ran the join by hand.");
+            });
+
+            await pair.CleanReturnAsync();
+        }
+
+        /// <summary>
+        /// The third. A research client's link to its server is a plain property on one side and a
+        /// view-variables list on the other, so neither end serializes, and the only thing that
+        /// ever sets it is a map-init scan of the client's own grid. A retrieved ship carrying its
+        /// own R&amp;D server would have every lathe disconnected from it until somebody opened the
+        /// server-selection menu by hand.
+        /// </summary>
+        [Test]
+        public async Task ResearchClientsComeBackRegistered()
+        {
+            await using var pair = await PoolManager.GetServerClient();
+            var server = pair.Server;
+            var entMan = server.EntMan;
+
+            var db = server.ResolveDependency<IServerDbManager>();
+            var drydock = server.System<DrydockSystem>();
+
+            var owner = Guid.NewGuid();
+            await InsertPlayer(db, owner);
+
+            var (station, shipGrid, _) = await BuildShipAndStation(pair);
+
+            EntityUid lathe = default;
+
+            await server.WaitPost(() =>
+            {
+                entMan.SpawnEntity(ResearchServerProtoId, new EntityCoordinates(shipGrid, new Vector2(0f, 0f)));
+                lathe = entMan.SpawnEntity(LatheProtoId, new EntityCoordinates(shipGrid, new Vector2(2f, 2f)));
+            });
+
+            await pair.RunTicksSync(5);
+
+            await server.WaitAssertion(() =>
+            {
+                Assert.That(entMan.GetComponent<ResearchClientComponent>(lathe).Server, Is.Not.Null,
+                    "The control: the lathe has to find its server while the ship is live, which is the map-init scan doing its job.");
+            });
+
+            var (result, shipId) = await RunOnServer(pair, () => drydock.TryStoreShip(shipGrid, owner, null));
+            Assert.That(result, Is.EqualTo(DrydockStoreResult.Success));
+
+            await pair.RunTicksSync(5);
+
+            var retrieved = await RunOnServer(pair, () => drydock.TryRetrieveShip(shipId!.Value, owner, station, null));
+            Assert.That(retrieved, Is.Not.Null);
+
+            await pair.RunTicksSync(5);
+
+            var retrievedLathe = await FindChildWithComponent<ResearchClientComponent>(pair, retrieved!.Value);
+            Assert.That(retrievedLathe, Is.Not.Null, "The lathe came back with the ship.");
+
+            await server.WaitAssertion(() =>
+            {
+                var client = entMan.GetComponent<ResearchClientComponent>(retrievedLathe!.Value);
+                Assert.That(client.Server, Is.Not.Null,
+                    "Neither end of the registration is a data field, so this passes only because Revive re-ran the grid scan.");
+
+                Assert.That(entMan.HasComponent<ResearchServerComponent>(client.Server!.Value), Is.True,
+                    "And it has to be pointed at a real server, not merely non-null.");
             });
 
             await pair.CleanReturnAsync();
