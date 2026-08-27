@@ -10,6 +10,7 @@ using System.Threading.Tasks;
 using Content.IntegrationTests.Pair;
 using Content.Server._NF.Shipyard.Systems;
 using Content.Server._Triad.Drydock;
+using Content.Server._NF.Market.Components;
 using Content.Server.Database;
 using Content.Server.DeviceNetwork.Systems;
 using Content.Server.NodeContainer.Nodes;
@@ -17,6 +18,7 @@ using Content.Server.Station.Components;
 using Content.Server.Station.Systems;
 using Content.Server.Shuttles.Components;
 using Content.Server.Wires;
+using Content.Shared._NF.Market;
 using Content.Shared._Triad.CCVar;
 using Content.Shared.Atmos;
 using Content.Shared.Damage;
@@ -60,6 +62,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
         private const string LatheProtoId = "Protolathe";
         private const string LatheRecipeId = "SheetSteel";
         private const string PipeProtoId = "GasPipeStraight";
+        private const string MarketItemProtoId = "SheetSteel1";
 
         [Test]
         public async Task AShipStoredComesBackWithItsContentsAndItsWires()
@@ -476,6 +479,75 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                 var query = entMan.AllEntityQueryEnumerator<DrydockPipeGasComponent>();
                 Assert.That(query.MoveNext(out _, out _), Is.False,
                     "The sidecar removes itself on the merge. One left behind would re-merge on the next pipe a player cuts, which duplicates the gas.");
+            });
+
+            await pair.CleanReturnAsync();
+        }
+
+        /// <summary>
+        /// The second and last entry on the capture manifest, so between this and the lathe queue
+        /// the whole manifest is now exercised rather than half of it.
+        ///
+        /// <para>Cargo market data is the grid's own record of what it sells, which is player-built
+        /// state accumulated over a round rather than anything a prototype provides. It sits on the
+        /// grid itself, so unlike the lathe it needs no machine aboard.</para>
+        /// </summary>
+        [Test]
+        public async Task CargoMarketDataSurvivesTheRoundTrip()
+        {
+            await using var pair = await PoolManager.GetServerClient();
+            var server = pair.Server;
+            var entMan = server.EntMan;
+
+            var db = server.ResolveDependency<IServerDbManager>();
+            var drydock = server.System<DrydockSystem>();
+
+            var owner = Guid.NewGuid();
+            await InsertPlayer(db, owner);
+
+            var (station, shipGrid, _) = await BuildShipAndStation(pair);
+
+            await server.WaitPost(() =>
+            {
+                var market = entMan.EnsureComponent<CargoMarketDataComponent>(shipGrid);
+
+                // The component is access-locked to the market system, and this test is neither.
+                // Same precedent as the other integration tests that have to seed restricted state.
+#pragma warning disable RA0002
+                market.MarketDataList.Add(new MarketData(MarketItemProtoId, null, quantity: 7, price: 42.5));
+#pragma warning restore RA0002
+            });
+
+            await pair.RunTicksSync(5);
+
+            var (result, shipId) = await RunOnServer(pair, () => drydock.TryStoreShip(shipGrid, owner, null));
+            Assert.That(result, Is.EqualTo(DrydockStoreResult.Success));
+
+            await pair.RunTicksSync(5);
+
+            var retrieved = await RunOnServer(pair, () => drydock.TryRetrieveShip(shipId!.Value, owner, station, null));
+            Assert.That(retrieved, Is.Not.Null);
+
+            await pair.RunTicksSync(5);
+
+            await server.WaitAssertion(() =>
+            {
+                Assert.That(entMan.TryGetComponent<CargoMarketDataComponent>(retrieved!.Value, out var market), Is.True,
+                    "The component rides the blob normally; it is the list inside it that needs carrying.");
+
+#pragma warning disable RA0002
+                var list = market!.MarketDataList;
+#pragma warning restore RA0002
+
+                Assert.That(list, Has.Count.EqualTo(1),
+                    "MarketData has no serializer, so an empty list here means it was stripped rather than captured.");
+
+                Assert.Multiple(() =>
+                {
+                    Assert.That(list[0].Prototype.Id, Is.EqualTo(MarketItemProtoId));
+                    Assert.That(list[0].Quantity, Is.EqualTo(7));
+                    Assert.That(list[0].Price, Is.EqualTo(42.5));
+                });
             });
 
             await pair.CleanReturnAsync();

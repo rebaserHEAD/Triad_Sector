@@ -5,6 +5,7 @@ using System.Linq;
 using System.Reflection;
 using System.Security.Cryptography;
 using System.Text;
+using Robust.Shared.GameStates;
 using Robust.Shared.Serialization.Manager;
 using Robust.Shared.Serialization.Manager.Attributes;
 using Robust.Shared.Serialization.Markdown;
@@ -116,7 +117,7 @@ public sealed class DrydockFidelitySystem : EntitySystem
                     capture.Snapshot.Add((uid, comp, member, value));
 
                     ClearMember(comp, member, memberType);
-                    Dirty(uid, comp);
+                    DirtyIfNetworked(uid, comp);
                 }
             }
         }
@@ -136,7 +137,7 @@ public sealed class DrydockFidelitySystem : EntitySystem
         foreach (var (uid, comp, member, original) in capture.Snapshot)
         {
             SetMember(comp, member, original);
-            Dirty(uid, comp);
+            DirtyIfNetworked(uid, comp);
         }
 
         foreach (var uid in capture.Sidecarred)
@@ -197,7 +198,7 @@ public sealed class DrydockFidelitySystem : EntitySystem
                     var node = DataNodeParser.ParseYamlStream(reader).First().Root;
 
                     SetMember(comp, member, _capture.Restore(MemberType(member), node));
-                    Dirty(uid, comp);
+                    DirtyIfNetworked(uid, comp);
                     report.Applied++;
                 }
                 catch (Exception e)
@@ -324,6 +325,34 @@ public sealed class DrydockFidelitySystem : EntitySystem
 
         SetMember(obj, m, cleared);
     }
+    /// <summary>
+    /// Dirty only what the engine will accept being dirtied.
+    ///
+    /// <para>This layer walks every component carrying a populated field the serializer
+    /// cannot write, and nothing about that description says the component is networked.
+    /// <c>CargoMarketDataComponent</c> is a live example: it holds one of the two captured
+    /// types and carries no <c>[NetworkedComponent]</c>. Dirtying it trips a debug assert in
+    /// the entity manager, which on a development server throws inside the capture, aborts
+    /// the store, and refuses the ship.</para>
+    ///
+    /// <para>The attribute test is the same one the engine asserts on. Results are cached by
+    /// type because this is called once per cleared field.</para>
+    /// </summary>
+    private void DirtyIfNetworked(EntityUid uid, IComponent comp)
+    {
+        var type = comp.GetType();
+
+        if (!NetworkedCache.TryGetValue(type, out var networked))
+        {
+            networked = type.GetCustomAttribute<NetworkedComponentAttribute>() != null;
+            NetworkedCache[type] = networked;
+        }
+
+        if (networked)
+            Dirty(uid, comp);
+    }
+
+    private static readonly Dictionary<Type, bool> NetworkedCache = new();
 }
 
 /// <summary>
@@ -402,4 +431,5 @@ internal sealed class DrydockEntityRefProbe : ISerializationContext, ITypeWriter
         IDependencyCollection dependencies,
         bool alwaysWrite = false,
         ISerializationContext? context = null) => Stub;
+
 }
