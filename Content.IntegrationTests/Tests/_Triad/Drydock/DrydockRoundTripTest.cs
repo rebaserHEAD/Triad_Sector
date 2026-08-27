@@ -12,16 +12,19 @@ using Content.Server._NF.Shipyard.Systems;
 using Content.Server._Triad.Drydock;
 using Content.Server.Database;
 using Content.Server.DeviceNetwork.Systems;
+using Content.Server.NodeContainer.Nodes;
 using Content.Server.Station.Components;
 using Content.Server.Station.Systems;
 using Content.Server.Shuttles.Components;
 using Content.Server.Wires;
 using Content.Shared._Triad.CCVar;
+using Content.Shared.Atmos;
 using Content.Shared.Damage;
 using Content.Shared.Damage.Prototypes;
 using Content.Shared.DeviceNetwork.Components;
 using Content.Shared.FixedPoint;
 using Content.Shared.Lathe;
+using Content.Shared.NodeContainer;
 using Content.Shared.Research.Components;
 using Content.Shared.Research.Prototypes;
 using Robust.Shared.Configuration;
@@ -56,6 +59,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
         private const string ResearchServerProtoId = "ResearchAndDevelopmentServer";
         private const string LatheProtoId = "Protolathe";
         private const string LatheRecipeId = "SheetSteel";
+        private const string PipeProtoId = "GasPipeStraight";
 
         [Test]
         public async Task AShipStoredComesBackWithItsContentsAndItsWires()
@@ -387,6 +391,121 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             });
 
             await pair.CleanReturnAsync();
+        }
+
+        /// <summary>
+        /// The last of the two sidecars, and the only piece of state here that does not live on an
+        /// entity at all. A pipe net's air hangs off the node-group object graph, which the map
+        /// serializer never visits, so it is not a serialization failure to detect: it is state
+        /// attached to a structure that gets rebuilt from scratch on load. Without the sidecar a
+        /// stored ship comes back with every pipe empty.
+        ///
+        /// <para>The restore is the odd one out too. It does not run in the Revive block; it waits
+        /// for the reloaded grid's first node-group rebuild, because that is when there is a net to
+        /// merge into. The sidecar's presence is the whole apply condition, and it removes itself
+        /// immediately so that a player cutting a pipe later cannot re-fire the merge and duplicate
+        /// the gas.</para>
+        /// </summary>
+        [Test]
+        public async Task PipeNetGasSurvivesTheRoundTrip()
+        {
+            await using var pair = await PoolManager.GetServerClient();
+            var server = pair.Server;
+            var entMan = server.EntMan;
+
+            var db = server.ResolveDependency<IServerDbManager>();
+            var drydock = server.System<DrydockSystem>();
+            var xformSys = server.System<SharedTransformSystem>();
+
+            var owner = Guid.NewGuid();
+            await InsertPlayer(db, owner);
+
+            var (station, shipGrid, _) = await BuildShipAndStation(pair);
+
+            await server.WaitPost(() =>
+            {
+                // Two adjacent pipes so there is a net rather than an isolated node. A pipe only
+                // joins a net while anchored, and this prototype already spawns anchored onto a set
+                // tile: anchoring it again trips a debug assert in the engine, because the entity
+                // is already in that snap-grid cell.
+                foreach (var pos in new[] { new Vector2(0.5f, 1.5f), new Vector2(1.5f, 1.5f) })
+                {
+                    var pipe = entMan.SpawnEntity(PipeProtoId, new EntityCoordinates(shipGrid, pos));
+                    var xform = entMan.GetComponent<TransformComponent>(pipe);
+
+                    if (!xform.Anchored)
+                        xformSys.AnchorEntity(pipe);
+                }
+            });
+
+            // Node groups are rebuilt on a deferred pass, so the net does not exist on the tick the
+            // pipes were anchored.
+            await pair.RunTicksSync(10);
+
+            await server.WaitPost(() =>
+            {
+                foreach (var pipe in PipeNodesOn(entMan, shipGrid))
+                    pipe.Air.AdjustMoles(Gas.Oxygen, 25f);
+            });
+
+            await pair.RunTicksSync(5);
+
+            var molesBefore = await TotalPipeMoles(pair, shipGrid);
+            Assert.That(molesBefore, Is.GreaterThan(0f),
+                "The control: the pipes have to actually hold gas and be in a net, or nothing below is measuring the sidecar.");
+
+            var (result, shipId) = await RunOnServer(pair, () => drydock.TryStoreShip(shipGrid, owner, null));
+            Assert.That(result, Is.EqualTo(DrydockStoreResult.Success));
+
+            await pair.RunTicksSync(5);
+
+            var retrieved = await RunOnServer(pair, () => drydock.TryRetrieveShip(shipId!.Value, owner, station, null));
+            Assert.That(retrieved, Is.Not.Null);
+
+            // The merge waits for the first node-group rebuild after the load, which is later than
+            // everything Revive does synchronously.
+            await pair.RunTicksSync(15);
+
+            var molesAfter = await TotalPipeMoles(pair, retrieved!.Value);
+
+            Assert.That(molesAfter, Is.EqualTo(molesBefore).Within(0.01f),
+                "Pipe gas is not on any entity, so this passes only because the sidecar carried each pipe's share and the rebuild merged it back.");
+
+            await server.WaitAssertion(() =>
+            {
+                var query = entMan.AllEntityQueryEnumerator<DrydockPipeGasComponent>();
+                Assert.That(query.MoveNext(out _, out _), Is.False,
+                    "The sidecar removes itself on the merge. One left behind would re-merge on the next pipe a player cuts, which duplicates the gas.");
+            });
+
+            await pair.CleanReturnAsync();
+        }
+
+        private static IEnumerable<PipeNode> PipeNodesOn(IEntityManager entMan, EntityUid grid)
+        {
+            var query = entMan.AllEntityQueryEnumerator<NodeContainerComponent, TransformComponent>();
+            while (query.MoveNext(out _, out var nodeContainer, out var xform))
+            {
+                if (xform.GridUid != grid)
+                    continue;
+
+                foreach (var node in nodeContainer.Nodes.Values)
+                {
+                    if (node is PipeNode pipe)
+                        yield return pipe;
+                }
+            }
+        }
+
+        private static async Task<float> TotalPipeMoles(TestPair pair, EntityUid grid)
+        {
+            var total = 0f;
+            await pair.Server.WaitPost(() =>
+            {
+                foreach (var pipe in PipeNodesOn(pair.Server.EntMan, grid))
+                    total += pipe.Air.TotalMoles;
+            });
+            return total;
         }
 
         /// <summary>
