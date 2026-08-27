@@ -63,6 +63,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
         private const string LatheRecipeId = "SheetSteel";
         private const string PipeProtoId = "GasPipeStraight";
         private const string MarketItemProtoId = "SheetSteel1";
+        private const string AudioProtoId = "Audio";
 
         [Test]
         public async Task AShipStoredComesBackWithItsContentsAndItsWires()
@@ -548,6 +549,77 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                     Assert.That(list[0].Quantity, Is.EqualTo(7));
                     Assert.That(list[0].Price, Is.EqualTo(42.5));
                 });
+            });
+
+            await pair.CleanReturnAsync();
+        }
+
+        /// <summary>
+        /// The roster sweep's non-determinism, reproduced on demand. Two identical sweeps on
+        /// 2026-08-26 refused different vessels, and the mechanism turned out to be sound effects:
+        /// a sound played at grid coordinates is a real grid child until its despawn timer fires,
+        /// but its prototype declares <c>save: false</c>, so the serializer never writes it. The
+        /// validation counted it on the live side, never saw it on the scratch side, and refused
+        /// the store - for whichever ship happened to have a sound in the air at that instant.
+        ///
+        /// <para>The sweep could only show the symptom, because whether a sound is aloft when the
+        /// store runs is timing. This test plants one deliberately, which makes the refusal a
+        /// certainty instead of a coin flip: before the validation learned the serializer's own
+        /// exclusion, this failed every run.</para>
+        /// </summary>
+        [Test]
+        public async Task ALiveSoundEffectDoesNotBlockTheStore()
+        {
+            await using var pair = await PoolManager.GetServerClient();
+            var server = pair.Server;
+            var entMan = server.EntMan;
+
+            var db = server.ResolveDependency<IServerDbManager>();
+            var drydock = server.System<DrydockSystem>();
+
+            var owner = Guid.NewGuid();
+            await InsertPlayer(db, owner);
+
+            var (station, shipGrid, _) = await BuildShipAndStation(pair);
+
+            EntityUid sound = default;
+            await server.WaitPost(() =>
+            {
+                // What SharedAudioSystem.SetupAudio spawns, planted as a direct grid child the way
+                // a sound played at grid coordinates lands. No despawn timer rides it, so unlike
+                // the real thing it is guaranteed to still be there when the store serializes.
+                sound = entMan.SpawnEntity(AudioProtoId, new EntityCoordinates(shipGrid, new Vector2(1.5f, 1.5f)));
+            });
+
+            await pair.RunTicksSync(2);
+
+            await server.WaitAssertion(() =>
+            {
+                Assert.That(entMan.GetComponent<MetaDataComponent>(sound).EntityPrototype?.MapSavable, Is.False,
+                    "The control: if the Audio prototype ever stops declaring save: false, this test is planting an ordinary entity and proves nothing.");
+                Assert.That(entMan.GetComponent<TransformComponent>(sound).ParentUid, Is.EqualTo(shipGrid),
+                    "The control: the sound has to be a direct grid child, because that is the population the validation counts.");
+            });
+
+            var (result, shipId) = await RunOnServer(pair, () => drydock.TryStoreShip(shipGrid, owner, null));
+            Assert.That(result, Is.EqualTo(DrydockStoreResult.Success),
+                "A sound in the air must not refuse the store. The serializer will not write it, and the validation has to count what the serializer writes, not what is live.");
+
+            await pair.RunTicksSync(5);
+
+            var retrieved = await RunOnServer(pair, () => drydock.TryRetrieveShip(shipId!.Value, owner, station, null));
+            Assert.That(retrieved, Is.Not.Null, "Stored with a sound aloft, then would not come back.");
+
+            await pair.RunTicksSync(5);
+
+            await server.WaitAssertion(() =>
+            {
+                var children = entMan.GetComponent<TransformComponent>(retrieved!.Value).ChildEnumerator;
+                while (children.MoveNext(out var child))
+                {
+                    Assert.That(entMan.GetComponent<MetaDataComponent>(child).EntityPrototype?.ID, Is.Not.EqualTo(AudioProtoId),
+                        "The sound is ephemera and the serializer refuses it; one aboard the retrieved ship means it rode the document after all.");
+                }
             });
 
             await pair.CleanReturnAsync();

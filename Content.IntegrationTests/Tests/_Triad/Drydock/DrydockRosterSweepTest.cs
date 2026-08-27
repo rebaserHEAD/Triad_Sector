@@ -14,7 +14,6 @@ using Content.Server.Station.Components;
 using Content.Server.Station.Systems;
 using Content.Shared._NF.Shipyard.Prototypes;
 using Content.Shared._Triad.CCVar;
-using Robust.Shared.Audio.Components;
 using Robust.Shared.Configuration;
 using Robust.Shared.EntitySerialization.Systems;
 using Robust.Shared.GameObjects;
@@ -41,22 +40,17 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
     /// seconds against a round trip's few, so a pair per vessel would make this an hour instead of
     /// minutes. About three minutes for the whole roster.</para>
     ///
-    /// <para><b>What the first two runs found, and why store refusals are reported rather than
-    /// asserted.</b> Some vessels are refused by the store's own round-trip validation, and
-    /// <em>which</em> ones is not stable: two identical runs on 2026-08-26, with nothing changed
-    /// between them, refused Behir and Horizon, then Medicus. A store that depends on the moment it
-    /// is attempted is a player being told at random that they cannot put their ship away, so this
-    /// is a real defect rather than a property of those hulls.</para>
-    ///
-    /// <para>The mechanism is not proven, but the shape is clear enough to write down: the
-    /// validation counts every child of the grid on both sides of the diff, with no exclusion for
-    /// entities that exist for a moment and belong to no ship. This sweep's own census had exactly
-    /// that problem on exactly these vessels, swinging by tens of sound entities between samples,
-    /// which is why it now skips them. The validation does not skip anything.</para>
-    ///
-    /// <para>Until that is settled, this sweep asserts on what is unambiguous: a vessel that will
-    /// not load, will not come back, or throws. Refusals are printed with their names so the set
-    /// can be watched.</para>
+    /// <para><b>What the first two runs found.</b> Vessels were being refused by the store's own
+    /// round-trip validation, and <em>which</em> ones was not stable: two identical runs on
+    /// 2026-08-26, with nothing changed between them, refused Behir and Horizon, then Medicus. The
+    /// mechanism was sound effects: a sound played at grid coordinates is a real grid child until
+    /// its despawn timer fires, but its prototype declares <c>save: false</c>, so the serializer
+    /// never writes it. The validation counted it live, never saw it reload, and refused whichever
+    /// ship had a sound in the air at that instant. The validation now counts through the
+    /// serializer's own exclusion, and
+    /// <see cref="DrydockRoundTripTest.ALiveSoundEffectDoesNotBlockTheStore"/> plants a sound
+    /// deliberately to hold that fix down. With the timing removed, a refusal here is a real
+    /// defect in a real hull, so refusals are asserted like every other failure.</para>
     /// </summary>
     [TestFixture]
     [TestOf(typeof(DrydockSystem))]
@@ -107,7 +101,6 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
 
             var failures = new List<string>();
             var deltas = new List<string>();
-            var refusals = new List<string>();
             var swept = 0;
 
             foreach (var vessel in vessels)
@@ -137,16 +130,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
 
                     if (result != DrydockStoreResult.Success || shipId == null)
                     {
-                        // ValidationFailed is reported rather than asserted on, because which
-                        // vessels it hits is NOT STABLE: two identical runs of this sweep on
-                        // 2026-08-26 refused Behir and Horizon, then Medicus, with nothing changed
-                        // in between. Asserting on a moving set would make this test flap and get
-                        // switched off, which is worse than a red one. See the class comment.
-                        if (result == DrydockStoreResult.ValidationFailed)
-                            refusals.Add(vessel.ID);
-                        else
-                            failures.Add($"{vessel.ID}: store refused with {result}.");
-
+                        failures.Add($"{vessel.ID}: store refused with {result}.");
                         await Cleanup(pair, loaded);
                         continue;
                     }
@@ -194,14 +178,6 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                 await TestContext.Out.WriteLineAsync(
                     $"[roster-sweep] {deltas.Count} vessel(s) changed manifest across the round trip:"
                     + Environment.NewLine + string.Join(Environment.NewLine, deltas));
-            }
-
-            if (refusals.Count > 0)
-            {
-                await TestContext.Out.WriteLineAsync(
-                    $"[roster-sweep] {refusals.Count} of {vessels.Count} vessel(s) were refused by the store's own "
-                    + "round-trip validation this run. Which ones is not stable between runs: "
-                    + string.Join(", ", refusals));
             }
 
             Assert.That(failures, Is.Empty,
@@ -280,13 +256,16 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                     {
                         stack.Push(child);
 
-                        // Sound entities spawn and die constantly and belong to no ship. Counting
-                        // them made the first run of this sweep report a hundred and twenty
-                        // differences that were all timing.
-                        if (entMan.HasComponent<AudioComponent>(child))
+                        // The serializer's own exclusion: a save: false prototype (sounds, chat
+                        // effects) is never written into a store, so a census that counts one is
+                        // measuring timing rather than the round trip. Counting sounds made the
+                        // first run of this sweep report a hundred and twenty differences that
+                        // were all timing, and the store's validation had the same bug.
+                        var meta = entMan.GetComponent<MetaDataComponent>(child);
+                        if (meta.EntityPrototype?.MapSavable == false)
                             continue;
 
-                        var proto = entMan.GetComponent<MetaDataComponent>(child).EntityPrototype?.ID ?? "<no prototype>";
+                        var proto = meta.EntityPrototype?.ID ?? "<no prototype>";
                         census[proto] = census.GetValueOrDefault(proto) + 1;
                     }
                 }

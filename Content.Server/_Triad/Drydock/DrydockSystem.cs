@@ -280,6 +280,15 @@ public sealed partial class DrydockSystem : EntitySystem
     /// physics state that is itself a data field, so the comparison differs with no content drift
     /// at all. That is one instance of an open-ended class rather than a single normalizable noise
     /// source.</para>
+    ///
+    /// <para>Both tiers count only what the serializer will actually write. The engine's
+    /// <c>EntitySerializer.IsSerializable</c> skips any entity whose prototype declares
+    /// <c>save: false</c>, a class of ninety-odd prototypes that includes every live sound effect:
+    /// a sound played at grid coordinates is a real grid child until its despawn timer fires.
+    /// Before this filter, a ship that happened to have a sound in the air at the moment of the
+    /// store counted it on the live side, never saw it on the scratch side, and was refused - which
+    /// vessel that hit depended on the instant the store ran. The 2026-08-26 roster sweep caught it
+    /// refusing different vessels on identical back-to-back runs.</para>
     /// </summary>
     /// <returns>True on mismatch, meaning the store must abort.</returns>
     private bool DetectRoundTripMismatch(EntityUid gridUid, string yaml)
@@ -299,16 +308,17 @@ public sealed partial class DrydockSystem : EntitySystem
 
         try
         {
-            var liveCount = Transform(gridUid).ChildCount;
-            var scratchCount = Transform(scratchGrid!.Value.Owner).ChildCount;
+            var live = CountChildPrototypes(gridUid);
+            var scratch = CountChildPrototypes(scratchGrid!.Value.Owner);
+
+            var liveCount = live.Values.Sum();
+            var scratchCount = scratch.Values.Sum();
             if (liveCount != scratchCount)
             {
                 Log.Warning($"Drydock store validation failed for {ToPrettyString(gridUid)}: entity count mismatch (live={liveCount}, scratch={scratchCount}).");
                 return true;
             }
 
-            var live = CountChildPrototypes(gridUid);
-            var scratch = CountChildPrototypes(scratchGrid.Value.Owner);
             if (!PrototypeCountsMatch(live, scratch, out var detail))
             {
                 Log.Warning($"Drydock store validation failed for {ToPrettyString(gridUid)}: composition mismatch ({detail}).");
@@ -329,7 +339,16 @@ public sealed partial class DrydockSystem : EntitySystem
         var enumerator = Transform(gridUid).ChildEnumerator;
         while (enumerator.MoveNext(out var child))
         {
-            var protoId = MetaData(child).EntityPrototype?.ID ?? "<no-prototype>";
+            var meta = MetaData(child);
+
+            // The serializer's own gate, mirrored: EntitySerializer.IsSerializable refuses any
+            // entity whose prototype declares save: false, so such a child is live but will never
+            // be in the document. Counting it refuses the store for content the store was never
+            // going to write. A prototype-less entity is serializable and stays counted.
+            if (meta.EntityPrototype?.MapSavable == false)
+                continue;
+
+            var protoId = meta.EntityPrototype?.ID ?? "<no-prototype>";
             counts.TryGetValue(protoId, out var count);
             counts[protoId] = count + 1;
         }
