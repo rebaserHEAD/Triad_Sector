@@ -62,6 +62,14 @@ namespace Content.Server.Database
         public DbSet<DrydockBlob>     DrydockBlob     { get; set; } = default!;
         public DbSet<DrydockAudit>    DrydockAudit    { get; set; } = default!;
         // End Triad
+        // Triad: market data. Shapes and reasoning live in Model.Market.cs.
+        public DbSet<MarketTransaction>         MarketTransaction       { get; set; } = default!;
+        public DbSet<MarketTransactionSplit>    MarketTransactionSplit  { get; set; } = default!;
+        public DbSet<MarketTransactionLine>     MarketTransactionLine   { get; set; } = default!;
+        public DbSet<MarketPriceStat>           MarketPriceStat         { get; set; } = default!;
+        public DbSet<MarketRoundParticipant>    MarketRoundParticipant  { get; set; } = default!;
+        public DbSet<SectorAccountSample>       SectorAccountSample     { get; set; } = default!;
+        // End Triad
         public DbSet<CompanyMember> CompanyMembers { get; set; } = null!;
 
         protected override void OnModelCreating(ModelBuilder modelBuilder)
@@ -357,6 +365,9 @@ namespace Content.Server.Database
             // End Triad
             // Triad: drydock
             ModelDrydock.OnModelCreating(modelBuilder);
+            // End Triad
+            // Triad: market data
+            ModelMarket.OnModelCreating(modelBuilder);
             // End Triad
             // Mono
             modelBuilder.Entity<CompanyMember>()

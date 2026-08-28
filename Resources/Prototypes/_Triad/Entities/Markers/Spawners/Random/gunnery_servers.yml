@@ -65,9 +65,9 @@
     - id: GunneryServerMedium
       weight: 1
     - id: GunneryServerHigh
-      weight: 0.6
+      weight: 0.75
     - id: GunneryServerUltra
-      weight: 0.08 # Very rare
+      weight: 0.2 # Rare
 
 - type: entity
   parent: SpawnRandomGunneryServer
@@ -84,9 +84,7 @@
   id: GunneryServerHighTierTable
   table: !type:GroupSelector
     children:
-    - id: GunneryServerMedium
-      weight: 0.9
     - id: GunneryServerHigh
       weight: 1
     - id: GunneryServerUltra
-      weight: 0.2
+      weight: 0.9

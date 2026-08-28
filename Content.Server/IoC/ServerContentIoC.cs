@@ -7,6 +7,9 @@ using Content.Server._Triad.Shipyard.Persistence;
 // Triad: drydock
 using Content.Server._Triad.Drydock;
 // End Triad
+// Triad: market data
+using Content.Server._Triad.Market;
+// End Triad
 using Content.Server.Administration;
 using Content.Server.Administration.Logs;
 using Content.Server.Administration.Managers;
@@ -106,6 +109,10 @@ namespace Content.Server.IoC
 
             // Triad: drydock
             IoCManager.Register<DrydockStore>();
+            // End Triad
+            // Triad: market data
+            IoCManager.Register<MarketDataStore>();
+            IoCManager.Register<IMarketDataManager, MarketDataManager>();
             // End Triad
         }
     }

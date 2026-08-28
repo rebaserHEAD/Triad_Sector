@@ -1,4 +1,4 @@
-using Content.Server.Access.Systems;
+﻿using Content.Server.Access.Systems;
 using Content.Server.Popups;
 using Content.Server.Radio.EntitySystems;
 using Content.Server._NF.Bank;
@@ -54,6 +54,9 @@ using Content.Shared.Tag;
 using Robust.Shared.Timing;
 using Content.Server.GameTicking;
 using Content.Shared._NF.Bank.BUI;
+
+using Content.Server._Triad.Market; // Triad: market data
+using Content.Server.Database; // Triad: market data
 
 // Suppress naming style rule for the _NF namespace prefix (project convention)
 #pragma warning disable IDE1006
@@ -223,7 +226,7 @@ public sealed partial class ShipyardSystem : SharedShipyardSystem
                 return;
             }
 
-            if (!_bank.TryBankWithdraw(player, vessel.Price))
+            if (!_bank.TryBankWithdraw(player, vessel.Price, new MarketRecord { Kind = MarketTransactionKind.ShipyardPurchase })) // Triad: market data
             {
                 Del(shuttleUid);
                 ConsolePopup(player, Loc.GetString("cargo-console-insufficient-funds", ("cost", vessel.Price)));
@@ -515,7 +518,7 @@ public sealed partial class ShipyardSystem : SharedShipyardSystem
             }
             bill = int.Max(0, bill);
 
-            _bank.TryBankDeposit(player, bill);
+            _bank.TryBankDeposit(player, bill, new MarketRecord { Kind = MarketTransactionKind.ShipyardSale }); // Triad: market data
             PlayConfirmSound(player, uid, component);
         }
 

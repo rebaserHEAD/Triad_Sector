@@ -4180,3 +4180,74 @@ Entries:
   id: 2545
   time: '2026-08-25T07:01:22.0000000+00:00'
   url: https://github.com/Triad-Sector/Triad_Sector/pull/546
+- author: Wuffindy
+  changes:
+    - type: Tweak
+      message: Changed Most if not all ballistic bullet to new sprites
+  id: 2546
+  time: '2026-08-25T12:06:04.0000000+00:00'
+  url: https://github.com/Triad-Sector/Triad_Sector/pull/543
+- author: Stedar111
+  changes:
+    - type: Add
+      message: Added the HZD Besieger, a high-end, researchable, and stompy modsuit!
+  id: 2547
+  time: '2026-08-25T12:13:50.0000000+00:00'
+  url: https://github.com/Triad-Sector/Triad_Sector/pull/505
+- author: TheRealMasterChief117
+  changes:
+    - type: Fix
+      message: Fixed some technology disks not giving you the recipes on the disk.
+  id: 2548
+  time: '2026-08-25T14:02:27.0000000+00:00'
+  url: https://github.com/Triad-Sector/Triad_Sector/pull/548
+- author: TheRealMasterChief117
+  changes:
+    - type: Add
+      message: >-
+        Added a notice label to the player factions tab in the character profile
+        editor to clear up any confusion
+    - type: Tweak
+      message: (ADMIN) Company toolshed command renamed to Faction toolshed commands
+  id: 2549
+  time: '2026-08-25T19:29:05.0000000+00:00'
+  url: https://github.com/Triad-Sector/Triad_Sector/pull/549
+- author: TheRealMasterChief117
+  changes:
+    - type: Fix
+      message: Fixed the supermatter console having the incorrect sprite
+  id: 2550
+  time: '2026-08-26T17:39:11.0000000+00:00'
+  url: https://github.com/Triad-Sector/Triad_Sector/pull/555
+- author: Stedar111
+  changes:
+    - type: Tweak
+      message: >-
+        Buffed multiple components of the besieger, including speed, blunt,
+        pierce, and fire resistances, and lowered the plastitanium cost down to
+        25
+  id: 2551
+  time: '2026-08-26T20:51:40.0000000+00:00'
+  url: https://github.com/Triad-Sector/Triad_Sector/pull/556
+- author: CastitoWae
+  changes:
+    - type: Tweak
+      message: Teslas will now mostly idle when shot with the PA on level 2
+    - type: Fix
+      message: >-
+        Fixed how the tesla jumps, it will no longer loose in proper containment
+        conditions.
+    - type: Fix
+      message: >-
+        Fixed various bugs regarding tesla, supermatter and containment field
+        generators.
+  id: 2552
+  time: '2026-08-27T02:36:47.0000000+00:00'
+  url: https://github.com/Triad-Sector/Triad_Sector/pull/474
+- author: nitrous-heart
+  changes:
+    - type: Add
+      message: Added Ghostlight player faction. Glory Glory Glory.
+  id: 2553
+  time: '2026-08-28T01:50:56.0000000+00:00'
+  url: https://github.com/Triad-Sector/Triad_Sector/pull/536
