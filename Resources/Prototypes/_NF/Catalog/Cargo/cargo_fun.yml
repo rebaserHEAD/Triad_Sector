@@ -8,13 +8,14 @@
   category: cargoproduct-category-name-fun
   group: market
 
-- type: cargoProduct
-  id: FunPartyNF
-  abstract: true # Mono out: OLD CAKE-INCLUDED VERSION REACTIVATED. RESTORE NUTRIMENT.
-  icon:
-    sprite: Clothing/Head/Hats/party_red.rsi
-    state: icon
-  product: CrateFunPartyNF
-  cost: 3000
-  category: cargoproduct-category-name-fun
-  group: market
+# Triad: removed - obtainable in-world (salvage, POI or loot table), see cargo terminal cull
+# - type: cargoProduct
+#   id: FunPartyNF
+#   abstract: true # Mono out: OLD CAKE-INCLUDED VERSION REACTIVATED. RESTORE NUTRIMENT.
+#   icon:
+#     sprite: Clothing/Head/Hats/party_red.rsi
+#     state: icon
+#   product: CrateFunPartyNF
+#   cost: 3000
+#   category: cargoproduct-category-name-fun
+#   group: market

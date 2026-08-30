@@ -1,12 +1,13 @@
-# Triad: the upstream single-coil product (EngineTeslaCoil) is abstract via Frontier, so this is
+# Triad: the upstream single-coil product (EngineTeslaCoil) is abstract via Frontier, so this was
 # the only console path to tesla coils. One bulk crate is a 12-tower starter array; two build the
-# 24-tower max-output ring.
-- type: cargoProduct
-  id: EngineTeslaCoilBulk
-  icon:
-    sprite: Structures/Power/Generation/Tesla/coil.rsi
-    state: coil
-  product: CrateEngineeringTeslaCoilBulk
-  cost: 10000
-  category: cargoproduct-category-name-engineering
-  group: market
+# 24-tower max-output ring. Removed in the cargo terminal cull: tesla coils have no lathe recipe,
+# so the in-world sources are now the bulk crate placed on Edison and the small-tesla salvage wreck.
+# - type: cargoProduct
+#   id: EngineTeslaCoilBulk
+#   icon:
+#     sprite: Structures/Power/Generation/Tesla/coil.rsi
+#     state: coil
+#   product: CrateEngineeringTeslaCoilBulk
+#   cost: 10000
+#   category: cargoproduct-category-name-engineering
+#   group: market

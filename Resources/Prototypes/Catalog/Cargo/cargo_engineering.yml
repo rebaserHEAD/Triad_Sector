@@ -1,68 +1,74 @@
-- type: cargoProduct
-  id: EngineeringCableLv
-  abstract: true # Frontier
-  icon:
-    sprite: Objects/Tools/cable-coils.rsi
-    state: coillv-30
-  product: CrateEngineeringCableLV
-  cost: 300
-  category: cargoproduct-category-name-engineering
-  group: market
+# Triad: removed - obtainable in-world (salvage, POI or loot table), see cargo terminal cull
+# - type: cargoProduct
+#   id: EngineeringCableLv
+#   abstract: true # Frontier
+#   icon:
+#     sprite: Objects/Tools/cable-coils.rsi
+#     state: coillv-30
+#   product: CrateEngineeringCableLV
+#   cost: 300
+#   category: cargoproduct-category-name-engineering
+#   group: market
 
-- type: cargoProduct
-  id: EngineeringCableMv
-  abstract: true # Frontier
-  icon:
-    sprite: Objects/Tools/cable-coils.rsi
-    state: coilmv-30
-  product: CrateEngineeringCableMV
-  cost: 300
-  category: cargoproduct-category-name-engineering
-  group: market
+# Triad: removed - obtainable in-world (salvage, POI or loot table), see cargo terminal cull
+# - type: cargoProduct
+#   id: EngineeringCableMv
+#   abstract: true # Frontier
+#   icon:
+#     sprite: Objects/Tools/cable-coils.rsi
+#     state: coilmv-30
+#   product: CrateEngineeringCableMV
+#   cost: 300
+#   category: cargoproduct-category-name-engineering
+#   group: market
 
-- type: cargoProduct
-  id: EngineeringCableHv
-  abstract: true # Frontier
-  icon:
-    sprite: Objects/Tools/cable-coils.rsi
-    state: coilhv-30
-  product: CrateEngineeringCableHV
-  cost: 300
-  category: cargoproduct-category-name-engineering
-  group: market
+# Triad: removed - obtainable in-world (salvage, POI or loot table), see cargo terminal cull
+# - type: cargoProduct
+#   id: EngineeringCableHv
+#   abstract: true # Frontier
+#   icon:
+#     sprite: Objects/Tools/cable-coils.rsi
+#     state: coilhv-30
+#   product: CrateEngineeringCableHV
+#   cost: 300
+#   category: cargoproduct-category-name-engineering
+#   group: market
 
-- type: cargoProduct
-  id: EngineeringFoamGrenade
-  abstract: true # Frontier
-  icon:
-    sprite: Objects/Weapons/Grenades/metalfoam.rsi
-    state: icon
-  product: CrateEngineeringFoamGrenade
-  cost: 2500
-  category: cargoproduct-category-name-engineering
-  group: market
+# Triad: removed - obtainable in-world (salvage, POI or loot table), see cargo terminal cull
+# - type: cargoProduct
+#   id: EngineeringFoamGrenade
+#   abstract: true # Frontier
+#   icon:
+#     sprite: Objects/Weapons/Grenades/metalfoam.rsi
+#     state: icon
+#   product: CrateEngineeringFoamGrenade
+#   cost: 2500
+#   category: cargoproduct-category-name-engineering
+#   group: market
 
-- type: cargoProduct
-  id: EngineeringCableBulk
-  abstract: true # Frontier
-  icon:
-    sprite: Objects/Tools/cable-coils.rsi
-    state: coilall-30
-  product: CrateEngineeringCableBulk
-  cost: 600
-  category: cargoproduct-category-name-engineering
-  group: market
+# Triad: removed - obtainable in-world (salvage, POI or loot table), see cargo terminal cull
+# - type: cargoProduct
+#   id: EngineeringCableBulk
+#   abstract: true # Frontier
+#   icon:
+#     sprite: Objects/Tools/cable-coils.rsi
+#     state: coilall-30
+#   product: CrateEngineeringCableBulk
+#   cost: 600
+#   category: cargoproduct-category-name-engineering
+#   group: market
 
-- type: cargoProduct
-  id: EngineeringElectricalSupplies
-  abstract: true # Frontier
-  icon:
-    sprite: _Impstation/Objects/Tools/Toolboxes/toolbox_yellow.rsi #imp edit
-    state: icon
-  product: CrateEngineeringElectricalSupplies
-  cost: 4500
-  category: cargoproduct-category-name-engineering
-  group: market
+# Triad: removed - obtainable in-world (salvage, POI or loot table), see cargo terminal cull
+# - type: cargoProduct
+#   id: EngineeringElectricalSupplies
+#   abstract: true # Frontier
+#   icon:
+#     sprite: _Impstation/Objects/Tools/Toolboxes/toolbox_yellow.rsi #imp edit
+#     state: icon
+#   product: CrateEngineeringElectricalSupplies
+#   cost: 4500
+#   category: cargoproduct-category-name-engineering
+#   group: market
 
 - type: cargoProduct
   id: StationBeaconBundle
@@ -75,84 +81,91 @@
   category: cargoproduct-category-name-engineering
   group: market
 
-- type: cargoProduct
-  id: EngineeringJetpack
-  abstract: true # Frontier
-  icon:
-    sprite: Objects/Tanks/Jetpacks/blue.rsi
-    state: icon
-  product: CrateEngineeringJetpack
-  cost: 1000
-  category: cargoproduct-category-name-engineering
-  group: market
+# Triad: removed - obtainable in-world (salvage, POI or loot table), see cargo terminal cull
+# - type: cargoProduct
+#   id: EngineeringJetpack
+#   abstract: true # Frontier
+#   icon:
+#     sprite: Objects/Tanks/Jetpacks/blue.rsi
+#     state: icon
+#   product: CrateEngineeringJetpack
+#   cost: 1000
+#   category: cargoproduct-category-name-engineering
+#   group: market
 
-- type: cargoProduct
-  id: EngineeringMiniJetpack
-  abstract: true # Frontier
-  icon:
-    sprite: Objects/Tanks/Jetpacks/mini.rsi
-    state: icon
-  product: CrateEngineeringMiniJetpack
-  cost: 750
-  category: cargoproduct-category-name-engineering
-  group: market
+# Triad: removed - obtainable in-world (salvage, POI or loot table), see cargo terminal cull
+# - type: cargoProduct
+#   id: EngineeringMiniJetpack
+#   abstract: true # Frontier
+#   icon:
+#     sprite: Objects/Tanks/Jetpacks/mini.rsi
+#     state: icon
+#   product: CrateEngineeringMiniJetpack
+#   cost: 750
+#   category: cargoproduct-category-name-engineering
+#   group: market
 
-- type: cargoProduct
-  id: AirlockKit
-  abstract: true # Frontier
-  icon:
-    sprite: _Impstation/Objects/Tools/Toolboxes/toolbox_yellow.rsi #imp edit
-    state: icon
-  product: CrateAirlockKit
-  cost: 1100
-  category: cargoproduct-category-name-engineering
-  group: market
+# Triad: removed - obtainable in-world (salvage, POI or loot table), see cargo terminal cull
+# - type: cargoProduct
+#   id: AirlockKit
+#   abstract: true # Frontier
+#   icon:
+#     sprite: _Impstation/Objects/Tools/Toolboxes/toolbox_yellow.rsi #imp edit
+#     state: icon
+#   product: CrateAirlockKit
+#   cost: 1100
+#   category: cargoproduct-category-name-engineering
+#   group: market
 
-- type: cargoProduct
-  id: EvaKit
-  abstract: true # Frontier
-  icon:
-    sprite: Clothing/Head/Helmets/eva.rsi
-    state: icon
-  product: CrateEvaKit
-  cost: 5000
-  category: cargoproduct-category-name-engineering
-  group: market
+# Triad: removed - obtainable in-world (salvage, POI or loot table), see cargo terminal cull
+# - type: cargoProduct
+#   id: EvaKit
+#   abstract: true # Frontier
+#   icon:
+#     sprite: Clothing/Head/Helmets/eva.rsi
+#     state: icon
+#   product: CrateEvaKit
+#   cost: 5000
+#   category: cargoproduct-category-name-engineering
+#   group: market
 
-- type: cargoProduct
-  id: EngineeringRCDAmmo
-  abstract: true # Frontier
-  icon:
-    sprite: _NF/Objects/Tools/rcd.rsi # Frontier
-    state: ammo
-  product: CrateRCDAmmo
-  cost: 2500
-  category: cargoproduct-category-name-engineering
-  group: market
+# Triad: removed - obtainable in-world (salvage, POI or loot table), see cargo terminal cull
+# - type: cargoProduct
+#   id: EngineeringRCDAmmo
+#   abstract: true # Frontier
+#   icon:
+#     sprite: _NF/Objects/Tools/rcd.rsi # Frontier
+#     state: ammo
+#   product: CrateRCDAmmo
+#   cost: 2500
+#   category: cargoproduct-category-name-engineering
+#   group: market
 
-- type: cargoProduct
-  id: EngineeringRCD
-  abstract: true # Frontier
-  icon:
-    sprite: _NF/Objects/Tools/rcd.rsi # Frontier
-    state: icon
-  product: CrateRCD
-  cost: 800
-  category: cargoproduct-category-name-engineering
-  group: market
+# Triad: removed - obtainable in-world (salvage, POI or loot table), see cargo terminal cull
+# - type: cargoProduct
+#   id: EngineeringRCD
+#   abstract: true # Frontier
+#   icon:
+#     sprite: _NF/Objects/Tools/rcd.rsi # Frontier
+#     state: icon
+#   product: CrateRCD
+#   cost: 800
+#   category: cargoproduct-category-name-engineering
+#   group: market
 
-# Triad: RPD port from funky-station — mirrors EngineeringRCD; abstract preserves Frontier's hide pattern.
-- type: cargoProduct
-  id: EngineeringRPD
-  abstract: true # Frontier
-  icon:
-    sprite: Objects/Tools/rpd.rsi
-    state: icon
-  product: CrateRPD
-  cost: 800
-  category: cargoproduct-category-name-engineering
-  group: market
-# End Triad
+# # Triad: RPD port from funky-station — mirrors EngineeringRCD; abstract preserves Frontier's hide pattern.
+# Triad: removed - obtainable in-world (salvage, POI or loot table), see cargo terminal cull
+# - type: cargoProduct
+#   id: EngineeringRPD
+#   abstract: true # Frontier
+#   icon:
+#     sprite: Objects/Tools/rpd.rsi
+#     state: icon
+#   product: CrateRPD
+#   cost: 800
+#   category: cargoproduct-category-name-engineering
+#   group: market
+# # End Triad
 
 - type: cargoProduct
   id: EngineeringParticleDecelerators
@@ -165,12 +178,13 @@
   category: cargoproduct-category-name-engineering
   group: market
 
-- type: cargoProduct
-  id: EngineeringSpaceHeater
-  icon:
-    sprite: Structures/Piping/Atmospherics/Portable/portable_sheater.rsi
-    state: sheaterOff
-  product: CrateEngineeringSpaceHeater
-  cost: 600 # Frontier: 350<600
-  category: cargoproduct-category-name-engineering
-  group: market
+# Triad: removed - obtainable in-world (salvage, POI or loot table), see cargo terminal cull
+# - type: cargoProduct
+#   id: EngineeringSpaceHeater
+#   icon:
+#     sprite: Structures/Piping/Atmospherics/Portable/portable_sheater.rsi
+#     state: sheaterOff
+#   product: CrateEngineeringSpaceHeater
+#   cost: 600 # Frontier: 350<600
+#   category: cargoproduct-category-name-engineering
+#   group: market

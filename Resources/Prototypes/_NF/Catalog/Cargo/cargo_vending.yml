@@ -6,15 +6,16 @@
 # The costs will need to be kept in line with the inventory of the respective
 # vending machines. An extra hundred or two profit margin should be fine.
 
-- type: cargoProduct
-  id: CrateVendingMachineRestockAstroVend
-  icon:
-    sprite: Objects/Specific/Service/vending_machine_restock.rsi
-    state: base
-  product: CrateVendingMachineRestockAstroVendFilled
-  cost: 1200 # Frontier
-  category: Engineering
-  group: market
+# Triad: removed - obtainable in-world (salvage, POI or loot table), see cargo terminal cull
+# - type: cargoProduct
+#   id: CrateVendingMachineRestockAstroVend
+#   icon:
+#     sprite: Objects/Specific/Service/vending_machine_restock.rsi
+#     state: base
+#   product: CrateVendingMachineRestockAstroVendFilled
+#   cost: 1200 # Frontier
+#   category: Engineering
+#   group: market
 
 - type: cargoProduct
   id: CrateVendingMachineRestockAmmo
@@ -27,16 +28,17 @@
   category: Security
   group: market
 
-- type: cargoProduct
-  id: CrateVendingMachineRestockCuddlyCritterVend
-  abstract: true # Frontier
-  icon:
-    sprite: Objects/Specific/Service/vending_machine_restock.rsi
-    state: base
-  product: CrateVendingMachineRestockCuddlyCritterVendFilled
-  cost: 100 # Frontier
-  category: cargoproduct-category-name-fun
-  group: market
+# Triad: removed - obtainable in-world (salvage, POI or loot table), see cargo terminal cull
+# - type: cargoProduct
+#   id: CrateVendingMachineRestockCuddlyCritterVend
+#   abstract: true # Frontier
+#   icon:
+#     sprite: Objects/Specific/Service/vending_machine_restock.rsi
+#     state: base
+#   product: CrateVendingMachineRestockCuddlyCritterVendFilled
+#   cost: 100 # Frontier
+#   category: cargoproduct-category-name-fun
+#   group: market
 
 - type: cargoProduct
   id: CrateVendingMachineRestockLessLethalVend

@@ -12,15 +12,16 @@
 
 # Mag/Drum reload
 
-- type: cargoProduct
-  id: ArmoryShipAmmo20mm
-  icon:
-    sprite: _NF/Structures/Storage/Crates/secure_ammo.rsi
-    state: icon
-  product: CrateAmmoBox20mm
-  cost: 4000
-  category: cargoproduct-category-name-shipammo
-  group: market
+# Triad: removed - obtainable in-world (salvage, POI or loot table), see cargo terminal cull
+# - type: cargoProduct
+#   id: ArmoryShipAmmo20mm
+#   icon:
+#     sprite: _NF/Structures/Storage/Crates/secure_ammo.rsi
+#     state: icon
+#   product: CrateAmmoBox20mm
+#   cost: 4000
+#   category: cargoproduct-category-name-shipammo
+#   group: market
 
 - type: cargoProduct
   id: ArmoryShipAmmo30mm
@@ -32,27 +33,29 @@
   category: cargoproduct-category-name-shipammo
   group: market
 
-- type: cargoProduct
-  id: ArmoryShipAmmo57mm
-  icon:
-    sprite: _NF/Structures/Storage/Crates/secure_ammo.rsi
-    state: icon
-  product: CrateAmmoBox57mm
-  cost: 4000
-  category: cargoproduct-category-name-shipammo
-  group: market
+# Triad: removed - obtainable in-world (salvage, POI or loot table), see cargo terminal cull
+# - type: cargoProduct
+#   id: ArmoryShipAmmo57mm
+#   icon:
+#     sprite: _NF/Structures/Storage/Crates/secure_ammo.rsi
+#     state: icon
+#   product: CrateAmmoBox57mm
+#   cost: 4000
+#   category: cargoproduct-category-name-shipammo
+#   group: market
 
-- type: cargoProduct
-  id: ArmoryShipAmmo90mm
-  icon:
-    sprite: _NF/Structures/Storage/Crates/secure_ammo.rsi
-    state: icon
-  product: CrateAmmoBox90mm
-  cost: 6500
-  category: cargoproduct-category-name-shipammo
-  group: market
+# Triad: removed - obtainable in-world (salvage, POI or loot table), see cargo terminal cull
+# - type: cargoProduct
+#   id: ArmoryShipAmmo90mm
+#   icon:
+#     sprite: _NF/Structures/Storage/Crates/secure_ammo.rsi
+#     state: icon
+#   product: CrateAmmoBox90mm
+#   cost: 6500
+#   category: cargoproduct-category-name-shipammo
+#   group: market
 
-# Missile reloads
+# # Missile reloads
 
 - type: cargoProduct
   id: ArmoryShipAmmoVanyk

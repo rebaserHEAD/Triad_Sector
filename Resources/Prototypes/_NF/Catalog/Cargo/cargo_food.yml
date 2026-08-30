@@ -1,10 +1,11 @@
-- type: cargoProduct
-  abstract: true
-  id: FoodCrateFreezer
-  icon:
-    sprite: Structures/Storage/Crates/freezer.rsi
-    state: icon
-  product: CrateFreezer
-  cost: 500
-  category: cargoproduct-category-name-food
-  group: market
+# Triad: removed - obtainable in-world (salvage, POI or loot table), see cargo terminal cull
+# - type: cargoProduct
+#   abstract: true
+#   id: FoodCrateFreezer
+#   icon:
+#     sprite: Structures/Storage/Crates/freezer.rsi
+#     state: icon
+#   product: CrateFreezer
+#   cost: 500
+#   category: cargoproduct-category-name-food
+#   group: market

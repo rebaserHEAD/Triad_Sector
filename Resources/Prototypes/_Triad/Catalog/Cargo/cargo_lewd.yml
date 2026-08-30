@@ -1,9 +1,10 @@
-- type: cargoProduct
-  id: LewdToyBox
-  icon:
-    sprite: _Floof/Structures/lewdcrate.rsi
-    state: icon
-  product: CrateLewdToys
-  cost: 2500
-  category: cargoproduct-category-name-lewd
-  group: market
+# Triad: removed - obtainable in-world (salvage, POI or loot table), see cargo terminal cull
+# - type: cargoProduct
+#   id: LewdToyBox
+#   icon:
+#     sprite: _Floof/Structures/lewdcrate.rsi
+#     state: icon
+#   product: CrateLewdToys
+#   cost: 2500
+#   category: cargoproduct-category-name-lewd
+#   group: market
