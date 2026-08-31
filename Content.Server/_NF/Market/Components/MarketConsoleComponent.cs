@@ -28,4 +28,20 @@ public sealed partial class MarketConsoleComponent : Component
 
     [DataField]
     public SoundSpecifier SuccessSound = new SoundPathSpecifier("/Audio/Effects/Cargo/ping.ogg");
+
+    // Triad: begin, multi-crate dispensing
+    /// <summary>
+    /// Entity slots per dispensed crate, matching standard crate storage capacity. A purchase
+    /// larger than this chunks into several crates dispensed one after another.
+    /// </summary>
+    [DataField]
+    public int CrateCapacity = 30;
+
+    /// <summary>
+    /// Cart ceiling, in crates' worth of slots. A sanity bound, not a gameplay knob: it keeps one
+    /// purchase from queueing an unbounded crate parade.
+    /// </summary>
+    [DataField]
+    public int MaxCartCrates = 10;
+    // Triad: end
 }

@@ -99,9 +99,18 @@ public sealed partial class MarketSystem
         // End Triad
         _audio.PlayPredicted(consoleComponent.SuccessSound, consoleUid, null, AudioParams.Default.WithMaxDistance(5f));
 
-        itemSpawner.ItemsToSpawn = consoleComponent.CartDataList;
+        // Triad: chunk the purchase into as few crates as possible and queue them; the machine
+        // dispenses one crate at a time, opening again for the next chunk once the previous crate
+        // is taken. Greedy fill-stacks-first is slot-minimal because every item costs an integer
+        // number of slots.
+        var chunks = ChunkForCrates(consoleComponent.CartDataList, consoleComponent.CrateCapacity);
         consoleComponent.CartDataList = [];
         MarkMarketDirty(_station.GetOwningStation(consoleUid)); // Triad: persistent inventory - the sold cart leaves the snapshot
+        if (chunks.Count == 0)
+            return;
+        itemSpawner.ItemsToSpawn = chunks[0];
+        chunks.RemoveAt(0);
+        itemSpawner.PendingChunks = chunks;
         _crateMachine.OpenFor(crateMachineUid, component);
     }
 
@@ -139,4 +148,80 @@ public sealed partial class MarketSystem
         SpawnCrateItems(itemSpawner.ItemsToSpawn, targetCrate);
         itemSpawner.ItemsToSpawn = [];
     }
+
+    // Triad: begin, multi-crate dispensing
+    /// <summary>
+    /// Splits a purchase into per-crate chunks of at most <paramref name="capacity"/> entity
+    /// slots. Stacks pack at their max stack count per slot, everything else costs one slot;
+    /// with integral slot costs a greedy split is minimal.
+    /// </summary>
+    private List<List<MarketData>> ChunkForCrates(List<MarketData> items, int capacity)
+    {
+        capacity = int.Max(1, capacity);
+        var chunks = new List<List<MarketData>>();
+        var current = new List<MarketData>();
+        var slotsUsed = 0;
+
+        void CloseChunk()
+        {
+            if (current.Count == 0)
+                return;
+            chunks.Add(current);
+            current = [];
+            slotsUsed = 0;
+        }
+
+        foreach (var data in items)
+        {
+            if (data.Quantity <= 0)
+                continue;
+
+            var perSlot = GetAmountPerEntitySpace(data);
+            if (perSlot == null)
+            {
+                // Infinite stack: one slot carries any amount.
+                if (slotsUsed >= capacity)
+                    CloseChunk();
+                current.Add(data);
+                slotsUsed += 1;
+                continue;
+            }
+
+            var remaining = data.Quantity;
+            while (remaining > 0)
+            {
+                if (slotsUsed >= capacity)
+                    CloseChunk();
+
+                var take = int.Min(remaining, (capacity - slotsUsed) * perSlot.Value);
+                current.Add(new MarketData(data.Prototype, data.StackPrototype, take, data.Price));
+                slotsUsed += (take + perSlot.Value - 1) / perSlot.Value;
+                remaining -= take;
+            }
+        }
+
+        CloseChunk();
+        return chunks;
+    }
+
+    /// <summary>
+    /// Feeds queued chunks to idle machines: once the previous crate is taken and the door is
+    /// shut, the next paid-for chunk opens the machine again.
+    /// </summary>
+    private void UpdateCrateDispensing()
+    {
+        var query = EntityQueryEnumerator<MarketItemSpawnerComponent, CrateMachineComponent>();
+        while (query.MoveNext(out var uid, out var spawner, out var machine))
+        {
+            if (spawner.PendingChunks.Count == 0 || spawner.ItemsToSpawn.Count > 0)
+                continue;
+            if (_crateMachine.IsOccupied(uid, machine))
+                continue;
+
+            spawner.ItemsToSpawn = spawner.PendingChunks[0];
+            spawner.PendingChunks.RemoveAt(0);
+            _crateMachine.OpenFor(uid, machine);
+        }
+    }
+    // Triad: end
 }

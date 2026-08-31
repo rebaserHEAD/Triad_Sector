@@ -41,6 +41,8 @@ public sealed partial class MarketSystem
     {
         base.Update(frameTime);
 
+        UpdateCrateDispensing(); // Triad: multi-crate dispensing
+
         // Apply finished loads. The task ran on the database's thread; the result is applied here,
         // on the game thread, where prototypes can be validated and the component touched safely.
         for (var i = _pendingLoads.Count - 1; i >= 0; i--)

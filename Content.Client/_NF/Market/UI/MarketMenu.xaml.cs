@@ -68,8 +68,15 @@ public sealed partial class MarketMenu : FancyWindow
     {
         _lastStateUpdate = uiState;
         Populate(uiState.MarketDataList, uiState.CartDataList, uiState.MarketModifier, uiState.Enabled);
-        CartEntitiesCount.Text = $"{uiState.CartEntities}/30";
-        if (uiState.CartEntities == 30)
+        // Triad: multi-crate dispensing - the cart holds several crates' worth of slots and the
+        // counter says how many crates the purchase will arrive in.
+        var crates = uiState.CrateCapacity > 0
+            ? (uiState.CartEntities + uiState.CrateCapacity - 1) / uiState.CrateCapacity
+            : 1;
+        CartEntitiesCount.Text = uiState.CartEntities > 0
+            ? $"{uiState.CartEntities}/{uiState.MaxCartEntities} ({crates} crate{(crates == 1 ? "" : "s")})"
+            : $"{uiState.CartEntities}/{uiState.MaxCartEntities}";
+        if (uiState.CartEntities >= uiState.MaxCartEntities)
             CartEntitiesCount.FontColorOverride = Color.OrangeRed;
         else
             CartEntitiesCount.FontColorOverride = null;

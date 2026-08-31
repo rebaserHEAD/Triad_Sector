@@ -349,7 +349,7 @@ public sealed partial class MarketSystem
             }
             else
             {
-                amountLeft = (30 - entityAmount) * amountPerEntity.Value;
+                amountLeft = (consoleComponent.CrateCapacity * consoleComponent.MaxCartCrates - entityAmount) * amountPerEntity.Value; // Triad: 30 >> multi-crate ceiling
 
                 var existingCart = FindMarketDataByPrototype(consoleComponent.CartDataList, args.ItemPrototype!);
                 if (existingCart != null)
@@ -451,7 +451,9 @@ public sealed partial class MarketSystem
             cartBalance,
             true, // TODO add enable/disable functionality
             component.TransactionCost,
-            CalculateEntityAmount(cartData)
+            CalculateEntityAmount(cartData),
+            component.CrateCapacity, // Triad: multi-crate dispensing
+            component.CrateCapacity * component.MaxCartCrates // Triad
         );
         _ui.SetUiState(consoleUid, MarketConsoleUiKey.Default, newState);
     }
