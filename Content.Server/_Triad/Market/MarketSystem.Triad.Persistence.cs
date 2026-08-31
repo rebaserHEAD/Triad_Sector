@@ -62,7 +62,9 @@ public sealed partial class MarketSystem
             if (Deleted(station) || !TryComp<CargoMarketDataComponent>(station, out var market))
                 continue;
 
+#pragma warning disable RA0004 // IsCompletedSuccessfully was checked above; this cannot block.
             ApplyLoadedInventory((station, market), key, task.Result);
+#pragma warning restore RA0004
         }
 
         // Debounced dirty-flag save.

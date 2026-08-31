@@ -325,7 +325,7 @@ public sealed partial class GasDepositSystem : SharedGasDepositSystem
 
         for (var i = 0; i < Atmospherics.TotalNumberOfGases; i++)
         {
-            var moles = mixture.Moles[i];
+            var moles = mixture.GetMoles(i);
             if (moles <= 0)
                 continue;
 

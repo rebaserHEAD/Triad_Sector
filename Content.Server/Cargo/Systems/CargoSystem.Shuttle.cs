@@ -444,12 +444,14 @@ public sealed partial class CargoSystem
                     CaptureSaleLines(capture, pricedNodes, effectiveMultiplier);
                 }
                 // Mono: ItemTaxs to budgets.
-                // Triad: reworked. Positive coefficients are now seller-paid (deducted from the
-                // payout in OnPalletSale) and stay direct to their department. Contraband sells
-                // clean: nothing is charged on it, and its BlackMarket coefficients become a
-                // mirror-only deposit so the hidden BM account still meters the flow while the
-                // smuggler keeps every credit. Negative coefficients are ignored entirely - the
-                // penalty debit mechanic is removed.
+                // Triad: reworked. Positive department coefficients are now seller-paid (deducted
+                // from the payout in OnPalletSale) and stay direct to their department. Contraband
+                // sells clean: nothing is charged on it. BlackMarket coefficients are mirror-only
+                // deposits whether or not the item carries Contraband (Fentanyl does not) - BM is
+                // the hidden smuggling meter and never charges a seller, so blackMarketTaxAmount
+                // is always zero now and rides along only for the plumbing it shares with the
+                // real department taxes. Negative coefficients are ignored entirely - the penalty
+                // debit mechanic is removed.
                 if (TryComp<ItemTaxComponent>(ent, out var itemTax))
                 {
                     var isContraband = HasComp<ContrabandComponent>(ent);
@@ -458,18 +460,17 @@ public sealed partial class CargoSystem
                         if (taxCoeff <= 0)
                             continue;
 
-                        if (isContraband)
+                        if (account == SectorBankAccount.BlackMarket)
                         {
-                            if (account == SectorBankAccount.BlackMarket)
-                                blackMarketMirrorAmount += price * taxCoeff;
+                            blackMarketMirrorAmount += price * taxCoeff;
                             continue;
                         }
 
+                        if (isContraband)
+                            continue;
+
                         switch (account)
                         {
-                            case SectorBankAccount.BlackMarket:
-                                blackMarketTaxAmount += price * taxCoeff;
-                                break;
                             case SectorBankAccount.Frontier:
                                 frontierTaxAmount += price * taxCoeff;
                                 break;

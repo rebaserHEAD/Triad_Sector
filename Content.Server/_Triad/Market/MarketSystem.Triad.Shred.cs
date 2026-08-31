@@ -2,6 +2,7 @@ using Content.Server._NF.Market.Components;
 using Content.Server._NF.Market.Extensions;
 using Content.Server.Atmos.EntitySystems;
 using Content.Server.Cargo.Systems;
+using Content.Shared.Atmos;
 using Content.Shared.Atmos.Piping.Unary.Components;
 using Content.Shared.Atmos.Prototypes;
 using Content.Shared.Chemistry.Components.SolutionManager;
@@ -249,9 +250,9 @@ public sealed partial class MarketSystem
             var mixture = canister.Air;
             var gasIndex = -1;
             var singleGas = true;
-            for (var i = 0; i < mixture.Moles.Length; i++)
+            for (var i = 0; i < Atmospherics.TotalNumberOfGases; i++)
             {
-                if (mixture.Moles[i] <= 0)
+                if (mixture.GetMoles(i) <= 0)
                     continue;
                 if (gasIndex == -1)
                     gasIndex = i;
@@ -263,7 +264,7 @@ public sealed partial class MarketSystem
                 continue;
 
             var gasId = _atmosphere.GetGas(gasIndex).ID;
-            var fillCenti = (long)Math.Round(mixture.Moles[gasIndex] * 100);
+            var fillCenti = (long)Math.Round(mixture.GetMoles(gasIndex) * 100);
             if (fillCenti <= 0)
                 continue;
 
