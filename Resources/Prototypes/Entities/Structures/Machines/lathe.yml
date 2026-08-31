@@ -117,7 +117,10 @@
   id: BaseHyperlathe
   components:
   - type: Lathe
-    materialUseMultiplier: 0.5
+    # Triad: 0.5 >> 1. Sub-1.0 material use is a money pump against the flat-priced market: the
+    # mall shreds a sold item back into its full recipe materials at value, so printing below
+    # full material cost arbitrages the difference. No machine may print under full cost.
+    materialUseMultiplier: 1
     timeMultiplier: 1.5
   - type: LatheHeatProducing
   - type: ReagentSpeed
@@ -754,7 +757,7 @@
   - type: Machine
     board: OreProcessorIndustrialMachineCircuitboard
   - type: Lathe
-    materialUseMultiplier: 0.75
+    materialUseMultiplier: 1 # Triad: 0.75 >> 1, no machine prints under full material cost (market arbitrage); speed and the advanced pack stay its edge
     timeMultiplier: 0.5
     staticPacks:
     - OreSmelting

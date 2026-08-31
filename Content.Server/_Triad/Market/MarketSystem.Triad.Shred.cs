@@ -9,6 +9,7 @@ using Content.Shared.Chemistry.Components.SolutionManager;
 using Content.Shared.Chemistry.Reagent;
 using Content.Shared.Item;
 using Content.Shared.Materials;
+using Content.Shared.Research.Prototypes;
 using Content.Shared.Stacks;
 using Robust.Shared.Prototypes;
 
@@ -28,6 +29,9 @@ public sealed partial class MarketSystem
 
     /// <summary>Gas id -> the largest single-gas canister proto and its fill in centimoles.</summary>
     private Dictionary<string, (string Proto, long FillCentiMoles)>? _canisterByGas;
+
+    /// <summary>Result proto -> the cheapest lathe recipe's material inputs.</summary>
+    private Dictionary<string, Dictionary<string, int>>? _recipeMaterialsByResult;
 
     /// <summary>
     /// Decomposes one sold entity into the market: manifest rows become pools and listings.
@@ -63,9 +67,16 @@ public sealed partial class MarketSystem
                         market.MarketDataList.Upsert(id, (int)(row.QuantityHundredths / 100), row.UnitValueMinor / 100.0);
                     break;
 
-                // authored:/unattributed: residue has no material mapping; the cash the seller was
-                // paid is its only representation. The startup audit reports which prototypes fall
-                // through this way, so the gap is a report, not a surprise.
+                case "authored":
+                case "unattributed":
+                    // An item whose value is an authored declaration (a gun frame's StaticPrice)
+                    // decomposes into its cheapest lathe recipe's input materials; with no recipe
+                    // it breaks to a synthetic fallback basket instead, so EVERYTHING decomposes
+                    // into some reasonable set of materials. Either way the credit is scaled to
+                    // the row's value, so fill already credited as entity rows is never counted
+                    // twice and the basket choice cannot mint or destroy market stock.
+                    TryShredAuthoredRow(market, id, row);
+                    break;
             }
         }
     }
@@ -205,6 +216,119 @@ public sealed partial class MarketSystem
 
         market.MarketDataList.Upsert(canister.Proto, (int)count, contentValue + shell);
         market.Pools[key] = pool - count * canister.FillCentiMoles;
+    }
+
+    /// <summary>
+    /// Fallback decomposition for items with no lathe recipe: clothing-ish things break to a
+    /// cloth-heavy basket, everything else to scrap. Shares are by value; these are made-up
+    /// recipes on purpose (user-decided 2026-08-30) and are never offered anywhere - they only
+    /// answer "what does this become when the mall shreds it".
+    /// </summary>
+    private static readonly (string Material, double Share)[] FallbackClothBasket =
+    [
+        ("Cloth", 0.8),
+        ("Plastic", 0.2),
+    ];
+
+    private static readonly (string Material, double Share)[] FallbackScrapBasket =
+    [
+        ("Steel", 0.6),
+        ("Plastic", 0.25),
+        ("Glass", 0.15),
+    ];
+
+    /// <summary>
+    /// Converts an authored or unattributed manifest row into materials: the item's cheapest
+    /// lathe recipe's inputs where one exists, else a synthetic fallback basket. Either way the
+    /// credit is scaled so the material value equals the row's value - the shred conserves what
+    /// was paid, and any recipe-vs-authored spread stays manufacturing margin rather than minted
+    /// or destroyed market stock.
+    /// </summary>
+    private void TryShredAuthoredRow(CargoMarketDataComponent market, string protoId, PriceContribution row)
+    {
+        var rowValue = row.Value;
+        if (rowValue <= 0)
+            return;
+
+        var recipes = _recipeMaterialsByResult ??= BuildRecipeMaterialMap();
+        if (!recipes.TryGetValue(protoId, out var materials))
+        {
+            ShredToFallbackBasket(market, protoId, rowValue);
+            return;
+        }
+
+        var recipeValue = 0.0;
+        foreach (var (matId, amount) in materials)
+        {
+            if (_prototypeManager.TryIndex<MaterialPrototype>(matId, out var mat))
+                recipeValue += mat.Price * amount;
+        }
+
+        if (recipeValue <= 0)
+        {
+            ShredToFallbackBasket(market, protoId, rowValue);
+            return;
+        }
+
+        var scale = rowValue / recipeValue;
+        foreach (var (matId, amount) in materials)
+            CreditPool(market, $"material:{matId}", (long)Math.Round(amount * 100.0 * scale));
+    }
+
+    private void ShredToFallbackBasket(CargoMarketDataComponent market, string protoId, double value)
+    {
+        var basket = _prototypeManager.TryIndex<EntityPrototype>(protoId, out var proto)
+                     && proto.Components.ContainsKey(Factory.GetComponentName<Content.Shared.Clothing.Components.ClothingComponent>())
+            ? FallbackClothBasket
+            : FallbackScrapBasket;
+
+        foreach (var (matId, share) in basket)
+        {
+            if (!_prototypeManager.TryIndex<MaterialPrototype>(matId, out var mat) || mat.Price <= 0)
+                continue;
+
+            var units = value * share / mat.Price;
+            CreditPool(market, $"material:{matId}", (long)Math.Round(units * 100));
+        }
+    }
+
+    /// <summary>
+    /// Result proto -> the material inputs of its cheapest printing recipe (by material value),
+    /// which is the plan's decomposition mapping for the classes PhysicalComposition misses -
+    /// the printable-gun economy means recipes blanket exactly those.
+    /// </summary>
+    private Dictionary<string, Dictionary<string, int>> BuildRecipeMaterialMap()
+    {
+        var best = new Dictionary<string, double>();
+        var map = new Dictionary<string, Dictionary<string, int>>();
+
+        foreach (var recipe in _prototypeManager.EnumeratePrototypes<LatheRecipePrototype>())
+        {
+            if (recipe.Result is not { } result || recipe.Materials.Count == 0)
+                continue;
+
+            var value = 0.0;
+            foreach (var (matId, amount) in recipe.Materials)
+            {
+                if (_prototypeManager.TryIndex(matId, out var mat))
+                    value += mat.Price * amount;
+            }
+
+            if (value <= 0)
+                continue;
+            if (best.TryGetValue(result, out var existing) && existing <= value)
+                continue;
+
+            var materials = new Dictionary<string, int>();
+            foreach (var (matId, amount) in recipe.Materials)
+                materials[matId] = amount;
+
+            best[result] = value;
+            map[result] = materials;
+        }
+
+        Log.Info($"Market shredder: mapped {map.Count} lathe-recipe result(s).");
+        return map;
     }
 
     /// <summary>

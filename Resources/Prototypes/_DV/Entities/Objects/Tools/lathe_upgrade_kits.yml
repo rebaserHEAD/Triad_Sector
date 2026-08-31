@@ -19,15 +19,19 @@
   parent: BaseLatheUpgradeKit
   id: LatheUpgradeKitHyper
   name: hyper-convection upgrade kit
-  description: An upgrade kit with all the parts needed to upgrade a lathe. This one will save materials at the cost of speed and producing heat.
+  description: An upgrade kit with all the parts needed to upgrade a lathe. This one will speed up production at the cost of producing heat. # Triad: reflavored, was a material-saver
   components:
   - type: UpgradeKit
     components:
     - type: UpgradedMachine
       upgrade: lathe-upgrade-kit-hyper-convection
     - type: LatheUpgrade
-      materialUseMultiplier: 0.8
-      timeMultiplier: 1.5
+      # Triad: material efficiency removed from upgrades entirely - printing under full material
+      # cost arbitrages the flat-priced market. Repurposed as the milder speed kit: slower than
+      # cryo (0.5) but it heats the room instead of freezing it.
+      # materialUseMultiplier: 0.8
+      # timeMultiplier: 1.5
+      timeMultiplier: 0.75
     - type: LatheHeatProducing
       temperatureCap: 373.15
     - type: ReagentSpeed
