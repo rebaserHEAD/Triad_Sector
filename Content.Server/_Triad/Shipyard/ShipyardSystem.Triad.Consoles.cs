@@ -363,13 +363,23 @@ public sealed partial class ShipyardSystem : SharedShipyardSystem
             return;
         }
 
-        if (!_bank.TryBankWithdraw(player, appraisalCost, new MarketRecord { Kind = MarketTransactionKind.ShipLoadAppraisal })) // Triad: market data
+        // Triad: the load fee used to be withdrawn and deleted; it is now sector income, split into
+        // the purchase-tax pot. The whole fee is tax - nothing is bought here.
+        var loadRecord = new MarketRecord
+        {
+            Kind = MarketTransactionKind.ShipLoadAppraisal,
+            Tax = appraisalCost * 100L,
+            ConsoleProto = MetaData(uid).EntityPrototype?.ID,
+        };
+        _bank.AddSectorTaxSplits(loadRecord, appraisalCost);
+        if (!_bank.TryBankWithdraw(player, appraisalCost, loadRecord)) // Triad: market data
         {
             Del(shuttleUid);
             ConsolePopup(player, Loc.GetString("cargo-console-insufficient-funds", ("cost", appraisalCost)));
             PlayDenySound(player, uid, component);
             return;
         }
+        _bank.DepositSectorTax(appraisalCost);
 
         // Notify player of the charge and their new balance
         ConsolePopup(player, Loc.GetString("shipyard-console-load-success-charged",

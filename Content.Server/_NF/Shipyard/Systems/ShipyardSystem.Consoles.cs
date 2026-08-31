@@ -217,21 +217,35 @@ public sealed partial class ShipyardSystem : SharedShipyardSystem
         }
         else
         {
-            if (bank.Balance <= vessel.Price)
+            // Triad: sector purchase tax on top of the hull price, into the pot. Voucher purchases
+            // never reach this branch, so they are untaxed by construction.
+            var buyTax = _bank.GetSectorBuyTax(vessel.Price);
+            var totalPrice = vessel.Price + buyTax;
+            if (bank.Balance <= totalPrice) // Triad: vessel.Price >> totalPrice
             {
                 Del(shuttleUid);
-                ConsolePopup(player, Loc.GetString("cargo-console-insufficient-funds", ("cost", vessel.Price)));
+                ConsolePopup(player, Loc.GetString("cargo-console-insufficient-funds", ("cost", totalPrice))); // Triad: vessel.Price >> totalPrice
                 PlayDenySound(player, shipyardConsoleUid, component);
                 return;
             }
 
-            if (!_bank.TryBankWithdraw(player, vessel.Price, new MarketRecord { Kind = MarketTransactionKind.ShipyardPurchase })) // Triad: market data
+            var record = new MarketRecord // Triad: market data
+            {
+                Kind = MarketTransactionKind.ShipyardPurchase,
+                Gross = -totalPrice * 100L,
+                Tax = buyTax * 100L,
+                Net = -vessel.Price * 100L,
+                ConsoleProto = MetaData(shipyardConsoleUid).EntityPrototype?.ID,
+            };
+            _bank.AddSectorTaxSplits(record, buyTax);
+            if (!_bank.TryBankWithdraw(player, totalPrice, record)) // Triad: market data; vessel.Price >> totalPrice
             {
                 Del(shuttleUid);
-                ConsolePopup(player, Loc.GetString("cargo-console-insufficient-funds", ("cost", vessel.Price)));
+                ConsolePopup(player, Loc.GetString("cargo-console-insufficient-funds", ("cost", totalPrice))); // Triad: vessel.Price >> totalPrice
                 PlayDenySound(player, shipyardConsoleUid, component);
                 return;
             }
+            _bank.DepositSectorTax(buyTax); // Triad
         }
 
         // Add company information to the shuttle from the ID card or voucher

@@ -13,7 +13,8 @@ ledger-no-expenses = None
 ledger-balance = Balance:
 ledger-no-balance = N/A
 
-ledger-tab-Frontier = Colonial Outpost
+# Triad: the Frontier account refaced as the TFA (Triad Frontier Association); was Colonial Outpost
+ledger-tab-Frontier = TFA
 ledger-tab-TDF = TDF
 ledger-tab-Medical = Medical Dispatch
 ledger-tab-BlackMarket = Black Market

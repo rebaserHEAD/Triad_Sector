@@ -45,6 +45,7 @@
     id: FentanylCrystal
   - type: ItemTax # Mono
     taxAccounts:
-      Medical: -0.05
-      TDF: -0.1
-      BlackMarket: 0.25
+      # Triad: negative penalty coefficients removed - the omniscient pallet debit mechanic is gone.
+      # Medical: -0.05
+      # TDF: -0.1
+      BlackMarket: 0.25 # Triad: mirror-only now - meters smuggling, the seller is not charged

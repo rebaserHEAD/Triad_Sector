@@ -135,6 +135,10 @@ public sealed partial class BankSystem : SharedBankSystem
         {
             if (value == SectorBankAccount.Invalid)
                 continue;
+            // Triad: BlackMarket is hidden from creditflow; entries for it fall through the
+            // ContainsKey guard below.
+            if (value == SectorBankAccount.BlackMarket)
+                continue;
             accountDict[value] = new AccountInfo();
         }
         foreach (var (ledgerEntry, value) in ledger.AccountLedgerEntries)

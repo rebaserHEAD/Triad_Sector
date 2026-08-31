@@ -95,9 +95,11 @@
       paper_label: !type:ContainerSlot
   - type: ItemSlots
   - type: RequireProjectileTarget
-  - type: ItemTax # Mono
-    taxAccounts:
-      Frontier: 0.3
+  # Triad: trade-crate ItemTax removed entirely - courier payouts are untouched and the
+  # destination values are the economy; the coefficient only printed money.
+  # - type: ItemTax # Mono
+  #   taxAccounts:
+  #     Frontier: 0.3
 
 - type: entity
   parent:
@@ -130,10 +132,12 @@
     - BlackMarket
   - type: PirateBountyItem
     id: ContrabandCrate
-  - type: ItemTax # Mono
-    taxAccounts:
-      BlackMarket: 0.3
-      TDF: -0.075
+  # Triad: trade-crate ItemTax removed entirely (see CrateTradeBaseSecure above); the pod-cargo
+  # contraband items carry their own BM mirror coefficients.
+  # - type: ItemTax # Mono
+  #   taxAccounts:
+  #     BlackMarket: 0.3
+  #     TDF: -0.075
   - type: RadarBlip # Triad, no immidiate visibility
     radarColor: "#FFCCCB"
     scale: 1.5

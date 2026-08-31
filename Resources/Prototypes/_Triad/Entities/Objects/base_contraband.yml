@@ -100,9 +100,10 @@
   components:
   - type: Contraband
     severity: Class3General
-  - type: ItemTax
-    taxAccounts:
-      TDF: -0.05 # TDF account
+  # Triad: negative penalty coefficients removed - the omniscient pallet debit mechanic is gone.
+  # - type: ItemTax
+  #   taxAccounts:
+  #     TDF: -0.05 # TDF account
 
 - type: entity
   parent: BaseTriadC3ContrabandUnredeemable

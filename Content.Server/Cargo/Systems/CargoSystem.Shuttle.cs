@@ -25,6 +25,7 @@ using Content.Server._Triad.Market; // Triad: market data
 using Content.Shared.Materials; // Triad: market data
 using Content.Shared.Chemistry.Components.SolutionManager; // Triad: market data
 using Content.Server.Database; // Triad: market data
+using Content.Shared.Contraband; // Triad: contraband sells clean
 
 namespace Content.Server.Cargo.Systems;
 
@@ -84,9 +85,11 @@ public sealed partial class CargoSystem
         }
 
         // Frontier: per-object market modification
-        GetPalletGoods(uid, gridUid, out var toSell, out var amount, out var noModAmount, out var blackMarketTaxAmount, out var frontierTaxAmount, out var nfsdTaxAmount, out var medicalTaxAmount);
+        GetPalletGoods(uid, gridUid, out var toSell, out var amount, out var noModAmount, out var blackMarketTaxAmount, out var frontierTaxAmount, out var nfsdTaxAmount, out var medicalTaxAmount, out _); // Triad: add mirror out
 
         amount += noModAmount;
+        // Triad: taxes are seller-paid now, so the console quotes what the sale will actually pay.
+        amount -= blackMarketTaxAmount + frontierTaxAmount + nfsdTaxAmount + medicalTaxAmount;
         // End Frontier
 
         // Monolith: display multiplier
@@ -289,11 +292,11 @@ public sealed partial class CargoSystem
 
     #region Station
 
-    private bool SellPallets(Entity<CargoPalletConsoleComponent> consoleUid, EntityUid gridUid, out double amount, out double noMultiplierAmount, out double blackMarketTaxAmount, out double frontierTaxAmount, out double nfsdTaxAmount, out double medicalTaxAmount, MarketRecord? capture = null) // Frontier: first arg to Entity, add noMultiplierAmount. Triad: add capture
+    private bool SellPallets(Entity<CargoPalletConsoleComponent> consoleUid, EntityUid gridUid, out double amount, out double noMultiplierAmount, out double blackMarketTaxAmount, out double frontierTaxAmount, out double nfsdTaxAmount, out double medicalTaxAmount, out double blackMarketMirrorAmount, MarketRecord? capture = null) // Frontier: first arg to Entity, add noMultiplierAmount. Triad: add capture + BM mirror
     {
-        GetPalletGoods(consoleUid, gridUid, out var toSell, out amount, out noMultiplierAmount, out blackMarketTaxAmount, out frontierTaxAmount, out nfsdTaxAmount, out medicalTaxAmount, capture); // Frontier: add noMultiplierAmount. Triad: add capture
+        GetPalletGoods(consoleUid, gridUid, out var toSell, out amount, out noMultiplierAmount, out blackMarketTaxAmount, out frontierTaxAmount, out nfsdTaxAmount, out medicalTaxAmount, out blackMarketMirrorAmount, capture); // Frontier: add noMultiplierAmount. Triad: add capture + BM mirror
 
-        Log.Debug($"Cargo sold {toSell.Count} entities for {amount} (plus {noMultiplierAmount} without mods). (Taxes: Black Market: {blackMarketTaxAmount}, CO: {frontierTaxAmount}, TSFMC: {nfsdTaxAmount}, MD: {medicalTaxAmount})"); // Frontier: add section in parentheses
+        Log.Debug($"Cargo sold {toSell.Count} entities for {amount} (plus {noMultiplierAmount} without mods). (Taxes: Black Market: {blackMarketTaxAmount}, CO: {frontierTaxAmount}, TSFMC: {nfsdTaxAmount}, MD: {medicalTaxAmount}, BM mirror: {blackMarketMirrorAmount})"); // Frontier: add section in parentheses. Triad: add BM mirror
 
         if (toSell.Count == 0)
             return false;
@@ -344,7 +347,7 @@ public sealed partial class CargoSystem
         }
     }
 
-    private void GetPalletGoods(Entity<CargoPalletConsoleComponent> consoleUid, EntityUid gridUid, out HashSet<EntityUid> toSell, out double amount, out double noMultiplierAmount, out double blackMarketTaxAmount, out double frontierTaxAmount, out double nfsdTaxAmount, out double medicalTaxAmount, MarketRecord? capture = null) // Frontier: first arg to Entity, add noMultiplierAmount. Triad: add capture
+    private void GetPalletGoods(Entity<CargoPalletConsoleComponent> consoleUid, EntityUid gridUid, out HashSet<EntityUid> toSell, out double amount, out double noMultiplierAmount, out double blackMarketTaxAmount, out double frontierTaxAmount, out double nfsdTaxAmount, out double medicalTaxAmount, out double blackMarketMirrorAmount, MarketRecord? capture = null) // Frontier: first arg to Entity, add noMultiplierAmount. Triad: add capture + BM mirror
     {
         // Triad: reused across entities so a full pallet does not allocate a list per item.
         var pricedNodes = capture != null ? new List<PricedNode>() : null;
@@ -354,6 +357,7 @@ public sealed partial class CargoSystem
         frontierTaxAmount = 0;
         nfsdTaxAmount = 0;
         medicalTaxAmount = 0;
+        blackMarketMirrorAmount = 0; // Triad
         toSell = new HashSet<EntityUid>();
 
         foreach (var (palletUid, _, _) in GetCargoPallets(consoleUid, gridUid, BuySellType.Sell))
@@ -440,10 +444,27 @@ public sealed partial class CargoSystem
                     CaptureSaleLines(capture, pricedNodes, effectiveMultiplier);
                 }
                 // Mono: ItemTaxs to budgets.
+                // Triad: reworked. Positive coefficients are now seller-paid (deducted from the
+                // payout in OnPalletSale) and stay direct to their department. Contraband sells
+                // clean: nothing is charged on it, and its BlackMarket coefficients become a
+                // mirror-only deposit so the hidden BM account still meters the flow while the
+                // smuggler keeps every credit. Negative coefficients are ignored entirely - the
+                // penalty debit mechanic is removed.
                 if (TryComp<ItemTaxComponent>(ent, out var itemTax))
                 {
+                    var isContraband = HasComp<ContrabandComponent>(ent);
                     foreach (var (account, taxCoeff) in itemTax.TaxAccounts)
                     {
+                        if (taxCoeff <= 0)
+                            continue;
+
+                        if (isContraband)
+                        {
+                            if (account == SectorBankAccount.BlackMarket)
+                                blackMarketMirrorAmount += price * taxCoeff;
+                            continue;
+                        }
+
                         switch (account)
                         {
                             case SectorBankAccount.BlackMarket:
@@ -470,12 +491,16 @@ public sealed partial class CargoSystem
 
     // Triad: begin, market data capture for pallet sales.
     /// <summary>
-    /// Files the completed sale: the header, the four sector taxes as splits, and the payout trace.
-    /// Lines were already attached during pricing, where the multipliers were known.
+    /// Files the completed sale: the header, the seller-paid sector taxes and the BM mirror as
+    /// splits, and the payout trace. Lines were already attached during pricing, where the
+    /// multipliers were known.
     /// </summary>
+    /// <param name="exactPayout">The full pre-tax value of everything sold.</param>
+    /// <param name="paidPayout">What the seller was actually handed, after the seller-paid taxes.</param>
     private void CapturePalletSale(EntityUid consoleUid, CargoPalletConsoleComponent component,
         MarketRecord? capture, EntityUid actor, double exactPayout, int paidPayout,
-        double blackMarketTax, double frontierTax, double nfsdTax, double medicalTax)
+        double blackMarketTax, double frontierTax, double nfsdTax, double medicalTax,
+        double blackMarketMirror) // Triad: add mirror
     {
         if (capture == null)
             return;
@@ -504,8 +529,12 @@ public sealed partial class CargoSystem
         AddTaxSplit(capture, SectorBankAccount.Frontier, LedgerEntryType.ColonialOutpostSales, LedgerEntryType.ColonialOutpostPenalties, frontierTax);
         AddTaxSplit(capture, SectorBankAccount.TDF, LedgerEntryType.TSFMCSales, LedgerEntryType.TSFMCPenalties, nfsdTax);
         AddTaxSplit(capture, SectorBankAccount.Medical, LedgerEntryType.MedicalSales, LedgerEntryType.MedicalPenalties, medicalTax);
+        // Triad: the BM mirror is a split but not part of Tax - it meters contraband flow into the
+        // hidden BlackMarket account without charging the seller.
+        AddTaxSplit(capture, SectorBankAccount.BlackMarket, LedgerEntryType.BlackMarketSales, LedgerEntryType.BlackMarketPenalties, blackMarketMirror);
 
-        // The seller's own share, so splits over one transaction sum to its gross.
+        // The seller's own share. Splits over one transaction sum to its gross, plus the BM mirror
+        // where contraband was sold (the mirror is printed, not carved out of the payout).
         capture.AddSplit("Player", "PalletSale", capture.Net);
 
         // The payout trace. Only the parts that are not already columns: what was rounded away, and
@@ -513,7 +542,8 @@ public sealed partial class CargoSystem
         var lineTotal = capture.LineTotal();
         capture.Calc =
             $"{{\"exactPayout\":{exactPayout:0.####},\"paidPayout\":{paidPayout}," +
-            $"\"roundingLoss\":{exactPayout - paidPayout:0.####}," +
+            $"\"roundingLoss\":{exactPayout - taxTotal - paidPayout:0.####}," +
+            $"\"bmMirrorMinor\":{(long)Math.Round(blackMarketMirror * 100)}," +
             $"\"lineTotalMinor\":{lineTotal},\"lineCount\":{capture.Lines.Count}}}";
 
         _market.Record(capture);
@@ -664,13 +694,18 @@ public sealed partial class CargoSystem
         // loop entirely rather than building a record nobody reads.
         var capture = _market.LinesEnabled ? new MarketRecord() : null;
 
-        if (!SellPallets((uid, component), gridUid, out var price, out var noMultiplierPrice, out var blackMarketTaxAmount, out var frontierTaxAmount, out var nfsdTaxAmount, out var medicalTaxAmount, capture)) // Frontier: convert first arg to Entity, add noMultiplierPrice. Triad: add capture
+        if (!SellPallets((uid, component), gridUid, out var price, out var noMultiplierPrice, out var blackMarketTaxAmount, out var frontierTaxAmount, out var nfsdTaxAmount, out var medicalTaxAmount, out var blackMarketMirrorAmount, capture)) // Frontier: convert first arg to Entity, add noMultiplierPrice. Triad: add capture + BM mirror
             return;
 
         price += noMultiplierPrice;
 
         // End Frontier: market modifiers & immune objects
         // Mono Begin
+        // Triad: the department taxes are seller-paid now - deducted from the payout below - so
+        // these deposits stop being printed money. The amounts can no longer be negative (the
+        // contraband penalty debits are removed; see GetPalletGoods), so the old negative-branch
+        // TrySectorWithdraw machinery is gone. The BM mirror deposit meters contraband flow
+        // without charging the seller anything.
         if (blackMarketTaxAmount > 0)
             _bank.TrySectorDeposit(SectorBankAccount.BlackMarket, (int)blackMarketTaxAmount, LedgerEntryType.BlackMarketSales, captureStandalone: false); // Triad: attached as a split of the sale
         if (frontierTaxAmount > 0)
@@ -679,32 +714,17 @@ public sealed partial class CargoSystem
             _bank.TrySectorDeposit(SectorBankAccount.TDF, (int)nfsdTaxAmount, LedgerEntryType.TSFMCSales, captureStandalone: false); // Triad: attached as a split of the sale
         if (medicalTaxAmount > 0)
             _bank.TrySectorDeposit(SectorBankAccount.Medical, (int)medicalTaxAmount, LedgerEntryType.MedicalSales, captureStandalone: false); // Triad: attached as a split of the sale
-        if (blackMarketTaxAmount < 0)
-        {
-            blackMarketTaxAmount = -blackMarketTaxAmount;
-            _bank.TrySectorWithdraw(SectorBankAccount.BlackMarket, (int)blackMarketTaxAmount, LedgerEntryType.BlackMarketPenalties, captureStandalone: false); // Triad: attached as a split of the sale
-        }
-        if (frontierTaxAmount < 0)
-        {
-            frontierTaxAmount = -frontierTaxAmount;
-            _bank.TrySectorWithdraw(SectorBankAccount.Frontier, (int)frontierTaxAmount, LedgerEntryType.ColonialOutpostPenalties, captureStandalone: false); // Triad: attached as a split of the sale
-        }
-        if (nfsdTaxAmount < 0)
-        {
-            nfsdTaxAmount = -nfsdTaxAmount;
-            _bank.TrySectorWithdraw(SectorBankAccount.TDF, (int)nfsdTaxAmount, LedgerEntryType.TSFMCPenalties, captureStandalone: false); // Triad: attached as a split of the sale
-        }
-        if (medicalTaxAmount < 0)
-        {
-            medicalTaxAmount = -medicalTaxAmount;
-            _bank.TrySectorWithdraw(SectorBankAccount.Medical, (int)medicalTaxAmount, LedgerEntryType.MedicalPenalties, captureStandalone: false); // Triad: attached as a split of the sale
-        }
+        if (blackMarketMirrorAmount > 0)
+            _bank.TrySectorDeposit(SectorBankAccount.BlackMarket, (int)blackMarketMirrorAmount, LedgerEntryType.BlackMarketSales, captureStandalone: false); // Triad: mirror, attached as a split of the sale
         // Mono End
+        // Triad: seller pays the department taxes out of the payout.
+        var sellerTaxTotal = blackMarketTaxAmount + frontierTaxAmount + nfsdTaxAmount + medicalTaxAmount;
+        var payout = price - sellerTaxTotal;
         var stackPrototype = _protoMan.Index<StackPrototype>(component.CashType);
         // Triad: capture before the cast, so the rounding loss is visible rather than inferred.
-        CapturePalletSale(uid, component, capture, args.Actor, price, (int) price,
-            blackMarketTaxAmount, frontierTaxAmount, nfsdTaxAmount, medicalTaxAmount);
-        _stack.Spawn((int)price, stackPrototype, xform.Coordinates);
+        CapturePalletSale(uid, component, capture, args.Actor, price, (int) payout,
+            blackMarketTaxAmount, frontierTaxAmount, nfsdTaxAmount, medicalTaxAmount, blackMarketMirrorAmount);
+        _stack.Spawn((int)payout, stackPrototype, xform.Coordinates); // Triad: price >> payout
         _audio.PlayPvs(ApproveSound, uid);
         UpdatePalletConsoleInterface((uid, component)); // Frontier: EntityUid<Entity
     }

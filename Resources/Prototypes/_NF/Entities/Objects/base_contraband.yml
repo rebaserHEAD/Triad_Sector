@@ -78,9 +78,10 @@
     severity: Class3Expedition
     turnInValues:
       TriadCommerceCredit: 15 # Triad - currency change
-  - type: ItemTax # Mono
-    taxAccounts:
-      TDF: -0.05
+  # Triad: negative penalty coefficients removed - the omniscient pallet debit mechanic is gone.
+  # - type: ItemTax # Mono
+  #   taxAccounts:
+  #     TDF: -0.05
 
 - type: entity
   parent: BaseC3ContrabandUnredeemable
@@ -90,9 +91,10 @@
   - type: Contraband
     turnInValues:
       TriadCommerceCredit: 10 # Triad - currency chnage
-  - type: ItemTax # Mono
-    taxAccounts:
-      TDF: -0.05
+  # Triad: negative penalty coefficients removed.
+  # - type: ItemTax # Mono
+  #   taxAccounts:
+  #     TDF: -0.05
 
 - type: entity
   parent: BaseC3ContrabandUnredeemable
@@ -137,9 +139,10 @@
   - type: Contraband
     turnInValues:
       TriadCommerceCredit: 5 # Triad - currency change
-  - type: ItemTax # Mono
-    taxAccounts:
-      TDF: -0.1
+  # Triad: negative penalty coefficients removed.
+  # - type: ItemTax # Mono
+  #   taxAccounts:
+  #     TDF: -0.1
 
 - type: entity
   parent: BaseC3PirateContrabandNoValue
@@ -150,9 +153,10 @@
     severity: Class3PirateHighValue
     turnInValues:
       TriadCommerceCredit: 20 # Triad - currency change
-  - type: ItemTax # Mono
-    taxAccounts:
-      TDF: -0.1
+  # Triad: negative penalty coefficients removed.
+  # - type: ItemTax # Mono
+  #   taxAccounts:
+  #     TDF: -0.1
 
 - type: entity
   parent: BaseC3ContrabandUnredeemable
@@ -175,9 +179,10 @@
   - type: Contraband
     turnInValues:
       TriadCommerceCredit: 10 # Triad - currency change
-  - type: ItemTax # Mono
-    taxAccounts:
-      TDF: -0.2
+  # Triad: negative penalty coefficients removed.
+  # - type: ItemTax # Mono
+  #   taxAccounts:
+  #     TDF: -0.2
 
 - type: entity
   parent: BaseC3ContrabandUnredeemable

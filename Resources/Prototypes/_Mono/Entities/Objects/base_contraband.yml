@@ -158,10 +158,11 @@
   parent: BaseFactionGearOtherFactionT0
   id: BaseFactionGearTaxedT0
   abstract: true
-  components:
-  - type: ItemTax
-    taxAccounts:
-      TDF: -0.2
+  # Triad: negative penalty coefficients removed - the omniscient pallet debit mechanic is gone.
+  # components:
+  # - type: ItemTax
+  #   taxAccounts:
+  #     TDF: -0.2
 
 - type: entity
   parent: BaseFactionGearTaxedT0

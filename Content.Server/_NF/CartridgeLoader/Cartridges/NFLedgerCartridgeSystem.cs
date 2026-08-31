@@ -52,20 +52,21 @@ public sealed partial class NFLedgerCartridgeSystem : EntitySystem
         if (!TryComp(_sectorService.GetServiceEntity(), out SectorBankComponent? ledger))
             return false;
 
-        var ledgerCount = ledger.AccountLedgerEntries.Count;
-        NFLedgerEntry[] entries = new NFLedgerEntry[ledgerCount];
-        var index = 0;
+        // Triad: BlackMarket is hidden from creditflow - it is the smuggling economy's meter, not
+        // a department, and its movements are nobody's business on a PDA.
+        var entryList = new List<NFLedgerEntry>(ledger.AccountLedgerEntries.Count);
         foreach (var ledgerEntry in ledger.AccountLedgerEntries)
         {
-            // Bounds check, just to be sure.
-            if (index >= ledgerCount)
-                break;
-            entries[index].Account = ledgerEntry.Key.Account;
-            entries[index].Type = ledgerEntry.Key.Type;
-            entries[index].Amount = ledgerEntry.Value;
-            index++;
+            if (ledgerEntry.Key.Account == Content.Shared._NF.Bank.Components.SectorBankAccount.BlackMarket)
+                continue;
+            entryList.Add(new NFLedgerEntry
+            {
+                Account = ledgerEntry.Key.Account,
+                Type = ledgerEntry.Key.Type,
+                Amount = ledgerEntry.Value,
+            });
         }
-        uiState = new NFLedgerState(entries);
+        uiState = new NFLedgerState(entryList.ToArray());
         return true;
     }
 

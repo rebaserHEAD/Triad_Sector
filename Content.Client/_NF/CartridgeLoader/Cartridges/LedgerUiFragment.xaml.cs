@@ -18,6 +18,10 @@ public sealed partial class LedgerUiFragment : BoxContainer
         {
             if (account == SectorBankAccount.Invalid)
                 continue;
+            // Triad: BlackMarket is hidden from creditflow; the server never sends its entries,
+            // so don't build an empty tab for it.
+            if (account == SectorBankAccount.BlackMarket)
+                continue;
             var ledgerTab = new LedgerTab(account);
             Tabs.AddChild(ledgerTab);
             Tabs.SetTabTitle(Tabs.ChildCount - 1, Loc.GetString($"ledger-tab-{account}"));
