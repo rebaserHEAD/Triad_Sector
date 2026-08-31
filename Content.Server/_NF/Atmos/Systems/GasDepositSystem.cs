@@ -25,6 +25,11 @@ using Robust.Server.GameObjects;
 using Robust.Shared.Prototypes;
 using Robust.Shared.Random;
 using Content.Server.Construction;
+using Content.Server._NF.Market.Systems; // Triad: gas pool intake
+using Content.Server.Station.Systems; // Triad: gas pool intake
+using Content.Server._Triad.Market; // Triad: market data
+using Content.Server.Database; // Triad: market data
+using Robust.Shared.Player; // Triad: market data
 
 namespace Content.Server._NF.Atmos.Systems;
 
@@ -42,6 +47,10 @@ public sealed partial class GasDepositSystem : SharedGasDepositSystem
     [Dependency] private IRobustRandom _random = default!;
     [Dependency] private NodeContainerSystem _nodeContainer = default!;
     [Dependency] private StackSystem _stack = default!;
+    [Dependency] private MarketSystem _marketSystem = default!; // Triad: gas pool intake
+    [Dependency] private StationSystem _station = default!; // Triad: gas pool intake
+    [Dependency] private IMarketDataManager _market = default!; // Triad: market data
+    [Dependency] private ISharedPlayerManager _playerManager = default!; // Triad: market data
 
     /// <summary>
     /// The fraction that a deposit's volume should be depleted to before it is considered "low volume".
@@ -295,6 +304,49 @@ public sealed partial class GasDepositSystem : SharedGasDepositSystem
         var amount = _atmosphere.GetPriceNoPurity(mixture); // Mono - No purity penalty
         if (TryComp<MarketModifierComponent>(ent, out var priceMod))
             amount *= priceMod.Mod;
+
+        // Triad: begin - the sold moles stop vanishing. On a station with a market (the Trade
+        // Mall), they credit the per-gas pools and convert into canister listings; the payout to
+        // the seller is unchanged. And the sale is captured as a GasSale with one line per gas:
+        // the moles ledger for the gas economy.
+        var owningStation = _station.GetOwningStation(ent);
+        var record = _market.Enabled
+            ? new MarketRecord
+            {
+                Kind = MarketTransactionKind.GasSale,
+                Rail = MarketRail.Cash,
+                Gross = (long)Math.Round(amount * 100),
+                Net = (long)Math.Round(amount * 100),
+                ConsoleProto = MetaData(ent).EntityPrototype?.ID,
+                LocationName = owningStation is { } locStation ? MetaData(locStation).EntityName : null,
+                MarketMod = priceMod?.Mod,
+            }
+            : null;
+
+        for (var i = 0; i < Atmospherics.TotalNumberOfGases; i++)
+        {
+            var moles = mixture.Moles[i];
+            if (moles <= 0)
+                continue;
+
+            var gas = _atmosphere.GetGas(i);
+            if (owningStation is { } station)
+                _marketSystem.CreditMarketPool(station, $"gas:{gas.ID}", (long)Math.Round(moles * 100));
+
+            record?.AddLine($"gas:{gas.ID}", MarketDirection.Sale, (int)moles,
+                (long)Math.Round(gas.PricePerMole * 100),
+                (long)Math.Round(moles * gas.PricePerMole * 100),
+                MarketPriceSource.Gas);
+        }
+
+        if (record != null)
+        {
+            record.AddSplit("Player", nameof(MarketTransactionKind.GasSale), record.Net);
+            if (_playerManager.TryGetSessionByEntity(args.Actor, out var session))
+                record.ActorUserId = session.UserId;
+            _market.Record(record);
+        }
+        // Triad: end
 
         var stackPrototype = _prototype.Index(ent.Comp.CashType);
         _stack.Spawn((int)amount, stackPrototype, xform.Coordinates);

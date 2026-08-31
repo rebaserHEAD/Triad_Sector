@@ -46,6 +46,7 @@ ledger-entry-type-StationDepositOther = Misc. Deposits
 ledger-entry-type-PowerTransmission = Energy Exports
 # Triad
 ledger-entry-type-SectorTaxShare = Sector Tax Share
+ledger-entry-type-SmugglingIncome = Smuggling Income
 ledger-entry-type-MailPenalty = Mail Penalties
 ledger-entry-type-ShuttleRecordFees = Shuttle Record Fees
 ledger-entry-type-StationWithdrawalPayroll = Payroll

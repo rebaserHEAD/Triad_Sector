@@ -49,6 +49,9 @@ public enum LedgerEntryType : byte
     // Triad: a department's even share of the sector purchase-tax pot (see BankSystem.SectorTax.cs).
     // Placed before FirstExpense so it classifies as income.
     SectorTaxShare,
+    // Triad: the hidden BlackMarket account metering realized smuggling - the speso appraisal of
+    // goods fenced at a contraband turn-in console. Income, before FirstExpense.
+    SmugglingIncome,
     // Expense entries
     MailPenalty,
     // Mono Begin

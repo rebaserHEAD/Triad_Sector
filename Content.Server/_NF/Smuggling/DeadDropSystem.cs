@@ -50,6 +50,9 @@ public sealed partial class DeadDropSystem : EntitySystem
     [Dependency] private SharedGameTicker _ticker = default!;
     [Dependency] private LinkedLifecycleGridSystem _linkedLifecycleGrid = default!;
     [Dependency] private StationRenameWarpsSystems _stationRenameWarps = default!;
+    [Dependency] private Content.Server._Triad.Market.IMarketDataManager _market = default!; // Triad: market data
+    [Dependency] private Content.Server.Cargo.Systems.PricingSystem _pricing = default!; // Triad: market data
+    [Dependency] private Robust.Shared.Player.ISharedPlayerManager _playerManager = default!; // Triad: market data
     private ISawmill _sawmill = default!;
 
     private readonly Queue<EntityUid> _drops = [];
@@ -504,6 +507,41 @@ public sealed partial class DeadDropSystem : EntitySystem
                 _linkedLifecycleGrid.UnparentPlayersFromGrid(entityToRemove, true);
             }
         }
+
+        // Triad: begin, market data - the supply side of the smuggling loop. One DeadDropSpawn
+        // per pod, its cargo appraised as lines, so spawned-vs-fenced-vs-sold is queryable end to
+        // end. No money moves here; Gross is the appraised supply value.
+        if (_market.Enabled)
+        {
+            var record = new Content.Server._Triad.Market.MarketRecord
+            {
+                Kind = Content.Server.Database.MarketTransactionKind.DeadDropSpawn,
+                Rail = Content.Server.Database.MarketRail.None,
+                LocationName = _station.GetOwningStation(uid) is { } dropStation ? MetaData(dropStation).EntityName : null,
+            };
+
+            double totalValue = 0;
+            var children = Transform(grid).ChildEnumerator;
+            while (children.MoveNext(out var child))
+            {
+                var price = _pricing.GetPrice(child);
+                if (price <= 0)
+                    continue;
+                totalValue += price;
+                if (_market.LinesEnabled && MetaData(child).EntityPrototype is { } childProto)
+                {
+                    record.AddLine(childProto.ID, Content.Server.Database.MarketDirection.Unknown, 1,
+                        (long)Math.Round(price * 100), (long)Math.Round(price * 100),
+                        Content.Server.Database.MarketPriceSource.Unknown);
+                }
+            }
+
+            record.Gross = (long)Math.Round(totalValue * 100);
+            if (_playerManager.TryGetSessionByEntity(user, out var userSession))
+                record.ActorUserId = userSession.UserId;
+            _market.Record(record);
+        }
+        // Triad: end
 
         //tattle on the smuggler here, but obfuscate it a bit if possible to just the grid it was summoned from.
         var sender = Transform(user).GridUid ?? uid;

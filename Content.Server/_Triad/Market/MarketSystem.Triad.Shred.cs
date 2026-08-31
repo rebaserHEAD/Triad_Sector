@@ -70,6 +70,20 @@ public sealed partial class MarketSystem
     }
 
     /// <summary>
+    /// Intake seam for other systems: credits loose units to a station's market pool. The gas
+    /// sale point feeds <c>gas:</c> mole pools through this instead of letting sold gas vanish.
+    /// Does nothing on stations without a market.
+    /// </summary>
+    public void CreditMarketPool(EntityUid station, string key, long centiUnits)
+    {
+        if (centiUnits <= 0 || !TryComp<CargoMarketDataComponent>(station, out var market))
+            return;
+
+        CreditPool(market, key, centiUnits);
+        MarkMarketDirty(station);
+    }
+
+    /// <summary>
     /// Credits loose units to a pool, then converts whatever now covers full containers or stacks
     /// into real listings. The remainder stays pooled; nothing is lost.
     /// </summary>

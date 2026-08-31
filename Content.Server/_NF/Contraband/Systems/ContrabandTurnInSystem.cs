@@ -14,6 +14,12 @@ using Content.Shared.Coordinates;
 using Content.Shared.Mobs;
 using Content.Shared.Mobs.Components;
 using Robust.Shared.Prototypes;
+using Content.Server._NF.Bank; // Triad: BM smuggling mirror
+using Content.Server._Triad.Market; // Triad: market data
+using Content.Server.Database; // Triad: market data
+using Content.Shared._NF.Bank.BUI; // Triad: BM smuggling mirror
+using Content.Shared._NF.Bank.Components; // Triad: BM smuggling mirror
+using Robust.Shared.Player; // Triad: market data
 
 namespace Content.Server._NF.Contraband.Systems;
 
@@ -27,6 +33,10 @@ public sealed partial class ContrabandTurnInSystem : SharedContrabandTurnInSyste
     [Dependency] private StackSystem _stack = default!;
     [Dependency] private StationSystem _station = default!;
     [Dependency] private UserInterfaceSystem _uiSystem = default!;
+    [Dependency] private BankSystem _bank = default!; // Triad: BM smuggling mirror
+    [Dependency] private PricingSystem _pricing = default!; // Triad: BM smuggling mirror
+    [Dependency] private IMarketDataManager _market = default!; // Triad: market data
+    [Dependency] private ISharedPlayerManager _playerManager = default!; // Triad: market data
 
     private EntityQuery<MobStateComponent> _mobQuery;
     private EntityQuery<TransformComponent> _xformQuery;
@@ -108,7 +118,7 @@ public sealed partial class ContrabandTurnInSystem : SharedContrabandTurnInSyste
         return pads;
     }
 
-    private void SellPallets(EntityUid gridUid, ContrabandPalletConsoleComponent component, EntityUid? station, out int amount)
+    private void SellPallets(EntityUid gridUid, ContrabandPalletConsoleComponent component, EntityUid? station, out int amount, out double spesoValue, MarketRecord? capture = null) // Triad: add spesoValue + capture
     {
         station ??= _station.GetOwningStation(gridUid);
         GetPalletGoods(gridUid, component, out var toSell, out amount);
@@ -120,6 +130,23 @@ public sealed partial class ContrabandTurnInSystem : SharedContrabandTurnInSyste
             var ev = new EntitySoldEvent(toSell, gridUid);
             RaiseLocalEvent(ref ev);
         }
+
+        // Triad: appraise the fenced goods before they are deleted - the speso value feeds the
+        // hidden BlackMarket mirror, and the lines make the fence half of the smuggling loop
+        // queryable.
+        spesoValue = 0;
+        foreach (var ent in toSell)
+        {
+            var appraised = _pricing.GetPrice(ent);
+            spesoValue += appraised;
+            if (capture != null && MetaData(ent).EntityPrototype is { } proto)
+            {
+                capture.AddLine(proto.ID, MarketDirection.Sale, 1,
+                    (long)Math.Round(appraised * 100), (long)Math.Round(appraised * 100),
+                    MarketPriceSource.Unknown);
+            }
+        }
+        // End Triad
 
         foreach (var ent in toSell)
         {
@@ -210,7 +237,36 @@ public sealed partial class ContrabandTurnInSystem : SharedContrabandTurnInSyste
             return;
         }
 
-        SellPallets(gridUid, component, null, out var price);
+        // Triad: begin - the fence event. Captured as ContrabandTurnIn in the payout currency,
+        // and the goods' speso appraisal deposits to the hidden BlackMarket account as
+        // SmugglingIncome (its own standalone ledger row, since the currencies differ).
+        var capture = _market.Enabled
+            ? new MarketRecord
+            {
+                Kind = MarketTransactionKind.ContrabandTurnIn,
+                Currency = component.RewardType,
+                Rail = MarketRail.Cash,
+                ConsoleProto = MetaData(uid).EntityPrototype?.ID,
+                LocationName = _station.GetOwningStation(uid) is { } locStation ? MetaData(locStation).EntityName : null,
+            }
+            : null;
+
+        SellPallets(gridUid, component, null, out var price, out var spesoValue, capture);
+
+        if ((int)spesoValue > 0)
+            _bank.TrySectorDeposit(SectorBankAccount.BlackMarket, (int)spesoValue, LedgerEntryType.SmugglingIncome);
+
+        if (capture != null)
+        {
+            capture.Gross = price * 100L;
+            capture.Net = price * 100L;
+            capture.AddSplit("Player", nameof(MarketTransactionKind.ContrabandTurnIn), price * 100L);
+            capture.Calc = $"{{\"spesoAppraisalMinor\":{(long)Math.Round(spesoValue * 100)}}}";
+            if (_playerManager.TryGetSessionByEntity(args.Actor, out var session))
+                capture.ActorUserId = session.UserId;
+            _market.Record(capture);
+        }
+        // Triad: end
 
         var stackPrototype = _protoMan.Index<StackPrototype>(component.RewardType);
         _stack.Spawn(price, stackPrototype, uid.ToCoordinates());

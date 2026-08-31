@@ -459,6 +459,15 @@ public enum MarketTransactionKind
     LoadoutSpawn,
     AdminAdjust,
 
+    /// <summary>A gas sale point payout: lines are gas:&lt;id&gt; with whole-mole quantities.</summary>
+    GasSale,
+
+    /// <summary>A smuggling dead-drop pod arriving: lines are its contraband cargo, appraised.</summary>
+    DeadDropSpawn,
+
+    /// <summary>A contraband fence event at a turn-in console, paid in TriadCommerceCredit.</summary>
+    ContrabandTurnIn,
+
     /// <summary>
     /// A sector account movement captured at the ledger chokepoint rather than at a site that knew
     /// what was happening. The <c>LedgerEntryType</c> carries the real taxonomy for these; this kind
@@ -511,4 +520,7 @@ public enum MarketPriceSource
     /// these reads a constant as a signal, so they must be excludable.
     /// </summary>
     Fallback,
+
+    /// <summary>Per-mole gas pricing from the atmospherics gas prototypes.</summary>
+    Gas,
 }
