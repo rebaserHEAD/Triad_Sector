@@ -183,7 +183,7 @@ public sealed partial class MarketSystem
         }
 
         var now = DateTime.UtcNow;
-        var rows = new List<MarketInventory>(totals.Count);
+        var rows = new List<MarketInventory>(totals.Count + market.Pools.Count);
         foreach (var ((proto, stack), (quantity, price)) in totals)
         {
             rows.Add(new MarketInventory
@@ -194,6 +194,38 @@ public sealed partial class MarketSystem
                 StackProto = stack,
                 Quantity = quantity * 100,
                 UnitPrice = (long)Math.Round(price * 100),
+                UpdatedAt = now,
+            });
+        }
+
+        // Shred pools ride in the same table under their key prefix. Unit price is zero on
+        // purpose: pools are quantities awaiting a container, valued live at conversion time.
+        foreach (var (key, centiUnits) in market.Pools)
+        {
+            if (centiUnits <= 0)
+                continue;
+
+            var sep = key.IndexOf(':');
+            if (sep <= 0)
+                continue;
+
+            var kind = key[..sep] switch
+            {
+                "reagent" => MarketInventoryKind.Reagent,
+                "gas" => MarketInventoryKind.Gas,
+                "material" => MarketInventoryKind.Material,
+                _ => (MarketInventoryKind?)null,
+            };
+            if (kind is not { } poolKind)
+                continue;
+
+            rows.Add(new MarketInventory
+            {
+                PoiKey = market.PersistKey!,
+                Kind = poolKind,
+                ProtoId = key[(sep + 1)..],
+                Quantity = centiUnits,
+                UnitPrice = 0,
                 UpdatedAt = now,
             });
         }
@@ -209,14 +241,25 @@ public sealed partial class MarketSystem
     private void ApplyLoadedInventory(Entity<CargoMarketDataComponent> station, string key, List<MarketInventory> rows)
     {
         var list = new List<MarketData>(rows.Count);
+        var pools = new Dictionary<string, long>();
         var dropped = 0;
 
         foreach (var row in rows)
         {
-            // Reagent and gas pool rows persist in the same table but have no shelf representation
-            // yet; they are B3's to consume. Leaving them in the table is deliberate.
+            // Pool rows come back as loose units under their key prefix.
             if (row.Kind != MarketInventoryKind.Item)
+            {
+                var prefix = row.Kind switch
+                {
+                    MarketInventoryKind.Reagent => "reagent",
+                    MarketInventoryKind.Gas => "gas",
+                    MarketInventoryKind.Material => "material",
+                    _ => null,
+                };
+                if (prefix != null && row.Quantity > 0)
+                    pools[$"{prefix}:{row.ProtoId}"] = row.Quantity;
                 continue;
+            }
 
             if (!_prototypeManager.HasIndex<EntityPrototype>(row.ProtoId))
             {
@@ -245,6 +288,13 @@ public sealed partial class MarketSystem
         }
 
         station.Comp.MarketDataList = list;
-        Log.Info($"Market inventory '{key}': loaded {list.Count} listing(s), dropped {dropped}.");
+        station.Comp.Pools = pools;
+
+        // Convert pools that already cover a container - the prototype roster may have changed
+        // since the save, and a pool topped up across rounds converts on arrival.
+        foreach (var poolKey in new List<string>(pools.Keys))
+            ConvertPool(station.Comp, poolKey);
+
+        Log.Info($"Market inventory '{key}': loaded {list.Count} listing(s) and {pools.Count} pool(s), dropped {dropped}.");
     }
 }

@@ -41,5 +41,15 @@ public sealed partial class CargoMarketDataComponent : Component
     /// </summary>
     [DataField]
     public string? PersistKey;
+
+    /// <summary>
+    /// Loose-unit pools fed by shredding, keyed <c>material:Steel</c> / <c>reagent:X</c> /
+    /// <c>gas:X</c>, values in x100 fixed-point (centiunits / centimoles). Whenever a pool covers
+    /// a full standard container or stack, that much converts into a real listing on
+    /// <see cref="MarketDataList"/>; the remainder stays here, so nothing is ever lost. Persisted
+    /// alongside the listings under the same key.
+    /// </summary>
+    [ViewVariables]
+    public Dictionary<string, long> Pools = new();
     // Triad: end
 }

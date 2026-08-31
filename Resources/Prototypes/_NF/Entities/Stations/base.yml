@@ -82,34 +82,22 @@
       - Seed
       - MachineBoard
       - ComputerBoard
+    # Triad: the list model is inverted. The whitelist above lists as-is; this blacklist is the
+    # HARD-REJECT roster - cash-only export, never listed, never shredded; and everything on
+    # neither list SHREDS into pools and listings via its price manifest. The old shred-class
+    # entries (Trash/Mail/Paper, Anchorable, Food, SpaceGarbage, Gun, Ammo, Drink, GasTank,
+    # Explosive, RCD, Storage/StorageFill) came off - default shred covers them - and the
+    # UraniumMaterials whitelistOverride died with the Food entry.
     blacklist:
-      tags:
-      - Trash
-      - Mail
-      - Paper
       components:
-      - Anchorable # No structures, they won't fit in crates
-      - Food
       - Currency # No selling money.
-      - SpaceGarbage
-      - Contraband
-      - Gun
-      - Ammo
-      - Drink
-      - GasTank # Default containers won't be empty
-      - Explosive
+      - Contraband # Sells clean for cash - the mall does not launder smuggled goods into pools.
       - Actor
       - Mind # Players
       - MindContainer # Positronic brains
       - Body # No corpses
       - MobPrice # Animals (live or dead) and the like
       - XenoArtifact # Unique, abusable for research points
-      - RCD # Dup charges
-      - Storage # Till fixed
-      - StorageFill # Till fixed
-    whitelistOverride:
-      components:
-      - UraniumMaterials # Counts as food
 
 - type: entity
   id: BaseStationDeadDrops

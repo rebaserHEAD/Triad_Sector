@@ -425,6 +425,8 @@ public enum MarketInventoryKind
     Item = 0,
     Reagent,
     Gas,
+    /// <summary>Sub-stack material remainders (centiunits of raw material, e.g. Steel).</summary>
+    Material,
 }
 
 /// <summary>

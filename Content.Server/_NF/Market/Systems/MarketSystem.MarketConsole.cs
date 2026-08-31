@@ -13,6 +13,7 @@ using Content.Shared.Stacks;
 using Content.Shared.Storage;
 using Content.Shared.Materials;
 using Robust.Shared.Prototypes;
+using Content.Server.Botany.Components; // Triad: seed-state listing guard
 
 
 namespace Content.Server._NF.Market.Systems;
@@ -51,22 +52,27 @@ public sealed partial class MarketSystem
 
         foreach (var sold in entitySoldEvent.Sold)
         {
-            if (_entityManager.TryGetComponent<MaterialStorageComponent>(sold, out var materialStorageComponent))
-                UpsertMaterialStorage(market, materialStorageComponent, sold);
-            else if (_entityManager.TryGetComponent<StorageComponent>(sold, out var storageComponent))
-                UpsertStorage(market, storageComponent);
+            // Triad: removed - the UpsertMaterialStorage pre-walk. Stored materials now enter
+            // through the shred path (the MaterialStorage price-manifest rows feed the material
+            // pools), which also keeps sub-stack remainders instead of dropping them; running
+            // both would count the materials twice.
+            // if (_entityManager.TryGetComponent<MaterialStorageComponent>(sold, out var materialStorageComponent))
+            //     UpsertMaterialStorage(market, materialStorageComponent, sold);
+            // else // Triad: removed - else-chain now starts at StorageComponent
+            if (_entityManager.TryGetComponent<StorageComponent>(sold, out var storageComponent))
+                UpsertStorage(market, storageComponent, entitySoldEvent.Grid);
             else if (_entityManager.TryGetComponent<EntityStorageComponent>(sold, out var entityStorageComponent))
-                UpsertEntityStorage(market, entityStorageComponent);
+                UpsertEntityStorage(market, entityStorageComponent, entitySoldEvent.Grid);
             else if (_entityManager.TryGetComponent<ItemSlotsComponent>(sold, out var itemSlotsComponent))
-                UpsertItemSlots(market, itemSlotsComponent);
+                UpsertItemSlots(market, itemSlotsComponent, entitySoldEvent.Grid);
 
-            UpsertMetadata(market, sold);
+            UpsertMetadata(market, sold, entitySoldEvent.Grid);
         }
 
         MarkMarketDirty(station); // Triad: persistent inventory
     }
 
-    private void UpsertMetadata(CargoMarketDataComponent marketDataComponent, EntityUid sold)
+    private void UpsertMetadata(CargoMarketDataComponent marketDataComponent, EntityUid sold, EntityUid grid) // Triad: add grid for the shred path
     {
         // Get the MetaDataComponent from the sold entity
         if (!_entityManager.TryGetComponent<MetaDataComponent>(sold, out var metaDataComponent))
@@ -95,16 +101,45 @@ public sealed partial class MarketSystem
             return;
 
         // Check whitelist/blacklist for particular prototype
-        if (_whitelistSystem.IsWhitelistPassOrNull(marketDataComponent.Whitelist, sold) &&
-            _whitelistSystem.IsBlacklistFailOrNull(marketDataComponent.Blacklist, sold) ||
-            _whitelistSystem.IsWhitelistPassOrNull(marketDataComponent.WhitelistOverride, sold))
+        // Triad: three-tier disposition replaces the two-list gate. The whitelist still lists
+        // as-is; the blacklist field is now the hard-reject roster (cash-only, never listed,
+        // never shredded); and everything else SHREDS - its price manifest becomes pools and
+        // listings, so the unlisted middle stops evaporating for cash. The whitelistOverride
+        // consult is gone with its last member: once Food left the roster, uranium sheets list
+        // on their whitelist tags alone.
+        if (_whitelistSystem.IsWhitelistPass(marketDataComponent.Blacklist, sold))
+            return;
+
+        if (_whitelistSystem.IsWhitelistPassOrNull(marketDataComponent.Whitelist, sold))
         {
+            // A packet carrying runtime seed data must not respawn as the base variety; it stays
+            // export-only cash.
+            if (TryComp<SeedComponent>(sold, out var seedComp) && seedComp.Seed != null)
+                return;
+
             var estimatedPrice = _pricingSystem.GetPrice(sold) / count;
+
+            // The generic catch for state slipping through the whitelist: a non-stack item whose
+            // live appraisal deviates from its prototype estimate is carrying state, and the
+            // shelf stores fungibles only - it shreds instead. Stacks are exempt; their only
+            // state is the count, which the singular-id normalization already handles.
+            if (stackPrototypeId == null)
+            {
+                var protoEstimate = _pricingSystem.GetEstimatedPrice(entityPrototype);
+                if (Math.Abs(estimatedPrice - protoEstimate) > Math.Max(2.0, protoEstimate * 0.01))
+                {
+                    ShredIntoMarket(marketDataComponent, sold, grid);
+                    return;
+                }
+            }
 
             // Increase the count in the MarketData for this entity
             // Assuming the quantity to increase is 1 for each sold entity
             marketDataComponent.MarketDataList.Upsert(entityPrototype.ID, count, estimatedPrice, stackPrototypeId);
+            return;
         }
+
+        ShredIntoMarket(marketDataComponent, sold, grid);
     }
 
     /// <summary>
@@ -112,19 +147,19 @@ public sealed partial class MarketSystem
     /// </summary>
     /// <param name="marketDataComponent">The MarketDataComponent to update.</param>
     /// <param name="entityStorageComponent">The EntityStorageComponent containing entities to process.</param>
-    private void UpsertEntityStorage(CargoMarketDataComponent marketDataComponent, EntityStorageComponent entityStorageComponent)
+    private void UpsertEntityStorage(CargoMarketDataComponent marketDataComponent, EntityStorageComponent entityStorageComponent, EntityUid grid) // Triad: add grid
     {
         foreach (var entityUid in entityStorageComponent.Contents.ContainedEntities)
         {
             if (_entityManager.TryGetComponent<StorageComponent>(entityUid, out var storageComponent))
             {
-                UpsertStorage(marketDataComponent, storageComponent);
+                UpsertStorage(marketDataComponent, storageComponent, grid);
             }
             else if (_entityManager.TryGetComponent<EntityStorageComponent>(entityUid, out var nestedEntityStorageComponent))
             {
-                UpsertEntityStorage(marketDataComponent, nestedEntityStorageComponent);
+                UpsertEntityStorage(marketDataComponent, nestedEntityStorageComponent, grid);
             }
-            UpsertMetadata(marketDataComponent, entityUid);
+            UpsertMetadata(marketDataComponent, entityUid, grid);
         }
     }
 
@@ -133,7 +168,7 @@ public sealed partial class MarketSystem
     /// </summary>
     /// <param name="marketDataComponent">The MarketDataComponent to update.</param>
     /// <param name="itemSlotsComponent">The ItemSlotsComponent containing item slots to process.</param>
-    private void UpsertItemSlots(CargoMarketDataComponent marketDataComponent, ItemSlotsComponent itemSlotsComponent)
+    private void UpsertItemSlots(CargoMarketDataComponent marketDataComponent, ItemSlotsComponent itemSlotsComponent, EntityUid grid) // Triad: add grid
     {
         foreach (var slot in itemSlotsComponent.Slots.Values)
         {
@@ -142,13 +177,13 @@ public sealed partial class MarketSystem
 
             if (_entityManager.TryGetComponent<StorageComponent>(entityUid, out var storageComponent))
             {
-                UpsertStorage(marketDataComponent, storageComponent);
+                UpsertStorage(marketDataComponent, storageComponent, grid);
             }
             else if (_entityManager.TryGetComponent<EntityStorageComponent>(entityUid, out var entityStorageComponent))
             {
-                UpsertEntityStorage(marketDataComponent, entityStorageComponent);
+                UpsertEntityStorage(marketDataComponent, entityStorageComponent, grid);
             }
-            UpsertMetadata(marketDataComponent, entityUid);
+            UpsertMetadata(marketDataComponent, entityUid, grid);
         }
     }
 
@@ -157,14 +192,14 @@ public sealed partial class MarketSystem
     /// </summary>
     /// <param name="marketDataComponent"></param>
     /// <param name="storageComponent"></param>
-    private void UpsertStorage(CargoMarketDataComponent marketDataComponent, StorageComponent storageComponent)
+    private void UpsertStorage(CargoMarketDataComponent marketDataComponent, StorageComponent storageComponent, EntityUid grid) // Triad: add grid
     {
         foreach (var entityUid in storageComponent.Container.ContainedEntities.ToArray())
         {
             if (_entityManager.TryGetComponent<StorageComponent>(entityUid, out var comp))
-                UpsertStorage(marketDataComponent, comp);
+                UpsertStorage(marketDataComponent, comp, grid);
 
-            UpsertMetadata(marketDataComponent, entityUid);
+            UpsertMetadata(marketDataComponent, entityUid, grid);
         }
     }
 

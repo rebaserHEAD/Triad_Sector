@@ -443,6 +443,33 @@ public sealed partial class PricingSystem : EntitySystem
     }
     // Triad: end
 
+    // Triad: begin, shred manifest
+    /// <summary>
+    /// One entity's own price manifest, contents excluded, gap row included: the same rows the
+    /// collecting walk attaches to a node, for callers (the market shredder) that need a single
+    /// entity's breakdown outside a pallet traversal. Returns the entity's own price; the rows
+    /// always sum to it.
+    /// </summary>
+    public double GetOwnPriceCollectingManifest(EntityUid uid, EntityUid currentGrid, List<PriceContribution> contributions)
+    {
+        var own = GetOwnPriceWithVendingDiscount(uid, currentGrid, out _, contributions);
+
+        var explained = 0.0;
+        foreach (var row in contributions)
+            explained += row.Value;
+
+        var gap = own - explained;
+        if (Math.Abs(gap) >= 0.01)
+        {
+            contributions.Add(new PriceContribution("gap",
+                $"unattributed:{MetaData(uid).EntityPrototype?.ID ?? "unknown"}",
+                100, (long)Math.Round(gap * 100)));
+        }
+
+        return own;
+    }
+    // Triad: end
+
     // Begin Frontier - GetPrice variant that uses predicate
     /// <summary>
     /// Appraises an entity, returning its price. Respects predicate - an entity that is excluded will be removed from the
