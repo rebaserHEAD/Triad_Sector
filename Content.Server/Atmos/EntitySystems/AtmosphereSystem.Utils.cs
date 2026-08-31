@@ -35,6 +35,42 @@ public partial class AtmosphereSystem
         return basePrice * purity;
     }
 
+    // Triad: begin, price manifest (E0)
+    /// <summary>
+    /// <see cref="GetPrice(GasMixture)"/>, additionally emitting one manifest row per gas present.
+    /// Quantity is true centimoles; unit value is the realized per-mole price with the purity
+    /// multiplier folded in, so the rows sum to the returned price.
+    /// </summary>
+    public double GetPriceCollecting(GasMixture mixture, List<Cargo.Systems.PriceContribution> contributions, string source)
+    {
+        float basePrice = 0;
+        float totalMoles = 0;
+        float maxComponent = 0;
+        for (var i = 0; i < Atmospherics.TotalNumberOfGases; i++)
+        {
+            basePrice += mixture.Moles[i] * GetGas(i).PricePerMole;
+            totalMoles += mixture.Moles[i];
+            maxComponent = Math.Max(maxComponent, mixture.Moles[i]);
+        }
+
+        float purity = 1;
+        if (totalMoles > 0)
+            purity = maxComponent / totalMoles;
+
+        for (var i = 0; i < Atmospherics.TotalNumberOfGases; i++)
+        {
+            var moles = mixture.Moles[i];
+            if (moles <= 0)
+                continue;
+            var gas = GetGas(i);
+            contributions.Add(new Cargo.Systems.PriceContribution(source, $"gas:{gas.ID}",
+                (long)Math.Round(moles * 100), (long)Math.Round(gas.PricePerMole * purity * 100)));
+        }
+
+        return basePrice * purity;
+    }
+    // Triad: end
+
     /// <summary>
     /// Mono - Gets the price of an air mixture without purity penalty.
     /// </summary>

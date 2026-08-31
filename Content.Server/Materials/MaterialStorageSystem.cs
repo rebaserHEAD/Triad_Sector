@@ -79,6 +79,9 @@ public sealed partial class MaterialStorageSystem : SharedMaterialStorageSystem
                 continue;
             }
             ev.Price += material.Price * amount;
+            // Triad: manifest row - a loaded silo stops appraising as one opaque number.
+            ev.Contributions?.Add(new PriceContribution("MaterialStorage", $"material:{materialProto}",
+                100L * amount, (long)Math.Round(material.Price * 100)));
         }
     }
     // End Frontier: add value of contents to appraisal price

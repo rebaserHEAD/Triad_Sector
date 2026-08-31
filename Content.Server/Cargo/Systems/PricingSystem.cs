@@ -110,10 +110,10 @@ public sealed partial class PricingSystem : EntitySystem
         args.Price += (component.Price - partPenalty) * (_mobStateSystem.IsAlive(uid, state) ? 1.0 : component.DeathPenalty) * (HasComp<LabGrownComponent>(uid) ? 1.0 : component.LabGrownPenalty); // Frontier - LabGrown
     }
 
-    private double GetSolutionPrice(Entity<SolutionContainerManagerComponent> entity)
+    private double GetSolutionPrice(Entity<SolutionContainerManagerComponent> entity, List<PriceContribution>? contributions = null) // Triad: add contributions
     {
         if (Comp<MetaDataComponent>(entity).EntityLifeStage < EntityLifeStage.MapInitialized)
-            return GetSolutionPrice(entity.Comp);
+            return GetSolutionPrice(entity.Comp, contributions);
 
         var price = 0.0;
 
@@ -127,13 +127,15 @@ public sealed partial class PricingSystem : EntitySystem
 
                 // TODO check ReagentData for price information?
                 price += (float) quantity * reagentProto.PricePerUnit;
+                contributions?.Add(new PriceContribution("ladder", $"reagent:{reagent.Prototype}",
+                    (long)Math.Round((float)quantity * 100), (long)Math.Round(reagentProto.PricePerUnit * 100))); // Triad
             }
         }
 
         return price;
     }
 
-    private double GetSolutionPrice(SolutionContainerManagerComponent component)
+    private double GetSolutionPrice(SolutionContainerManagerComponent component, List<PriceContribution>? contributions = null) // Triad: add contributions
     {
         var price = 0.0;
 
@@ -146,6 +148,8 @@ public sealed partial class PricingSystem : EntitySystem
 
                 // TODO check ReagentData for price information?
                 price += (float) quantity * reagentProto.PricePerUnit;
+                contributions?.Add(new PriceContribution("ladder", $"reagent:{reagent.Prototype}",
+                    (long)Math.Round((float)quantity * 100), (long)Math.Round(reagentProto.PricePerUnit * 100))); // Triad
             }
         }
 
@@ -340,10 +344,12 @@ public sealed partial class PricingSystem : EntitySystem
     /// Mirrors <see cref="PriceCalculationEvent.Handled"/>. When true a subscriber replaced the
     /// price outright and the caller must not add contents on top, the same as the plain path.
     /// </param>
-    private double GetOwnPriceWithVendingDiscount(EntityUid uid, EntityUid currentGrid, out bool handled)
+    private double GetOwnPriceWithVendingDiscount(EntityUid uid, EntityUid currentGrid, out bool handled,
+        List<PriceContribution>? contributions = null) // Triad: add contributions
     {
         var ev = new PriceCalculationEvent();
         ev.Price = 0;
+        ev.Contributions = contributions; // Triad: converted subscribers append typed rows
         RaiseLocalEvent(uid, ref ev);
 
         handled = ev.Handled;
@@ -351,17 +357,26 @@ public sealed partial class PricingSystem : EntitySystem
             return ev.Price;
 
         var price = ev.Price;
-        price += GetMaterialsPrice(uid);
-        price += GetSolutionsPrice(uid);
+        price += GetMaterialsPrice(uid, contributions);
+        price += GetSolutionsPrice(uid, contributions);
 
         // Can't use static price with stackprice
         var oldPrice = price;
-        price += GetStackPrice(uid);
+        price += GetStackPrice(uid, contributions);
 
         if (oldPrice.Equals(price))
         {
             // Use the vending machine discount version of static price
-            price += GetStaticPriceWithVendingDiscount(uid, currentGrid);
+            // Triad: this trio of rungs is the shell-price provider seam - the long-term derived
+            // price table replaces what this branch reads without touching any capture site.
+            var staticPrice = GetStaticPriceWithVendingDiscount(uid, currentGrid);
+            if (staticPrice != 0)
+            {
+                contributions?.Add(new PriceContribution("ladder",
+                    $"authored:{MetaData(uid).EntityPrototype?.ID ?? "unknown"}",
+                    100, (long)Math.Round(staticPrice * 100)));
+            }
+            price += staticPrice;
         }
 
         return price;
@@ -382,12 +397,31 @@ public sealed partial class PricingSystem : EntitySystem
     /// what the plain method returns for the same entity.</para>
     /// </summary>
     public double GetPriceWithVendingDiscountCollecting(EntityUid uid, EntityUid currentGrid,
-        List<PricedNode> into, int? parentIndex = null)
+        List<PricedNode> into, int? parentIndex = null, bool withManifest = false)
     {
-        var own = GetOwnPriceWithVendingDiscount(uid, currentGrid, out var handled);
+        var contributions = withManifest ? new List<PriceContribution>() : null;
+        var own = GetOwnPriceWithVendingDiscount(uid, currentGrid, out var handled, contributions);
+
+        // The gap row: whatever no rung or converted subscriber explained. It keeps the row sum
+        // equal to the price through partial migration, and it IS the conversion worklist - a
+        // subscriber that folds value without emitting rows shows up here under its prototype.
+        if (contributions != null)
+        {
+            var explained = 0.0;
+            foreach (var row in contributions)
+                explained += row.Value;
+
+            var gap = own - explained;
+            if (Math.Abs(gap) >= 0.01)
+            {
+                contributions.Add(new PriceContribution("gap",
+                    $"unattributed:{MetaData(uid).EntityPrototype?.ID ?? "unknown"}",
+                    100, (long)Math.Round(gap * 100)));
+            }
+        }
 
         var index = into.Count;
-        into.Add(new PricedNode(uid, own, parentIndex));
+        into.Add(new PricedNode(uid, own, parentIndex, contributions));
 
         if (handled)
             return own;
@@ -400,7 +434,7 @@ public sealed partial class PricingSystem : EntitySystem
             {
                 foreach (var ent in container.ContainedEntities)
                 {
-                    total += GetPriceWithVendingDiscountCollecting(ent, currentGrid, into, index);
+                    total += GetPriceWithVendingDiscountCollecting(ent, currentGrid, into, index, withManifest);
                 }
             }
         }
@@ -438,7 +472,7 @@ public sealed partial class PricingSystem : EntitySystem
     }
     // End Frontier - GetPrice variant that uses predicate
 
-    private double GetMaterialsPrice(EntityUid uid)
+    private double GetMaterialsPrice(EntityUid uid, List<PriceContribution>? contributions = null) // Triad: add contributions
     {
         double price = 0;
 
@@ -450,6 +484,18 @@ public sealed partial class PricingSystem : EntitySystem
                 matPrice *= stack.Count;
 
             price += matPrice;
+
+            // Triad: manifest rows, one per constituent material, stack folded into quantity.
+            if (contributions != null)
+            {
+                var count = stack?.Count ?? 1;
+                foreach (var (id, quantity) in composition.MaterialComposition)
+                {
+                    var material = _prototypeManager.Index<MaterialPrototype>(id);
+                    contributions.Add(new PriceContribution("ladder", $"material:{id}",
+                        100L * quantity * count, (long)Math.Round(material.Price * 100)));
+                }
+            }
         }
 
         return price;
@@ -476,13 +522,13 @@ public sealed partial class PricingSystem : EntitySystem
         return price;
     }
 
-    private double GetSolutionsPrice(EntityUid uid)
+    private double GetSolutionsPrice(EntityUid uid, List<PriceContribution>? contributions = null) // Triad: add contributions
     {
         var price = 0.0;
 
         if (TryComp<SolutionContainerManagerComponent>(uid, out var solComp))
         {
-            price += GetSolutionPrice((uid, solComp));
+            price += GetSolutionPrice((uid, solComp), contributions);
         }
 
         return price;
@@ -501,7 +547,7 @@ public sealed partial class PricingSystem : EntitySystem
         return price;
     }
 
-    private double GetStackPrice(EntityUid uid)
+    private double GetStackPrice(EntityUid uid, List<PriceContribution>? contributions = null) // Triad: add contributions
     {
         var price = 0.0;
 
@@ -510,6 +556,10 @@ public sealed partial class PricingSystem : EntitySystem
             !HasComp<MaterialComponent>(uid)) // don't double count material prices
         {
             price += stack.Count * stackPrice.Price;
+            // Triad: StackPrice is an authored declaration, same as StaticPrice.
+            contributions?.Add(new PriceContribution("ladder",
+                $"authored:{MetaData(uid).EntityPrototype?.ID ?? "unknown"}",
+                100L * stack.Count, (long)Math.Round(stackPrice.Price * 100)));
         }
 
         return price;
@@ -641,6 +691,18 @@ public record struct PriceCalculationEvent()
     /// Whether this event was already handled.
     /// </summary>
     public bool Handled = false;
+
+    // Triad: begin, price manifest (E0)
+    /// <summary>
+    /// Opt-in itemization of the price. Null on ordinary appraisals, so unconverted subscribers
+    /// and hot paths pay nothing; a collector that wants the breakdown supplies the list, and
+    /// both the pricing ladder and converted subscribers append typed rows to it. The scalar
+    /// <see cref="Price"/> stays the sum either way - no caller breaks. Whatever the rows do not
+    /// explain surfaces as an <c>unattributed:</c> gap row, so the row sum always equals the
+    /// price and the tracker itself measures what is left to convert.
+    /// </summary>
+    public List<PriceContribution>? Contributions = null;
+    // Triad: end
 }
 
 /// <summary>
@@ -672,5 +734,23 @@ public record struct EstimatedPriceCalculationEvent()
 /// Index of the containing node in the same list, or null if this sat at the top level. An index
 /// rather than a reference so the tree survives being persisted without resolving identifiers.
 /// </param>
-public readonly record struct PricedNode(EntityUid Uid, double OwnPrice, int? ParentIndex);
+public readonly record struct PricedNode(EntityUid Uid, double OwnPrice, int? ParentIndex, List<PriceContribution>? Contributions = null);
+
+/// <summary>
+/// One typed row of a price manifest: what part of an entity's own price came from where.
+/// </summary>
+/// <param name="Source">Who emitted the row: "ladder" for PricingSystem's own rungs, else the
+/// converting subscriber's name. Debugging taxonomy, not a key.</param>
+/// <param name="Key">What the value is, prefixed by kind: <c>material:Steel</c>,
+/// <c>reagent:Omnizine</c>, <c>gas:Oxygen</c>, <c>entity:CartridgePistol</c>,
+/// <c>authored:MedkitFilled</c> for StaticPrice/StackPrice declarations, or
+/// <c>unattributed:&lt;proto&gt;</c> for whatever no row explains yet.</param>
+/// <param name="QuantityHundredths">Quantity in x100 fixed-point, the same scaling as every money
+/// column: items x100, reagent centiunits, centimoles.</param>
+/// <param name="UnitValueMinor">Value of one whole unit, in minor currency units (hundredths).</param>
+public readonly record struct PriceContribution(string Source, string Key, long QuantityHundredths, long UnitValueMinor)
+{
+    /// <summary>The row's total value in spesos, for summing against a double price.</summary>
+    public double Value => QuantityHundredths / 100.0 * (UnitValueMinor / 100.0);
+}
 // Triad: end

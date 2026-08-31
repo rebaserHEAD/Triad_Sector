@@ -147,7 +147,11 @@ public sealed partial class GasCanisterSystem : SharedGasCanisterSystem
 
     private void CalculateCanisterPrice(EntityUid uid, GasCanisterComponent component, ref PriceCalculationEvent args)
     {
-        args.Price += _atmos.GetPrice(component.Air);
+        // Triad: emit per-gas manifest rows when a collector asks.
+        if (args.Contributions is { } contributions)
+            args.Price += _atmos.GetPriceCollecting(component.Air, contributions, "GasCanister");
+        else
+            args.Price += _atmos.GetPrice(component.Air);
     }
 
     /// <summary>

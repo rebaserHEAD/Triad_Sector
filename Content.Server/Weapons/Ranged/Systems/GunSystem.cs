@@ -78,6 +78,9 @@ public sealed partial class GunSystem : SharedGunSystem
         // Probably good enough for most.
         var price = _pricing.GetEstimatedPrice(proto);
         args.Price += price * component.UnspawnedCount;
+        // Triad: manifest row - unspawned fill priced as so-many rounds, not folded into the mag.
+        args.Contributions?.Add(new PriceContribution("BallisticAmmo", $"entity:{component.Proto}",
+            100L * component.UnspawnedCount, (long)Math.Round(price * 100)));
     }
 
     public override void Shoot(EntityUid gunUid, GunComponent gun, List<(EntityUid? Entity, IShootable Shootable)> ammo,

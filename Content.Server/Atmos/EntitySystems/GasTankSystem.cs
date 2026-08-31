@@ -239,7 +239,11 @@ namespace Content.Server.Atmos.EntitySystems
 
         private void OnGasTankPrice(EntityUid uid, GasTankComponent component, ref PriceCalculationEvent args)
         {
-            args.Price += _atmosphereSystem.GetPrice(component.Air);
+            // Triad: emit per-gas manifest rows when a collector asks.
+            if (args.Contributions is { } contributions)
+                args.Price += _atmosphereSystem.GetPriceCollecting(component.Air, contributions, "GasTank");
+            else
+                args.Price += _atmosphereSystem.GetPrice(component.Air);
         }
     }
 }
