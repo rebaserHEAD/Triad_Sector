@@ -985,6 +985,53 @@ namespace Content.Server.Database.Migrations.Sqlite
                     b.ToTable("job", (string)null);
                 });
 
+            modelBuilder.Entity("Content.Server.Database.MarketInventory", b =>
+                {
+                    b.Property<long>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("market_inventory_id");
+
+                    b.Property<string>("Kind")
+                        .IsRequired()
+                        .HasColumnType("TEXT")
+                        .HasColumnName("kind");
+
+                    b.Property<string>("PoiKey")
+                        .IsRequired()
+                        .HasColumnType("TEXT")
+                        .HasColumnName("poi_key");
+
+                    b.Property<string>("ProtoId")
+                        .IsRequired()
+                        .HasColumnType("TEXT")
+                        .HasColumnName("proto_id");
+
+                    b.Property<long>("Quantity")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("quantity");
+
+                    b.Property<string>("StackProto")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("stack_proto");
+
+                    b.Property<long>("UnitPrice")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("unit_price");
+
+                    b.Property<DateTime>("UpdatedAt")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("updated_at");
+
+                    b.HasKey("Id")
+                        .HasName("PK_market_inventory");
+
+                    b.HasIndex("PoiKey", "Kind", "ProtoId")
+                        .IsUnique();
+
+                    b.ToTable("market_inventory", (string)null);
+                });
+
             modelBuilder.Entity("Content.Server.Database.MarketPriceStat", b =>
                 {
                     b.Property<string>("EntityProto")

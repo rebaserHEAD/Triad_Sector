@@ -1,0 +1,10 @@
+# Persistent-market station variants. A child prototype rather than a gameMap component override
+# because station component overrides replace a component wholesale, which would silently drop the
+# market whitelist; prototype inheritance field-merges, so this adds only the key.
+- type: entity
+  id: MarketFrontierOutpostPersistent
+  parent: MarketFrontierOutpost
+  categories: [ HideSpawnMenu ]
+  components:
+  - type: CargoMarketData
+    persistKey: TradeMall

@@ -40,7 +40,7 @@
   minPlayers: 0
   stations:
     TradeMall:
-      stationProto: MarketFrontierOutpost
+      stationProto: MarketFrontierOutpostPersistent # Triad: MarketFrontierOutpost + persistKey TradeMall
       components:
         - type: StationCargoOrderDatabase
           capacity: 60

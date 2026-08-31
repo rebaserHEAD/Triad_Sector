@@ -101,6 +101,7 @@ public sealed partial class MarketSystem
 
         itemSpawner.ItemsToSpawn = consoleComponent.CartDataList;
         consoleComponent.CartDataList = [];
+        MarkMarketDirty(_station.GetOwningStation(consoleUid)); // Triad: persistent inventory - the sold cart leaves the snapshot
         _crateMachine.OpenFor(crateMachineUid, component);
     }
 

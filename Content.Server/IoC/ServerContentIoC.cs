@@ -106,6 +106,7 @@ namespace Content.Server.IoC
             // Triad: market data
             IoCManager.Register<MarketDataStore>();
             IoCManager.Register<IMarketDataManager, MarketDataManager>();
+            IoCManager.Register<MarketInventoryStore>();
             // End Triad
         }
     }

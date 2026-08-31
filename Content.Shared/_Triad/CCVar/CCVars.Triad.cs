@@ -130,4 +130,12 @@ public sealed class TriadCCVars
     /// </summary>
     public static readonly CVarDef<float> MarketBuyTax =
         CVarDef.Create("triad.market.buy_tax", 0.15f, CVar.SERVER | CVar.REPLICATED);
+
+    /// <summary>
+    /// Whether market inventories with a persistKey survive round restarts through the
+    /// market_inventory table. Off by default until live-verified, the same rollout pattern as
+    /// triad.market.enabled; the migration creates the table either way.
+    /// </summary>
+    public static readonly CVarDef<bool> MarketPersistInventory =
+        CVarDef.Create("triad.market.persist_inventory", false, CVar.SERVERONLY);
 }

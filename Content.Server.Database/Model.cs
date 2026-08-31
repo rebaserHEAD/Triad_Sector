@@ -63,6 +63,7 @@ namespace Content.Server.Database
         public DbSet<MarketPriceStat>           MarketPriceStat         { get; set; } = default!;
         public DbSet<MarketRoundParticipant>    MarketRoundParticipant  { get; set; } = default!;
         public DbSet<SectorAccountSample>       SectorAccountSample     { get; set; } = default!;
+        public DbSet<MarketInventory>           MarketInventory         { get; set; } = default!;
         // End Triad
         public DbSet<CompanyMember> CompanyMembers { get; set; } = null!;
 

@@ -30,5 +30,6 @@ public sealed partial class MarketSystem: SharedMarketSystem
 
         InitializeConsole();
         InitializeCrateMachine();
+        InitializePersistence(); // Triad: persistent inventory
     }
 }

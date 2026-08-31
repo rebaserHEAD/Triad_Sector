@@ -62,6 +62,8 @@ public sealed partial class MarketSystem
 
             UpsertMetadata(market, sold);
         }
+
+        MarkMarketDirty(station); // Triad: persistent inventory
     }
 
     private void UpsertMetadata(CargoMarketDataComponent marketDataComponent, EntityUid sold)
@@ -332,6 +334,8 @@ public sealed partial class MarketSystem
             marketData.Upsert(existing.Prototype, -toWithdraw, existing.Price, existing.StackPrototype);
             consoleComponent.CartDataList.Upsert(existing.Prototype, toWithdraw, existing.Price, existing.StackPrototype);
         }
+
+        MarkMarketDirty(stationUid); // Triad: persistent inventory - cart moves change the snapshot
 
         RefreshState(
             consoleUid,

@@ -136,6 +136,21 @@ internal static class ModelMarket
 
         modelBuilder.Entity<SectorAccountSample>()
             .HasIndex(s => new { s.Account, s.SampledAt });
+
+        //
+        // Persistent market inventory. State-not-history: the transaction tables above are the
+        // audit trail; this is the shelf, and it is rewritten wholesale per POI on save.
+        //
+
+        modelBuilder.Entity<MarketInventory>()
+            .Property(i => i.Kind)
+            .HasConversion<string>();
+
+        // The natural key. Load-by-POI walks this; save is delete+insert under the same key.
+        // No other index and no foreign keys: inventory has no subjects to outlive.
+        modelBuilder.Entity<MarketInventory>()
+            .HasIndex(i => new { i.PoiKey, i.Kind, i.ProtoId })
+            .IsUnique();
     }
 }
 
@@ -360,6 +375,56 @@ public class SectorAccountSample
     public string Account { get; set; } = null!;
 
     public long Balance { get; set; }
+}
+
+/// <summary>
+/// One shelf row of a persistent market inventory: what a point of interest currently has listed,
+/// surviving round restarts. State, not history - the transaction tables are the audit trail, and
+/// a save rewrites a POI's rows wholesale inside one transaction.
+/// </summary>
+public class MarketInventory
+{
+    public long Id { get; set; }
+
+    /// <summary>
+    /// Which market this shelf belongs to: the persist key authored on the station's
+    /// CargoMarketData (e.g. <c>TradeMall</c>). Not a foreign key on purpose - the POI is YAML.
+    /// </summary>
+    public string PoiKey { get; set; } = null!;
+
+    public MarketInventoryKind Kind { get; set; }
+
+    /// <summary>
+    /// Entity prototype id for items, reagent id for reagent pools, gas id for gas pools. Which
+    /// namespace applies is <see cref="Kind"/>; text so pool rows cost no migration.
+    /// </summary>
+    public string ProtoId { get; set; } = null!;
+
+    /// <summary>The stack prototype for stackables, mirroring the in-memory market data.</summary>
+    public string? StackProto { get; set; }
+
+    /// <summary>
+    /// x100 fixed-point across all kinds, one scaling rule like the money columns: items x100,
+    /// reagent centiunits, centimoles. Floored at listing time so remainders persist.
+    /// </summary>
+    public long Quantity { get; set; }
+
+    /// <summary>Minor units. The latest appraisal, refreshed on each upsert.</summary>
+    public long UnitPrice { get; set; }
+
+    /// <summary>Stored as UTC.</summary>
+    public DateTime UpdatedAt { get; set; }
+}
+
+/// <summary>
+/// Which namespace a market inventory row's <see cref="MarketInventory.ProtoId"/> lives in.
+/// Persisted as a name, per the house rule.
+/// </summary>
+public enum MarketInventoryKind
+{
+    Item = 0,
+    Reagent,
+    Gas,
 }
 
 /// <summary>

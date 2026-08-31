@@ -31,4 +31,15 @@ public sealed partial class CargoMarketDataComponent : Component
     /// </summary>
     [DataField]
     public EntityWhitelist? WhitelistOverride;
+
+    // Triad: begin, persistent inventory
+    /// <summary>
+    /// Which persistent shelf this market belongs to, keyed into the market_inventory table.
+    /// Null (the default) keeps round-local behavior: the inventory dies with the round.
+    /// Set through a station prototype (MarketFrontierOutpostPersistent sets TradeMall), and
+    /// only honored while triad.market.persist_inventory is on.
+    /// </summary>
+    [DataField]
+    public string? PersistKey;
+    // Triad: end
 }
