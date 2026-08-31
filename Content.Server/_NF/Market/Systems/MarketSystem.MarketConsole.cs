@@ -402,6 +402,7 @@ public sealed partial class MarketSystem
             marketData = market.MarketDataList;
         }
         var cartBalance = MarketDataExtensions.GetMarketValue(cartData, marketMultiplier);
+        cartBalance += _bankSystem.GetSectorBuyTax(cartBalance); // Triad: show the taxed total the purchase will actually charge
 
         var newState = new MarketConsoleInterfaceState(
             balance,

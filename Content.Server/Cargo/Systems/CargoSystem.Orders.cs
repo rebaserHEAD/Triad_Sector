@@ -214,10 +214,15 @@ namespace Content.Server.Cargo.Systems
 
             var cost = order.Price * order.OrderQuantity;
 
+            // Triad: purchase tax into the sector pot; the player pays it, replacing the printed
+            // per-account CargoTax coefficients further down.
+            var buyTax = _bank.GetSectorBuyTax(cost);
+            var totalCost = cost + buyTax;
+
             // Not enough balance
-            if (cost > bankAccount.Balance)
+            if (totalCost > bankAccount.Balance) // Triad: cost >> totalCost
             {
-                ConsolePopup(args.Actor, Loc.GetString("cargo-console-insufficient-funds", ("cost", cost)));
+                ConsolePopup(args.Actor, Loc.GetString("cargo-console-insufficient-funds", ("cost", totalCost))); // Triad: cost >> totalCost
                 PlayDenySound(uid, component);
                 return;
             }
@@ -268,14 +273,30 @@ namespace Content.Server.Cargo.Systems
             // orderDatabase.Orders.Remove(order); // Frontier
 
             // Frontier: account balances, taxing vendor purchases
-            foreach (var (account, taxCoeff) in component.TaxAccounts)
+            // Triad: removed - the per-account coefficients printed deposits keyed to activity while
+            // the player paid list price only. Replaced by the real purchase tax withdrawn above the
+            // list price and split into the sector pot.
+            // foreach (var (account, taxCoeff) in component.TaxAccounts)
+            // {
+            //     if (!float.IsFinite(taxCoeff) || taxCoeff <= 0.0f)
+            //         continue;
+            //     var tax = (int)Math.Floor(cost * taxCoeff);
+            //     _bank.TrySectorDeposit(account, tax, LedgerEntryType.CargoTax);
+            // }
+            var record = new MarketRecord
             {
-                if (!float.IsFinite(taxCoeff) || taxCoeff <= 0.0f)
-                    continue;
-                var tax = (int)Math.Floor(cost * taxCoeff);
-                _bank.TrySectorDeposit(account, tax, LedgerEntryType.CargoTax);
-            }
-            _bank.TryBankWithdraw(player, cost, new MarketRecord { Kind = MarketTransactionKind.CargoOrder }); // Triad: market data
+                Kind = MarketTransactionKind.CargoOrder,
+                Gross = -totalCost * 100L,
+                Tax = buyTax * 100L,
+                Net = -cost * 100L,
+                ConsoleProto = MetaData(uid).EntityPrototype?.ID,
+                LocationName = GetCaptureLocationName(uid),
+            };
+            record.AddLine(order.ProductId, MarketDirection.Purchase, order.OrderQuantity, order.Price * 100L,
+                cost * 100L, MarketPriceSource.Static);
+            _bank.AddSectorTaxSplits(record, buyTax);
+            if (_bank.TryBankWithdraw(player, totalCost, record)) // Triad: market data; cost >> totalCost
+                _bank.DepositSectorTax(buyTax);
             // End Frontier
 
             UpdateOrders(station.Value);

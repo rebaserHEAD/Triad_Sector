@@ -41,6 +41,8 @@ using Robust.Shared.Containers; // Frontier
 
 using Content.Server._Triad.Market; // Triad: market data
 using Content.Server.Database; // Triad: market data
+using Content.Server._Triad.Market.Components; // Triad: sector purchase tax
+using Content.Server.Station.Systems; // Triad: sector purchase tax
 
 namespace Content.Server.VendingMachines
 {
@@ -62,6 +64,7 @@ namespace Content.Server.VendingMachines
         [Dependency] private IAdminLogManager _adminLogger = default!; // Frontier
         [Dependency] private StackSystem _stack = default!; // Frontier
         [Dependency] private VendingMachinePurchaseSystem _vendingPurchase = default!; // Mono
+        [Dependency] private StationSystem _station = default!; // Triad: sector purchase tax
 
         private const float WallVendEjectDistanceFromWall = 1f;
 
@@ -414,6 +417,19 @@ namespace Content.Server.VendingMachines
             if (priceVend > 0.0 && component.RequiresCash) // if vending price exists, overwrite it.
                 totalPrice = (int) priceVend;
 
+            // Triad: at a managed POI the sector purchase tax rides on top of the price and goes to
+            // the pot; vendors anywhere else (player ships included) charge list price and pay no
+            // tax at all.
+            var buyTax = 0;
+            if (totalPrice > 0
+                && _station.GetOwningStation(uid) is { } vendStation
+                && HasComp<SectorPurchaseTaxComponent>(vendStation))
+            {
+                buyTax = _bankSystem.GetSectorBuyTax(totalPrice);
+                totalPrice += buyTax;
+            }
+            // End Triad
+
             if (IsAuthorized(uid, sender, component))
             {
                 int bankBalance = 0;
@@ -452,20 +468,34 @@ namespace Content.Server.VendingMachines
                         component.CashSlotBalance = newCashSlotBalance;
                         paidFully = true; // Either we paid fully with cash, or we need to withdraw the remainder
                     }
+                    // Triad: market data - console and location on the record, so taxed POI vendors
+                    // are distinguishable from untaxed ship vendors; pot shares ride as splits.
+                    var record = new MarketRecord
+                    {
+                        Kind = MarketTransactionKind.VendorSale,
+                        Tax = buyTax * 100L,
+                        ConsoleProto = MetaData(uid).EntityPrototype?.ID,
+                        LocationName = _station.GetOwningStation(uid) is { } locStation ? MetaData(locStation).EntityName : null,
+                    };
+                    _bankSystem.AddSectorTaxSplits(record, buyTax);
+                    // End Triad
                     if (totalPrice > cashSlotBalance && !HasComp<Content.Shared._Mono.Traits.Physical.IronmanComponent>(sender))
-                        paidFully = _bankSystem.TryBankWithdraw(sender, totalPrice - cashSlotBalance, new MarketRecord { Kind = MarketTransactionKind.VendorSale }); // Triad: market data
+                        paidFully = _bankSystem.TryBankWithdraw(sender, totalPrice - cashSlotBalance, record); // Triad: market data
 
                     // If we paid completely, pay our station taxes
+                    // Triad: removed - the per-machine printed VendorTax deposits (tax was never
+                    // added to the price). The pot tax above is real money the player paid and is
+                    // the only vendor tax now.
+                    // foreach (var (account, taxCoeff) in component.TaxAccounts)
+                    // {
+                    //     if (!float.IsFinite(taxCoeff) || taxCoeff <= 0.0f)
+                    //         continue;
+                    //     var tax = (int)Math.Floor(totalPrice * taxCoeff);
+                    //     _bankSystem.TrySectorDeposit(account, tax, LedgerEntryType.VendorTax);
+                    // }
                     if (paidFully)
-                    {
-                        foreach (var (account, taxCoeff) in component.TaxAccounts)
-                        {
-                            if (!float.IsFinite(taxCoeff) || taxCoeff <= 0.0f)
-                                continue;
-                            var tax = (int)Math.Floor(totalPrice * taxCoeff);
-                            _bankSystem.TrySectorDeposit(account, tax, LedgerEntryType.VendorTax);
-                        }
-                    }
+                        _bankSystem.DepositSectorTax(buyTax);
+                    // End Triad
 
                     // Something was ejected, update the vending component's state
                     Dirty(uid, component);

@@ -21,6 +21,7 @@
       components:
         - type: StationNameSetup
           mapNameTemplate: 'Venmar Station'
+        - type: SectorPurchaseTax # Triad: managed POI, vendors collect the pot tax
 #          nameGenerator:
 #            !type:NanotrasenNameGenerator
 #            prefixCreator: '14'

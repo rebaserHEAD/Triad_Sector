@@ -120,4 +120,14 @@ public sealed class TriadCCVars
     /// </summary>
     public static readonly CVarDef<int> MarketDataRetentionDays =
         CVarDef.Create("triad.market.retention_days", 90, CVar.SERVERONLY);
+
+    // Triad: persistent economy
+    /// <summary>
+    /// Purchase tax charged on top of list price at market consoles, cargo order consoles,
+    /// managed-POI vendors and shipyard purchases. Collected into the sector pot, which splits
+    /// evenly across the four department accounts (remainder to the TFA). With all market
+    /// modifiers flat at 1.0 this is the only buy/sell spread. 0.15 = 15%.
+    /// </summary>
+    public static readonly CVarDef<float> MarketBuyTax =
+        CVarDef.Create("triad.market.buy_tax", 0.15f, CVar.SERVER | CVar.REPLICATED);
 }

@@ -35,13 +35,9 @@
   # Triad: dropped the NFCargoOrderConsole override (NF sector-cargo variant not ported) and
   # the coyote Sprite override (screen state 'request-eng' absent from our computers.rsi);
   # inherits the stock cargo console + screen from parent ComputerCargoOrders.
-  # Triad: keep the parent's sector tax split but route a cut to the plant's own account.
+  # Triad: taxAccounts override removed - the printed coefficients collapsed into the real sector
+  # purchase tax; this console now taxes to the pot like every other order console.
   - type: CargoOrderConsole
-    taxAccounts:
-      Frontier: 0.25
-      TDF: 0.15
-      Medical: 0.1
-      Edison: 0.15
   - type: AccessReader
     access: [["Command"]] # Triad: retired ChiefEngineer; the Director runs the plant on Command
 

@@ -19,27 +19,31 @@
   id: BankAccounts
   components:
   - type: SectorBank
+    # Triad: passive ticking income retired and starting floats zeroed. Department base income is
+    # now the sector purchase-tax pot (SectorTaxShare, split evenly four ways); department activity
+    # income (ItemTax, AtmTax, PowerTransmission, smuggling) stays direct. BlackMarket earns only
+    # from the smuggling loop.
     accounts:
       Frontier:
         !type:SectorBankAccountInfo
-        balance: 8000
-        increasePerSecond: 14 # ~50K per hour, minimum wage employees!
+        balance: 0 # Triad: 8000 >> 0
+        increasePerSecond: 0 # Triad: 14 >> 0 (was ~50K per hour, minimum wage employees!)
       TDF:
         !type:SectorBankAccountInfo
-        balance: 8000
-        increasePerSecond: 42 # ~150K per hour, about enough for minimum wage for the default TDF size
+        balance: 0 # Triad: 8000 >> 0
+        increasePerSecond: 0 # Triad: 42 >> 0 (was ~150K per hour, about enough for minimum wage for the default TDF size)
       Medical:
         !type:SectorBankAccountInfo
-        balance: 8000
-        increasePerSecond: 18 # ~65K per hour, a bit over for the DOC MOM's wage.
+        balance: 0 # Triad: 8000 >> 0
+        increasePerSecond: 0 # Triad: 18 >> 0 (was ~65K per hour, a bit over for the DOC MOM's wage.)
       BlackMarket:
         !type:SectorBankAccountInfo
-        balance: 8000
-        increasePerSecond: 18 # ~65K per hour, they get ALOT just from people smuggling anyways.
-      Edison: # Triad: coyote's power plant account; a trickle - the plant earns by selling power
+        balance: 0 # Triad: 8000 >> 0
+        increasePerSecond: 0 # Triad: 18 >> 0 (was ~65K per hour; smuggling feeds it directly now)
+      Edison: # Triad: coyote's power plant account; the plant earns by selling power
         !type:SectorBankAccountInfo
-        balance: 8000
-        increasePerSecond: 1
+        balance: 0 # Triad: 8000 >> 0
+        increasePerSecond: 0 # Triad: 1 >> 0
 # mono edit end
 
  # A global source of character records (DNA, fingerprints, criminal records, etc.)

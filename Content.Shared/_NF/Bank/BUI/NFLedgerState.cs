@@ -46,6 +46,9 @@ public enum LedgerEntryType : byte
     // Triad: income from selling power to the sector via a PowerTransmissionPoint (ported from
     // coyote-frontier for the Edison POI). Placed before FirstExpense so it classifies as income.
     PowerTransmission,
+    // Triad: a department's even share of the sector purchase-tax pot (see BankSystem.SectorTax.cs).
+    // Placed before FirstExpense so it classifies as income.
+    SectorTaxShare,
     // Expense entries
     MailPenalty,
     // Mono Begin

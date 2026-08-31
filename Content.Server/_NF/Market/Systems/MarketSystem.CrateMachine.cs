@@ -71,18 +71,32 @@ public sealed partial class MarketSystem
         if (!TryComp<MarketItemSpawnerComponent>(crateMachineUid, out var itemSpawner))
             return;
 
-        var cartBalance = MarketDataExtensions.GetMarketValue(consoleComponent.CartDataList, marketMod);
-        if (playerBank.Balance < cartBalance)
+        // Triad: purchase tax on top of list price, collected into the sector pot. Splits go on
+        // the record before the withdrawal enqueues it; the deposits move only on success.
+        var spawnCost = int.Abs(MarketDataExtensions.GetMarketValue(consoleComponent.CartDataList, marketMod));
+        var buyTax = _bankSystem.GetSectorBuyTax(spawnCost);
+        var totalCost = spawnCost + buyTax;
+        if (playerBank.Balance < totalCost)
             return;
 
+        var record = new MarketRecord
+        {
+            Kind = MarketTransactionKind.MarketCrate,
+            Gross = -totalCost * 100L,
+            Tax = buyTax * 100L,
+            Net = -spawnCost * 100L,
+        };
+        _bankSystem.AddSectorTaxSplits(record, buyTax);
+
         // Withdraw spesos from player
-        var spawnCost = int.Abs(MarketDataExtensions.GetMarketValue(consoleComponent.CartDataList, marketMod));
-        if (!_bankSystem.TryBankWithdraw(player, spawnCost, new MarketRecord { Kind = MarketTransactionKind.MarketCrate })) // Triad: market data
+        if (!_bankSystem.TryBankWithdraw(player, totalCost, record)) // Triad: market data; spawnCost >> totalCost
         {
             _popup.PopupEntity(Loc.GetString("market-insufficient-funds"), consoleUid, player);
             _audio.PlayPredicted(consoleComponent.ErrorSound, consoleUid, null, AudioParams.Default.WithMaxDistance(5f));
             return;
         }
+        _bankSystem.DepositSectorTax(buyTax); // Triad
+        // End Triad
         _audio.PlayPredicted(consoleComponent.SuccessSound, consoleUid, null, AudioParams.Default.WithMaxDistance(5f));
 
         itemSpawner.ItemsToSpawn = consoleComponent.CartDataList;

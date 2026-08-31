@@ -37,6 +37,7 @@
       components:
         - type: StationNameSetup
           mapNameTemplate: 'Edison Power Plant'
+        - type: SectorPurchaseTax # Triad: managed POI, vendors collect the pot tax
         # Triad: join-menu card (icon, subtext, description); mirrors medical.yml's setup
         - type: ExtraStationInformation
           icon:
