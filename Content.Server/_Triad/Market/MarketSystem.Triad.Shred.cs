@@ -71,6 +71,27 @@ public sealed partial class MarketSystem
     }
 
     /// <summary>
+    /// The sector's marketplace: the station whose market carries a persist key (the Trade Mall).
+    /// Gas sold at any sale point in the sector lands in ITS pools - the bluespace gas storage
+    /// fiction - which is how Edison's intake stocks the mall's canister shelf without the mall
+    /// ever hosting a sale point of its own.
+    /// </summary>
+    public bool TryGetSectorMarket(out EntityUid station)
+    {
+        var query = EntityQueryEnumerator<CargoMarketDataComponent>();
+        while (query.MoveNext(out var uid, out var market))
+        {
+            if (market.PersistKey == null)
+                continue;
+            station = uid;
+            return true;
+        }
+
+        station = default;
+        return false;
+    }
+
+    /// <summary>
     /// Intake seam for other systems: credits loose units to a station's market pool. The gas
     /// sale point feeds <c>gas:</c> mole pools through this instead of letting sold gas vanish.
     /// Does nothing on stations without a market.

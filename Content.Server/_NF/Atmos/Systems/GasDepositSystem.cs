@@ -305,11 +305,13 @@ public sealed partial class GasDepositSystem : SharedGasDepositSystem
         if (TryComp<MarketModifierComponent>(ent, out var priceMod))
             amount *= priceMod.Mod;
 
-        // Triad: begin - the sold moles stop vanishing. On a station with a market (the Trade
-        // Mall), they credit the per-gas pools and convert into canister listings; the payout to
-        // the seller is unchanged. And the sale is captured as a GasSale with one line per gas:
-        // the moles ledger for the gas economy.
+        // Triad: begin - the sold moles stop vanishing. Wherever the sale point sits (Edison),
+        // the moles land in the SECTOR market's gas pools - bluespace gas storage - and convert
+        // into canister listings on the Trade Mall's shelf; the mall itself never hosts a sale
+        // point. The payout to the seller is unchanged, and the sale is captured as a GasSale
+        // with one line per gas: the moles ledger for the gas economy.
         var owningStation = _station.GetOwningStation(ent);
+        var hasSectorMarket = _marketSystem.TryGetSectorMarket(out var sectorMarket);
         var record = _market.Enabled
             ? new MarketRecord
             {
@@ -330,8 +332,8 @@ public sealed partial class GasDepositSystem : SharedGasDepositSystem
                 continue;
 
             var gas = _atmosphere.GetGas(i);
-            if (owningStation is { } station)
-                _marketSystem.CreditMarketPool(station, $"gas:{gas.ID}", (long)Math.Round(moles * 100));
+            if (hasSectorMarket)
+                _marketSystem.CreditMarketPool(sectorMarket, $"gas:{gas.ID}", (long)Math.Round(moles * 100));
 
             record?.AddLine($"gas:{gas.ID}", MarketDirection.Sale, (int)moles,
                 (long)Math.Round(gas.PricePerMole * 100),
