@@ -14,6 +14,7 @@ using Content.Server.Station.Components;
 using Content.Server.Station.Systems;
 using Content.Shared._Mono.ShipRepair.Components;
 using Content.Shared._Triad.CCVar;
+using Content.Shared._Triad.ShipSize;
 using Content.Shared.Station.Components;
 using Microsoft.EntityFrameworkCore;
 using Robust.Shared.Configuration;
@@ -30,11 +31,14 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
     /// first restorable mutation rather than after the whole preparation, and until this ran that
     /// correction was an argument rather than a measurement.
     ///
-    /// <para>The failure is induced through the owner foreign key rather than by patching the
-    /// system under test. Filing a revision for a player who has no row throws inside
+    /// <para>The failure is induced through the round foreign key rather than by patching the
+    /// system under test. Filing a revision against a round that has no row throws inside
     /// <c>FileRevision</c>, which sits after the sidecars, the strip list and the fidelity capture,
     /// so the unwind is exercised across its whole surface by a fault the database really produces
-    /// rather than by a seam opened for the test.</para>
+    /// rather than by a seam opened for the test. It used to be the owner foreign key, until the
+    /// capacity gate started reading the owner's berths before the pipeline mutates anything: an
+    /// owner with no row has no berths, and that refusal happens before there is anything to
+    /// unwind.</para>
     ///
     /// <para>The sharpest assertion here is the station re-book. Stripping station membership fires
     /// the station system's shutdown handler, which removes the grid from the station's own grid
@@ -60,10 +64,14 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             var stationSys = server.System<StationSystem>();
             var mapSys = server.System<SharedMapSystem>();
 
-            // Deliberately NOT inserted into the player table. The owner column is a real foreign
-            // key, so this is what makes the commit throw.
-            var orphanOwner = Guid.NewGuid();
-
+            // A real owner with a real berth, so the capacity gate passes and the pipeline gets as
+            // far as the commit. The round id below is what makes that commit throw: the revision's
+            // round column is a real foreign key and no such round exists.
+            var owner = Guid.NewGuid();
+            await InsertPlayer(db, owner);
+            var store = server.ResolveDependency<DrydockStore>();
+            await store.AddBerth(owner, ShipSizeClass.SuperCapital, DrydockBerthKind.Granted, 0, null, null);
+            const int noSuchRound = 987654321;
 
             var map = await pair.CreateTestMap();
 
@@ -121,7 +129,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             // The store must fail, and it must fail loudly rather than reporting a refusal reason:
             // a database fault is not one of the outcomes the enum models.
             Task<(DrydockStoreResult Result, Guid? ShipId)>? storeTask = null;
-            await server.WaitPost(() => storeTask = drydock.TryStoreShip(shipGrid, orphanOwner, null));
+            await server.WaitPost(() => storeTask = drydock.TryStoreShip(shipGrid, owner, noSuchRound));
 
             for (var i = 0; i < 600 && !storeTask!.IsCompleted; i++)
             {
@@ -133,7 +141,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
 
             Assert.That(storeTask!.IsCompleted, Is.True, "The store never completed.");
             Assert.That(storeTask.IsFaulted, Is.True,
-                "Filing a revision for a player who does not exist must violate the owner foreign key.");
+                "Filing a revision against a round that does not exist must violate the round foreign key.");
 
             await pair.RunTicksSync(5);
 
@@ -181,6 +189,23 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             return db.RunTriadDbCommand(
                 async (context, token) => await context.DrydockRevision.AsNoTracking().CountAsync(token),
                 CancellationToken.None);
+        }
+
+        private static Task InsertPlayer(IServerDbManager db, Guid userId)
+        {
+            return db.RunTriadDbCommand(async (context, token) =>
+            {
+                context.Player.Add(new Player
+                {
+                    UserId = userId,
+                    LastSeenUserName = $"drydock-test-{userId:N}",
+                    FirstSeenTime = DateTime.UtcNow,
+                    LastSeenTime = DateTime.UtcNow,
+                    LastSeenAddress = System.Net.IPAddress.Loopback,
+                });
+
+                await context.SaveChangesAsync(token);
+            }, CancellationToken.None);
         }
     }
 }

@@ -88,24 +88,14 @@ public sealed partial class DrydockSystem : EntitySystem
         var mobQuery = GetEntityQuery<MobStateComponent>();
         var xformQuery = GetEntityQuery<TransformComponent>();
 
-        // Hazards first, because the check mutates nothing and refusing here means nobody has been
-        // moved for a store that was never going to happen. Runtime countdowns are ordinary data
-        // fields that would resume on thaw, so an armed ship must be refused rather than frozen.
-        if (HasHazardAboard(gridUid))
-            return (DrydockStoreResult.HazardAboard, null);
+        // The sentinel, before anything yields. A second store request for the same grid while
+        // this one is awaiting the database would otherwise run the whole preparation again on a
+        // grid mid-store and file a second revision of it. The marker doubles as the container
+        // insertion block for the length of the store, and the finally below always removes it.
+        if (HasComp<DrydockInProgressComponent>(gridUid))
+            return (DrydockStoreResult.InProgress, null);
 
-        // A mind must never be serialized, and a living mob does not round-trip cleanly. The
-        // implementation this is ported from relocates loose occupants onto the docked station
-        // instead of refusing; that is not ported yet, so this gate is stricter than it will
-        // finally be. Refusing is the safe direction to be stricter in.
-        if (_shipyard.FoundOrganics(gridUid, mobQuery, xformQuery) is not null)
-            return (DrydockStoreResult.OrganicsAboard, null);
-
-        var shipId = ResolveOrMintShipId(gridUid);
-        EnsureComp<DrydockIdentityComponent>(gridUid).ShipId = shipId;
-
-        var shipName = Comp<MetaDataComponent>(gridUid).EntityName;
-        var sizeClass = _shipSize.GetSizeClass((gridUid, Comp<MapGridComponent>(gridUid))).ToString();
+        EnsureComp<DrydockInProgressComponent>(gridUid);
 
         var injectedGas = new List<EntityUid>();
         var injectedDamage = new List<EntityUid>();
@@ -113,13 +103,48 @@ public sealed partial class DrydockSystem : EntitySystem
         DrydockFidelityCapture? fidelity = null;
         var committed = false;
 
-        // The try opens HERE, before the first mutation that has to be undone, rather than after
-        // the whole preparation as the reference implementation had it. Everything below clears
-        // live fields or removes live components, and a throw anywhere in it would otherwise escape
-        // with the ship left blanked: sidecars stuck on, stripped components gone, captured fields
-        // emptied. There is no useful work between the gates above and this line.
+        // The try opens HERE, before the first await and before the first mutation that has to be
+        // undone, rather than after the whole preparation as the reference implementation had it.
+        // Everything below either yields or clears live fields or removes live components, and a
+        // throw anywhere in it would otherwise escape with the ship left blanked or the sentinel
+        // left on: sidecars stuck on, stripped components gone, captured fields emptied, every
+        // container aboard refusing insertion forever.
         try
         {
+            // Capacity first, because it is the one gate that needs the database. The await sits
+            // before any other gate has been passed and before any mutation, so nothing has to be
+            // re-checked after it. A full garage refuses cheaply here; the filing transaction
+            // checks again, and the unique index on the berth column makes that answer the final
+            // one. Both reads are of the live grid: the cached class text on the row is never
+            // load-bearing.
+            var shipId = ResolveOrMintShipId(gridUid);
+            var sizeClass = _shipSize.GetSizeClass((gridUid, Comp<MapGridComponent>(gridUid))).ToString();
+
+            var capacity = await _store.CheckBerthForStore(shipId, ownerUserId, sizeClass);
+            if (capacity != DrydockBerthResult.Success)
+                return (BerthRefusal(capacity), null);
+
+            if (TerminatingOrDeleted(gridUid))
+                return (DrydockStoreResult.SerializeFailed, null);
+
+            // Hazards next, because the check mutates nothing and refusing here means nobody has
+            // been moved for a store that was never going to happen. Runtime countdowns are
+            // ordinary data fields that would resume on thaw, so an armed ship must be refused
+            // rather than frozen.
+            if (HasHazardAboard(gridUid))
+                return (DrydockStoreResult.HazardAboard, null);
+
+            // A mind must never be serialized, and a living mob does not round-trip cleanly. The
+            // implementation this is ported from relocates loose occupants onto the docked station
+            // instead of refusing; that is not ported yet, so this gate is stricter than it will
+            // finally be. Refusing is the safe direction to be stricter in.
+            if (_shipyard.FoundOrganics(gridUid, mobQuery, xformQuery) is not null)
+                return (DrydockStoreResult.OrganicsAboard, null);
+
+            EnsureComp<DrydockIdentityComponent>(gridUid).ShipId = shipId;
+
+            var shipName = Comp<MetaDataComponent>(gridUid).EntityName;
+
             // A pipe net's air lives on the node-group graph, which the serializer cannot reach.
             // Distribute each net's gas across its members by volume. The live net is left alone,
             // since the ship stays flyable until it despawns.
@@ -160,10 +185,6 @@ public sealed partial class DrydockSystem : EntitySystem
             // tick, which leaves it stuck.
             if (HasComp<FTLComponent>(gridUid))
                 RemComp<FTLComponent>(gridUid);
-
-            // Serialization below is synchronous, so the only window where the grid is live and
-            // reachable is the database write. Block insertion aboard for the whole span.
-            EnsureComp<DrydockInProgressComponent>(gridUid);
 
             // A ship document is self-contained. The engine default drags any referenced null-space
             // entity into the save, and a ship that is its own station references that station,
@@ -209,17 +230,39 @@ public sealed partial class DrydockSystem : EntitySystem
                 Manifest = BuildManifest(gridUid, fidelity).Serialize(),
             };
 
-            await _store.FileRevision(request, CompressZstd(yamlBytes), _cfg.GetCVar(TriadCCVars.DrydockKeepBlobs));
+            var filed = await _store.FileRevision(request, CompressZstd(yamlBytes), _cfg.GetCVar(TriadCCVars.DrydockKeepBlobs));
+
+            // The garage filled up between the capacity check and the commit, or this store lost
+            // the last berth to another committing in the same instant. Nothing was filed; the
+            // unwind below hands the ship back exactly as it was.
+            if (filed.Outcome != DrydockBerthResult.Success)
+                return (BerthRefusal(filed.Outcome), null);
 
             // The write above yielded, and the in-progress marker blocks insertion, not walking
             // aboard. Refuse rather than despawning somebody with the ship. The revision already
             // filed is a truthful snapshot of a real past state and cannot be retrieved into a
-            // duplicate, because the ship's row is not marked stored until this method succeeds.
+            // duplicate, because the row is not marked stored until the grid is gone, below. That
+            // two-step is deliberate: the first draft had the filing write mark the row stored,
+            // and this refusal then left a retrievable row behind a ship still flying.
             if (_shipyard.FoundOrganics(gridUid, mobQuery, xformQuery) is not null)
                 return (DrydockStoreResult.OrganicsAboard, null);
 
             QueueDel(gridUid);
             committed = true;
+
+            // The grid is queued for deletion and nothing below can bring it back, so the row may
+            // now say stored. If this write fails the revision is filed and the ship is gone from
+            // the world with its row still checked out, which is exactly the "wait for a human"
+            // state an admin restore exists for, and not a duplicate.
+            try
+            {
+                if (!await _store.MarkStored(shipId))
+                    Log.Warning($"Drydock: {shipId} filed revision {filed.Revision} but its row did not move to stored; it may be held.");
+            }
+            catch (Exception e)
+            {
+                Log.Error($"Drydock: {shipId} filed revision {filed.Revision} but marking it stored failed: {e.Message}. An admin restore recovers it.");
+            }
 
             return (DrydockStoreResult.Success, shipId);
         }
@@ -242,8 +285,11 @@ public sealed partial class DrydockSystem : EntitySystem
                 // Stripping station membership fired the station system's shutdown handler, which
                 // removed this grid from its station's set. Restoring the component brings the
                 // reference back but not the set entry, and that set is access-locked to the station
-                // system, so the re-add has to go through it.
-                if (TryComp<StationMemberComponent>(gridUid, out var restoredMember)
+                // system, so the re-add has to go through it. Only after a strip actually happened:
+                // the gates above the strip refuse through this same finally, and re-booking a grid
+                // that never left its station is not a no-op for the station's listeners.
+                if (stripped.Count > 0
+                    && TryComp<StationMemberComponent>(gridUid, out var restoredMember)
                     && HasComp<StationDataComponent>(restoredMember.Station))
                 {
                     _station.AddGridToStation(restoredMember.Station, gridUid);
@@ -265,6 +311,18 @@ public sealed partial class DrydockSystem : EntitySystem
             return identity.ShipId;
 
         return Guid.NewGuid();
+    }
+
+    /// <summary>
+    /// What the console tells the player when the drydock has nowhere to put the hull. Only the
+    /// too-small case gets its own message, because its fix is different; every other berth
+    /// outcome a store can produce means "no free berth", including losing a race for the last one.
+    /// </summary>
+    private static DrydockStoreResult BerthRefusal(DrydockBerthResult outcome)
+    {
+        return outcome == DrydockBerthResult.BerthTooSmall
+            ? DrydockStoreResult.BerthTooSmall
+            : DrydockStoreResult.NoBerth;
     }
 
     /// <summary>

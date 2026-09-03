@@ -71,6 +71,55 @@ internal static class ModelDrydock
 
         modelBuilder.Entity<DrydockAudit>()
             .HasIndex(a => a.ActorUserId);
+
+        // "Every ship this player has ever owned" walks transfer rows by recipient.
+        modelBuilder.Entity<DrydockAudit>()
+            .HasIndex(a => a.SubjectUserId);
+
+        // Berths. Explicit key for the same reason as the ship.
+        modelBuilder.Entity<DrydockBerth>()
+            .HasKey(b => b.BerthId);
+
+        modelBuilder.Entity<DrydockBerth>()
+            .HasOne(b => b.Owner)
+            .WithMany()
+            .HasForeignKey(b => b.OwnerUserId)
+            .HasPrincipalKey(p => p.UserId)
+            .OnDelete(DeleteBehavior.Restrict);
+
+        // Every player-facing berth query starts from the owner.
+        modelBuilder.Entity<DrydockBerth>()
+            .HasIndex(b => b.OwnerUserId);
+
+        // The principal for the ship's composite foreign key below. Redundant with the primary
+        // key as a uniqueness fact, but a foreign key needs a key to point at, and pointing at
+        // (berth, owner) rather than (berth) is what makes ownership a database invariant.
+        modelBuilder.Entity<DrydockBerth>()
+            .HasAlternateKey(b => new { b.BerthId, b.OwnerUserId });
+
+        // A ship can sit only in a berth its own owner owns. A transfer that moves the owner but
+        // not the berth, or a move into another player's berth, fails here rather than surfacing a
+        // round trip later. Restrict on delete: an occupied berth cannot be deleted, move first.
+        modelBuilder.Entity<DrydockShip>()
+            .HasOne(s => s.Berth)
+            .WithMany()
+            .HasForeignKey(s => new { s.BerthId, s.OwnerUserId })
+            .HasPrincipalKey(b => new { b.BerthId, b.OwnerUserId })
+            .OnDelete(DeleteBehavior.Restrict);
+
+        // One hull per berth. Nulls are distinct on both providers, so every ship that is out in
+        // the world coexists with every other. This is also the index the free-berth anti-join
+        // reads, and the arbiter when two stores race for the last free berth.
+        modelBuilder.Entity<DrydockShip>()
+            .HasIndex(s => s.BerthId)
+            .IsUnique();
+
+        // A hint, never a claim, so it may point at a berth that has since been deleted.
+        modelBuilder.Entity<DrydockShip>()
+            .HasOne(s => s.LastBerth)
+            .WithMany()
+            .HasForeignKey(s => s.LastBerthId)
+            .OnDelete(DeleteBehavior.SetNull);
     }
 }
 
@@ -136,7 +185,67 @@ public sealed class DrydockShip
 
     public DateTime UpdatedAt { get; set; }
 
+    /// <summary>
+    /// The berth the hull sits in while stored, null while it is out in the world. A parking
+    /// spot, not a home: retrieve vacates it as its last step, and store finds one again.
+    /// </summary>
+    public int? BerthId { get; set; }
+
+    public DrydockBerth? Berth { get; set; }
+
+    /// <summary>
+    /// A hint, never a claim: the berth this hull last sat in, so a store can put it back where it
+    /// was when that spot is still free, and an admin restore has a sensible default.
+    /// </summary>
+    public int? LastBerthId { get; set; }
+
+    public DrydockBerth? LastBerth { get; set; }
+
     public List<DrydockRevision> Revisions { get; set; } = default!;
+}
+
+/// <summary>
+/// One slot in a player's drydock, holding at most one hull. A player's drydock is the set of
+/// berths they own; there is no garage row because it would only ever be a count.
+/// </summary>
+public sealed class DrydockBerth
+{
+    /// <summary>An identity integer: nothing outside the database ever names a berth.</summary>
+    public int BerthId { get; set; }
+
+    public Guid OwnerUserId { get; set; }
+
+    public Player Owner { get; set; } = default!;
+
+    /// <summary>
+    /// The largest size class this berth accepts, stored as text for the same reason the ship's
+    /// class is: a content-side taxonomy change cannot invalidate rows. Compared in code after
+    /// parsing, never in SQL; an owner has a handful of berths.
+    /// </summary>
+    public string MaxSizeClass { get; set; } = default!;
+
+    public DrydockBerthKind Kind { get; set; }
+
+    /// <summary>What makes sell-back computable. Zero for a grant, so a grant refunds nothing.</summary>
+    public int PricePaid { get; set; }
+
+    public DateTime PurchasedAt { get; set; }
+
+    public int? PurchasedRoundId { get; set; }
+
+    public Round? PurchasedRound { get; set; }
+}
+
+public enum DrydockBerthKind
+{
+    /// <summary>Bought by the player at a terminal.</summary>
+    Purchased = 0,
+
+    /// <summary>
+    /// Handed out by the import bridge, a starter grant, or an admin. Refunds nothing on sale,
+    /// so a grant can never be turned into credits.
+    /// </summary>
+    Granted = 1,
 }
 
 public enum DrydockShipState
@@ -241,6 +350,12 @@ public enum DrydockRevisionKind
     /// values persist, and adding it later would mean a migration to reinterpret existing rows.
     /// </summary>
     LegacyImport = 2,
+
+    /// <summary>
+    /// An admin promoted an older revision as the current one. Filed as a new revision derived
+    /// from the old, so history stays append-only and nothing ever rewinds the pointer.
+    /// </summary>
+    AdminRestore = 3,
 }
 
 /// <summary>
@@ -274,9 +389,16 @@ public sealed class DrydockAudit
 
     /// <summary>
     /// Deliberately NOT a foreign key: audit outlives the ship record, so a deletion through admin
-    /// tooling must not cascade away the evidence of it.
+    /// tooling must not cascade away the evidence of it. Null on berth events that involve no
+    /// ship, which is why there is one timeline rather than two.
     /// </summary>
-    public Guid ShipGuid { get; set; }
+    public Guid? ShipGuid { get; set; }
+
+    /// <summary>
+    /// The berth taken, vacated, bought, sold, or moved. No foreign key, for the same reason as
+    /// the ship. Store and retrieve rows carry it too, so the timeline says where as well as when.
+    /// </summary>
+    public int? BerthId { get; set; }
 
     /// <summary>Name snapshot, because the ship row it came from may no longer exist.</summary>
     public string? ShipName { get; set; }
@@ -317,4 +439,20 @@ public enum DrydockAuditAction
 
     /// <summary>Released a hold.</summary>
     Release = 7,
+
+    BerthPurchase = 8,
+    BerthSale = 9,
+    BerthGrant = 10,
+    BerthUpgrade = 11,
+
+    /// <summary>A ship moved between two berths of the same owner, by an admin.</summary>
+    BerthMove = 12,
+
+    BerthDelete = 13,
+
+    /// <summary>
+    /// A retrieve could not use the current revision and materialized an older one. The newer
+    /// document still exists until pruning reaches it, which is why this is on the timeline.
+    /// </summary>
+    Fallback = 14,
 }

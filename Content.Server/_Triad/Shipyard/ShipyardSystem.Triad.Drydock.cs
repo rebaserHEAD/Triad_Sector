@@ -32,12 +32,24 @@ public sealed partial class ShipyardSystem
     /// </summary>
     private int? DrydockRoundId => _gameTicker.RoundId > 0 ? _gameTicker.RoundId : null;
 
+    // Both handlers are async void, which is what a BUI message subscription has to be, and an
+    // exception escaping an async void has nowhere to go but the synchronization context. A
+    // database fault mid-store or mid-retrieve is a logged refusal, never an unhandled throw.
     private async void OnStoreMessage(EntityUid uid, ShipyardConsoleComponent component, ShipyardConsoleStoreMessage args)
     {
         if (args.Actor is not { Valid: true } player)
             return;
 
-        await TryDrydockStore(uid, component, player, (ShipyardConsoleUiKey)args.UiKey);
+        try
+        {
+            await TryDrydockStore(uid, component, player, (ShipyardConsoleUiKey)args.UiKey);
+        }
+        catch (Exception e)
+        {
+            Log.Error($"Drydock: store from console {ToPrettyString(uid)} by {ToPrettyString(player)} threw: {e}");
+            if (!TerminatingOrDeleted(player))
+                ConsolePopup(player, Loc.GetString("shipyard-console-store-failed"));
+        }
     }
 
     private async void OnRetrieveMessage(EntityUid uid, ShipyardConsoleComponent component, ShipyardConsoleRetrieveMessage args)
@@ -45,7 +57,16 @@ public sealed partial class ShipyardSystem
         if (args.Actor is not { Valid: true } player)
             return;
 
-        await TryDrydockRetrieve(uid, component, player, args.ShipId, (ShipyardConsoleUiKey)args.UiKey);
+        try
+        {
+            await TryDrydockRetrieve(uid, component, player, args.ShipId, (ShipyardConsoleUiKey)args.UiKey);
+        }
+        catch (Exception e)
+        {
+            Log.Error($"Drydock: retrieve of {args.ShipId} from console {ToPrettyString(uid)} by {ToPrettyString(player)} threw: {e}");
+            if (!TerminatingOrDeleted(player))
+                ConsolePopup(player, Loc.GetString("shipyard-console-retrieve-failed"));
+        }
     }
 
     /// <summary>
@@ -252,6 +273,9 @@ public sealed partial class ShipyardSystem
             DrydockStoreResult.OrganicsAboard => "shipyard-console-store-organics",
             DrydockStoreResult.HazardAboard => "shipyard-console-store-hazard",
             DrydockStoreResult.Disabled => "shipyard-console-store-disabled",
+            DrydockStoreResult.NoBerth => "shipyard-console-store-no-berth",
+            DrydockStoreResult.BerthTooSmall => "shipyard-console-store-berth-too-small",
+            DrydockStoreResult.InProgress => "shipyard-console-store-in-progress",
             _ => "shipyard-console-store-failed",
         };
     }

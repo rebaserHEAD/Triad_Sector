@@ -1,8 +1,10 @@
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using Content.Server.Database;
+using Content.Shared._Triad.ShipSize;
 using Microsoft.EntityFrameworkCore;
 using Robust.Shared.IoC;
 
@@ -35,109 +37,366 @@ public sealed class DrydockStore
     /// How many revisions keep their document. Zero or less prunes nothing. The revision just filed
     /// is never pruned, whatever this says.
     /// </param>
-    /// <returns>The revision number filed.</returns>
-    public Task<int> FileRevision(DrydockRevisionRequest request, byte[] blob, int keepBlobs, CancellationToken ct = default)
+    /// <returns>The outcome, the revision number filed, and the berth the ship now sits in.</returns>
+    public Task<DrydockFileResult> FileRevision(DrydockRevisionRequest request, byte[] blob, int keepBlobs, CancellationToken ct = default)
     {
         return _db.RunTriadDbCommand(async (db, token) =>
         {
-            await using var tx = await db.Database.BeginTransactionAsync(token);
-
-            var now = DateTime.UtcNow;
-
-            var ship = await db.DrydockShip
-                .SingleOrDefaultAsync(s => s.ShipGuid == request.ShipGuid, token);
-
-            if (ship == null)
+            // A store that picks a berth can lose it to another store committing in the same
+            // instant, and the unique index on the ship's berth column is the arbiter. Each attempt
+            // is its own transaction against a cleared tracker, the lost berth is excluded from the
+            // next pick, and three attempts is more free berths than any real garage has. A ship
+            // that kept the berth it already held never retries: a violation there is the revision
+            // key, and that one has to stay loud.
+            var excluded = new HashSet<int>();
+            for (var attempt = 0; attempt < 3; attempt++)
             {
-                ship = new DrydockShip
+                int? picked = null;
+                try
                 {
-                    ShipGuid = request.ShipGuid,
-                    OwnerUserId = request.OwnerUserId,
-                    State = DrydockShipState.Stored,
-                    StateChangedAt = now,
-                    CreatedAt = now,
-                };
-                db.DrydockShip.Add(ship);
+                    return await FileRevisionOnce(db, request, blob, keepBlobs, excluded, id => picked = id, token);
+                }
+                catch (DbUpdateException e) when (picked is { } lost && IsBerthUniqueViolation(e))
+                {
+                    db.ChangeTracker.Clear();
+                    excluded.Add(lost);
+                }
             }
 
-            // Display cache, refreshed on every store. Ownership is NOT refreshed here: a transfer
-            // is its own operation with its own audit row, and a store must never quietly move a
-            // ship to whoever happened to be flying it.
-            ship.ShipName = request.ShipName;
-            ship.VesselProto = request.VesselProto;
-            ship.SizeClass = request.SizeClass;
-            ship.UpdatedAt = now;
+            return new DrydockFileResult(DrydockBerthResult.Conflict, 0, null);
+        }, ct);
+    }
 
-            var revision = ship.CurrentRevision + 1;
+    /// <summary>
+    /// Whether a failed write was the berth unique index and nothing else. The retry above must
+    /// only ever swallow that one fault: the abort test found the first draft catching every
+    /// update exception while a berth was picked, which turned a round foreign-key failure into a
+    /// polite "no free berth" and hid the real fault from everyone. Provider-typed on purpose;
+    /// the constraint name is the one EF generates for the index on the berth column.
+    /// </summary>
+    internal static bool IsBerthUniqueViolation(DbUpdateException e)
+    {
+        return e.InnerException switch
+        {
+            Npgsql.PostgresException pg => pg.SqlState == "23505"
+                && pg.ConstraintName is { } name
+                && name.Contains("drydock_ship_berth_id", StringComparison.Ordinal),
+            Microsoft.Data.Sqlite.SqliteException sq => sq.SqliteErrorCode == 19
+                && sq.Message.Contains("UNIQUE", StringComparison.Ordinal)
+                && sq.Message.Contains("drydock_ship.berth_id", StringComparison.Ordinal),
+            _ => false,
+        };
+    }
 
-            db.DrydockRevision.Add(new DrydockRevision
+    /// <summary>
+    /// Makes a filed ship retrievable. The pipeline calls this after the grid is gone, never
+    /// before: filing and marking are two steps because the filing write yields, and an occupant
+    /// who boards during it has to refuse the store without leaving a retrievable row behind a
+    /// live ship, which is a duplicate. A held ship stays held; the hold is an admin's decision.
+    /// </summary>
+    public Task<bool> MarkStored(Guid shipGuid, CancellationToken ct = default)
+    {
+        return _db.RunTriadDbCommand(async (db, token) =>
+        {
+            var now = DateTime.UtcNow;
+            var moved = await db.DrydockShip
+                .Where(s => s.ShipGuid == shipGuid && s.State == DrydockShipState.CheckedOut)
+                .ExecuteUpdateAsync(set => set
+                    .SetProperty(s => s.State, DrydockShipState.Stored)
+                    .SetProperty(s => s.StateChangedAt, now)
+                    .SetProperty(s => s.CheckedOutRoundId, (int?)null)
+                    .SetProperty(s => s.UpdatedAt, now), token);
+
+            return moved > 0;
+        }, ct);
+    }
+
+    private static async Task<DrydockFileResult> FileRevisionOnce(
+        ServerDbContext db,
+        DrydockRevisionRequest request,
+        byte[] blob,
+        int keepBlobs,
+        HashSet<int> excludedBerths,
+        Action<int> berthPicked,
+        CancellationToken token)
+    {
+        await using var tx = await db.Database.BeginTransactionAsync(token);
+
+        var now = DateTime.UtcNow;
+
+        var ship = await db.DrydockShip
+            .SingleOrDefaultAsync(s => s.ShipGuid == request.ShipGuid, token);
+
+        if (ship == null)
+        {
+            // A new hull is out in the world at the moment it is first filed. It becomes stored
+            // below only if the caller says so, or by MarkStored once the grid is gone.
+            ship = new DrydockShip
             {
                 ShipGuid = request.ShipGuid,
-                Revision = revision,
-                Kind = request.Kind,
-                DerivedFromRevision = request.DerivedFromRevision,
-                RebakeVersion = request.RebakeVersion,
-                ActorUserId = request.ActorUserId,
-                CreatedRoundId = request.CreatedRoundId,
+                OwnerUserId = request.OwnerUserId,
+                State = DrydockShipState.CheckedOut,
+                StateChangedAt = now,
+                CheckedOutRoundId = request.CreatedRoundId,
                 CreatedAt = now,
-                EngineFormatVer = request.EngineFormatVer,
-                DrydockFormatVer = request.DrydockFormatVer,
-                ProtoFingerprint = request.ProtoFingerprint,
-                CapturedKeyHash = request.CapturedKeyHash,
-                Checksum = request.Checksum,
-                SizeBytes = request.SizeBytes,
-                Manifest = request.Manifest,
-            });
+            };
+            db.DrydockShip.Add(ship);
+        }
 
-            db.DrydockBlob.Add(new DrydockBlob
+        // Display cache, refreshed on every store. Ownership is NOT refreshed here: a transfer
+        // is its own operation with its own audit row, and a store must never quietly move a
+        // ship to whoever happened to be flying it.
+        ship.ShipName = request.ShipName;
+        ship.VesselProto = request.VesselProto;
+        ship.SizeClass = request.SizeClass;
+        ship.UpdatedAt = now;
+
+        // A player store needs somewhere to put the hull. A re-bake rewrites a document and never
+        // touches the berth, because the ship may be out flying while the ladder runs. Refusing
+        // here rolls the whole transaction back: nothing is filed for a ship with nowhere to go.
+        if (request.Kind is DrydockRevisionKind.PlayerStore or DrydockRevisionKind.LegacyImport)
+        {
+            var seated = await SeatShip(db, ship, request.SizeClass, request.BerthId, excludedBerths, berthPicked, token);
+            if (seated != DrydockBerthResult.Success)
+                return new DrydockFileResult(seated, 0, null);
+        }
+
+        var revision = ship.CurrentRevision + 1;
+
+        db.DrydockRevision.Add(new DrydockRevision
+        {
+            ShipGuid = request.ShipGuid,
+            Revision = revision,
+            Kind = request.Kind,
+            DerivedFromRevision = request.DerivedFromRevision,
+            RebakeVersion = request.RebakeVersion,
+            ActorUserId = request.ActorUserId,
+            CreatedRoundId = request.CreatedRoundId,
+            CreatedAt = now,
+            EngineFormatVer = request.EngineFormatVer,
+            DrydockFormatVer = request.DrydockFormatVer,
+            ProtoFingerprint = request.ProtoFingerprint,
+            CapturedKeyHash = request.CapturedKeyHash,
+            Checksum = request.Checksum,
+            SizeBytes = request.SizeBytes,
+            Manifest = request.Manifest,
+        });
+
+        db.DrydockBlob.Add(new DrydockBlob
+        {
+            ShipGuid = request.ShipGuid,
+            Revision = revision,
+            Blob = blob,
+        });
+
+        ship.CurrentRevision = revision;
+
+        // An import has no live grid, so it is stored the moment it is filed. A player store is
+        // marked stored by the pipeline after the grid is gone, unless the caller asks for it
+        // here. A system re-bake must leave the state alone: the ship may be checked out and
+        // flying while the ladder rewrites an older revision.
+        if (request.Kind == DrydockRevisionKind.LegacyImport
+            || (request.Kind == DrydockRevisionKind.PlayerStore && request.MarkStored))
+        {
+            ship.State = DrydockShipState.Stored;
+            ship.StateChangedAt = now;
+            ship.CheckedOutRoundId = null;
+        }
+
+        // Prune blobs, never revisions. The floor is the revision we just filed, which is the
+        // one a retrieve reads, so it survives whatever keepBlobs says. Zero or less means no
+        // pruning rather than keep nothing: of the two readings, only this one costs disk when
+        // it is misconfigured.
+        if (keepBlobs > 0)
+        {
+            var floor = revision - keepBlobs + 1;
+            var stale = await db.DrydockBlob
+                .Where(b => b.ShipGuid == request.ShipGuid && b.Revision < floor)
+                .ToListAsync(token);
+
+            db.DrydockBlob.RemoveRange(stale);
+        }
+
+        db.DrydockAudit.Add(new DrydockAudit
+        {
+            ShipGuid = request.ShipGuid,
+            BerthId = ship.BerthId,
+            ShipName = request.ShipName,
+            Action = request.Kind == DrydockRevisionKind.SystemRebake
+                ? DrydockAuditAction.Rebake
+                : DrydockAuditAction.Store,
+            ActorUserId = request.ActorUserId,
+            Revision = revision,
+            RoundId = request.CreatedRoundId,
+            CreatedAt = now,
+        });
+
+        await db.SaveChangesAsync(token);
+        await tx.CommitAsync(token);
+
+        return new DrydockFileResult(DrydockBerthResult.Success, revision, ship.BerthId);
+    }
+
+    /// <summary>
+    /// Puts a hull in a berth as part of a store. Keeps the berth it already holds if that still
+    /// fits (a crash between confirm and vacate leaves one behind, and this is where it heals),
+    /// otherwise takes the named berth, otherwise picks one: its own old slot if free, else the
+    /// smallest free berth that fits. Owner and vacancy are enforced by the database as well, so a
+    /// pick that turns out to be taken by the time this commits fails on the unique index rather
+    /// than filing two hulls into one slot.
+    /// </summary>
+    private static async Task<DrydockBerthResult> SeatShip(
+        ServerDbContext db,
+        DrydockShip ship,
+        string? hullClass,
+        int? requestedBerth,
+        HashSet<int> excludedBerths,
+        Action<int> berthPicked,
+        CancellationToken token)
+    {
+        if (ship.BerthId is { } held && (requestedBerth == null || requestedBerth == held))
+        {
+            var current = await db.DrydockBerth.AsNoTracking()
+                .SingleOrDefaultAsync(b => b.BerthId == held, token);
+
+            if (current != null && Fits(hullClass, current.MaxSizeClass))
+                return DrydockBerthResult.Success;
+        }
+
+        if (requestedBerth is { } wanted)
+        {
+            var named = await db.DrydockBerth.AsNoTracking()
+                .SingleOrDefaultAsync(b => b.BerthId == wanted && b.OwnerUserId == ship.OwnerUserId, token);
+
+            if (named == null)
+                return DrydockBerthResult.NotFound;
+
+            if (!Fits(hullClass, named.MaxSizeClass))
+                return DrydockBerthResult.BerthTooSmall;
+
+            if (await db.DrydockShip.AnyAsync(s => s.BerthId == wanted && s.ShipGuid != ship.ShipGuid, token))
+                return DrydockBerthResult.BerthOccupied;
+
+            ship.LastBerthId = ship.BerthId;
+            ship.BerthId = wanted;
+            berthPicked(wanted);
+            return DrydockBerthResult.Success;
+        }
+
+        var (outcome, pick) = await PickFreeBerth(db, ship.OwnerUserId, hullClass, ship.LastBerthId, excludedBerths, token);
+        if (outcome != DrydockBerthResult.Success)
+            return outcome;
+
+        ship.LastBerthId = ship.BerthId;
+        ship.BerthId = pick;
+        berthPicked(pick!.Value);
+        return DrydockBerthResult.Success;
+    }
+
+    /// <summary>
+    /// The owner's free berths that accept the hull, preferring the ship's own old slot and then
+    /// the smallest that fits so the big ones stay available. Free means no ship row points at
+    /// it, which the unique index on that column answers directly.
+    /// </summary>
+    private static async Task<(DrydockBerthResult Outcome, int? BerthId)> PickFreeBerth(
+        ServerDbContext db,
+        Guid ownerUserId,
+        string? hullClass,
+        int? preferredBerth,
+        HashSet<int> excludedBerths,
+        CancellationToken token)
+    {
+        // A hull class that does not parse is a taxonomy the berths cannot answer for. Fail closed.
+        if (!TryParseClass(hullClass, out var hull))
+            return (DrydockBerthResult.BerthTooSmall, null);
+
+        var free = await db.DrydockBerth.AsNoTracking()
+            .Where(b => b.OwnerUserId == ownerUserId && !db.DrydockShip.Any(s => s.BerthId == b.BerthId))
+            .ToListAsync(token);
+
+        free.RemoveAll(b => excludedBerths.Contains(b.BerthId));
+
+        if (free.Count == 0)
+            return (DrydockBerthResult.NoBerth, null);
+
+        var fitting = free
+            .Where(b => TryParseClass(b.MaxSizeClass, out var max) && hull <= max)
+            .ToList();
+
+        if (fitting.Count == 0)
+            return (DrydockBerthResult.BerthTooSmall, null);
+
+        var pick = fitting.FirstOrDefault(b => b.BerthId == preferredBerth)
+            ?? fitting
+                .OrderBy(b => TryParseClass(b.MaxSizeClass, out var max) ? (int)max : int.MaxValue)
+                .ThenBy(b => b.BerthId)
+                .First();
+
+        return (DrydockBerthResult.Success, pick.BerthId);
+    }
+
+    /// <summary>
+    /// Both classes are stored as text so a taxonomy change cannot invalidate rows; the comparison
+    /// happens here, after parsing, never in SQL. Anything that does not parse fits nothing.
+    /// </summary>
+    internal static bool Fits(string? hullClass, string? berthClass)
+    {
+        return TryParseClass(hullClass, out var hull)
+            && TryParseClass(berthClass, out var max)
+            && hull <= max;
+    }
+
+    internal static bool TryParseClass(string? text, out ShipSizeClass sizeClass)
+    {
+        return Enum.TryParse(text, ignoreCase: false, out sizeClass) && Enum.IsDefined(sizeClass);
+    }
+
+    /// <summary>
+    /// Empties the ship's berth. Called as the LAST step of a successful retrieve, after the ship
+    /// is docked and the claim is confirmed, and deliberately not inside the state claim: the
+    /// claim is what blocks a second retrieve, and a failure after it releases the state without
+    /// ever having to re-seat a berth somebody else may have taken. The old slot is remembered so
+    /// the next store can put the ship back where it was.
+    /// </summary>
+    public Task VacateBerth(Guid shipGuid, CancellationToken ct = default)
+    {
+        return _db.RunTriadDbCommand(async (db, token) =>
+        {
+            await db.DrydockShip
+                .Where(s => s.ShipGuid == shipGuid && s.BerthId != null)
+                .ExecuteUpdateAsync(set => set
+                    .SetProperty(s => s.LastBerthId, s => s.BerthId)
+                    .SetProperty(s => s.BerthId, (int?)null)
+                    .SetProperty(s => s.UpdatedAt, DateTime.UtcNow), token);
+        }, ct);
+    }
+
+    /// <summary>
+    /// Whether a store for this hull has somewhere to go, checked before the pipeline mutates
+    /// anything so a full garage refuses cheaply. The answer is advisory: the filing transaction
+    /// checks again and the unique index makes that one final.
+    /// </summary>
+    public Task<DrydockBerthResult> CheckBerthForStore(Guid shipGuid, Guid ownerUserId, string hullClass, CancellationToken ct = default)
+    {
+        return _db.RunTriadDbCommand(async (db, token) =>
+        {
+            var ship = await db.DrydockShip.AsNoTracking()
+                .SingleOrDefaultAsync(s => s.ShipGuid == shipGuid, token);
+
+            // The row's owner, not the caller's: a store never moves a ship between garages.
+            var owner = ship?.OwnerUserId ?? ownerUserId;
+
+            if (ship?.BerthId is { } held)
             {
-                ShipGuid = request.ShipGuid,
-                Revision = revision,
-                Blob = blob,
-            });
+                var current = await db.DrydockBerth.AsNoTracking()
+                    .SingleOrDefaultAsync(b => b.BerthId == held, token);
 
-            ship.CurrentRevision = revision;
-
-            // A player store puts the ship away. A system re-bake must leave the state alone: the
-            // ship may be checked out and flying while the ladder rewrites an older revision.
-            if (request.Kind == DrydockRevisionKind.PlayerStore || request.Kind == DrydockRevisionKind.LegacyImport)
-            {
-                ship.State = DrydockShipState.Stored;
-                ship.StateChangedAt = now;
-                ship.CheckedOutRoundId = null;
+                if (current != null && Fits(hullClass, current.MaxSizeClass))
+                    return DrydockBerthResult.Success;
             }
 
-            // Prune blobs, never revisions. The floor is the revision we just filed, which is the
-            // one a retrieve reads, so it survives whatever keepBlobs says. Zero or less means no
-            // pruning rather than keep nothing: of the two readings, only this one costs disk when
-            // it is misconfigured.
-            if (keepBlobs > 0)
-            {
-                var floor = revision - keepBlobs + 1;
-                var stale = await db.DrydockBlob
-                    .Where(b => b.ShipGuid == request.ShipGuid && b.Revision < floor)
-                    .ToListAsync(token);
-
-                db.DrydockBlob.RemoveRange(stale);
-            }
-
-            db.DrydockAudit.Add(new DrydockAudit
-            {
-                ShipGuid = request.ShipGuid,
-                ShipName = request.ShipName,
-                Action = request.Kind == DrydockRevisionKind.SystemRebake
-                    ? DrydockAuditAction.Rebake
-                    : DrydockAuditAction.Store,
-                ActorUserId = request.ActorUserId,
-                Revision = revision,
-                RoundId = request.CreatedRoundId,
-                CreatedAt = now,
-            });
-
-            await db.SaveChangesAsync(token);
-            await tx.CommitAsync(token);
-
-            return revision;
+            var (outcome, _) = await PickFreeBerth(db, owner, hullClass, ship?.LastBerthId, new HashSet<int>(), token);
+            return outcome;
         }, ct);
     }
 
@@ -249,7 +508,7 @@ public sealed class DrydockStore
             var snapshot = await db.DrydockShip
                 .AsNoTracking()
                 .Where(s => s.ShipGuid == shipGuid)
-                .Select(s => new { s.ShipName, s.CurrentRevision })
+                .Select(s => new { s.ShipName, s.CurrentRevision, s.BerthId })
                 .SingleOrDefaultAsync(token);
 
             if (snapshot == null)
@@ -277,6 +536,7 @@ public sealed class DrydockStore
             db.DrydockAudit.Add(new DrydockAudit
             {
                 ShipGuid = shipGuid,
+                BerthId = snapshot.BerthId,
                 ShipName = snapshot.ShipName,
                 Action = action,
                 ActorUserId = actorUserId,
@@ -316,6 +576,398 @@ public sealed class DrydockStore
             .OrderBy(a => a.CreatedAt)
             .ToListAsync(token), ct);
     }
+
+    /// <summary>Every berth an owner has, each with the hull sitting in it, for the terminal and the admin panel.</summary>
+    public Task<List<DrydockBerthSlot>> GetBerths(Guid ownerUserId, CancellationToken ct = default)
+    {
+        return _db.RunTriadDbCommand(async (db, token) =>
+        {
+            var berths = await db.DrydockBerth.AsNoTracking()
+                .Where(b => b.OwnerUserId == ownerUserId)
+                .OrderBy(b => b.BerthId)
+                .ToListAsync(token);
+
+            // Filtering occupants by owner is sound because the composite foreign key guarantees
+            // a berth's occupant is its owner's ship.
+            var occupants = await db.DrydockShip.AsNoTracking()
+                .Where(s => s.OwnerUserId == ownerUserId && s.BerthId != null)
+                .ToListAsync(token);
+
+            var byBerth = occupants.ToDictionary(s => s.BerthId!.Value);
+            return berths.Select(b => new DrydockBerthSlot(b, byBerth.GetValueOrDefault(b.BerthId))).ToList();
+        }, ct);
+    }
+
+    /// <summary>
+    /// Creates a berth. A grant records a price of zero whatever is passed, so a grant can never be
+    /// sold for credits. The money itself moves at the terminal before this is called, and the
+    /// caller refunds if this throws.
+    /// </summary>
+    public Task<int> AddBerth(
+        Guid ownerUserId,
+        ShipSizeClass maxSizeClass,
+        DrydockBerthKind kind,
+        int pricePaid,
+        Guid? actorUserId,
+        int? roundId,
+        CancellationToken ct = default)
+    {
+        return _db.RunTriadDbCommand(async (db, token) =>
+        {
+            await using var tx = await db.Database.BeginTransactionAsync(token);
+
+            var now = DateTime.UtcNow;
+            var berth = new DrydockBerth
+            {
+                OwnerUserId = ownerUserId,
+                MaxSizeClass = maxSizeClass.ToString(),
+                Kind = kind,
+                PricePaid = kind == DrydockBerthKind.Granted ? 0 : Math.Max(0, pricePaid),
+                PurchasedAt = now,
+                PurchasedRoundId = roundId,
+            };
+
+            db.DrydockBerth.Add(berth);
+            await db.SaveChangesAsync(token);
+
+            db.DrydockAudit.Add(new DrydockAudit
+            {
+                BerthId = berth.BerthId,
+                Action = kind == DrydockBerthKind.Granted ? DrydockAuditAction.BerthGrant : DrydockAuditAction.BerthPurchase,
+                ActorUserId = actorUserId,
+                SubjectUserId = ownerUserId,
+                RoundId = roundId,
+                Reason = $"{maxSizeClass} berth, {berth.PricePaid} paid",
+                CreatedAt = now,
+            });
+
+            await db.SaveChangesAsync(token);
+            await tx.CommitAsync(token);
+
+            return berth.BerthId;
+        }, ct);
+    }
+
+    /// <summary>
+    /// Sells or deletes an empty berth; a null <paramref name="requiredOwner"/> is the admin path.
+    /// Returns the removed row so the caller can compute a refund from what was actually paid. A
+    /// store that lands between the vacancy check and the delete trips the foreign key instead,
+    /// and reads as occupied, which it is.
+    /// </summary>
+    public Task<(DrydockBerthResult Outcome, DrydockBerth? Berth)> TryRemoveBerth(
+        int berthId,
+        Guid? requiredOwner,
+        DrydockAuditAction action,
+        Guid? actorUserId,
+        int? roundId,
+        CancellationToken ct = default)
+    {
+        return _db.RunTriadDbCommand<(DrydockBerthResult, DrydockBerth?)>(async (db, token) =>
+        {
+            await using var tx = await db.Database.BeginTransactionAsync(token);
+
+            var berth = await db.DrydockBerth
+                .SingleOrDefaultAsync(b => b.BerthId == berthId && (requiredOwner == null || b.OwnerUserId == requiredOwner), token);
+
+            if (berth == null)
+                return (DrydockBerthResult.NotFound, null);
+
+            if (await db.DrydockShip.AnyAsync(s => s.BerthId == berthId, token))
+                return (DrydockBerthResult.BerthOccupied, null);
+
+            db.DrydockBerth.Remove(berth);
+
+            db.DrydockAudit.Add(new DrydockAudit
+            {
+                BerthId = berthId,
+                Action = action,
+                ActorUserId = actorUserId,
+                SubjectUserId = berth.OwnerUserId,
+                RoundId = roundId,
+                Reason = $"{berth.Kind} {berth.MaxSizeClass} berth, {berth.PricePaid} paid",
+                CreatedAt = DateTime.UtcNow,
+            });
+
+            try
+            {
+                await db.SaveChangesAsync(token);
+                await tx.CommitAsync(token);
+            }
+            catch (DbUpdateException)
+            {
+                return (DrydockBerthResult.BerthOccupied, null);
+            }
+
+            return (DrydockBerthResult.Success, berth);
+        }, ct);
+    }
+
+    /// <summary>
+    /// Raises a berth's class in place, for a hull that grew while it was out. The delta was really
+    /// paid, so it is refundable even on a granted berth; only the free base of a grant stays worth
+    /// nothing, which is what flipping the kind records.
+    /// </summary>
+    public Task<DrydockBerthResult> TryUpgradeBerth(
+        int berthId,
+        Guid ownerUserId,
+        ShipSizeClass newClass,
+        int priceDelta,
+        Guid? actorUserId,
+        int? roundId,
+        CancellationToken ct = default)
+    {
+        return _db.RunTriadDbCommand(async (db, token) =>
+        {
+            await using var tx = await db.Database.BeginTransactionAsync(token);
+
+            var berth = await db.DrydockBerth
+                .SingleOrDefaultAsync(b => b.BerthId == berthId && b.OwnerUserId == ownerUserId, token);
+
+            if (berth == null)
+                return DrydockBerthResult.NotFound;
+
+            if (!TryParseClass(berth.MaxSizeClass, out var current) || newClass <= current)
+                return DrydockBerthResult.WrongState;
+
+            berth.MaxSizeClass = newClass.ToString();
+            berth.PricePaid += Math.Max(0, priceDelta);
+            if (berth.PricePaid > 0)
+                berth.Kind = DrydockBerthKind.Purchased;
+
+            db.DrydockAudit.Add(new DrydockAudit
+            {
+                BerthId = berthId,
+                Action = DrydockAuditAction.BerthUpgrade,
+                ActorUserId = actorUserId,
+                SubjectUserId = ownerUserId,
+                RoundId = roundId,
+                Reason = $"{current} to {newClass}, {priceDelta} paid",
+                CreatedAt = DateTime.UtcNow,
+            });
+
+            await db.SaveChangesAsync(token);
+            await tx.CommitAsync(token);
+
+            return DrydockBerthResult.Success;
+        }, ct);
+    }
+
+    /// <summary>
+    /// Admin: moves a stored ship to another of its owner's berths, or with a null target vacates
+    /// the berth a ship that is out is still shown in. A cross-owner move is a transfer, and the
+    /// composite foreign key refuses it before anything here has to.
+    /// </summary>
+    public Task<DrydockBerthResult> TryMoveShip(
+        Guid shipGuid,
+        int? targetBerthId,
+        Guid? actorUserId,
+        int? roundId,
+        string? reason,
+        CancellationToken ct = default)
+    {
+        return _db.RunTriadDbCommand(async (db, token) =>
+        {
+            await using var tx = await db.Database.BeginTransactionAsync(token);
+
+            var ship = await db.DrydockShip.SingleOrDefaultAsync(s => s.ShipGuid == shipGuid, token);
+            if (ship == null)
+                return DrydockBerthResult.NotFound;
+
+            var now = DateTime.UtcNow;
+
+            if (targetBerthId is { } target)
+            {
+                // Seating a ship that is out is a restore, which is a different decision.
+                if (ship.State != DrydockShipState.Stored)
+                    return DrydockBerthResult.WrongState;
+
+                var berth = await db.DrydockBerth.AsNoTracking()
+                    .SingleOrDefaultAsync(b => b.BerthId == target && b.OwnerUserId == ship.OwnerUserId, token);
+
+                if (berth == null)
+                    return DrydockBerthResult.NotFound;
+
+                if (!Fits(ship.SizeClass, berth.MaxSizeClass))
+                    return DrydockBerthResult.BerthTooSmall;
+
+                if (await db.DrydockShip.AnyAsync(s => s.BerthId == target && s.ShipGuid != shipGuid, token))
+                    return DrydockBerthResult.BerthOccupied;
+
+                ship.LastBerthId = ship.BerthId;
+                ship.BerthId = target;
+            }
+            else
+            {
+                if (ship.BerthId == null)
+                    return DrydockBerthResult.WrongState;
+
+                ship.LastBerthId = ship.BerthId;
+                ship.BerthId = null;
+            }
+
+            ship.UpdatedAt = now;
+
+            db.DrydockAudit.Add(new DrydockAudit
+            {
+                ShipGuid = shipGuid,
+                ShipName = ship.ShipName,
+                BerthId = targetBerthId ?? ship.LastBerthId,
+                Action = DrydockAuditAction.BerthMove,
+                ActorUserId = actorUserId,
+                SubjectUserId = ship.OwnerUserId,
+                Revision = ship.CurrentRevision,
+                RoundId = roundId,
+                Reason = reason,
+                CreatedAt = now,
+            });
+
+            try
+            {
+                await db.SaveChangesAsync(token);
+                await tx.CommitAsync(token);
+            }
+            catch (DbUpdateException)
+            {
+                return DrydockBerthResult.Conflict;
+            }
+
+            return DrydockBerthResult.Success;
+        }, ct);
+    }
+
+    /// <summary>
+    /// Moves a stored ship to another player, into a free berth of theirs that fits, in one
+    /// transaction with its audit row. The composite foreign key on the ship row is what makes
+    /// updating the owner without the berth impossible, here and everywhere else.
+    /// </summary>
+    public Task<(DrydockBerthResult Outcome, int? BerthId)> TryTransferShip(
+        Guid shipGuid,
+        Guid fromUserId,
+        Guid toUserId,
+        int? roundId,
+        string? reason,
+        CancellationToken ct = default)
+    {
+        return _db.RunTriadDbCommand<(DrydockBerthResult, int?)>(async (db, token) =>
+        {
+            await using var tx = await db.Database.BeginTransactionAsync(token);
+
+            var ship = await db.DrydockShip.SingleOrDefaultAsync(s => s.ShipGuid == shipGuid, token);
+            if (ship == null || ship.OwnerUserId != fromUserId)
+                return (DrydockBerthResult.NotFound, null);
+
+            if (fromUserId == toUserId || ship.State != DrydockShipState.Stored || ship.Investigating)
+                return (DrydockBerthResult.WrongState, null);
+
+            var (outcome, pick) = await PickFreeBerth(db, toUserId, ship.SizeClass, null, new HashSet<int>(), token);
+            if (outcome != DrydockBerthResult.Success)
+                return (outcome, null);
+
+            var now = DateTime.UtcNow;
+            ship.OwnerUserId = toUserId;
+            ship.BerthId = pick;
+            ship.LastBerthId = null;
+            ship.UpdatedAt = now;
+
+            db.DrydockAudit.Add(new DrydockAudit
+            {
+                ShipGuid = shipGuid,
+                ShipName = ship.ShipName,
+                BerthId = pick,
+                Action = DrydockAuditAction.Transfer,
+                ActorUserId = fromUserId,
+                SubjectUserId = toUserId,
+                Revision = ship.CurrentRevision,
+                RoundId = roundId,
+                Reason = reason,
+                CreatedAt = now,
+            });
+
+            try
+            {
+                await db.SaveChangesAsync(token);
+                await tx.CommitAsync(token);
+            }
+            catch (DbUpdateException)
+            {
+                return (DrydockBerthResult.Conflict, null);
+            }
+
+            return (DrydockBerthResult.Success, pick);
+        }, ct);
+    }
+
+    /// <summary>
+    /// Admin: returns a ship that is out or held to the drydock, into a named berth. Whether the
+    /// ship is really lost is the admin's call. The one thing this cannot know is whether a live
+    /// grid still carries the id, and the system checks that before calling.
+    /// </summary>
+    public Task<DrydockBerthResult> TryRestoreShip(
+        Guid shipGuid,
+        int berthId,
+        Guid? actorUserId,
+        int? roundId,
+        string reason,
+        CancellationToken ct = default)
+    {
+        return _db.RunTriadDbCommand(async (db, token) =>
+        {
+            await using var tx = await db.Database.BeginTransactionAsync(token);
+
+            var ship = await db.DrydockShip.SingleOrDefaultAsync(s => s.ShipGuid == shipGuid, token);
+            if (ship == null)
+                return DrydockBerthResult.NotFound;
+
+            if (ship.State == DrydockShipState.Stored)
+                return DrydockBerthResult.WrongState;
+
+            var berth = await db.DrydockBerth.AsNoTracking()
+                .SingleOrDefaultAsync(b => b.BerthId == berthId && b.OwnerUserId == ship.OwnerUserId, token);
+
+            if (berth == null)
+                return DrydockBerthResult.NotFound;
+
+            if (!Fits(ship.SizeClass, berth.MaxSizeClass))
+                return DrydockBerthResult.BerthTooSmall;
+
+            if (await db.DrydockShip.AnyAsync(s => s.BerthId == berthId && s.ShipGuid != shipGuid, token))
+                return DrydockBerthResult.BerthOccupied;
+
+            var now = DateTime.UtcNow;
+            ship.State = DrydockShipState.Stored;
+            ship.StateChangedAt = now;
+            ship.CheckedOutRoundId = null;
+            ship.LastBerthId = ship.BerthId;
+            ship.BerthId = berthId;
+            ship.UpdatedAt = now;
+
+            db.DrydockAudit.Add(new DrydockAudit
+            {
+                ShipGuid = shipGuid,
+                ShipName = ship.ShipName,
+                BerthId = berthId,
+                Action = DrydockAuditAction.Restore,
+                ActorUserId = actorUserId,
+                SubjectUserId = ship.OwnerUserId,
+                Revision = ship.CurrentRevision,
+                RoundId = roundId,
+                Reason = reason,
+                CreatedAt = now,
+            });
+
+            try
+            {
+                await db.SaveChangesAsync(token);
+                await tx.CommitAsync(token);
+            }
+            catch (DbUpdateException)
+            {
+                return DrydockBerthResult.Conflict;
+            }
+
+            return DrydockBerthResult.Success;
+        }, ct);
+    }
 }
 
 /// <summary>
@@ -335,6 +987,21 @@ public sealed class DrydockRevisionRequest
     public string? VesselProto { get; init; }
 
     public string? SizeClass { get; init; }
+
+    /// <summary>
+    /// Name the berth rather than letting the store pick one. The import bridge and admin paths
+    /// use it; a player store leaves it null. It still has to be the owner's, free, and large
+    /// enough, and the store checks all three.
+    /// </summary>
+    public int? BerthId { get; init; }
+
+    /// <summary>
+    /// Mark the ship stored in the same transaction that files the revision. The pipeline leaves
+    /// this false and calls <see cref="DrydockStore.MarkStored"/> once the grid is despawned, so
+    /// a store that is refused after the write never leaves a retrievable row behind a live ship.
+    /// Callers with no live grid, such as tests filing documents directly, set it.
+    /// </summary>
+    public bool MarkStored { get; init; }
 
     public required DrydockRevisionKind Kind { get; init; }
 

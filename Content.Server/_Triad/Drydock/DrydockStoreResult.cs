@@ -31,4 +31,21 @@ public enum DrydockStoreResult : byte
     /// bad revisions can be stopped from writing any more without grounding the fleet.
     /// </summary>
     Disabled,
+
+    /// <summary>
+    /// The owner has no free berth. Checked before the first mutation so a full garage refuses
+    /// cheaply, and again inside the filing transaction, where the unique index on the berth column
+    /// makes the answer final. A store that loses that race reports this too: nothing was filed,
+    /// and the fix is the same.
+    /// </summary>
+    NoBerth,
+
+    /// <summary>
+    /// Free berths exist and none accepts a hull of this class. Blocking on purpose: unlike drift,
+    /// the player grew the hull and can upgrade or buy a berth at the same terminal.
+    /// </summary>
+    BerthTooSmall,
+
+    /// <summary>A store of this grid is already in flight. The second request does nothing.</summary>
+    InProgress,
 }

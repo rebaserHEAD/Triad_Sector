@@ -995,6 +995,10 @@ namespace Content.Server.Database.Migrations.Postgres
                         .HasColumnType("uuid")
                         .HasColumnName("actor_user_id");
 
+                    b.Property<int?>("BerthId")
+                        .HasColumnType("integer")
+                        .HasColumnName("berth_id");
+
                     b.Property<DateTime>("CreatedAt")
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("created_at");
@@ -1011,7 +1015,7 @@ namespace Content.Server.Database.Migrations.Postgres
                         .HasColumnType("integer")
                         .HasColumnName("round_id");
 
-                    b.Property<Guid>("ShipGuid")
+                    b.Property<Guid?>("ShipGuid")
                         .HasColumnType("uuid")
                         .HasColumnName("ship_guid");
 
@@ -1028,9 +1032,59 @@ namespace Content.Server.Database.Migrations.Postgres
 
                     b.HasIndex("ActorUserId");
 
+                    b.HasIndex("SubjectUserId");
+
                     b.HasIndex("ShipGuid", "CreatedAt");
 
                     b.ToTable("drydock_audit", (string)null);
+                });
+
+            modelBuilder.Entity("Content.Server.Database.DrydockBerth", b =>
+                {
+                    b.Property<int>("BerthId")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer")
+                        .HasColumnName("berth_id");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("BerthId"));
+
+                    b.Property<int>("Kind")
+                        .HasColumnType("integer")
+                        .HasColumnName("kind");
+
+                    b.Property<string>("MaxSizeClass")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("max_size_class");
+
+                    b.Property<Guid>("OwnerUserId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("owner_user_id");
+
+                    b.Property<int>("PricePaid")
+                        .HasColumnType("integer")
+                        .HasColumnName("price_paid");
+
+                    b.Property<DateTime>("PurchasedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("purchased_at");
+
+                    b.Property<int?>("PurchasedRoundId")
+                        .HasColumnType("integer")
+                        .HasColumnName("purchased_round_id");
+
+                    b.HasKey("BerthId")
+                        .HasName("PK_drydock_berth");
+
+                    b.HasAlternateKey("BerthId", "OwnerUserId")
+                        .HasName("ak_drydock_berth_berth_id_owner_user_id");
+
+                    b.HasIndex("OwnerUserId");
+
+                    b.HasIndex("PurchasedRoundId")
+                        .HasDatabaseName("IX_drydock_berth_purchased_round_id");
+
+                    b.ToTable("drydock_berth", (string)null);
                 });
 
             modelBuilder.Entity("Content.Server.Database.DrydockBlob", b =>
@@ -1146,6 +1200,10 @@ namespace Content.Server.Database.Migrations.Postgres
                         .HasColumnType("text")
                         .HasColumnName("admin_notes");
 
+                    b.Property<int?>("BerthId")
+                        .HasColumnType("integer")
+                        .HasColumnName("berth_id");
+
                     b.Property<int?>("CheckedOutRoundId")
                         .HasColumnType("integer")
                         .HasColumnName("checked_out_round_id");
@@ -1161,6 +1219,10 @@ namespace Content.Server.Database.Migrations.Postgres
                     b.Property<bool>("Investigating")
                         .HasColumnType("boolean")
                         .HasColumnName("investigating");
+
+                    b.Property<int?>("LastBerthId")
+                        .HasColumnType("integer")
+                        .HasColumnName("last_berth_id");
 
                     b.Property<Guid>("OwnerUserId")
                         .HasColumnType("uuid")
@@ -1194,10 +1256,18 @@ namespace Content.Server.Database.Migrations.Postgres
                     b.HasKey("ShipGuid")
                         .HasName("PK_drydock_ship");
 
+                    b.HasIndex("BerthId")
+                        .IsUnique();
+
                     b.HasIndex("CheckedOutRoundId")
                         .HasDatabaseName("IX_drydock_ship_checked_out_round_id");
 
+                    b.HasIndex("LastBerthId")
+                        .HasDatabaseName("IX_drydock_ship_last_berth_id");
+
                     b.HasIndex("OwnerUserId");
+
+                    b.HasIndex("BerthId", "OwnerUserId");
 
                     b.HasIndex("State", "StateChangedAt");
 
@@ -2713,6 +2783,26 @@ namespace Content.Server.Database.Migrations.Postgres
                     b.Navigation("ConsentSettings");
                 });
 
+            modelBuilder.Entity("Content.Server.Database.DrydockBerth", b =>
+                {
+                    b.HasOne("Content.Server.Database.Player", "Owner")
+                        .WithMany()
+                        .HasForeignKey("OwnerUserId")
+                        .HasPrincipalKey("UserId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired()
+                        .HasConstraintName("FK_drydock_berth_player_owner_id");
+
+                    b.HasOne("Content.Server.Database.Round", "PurchasedRound")
+                        .WithMany()
+                        .HasForeignKey("PurchasedRoundId")
+                        .HasConstraintName("FK_drydock_berth_round_purchased_round_id");
+
+                    b.Navigation("Owner");
+
+                    b.Navigation("PurchasedRound");
+                });
+
             modelBuilder.Entity("Content.Server.Database.DrydockBlob", b =>
                 {
                     b.HasOne("Content.Server.Database.DrydockRevision", "RevisionRow")
@@ -2760,6 +2850,12 @@ namespace Content.Server.Database.Migrations.Postgres
                         .HasForeignKey("CheckedOutRoundId")
                         .HasConstraintName("FK_drydock_ship_round_checked_out_round_id");
 
+                    b.HasOne("Content.Server.Database.DrydockBerth", "LastBerth")
+                        .WithMany()
+                        .HasForeignKey("LastBerthId")
+                        .OnDelete(DeleteBehavior.SetNull)
+                        .HasConstraintName("FK_drydock_ship_drydock_berth_last_berth_id");
+
                     b.HasOne("Content.Server.Database.Player", "Owner")
                         .WithMany()
                         .HasForeignKey("OwnerUserId")
@@ -2768,7 +2864,18 @@ namespace Content.Server.Database.Migrations.Postgres
                         .IsRequired()
                         .HasConstraintName("FK_drydock_ship_player_owner_id");
 
+                    b.HasOne("Content.Server.Database.DrydockBerth", "Berth")
+                        .WithMany()
+                        .HasForeignKey("BerthId", "OwnerUserId")
+                        .HasPrincipalKey("BerthId", "OwnerUserId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .HasConstraintName("FK_drydock_ship_drydock_berth_berth_id");
+
+                    b.Navigation("Berth");
+
                     b.Navigation("CheckedOutRound");
+
+                    b.Navigation("LastBerth");
 
                     b.Navigation("Owner");
                 });

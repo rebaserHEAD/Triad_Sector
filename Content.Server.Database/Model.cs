@@ -61,6 +61,7 @@ namespace Content.Server.Database
         public DbSet<DrydockRevision> DrydockRevision { get; set; } = default!;
         public DbSet<DrydockBlob>     DrydockBlob     { get; set; } = default!;
         public DbSet<DrydockAudit>    DrydockAudit    { get; set; } = default!;
+        public DbSet<DrydockBerth>    DrydockBerth    { get; set; } = default!;
         // End Triad
         // Triad: market data. Shapes and reasoning live in Model.Market.cs.
         public DbSet<MarketTransaction>         MarketTransaction       { get; set; } = default!;

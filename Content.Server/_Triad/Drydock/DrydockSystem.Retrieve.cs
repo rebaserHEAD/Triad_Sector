@@ -30,6 +30,7 @@ using Content.Shared.Shuttles.Components;
 using Content.Shared.Station.Components;
 using Robust.Server.Player;
 using Robust.Shared.Map;
+using Robust.Shared.Network;
 using Robust.Shared.Prototypes;
 using Robust.Shared.Timing;
 
@@ -89,6 +90,14 @@ public sealed partial class DrydockSystem
         if (current == null || current.Ship.OwnerUserId != ownerUserId)
             return null;
 
+        // The console hides a ship under investigation; this is what actually refuses it. An
+        // investigation is an admin's decision and a forged retrieve request must not walk past it.
+        if (current.Ship.Investigating)
+        {
+            Log.Info($"Drydock: retrieve of {shipId} refused, the ship is under investigation.");
+            return null;
+        }
+
         // Claim before materializing. A ship that is checked out or held loses here.
         if (!await _store.TrySetState(shipId, DrydockShipState.Stored, DrydockShipState.CheckedOut,
                 DrydockAuditAction.Retrieve, ownerUserId, roundId, null))
@@ -97,6 +106,7 @@ public sealed partial class DrydockSystem
         }
 
         var claimed = true;
+        EntityUid? presented = null;
         try
         {
             var keepBlobs = _cfg.GetCVar(TriadCCVars.DrydockKeepBlobs);
@@ -128,8 +138,25 @@ public sealed partial class DrydockSystem
                     continue;
                 }
 
+                // A fallback is a retrieve of an older state than the one the player last put
+                // away, and the newer state is still on disk for now. It goes on the timeline so
+                // an admin can see it before pruning takes the skipped document, because a
+                // fallback followed by a few ordinary stores is how a latest state disappears.
                 if (revision != current.Ship.CurrentRevision)
+                {
                     Log.Warning($"Drydock: {shipId} retrieved from fallback revision {revision}; revision {current.Ship.CurrentRevision} is unreadable.");
+                    await _store.WriteAudit(new DrydockAudit
+                    {
+                        ShipGuid = shipId,
+                        ShipName = current.Ship.ShipName,
+                        BerthId = current.Ship.BerthId,
+                        Action = DrydockAuditAction.Fallback,
+                        ActorUserId = ownerUserId,
+                        Revision = revision,
+                        RoundId = roundId,
+                        Reason = $"revision {current.Ship.CurrentRevision} would not load; retrieved from {revision}",
+                    });
+                }
 
                 using var reader = new StreamReader(new MemoryStream(yamlBytes), Encoding.UTF8);
 
@@ -174,7 +201,7 @@ public sealed partial class DrydockSystem
                         Log.Warning($"Drydock: {shipId} found no docking config at {ToPrettyString(stationUid)}; presented by proximity.");
 
                     claimed = false; // The claim is now correct: the ship really is out.
-                    return grid;
+                    presented = grid;
                 }
                 catch
                 {
@@ -184,10 +211,15 @@ public sealed partial class DrydockSystem
                     Del(grid);
                     throw;
                 }
+
+                break;
             }
 
-            Log.Error($"Drydock: {shipId} has no revision that verifies; retrieve refused.");
-            return null;
+            if (presented == null)
+            {
+                Log.Error($"Drydock: {shipId} has no revision that verifies; retrieve refused.");
+                return null;
+            }
         }
         finally
         {
@@ -197,6 +229,22 @@ public sealed partial class DrydockSystem
                     DrydockAuditAction.Release, null, roundId, "retrieve failed");
             }
         }
+
+        // The berth empties only now, after the ship is docked and the claim is confirmed, and
+        // never inside the claim: a failure after the claim releases the state without ever having
+        // to re-seat a berth somebody else may have taken. If this write fails the ship is out and
+        // still shown in its slot, which its next store heals and an admin move can fix; a ship
+        // that is already docked is not scrapped over a bookkeeping column.
+        try
+        {
+            await _store.VacateBerth(shipId);
+        }
+        catch (Exception e)
+        {
+            Log.Error($"Drydock: {shipId} is out but its berth could not be vacated: {e.Message}");
+        }
+
+        return presented;
     }
 
     /// <summary>
@@ -241,7 +289,7 @@ public sealed partial class DrydockSystem
         // nor the purchase event, and the repair system subscribes only to the latter.
         _shipRepair.GenerateRepairData(grid);
 
-        RefreshShipOwnership(grid);
+        RefreshShipOwnership(grid, record);
         RecreateStation(grid, record);
     }
 
@@ -382,16 +430,18 @@ public sealed partial class DrydockSystem
     }
 
     /// <summary>
-    /// Ownership rides the document, but its last-status timestamp is round-scoped absolute time,
-    /// and a previous round's clock would feed the offline-deletion timer nonsense. Refresh it, and
-    /// re-derive whether the owner is online from the live session list rather than trusting a
-    /// stored flag about a round that has ended.
+    /// The row is authoritative for ownership, and this is where the grid learns it. The
+    /// ownership component rides the document, so without this a transferred ship would come back
+    /// stamped with its previous owner, the console would refuse the new owner's store as "not
+    /// yours", and a store by the old owner would file the row back under them. Its last-status
+    /// timestamp is round-scoped absolute time too, and a previous round's clock would feed the
+    /// offline-deletion timer nonsense, so that is re-derived here as well.
     /// </summary>
-    private void RefreshShipOwnership(EntityUid grid)
+    private void RefreshShipOwnership(EntityUid grid, DrydockShip record)
     {
-        if (!TryComp<ShipOwnershipComponent>(grid, out var ownership))
-            return;
+        var ownership = EnsureComp<ShipOwnershipComponent>(grid);
 
+        ownership.OwnerUserId = new NetUserId(record.OwnerUserId);
         ownership.IsOwnerOnline = _player.TryGetSessionById(ownership.OwnerUserId, out _);
         ownership.LastStatusChangeTime = _timing.CurTime;
         Dirty(grid, ownership);

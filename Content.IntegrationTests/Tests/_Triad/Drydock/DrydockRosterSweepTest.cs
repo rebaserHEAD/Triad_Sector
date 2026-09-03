@@ -14,6 +14,7 @@ using Content.Server.Station.Components;
 using Content.Server.Station.Systems;
 using Content.Shared._NF.Shipyard.Prototypes;
 using Content.Shared._Triad.CCVar;
+using Content.Shared._Triad.ShipSize;
 using Robust.Shared.Configuration;
 using Robust.Shared.EntitySerialization.Systems;
 using Robust.Shared.GameObjects;
@@ -74,6 +75,12 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
 
             var owner = Guid.NewGuid();
             await InsertPlayer(db, owner);
+
+            // Every vessel is stored and retrieved in turn, so one berth would do; three keep a
+            // single failed retrieve from turning every later store into a capacity refusal.
+            var store = server.ResolveDependency<DrydockStore>();
+            for (var i = 0; i < 3; i++)
+                await store.AddBerth(owner, ShipSizeClass.SuperCapital, DrydockBerthKind.Granted, 0, null, null);
 
             var map = await pair.CreateTestMap();
 

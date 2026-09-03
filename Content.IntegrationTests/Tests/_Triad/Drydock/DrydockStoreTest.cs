@@ -8,6 +8,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using Content.Server._Triad.Drydock;
 using Content.Server.Database;
+using Content.Shared._Triad.ShipSize;
 using Microsoft.EntityFrameworkCore;
 
 namespace Content.IntegrationTests.Tests._Triad.Drydock
@@ -41,13 +42,15 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             var owner = Guid.NewGuid();
             var shipId = Guid.NewGuid();
             await InsertPlayer(db, owner);
+            await store.AddBerth(owner, ShipSizeClass.Cutter, DrydockBerthKind.Granted, 0, null, null);
 
             var firstBlob = Encoding.UTF8.GetBytes("first revision document");
             var secondBlob = Encoding.UTF8.GetBytes("second revision document");
 
             // Keep two blobs, so the third store below is what proves pruning happens at all.
-            var firstRevision = await store.FileRevision(Request(shipId, owner, "Kestrel"), firstBlob, keepBlobs: 2);
-            Assert.That(firstRevision, Is.EqualTo(1), "The first revision of a ship is 1.");
+            var first = await store.FileRevision(Request(shipId, owner, "Kestrel"), firstBlob, keepBlobs: 2);
+            Assert.That(first.Outcome, Is.EqualTo(DrydockBerthResult.Success));
+            Assert.That(first.Revision, Is.EqualTo(1), "The first revision of a ship is 1.");
 
             var loaded = await store.LoadCurrent(shipId);
             Assert.That(loaded, Is.Not.Null);
@@ -61,8 +64,8 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             });
 
             // A second store lands as a new revision on the same hull rather than a second hull.
-            var secondRevision = await store.FileRevision(Request(shipId, owner, "Kestrel II"), secondBlob, keepBlobs: 2);
-            Assert.That(secondRevision, Is.EqualTo(2));
+            var second = await store.FileRevision(Request(shipId, owner, "Kestrel II"), secondBlob, keepBlobs: 2);
+            Assert.That(second.Revision, Is.EqualTo(2));
 
             loaded = await store.LoadCurrent(shipId);
             Assert.Multiple(() =>
@@ -129,6 +132,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             var owner = Guid.NewGuid();
             var shipId = Guid.NewGuid();
             await InsertPlayer(db, owner);
+            await store.AddBerth(owner, ShipSizeClass.Cutter, DrydockBerthKind.Granted, 0, null, null);
             await store.FileRevision(Request(shipId, owner, "Harrier"), Encoding.UTF8.GetBytes("doc"), keepBlobs: 2);
 
             // The retrieve gate: only a stored ship can be checked out, and the check and the move
@@ -173,8 +177,9 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             OwnerUserId = owner,
             ShipName = name,
             VesselProto = "TestVessel",
-            SizeClass = "Small",
+            SizeClass = nameof(ShipSizeClass.Cutter),
             Kind = DrydockRevisionKind.PlayerStore,
+            MarkStored = true,
             ActorUserId = owner,
             CreatedRoundId = null,
             EngineFormatVer = 7,

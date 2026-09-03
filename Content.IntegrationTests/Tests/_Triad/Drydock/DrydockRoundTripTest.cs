@@ -19,7 +19,9 @@ using Content.Server.Station.Systems;
 using Content.Server.Shuttles.Components;
 using Content.Server.Wires;
 using Content.Shared._NF.Market;
+using Content.Shared._NF.Shipyard.Components;
 using Content.Shared._Triad.CCVar;
+using Content.Shared._Triad.ShipSize;
 using Content.Shared.Atmos;
 using Content.Shared.Damage;
 using Content.Shared.Damage.Prototypes;
@@ -29,10 +31,13 @@ using Content.Shared.Lathe;
 using Content.Shared.NodeContainer;
 using Content.Shared.Research.Components;
 using Content.Shared.Research.Prototypes;
+using Microsoft.EntityFrameworkCore;
 using Robust.Shared.Configuration;
 using Robust.Shared.GameObjects;
+using Robust.Shared.Log;
 using Robust.Shared.Map;
 using Robust.Shared.Maths;
+using Robust.Shared.Network;
 using Robust.Shared.Prototypes;
 
 namespace Content.IntegrationTests.Tests._Triad.Drydock
@@ -81,6 +86,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
 
             var owner = Guid.NewGuid();
             await InsertPlayer(db, owner);
+            await server.ResolveDependency<DrydockStore>().AddBerth(owner, ShipSizeClass.SuperCapital, DrydockBerthKind.Granted, 0, null, null);
 
             var (station, shipGrid, airlock) = await BuildShipAndStation(pair);
 
@@ -136,6 +142,158 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
         }
 
         /// <summary>
+        /// The berth is a parking spot: a successful retrieve empties it, and only once the ship is
+        /// really out. A retrieve that fails after the claim leaves the berth exactly as it was, so
+        /// the release never has to re-seat a berth another store may have taken in the meantime.
+        /// The failure is induced by corrupting the stored document in place, which the ladder
+        /// catches after the claim and before anything is materialized.
+        /// </summary>
+        [Test]
+        public async Task ARetrieveVacatesTheBerthOnlyWhenItSucceeds()
+        {
+            await using var pair = await PoolManager.GetServerClient();
+            var server = pair.Server;
+            var entMan = server.EntMan;
+
+            var db = server.ResolveDependency<IServerDbManager>();
+            var store = server.ResolveDependency<DrydockStore>();
+            var drydock = server.System<DrydockSystem>();
+
+            var owner = Guid.NewGuid();
+            await InsertPlayer(db, owner);
+            var berth = await store.AddBerth(owner, ShipSizeClass.SuperCapital, DrydockBerthKind.Granted, 0, null, null);
+
+            var (station, shipGrid, _) = await BuildShipAndStation(pair);
+
+            var (result, shipId) = await RunOnServer(pair, () => drydock.TryStoreShip(shipGrid, owner, null));
+            Assert.That(result, Is.EqualTo(DrydockStoreResult.Success));
+
+            var seated = (await store.LoadCurrent(shipId!.Value))!.Ship;
+            Assert.That(seated.BerthId, Is.EqualTo(berth), "A stored ship sits in the berth the store found for it.");
+
+            // Break the only document, so the retrieve claims the row, finds nothing that verifies,
+            // and releases. The two error lines that produces are the ladder doing its job.
+            var original = await ReadBlobs(db, shipId.Value);
+            await WriteBlobs(db, shipId.Value, new byte[] { 1, 2, 3 });
+
+            var failureLevel = pair.ServerLogHandler.FailureLevel;
+            pair.ServerLogHandler.FailureLevel = LogLevel.Fatal;
+            var refused = await RunOnServer(pair, () => drydock.TryRetrieveShip(shipId.Value, owner, station, null));
+            pair.ServerLogHandler.FailureLevel = failureLevel;
+
+            Assert.That(refused, Is.Null, "A document that fails its checksum must not come back as a ship.");
+
+            var afterRefusal = (await store.LoadCurrent(shipId.Value))!.Ship;
+            Assert.Multiple(() =>
+            {
+                Assert.That(afterRefusal.State, Is.EqualTo(DrydockShipState.Stored), "A failed retrieve releases the claim.");
+                Assert.That(afterRefusal.BerthId, Is.EqualTo(berth), "A failed retrieve leaves the berth exactly as it was.");
+            });
+
+            // Mend it and bring it out for real.
+            await WriteBlobs(db, shipId.Value, original);
+            var retrieved = await RunOnServer(pair, () => drydock.TryRetrieveShip(shipId.Value, owner, station, null));
+            Assert.That(retrieved, Is.Not.Null);
+            await pair.RunTicksSync(5);
+
+            var afterRetrieve = (await store.LoadCurrent(shipId.Value))!.Ship;
+            Assert.Multiple(() =>
+            {
+                Assert.That(afterRetrieve.State, Is.EqualTo(DrydockShipState.CheckedOut));
+                Assert.That(afterRetrieve.BerthId, Is.Null, "The ship is out, so its slot is empty as far as the player can see.");
+                Assert.That(afterRetrieve.LastBerthId, Is.EqualTo(berth), "The slot it came out of is remembered, so it goes back there.");
+            });
+
+            var slots = await store.GetBerths(owner);
+            Assert.That(slots.Single(s => s.Berth.BerthId == berth).Occupant, Is.Null);
+
+            // And back in, to the same slot.
+            var (again, sameShip) = await RunOnServer(pair, () => drydock.TryStoreShip(retrieved!.Value, owner, null));
+            Assert.Multiple(() =>
+            {
+                Assert.That(again, Is.EqualTo(DrydockStoreResult.Success));
+                Assert.That(sameShip, Is.EqualTo(shipId), "A re-store files against the same hull.");
+            });
+
+            var reseated = (await store.LoadCurrent(shipId.Value))!.Ship;
+            Assert.That(reseated.BerthId, Is.EqualTo(berth));
+
+            await pair.CleanReturnAsync();
+        }
+
+        /// <summary>
+        /// The row is authoritative for ownership and the grid learns it at retrieve. Without the
+        /// re-stamp a transferred ship comes back carrying its previous owner, the console refuses
+        /// the new owner's store as "not yours", and the old owner could file it back under
+        /// themselves. This is the round trip that proves the loop is closed.
+        /// </summary>
+        [Test]
+        public async Task ATransferredShipComesBackStampedForItsNewOwner()
+        {
+            await using var pair = await PoolManager.GetServerClient();
+            var server = pair.Server;
+            var entMan = server.EntMan;
+
+            var db = server.ResolveDependency<IServerDbManager>();
+            var store = server.ResolveDependency<DrydockStore>();
+            var drydock = server.System<DrydockSystem>();
+
+            var seller = Guid.NewGuid();
+            var buyer = Guid.NewGuid();
+            await InsertPlayer(db, seller);
+            await InsertPlayer(db, buyer);
+            await store.AddBerth(seller, ShipSizeClass.SuperCapital, DrydockBerthKind.Granted, 0, null, null);
+            await store.AddBerth(buyer, ShipSizeClass.SuperCapital, DrydockBerthKind.Granted, 0, null, null);
+
+            var (station, shipGrid, _) = await BuildShipAndStation(pair);
+            await server.WaitPost(() => entMan.EnsureComponent<ShipOwnershipComponent>(shipGrid).OwnerUserId = new NetUserId(seller));
+
+            var (result, shipId) = await RunOnServer(pair, () => drydock.TryStoreShip(shipGrid, seller, null));
+            Assert.That(result, Is.EqualTo(DrydockStoreResult.Success));
+
+            var (moved, _) = await store.TryTransferShip(shipId!.Value, seller, buyer, null, "sale");
+            Assert.That(moved, Is.EqualTo(DrydockBerthResult.Success));
+
+            // The previous owner can no longer bring it out; the new one can.
+            var refused = await RunOnServer(pair, () => drydock.TryRetrieveShip(shipId.Value, seller, station, null));
+            Assert.That(refused, Is.Null, "A ship that changed hands is not the previous owner's to retrieve.");
+
+            var retrieved = await RunOnServer(pair, () => drydock.TryRetrieveShip(shipId.Value, buyer, station, null));
+            Assert.That(retrieved, Is.Not.Null);
+            await pair.RunTicksSync(5);
+
+            await server.WaitAssertion(() =>
+            {
+                var ownership = entMan.GetComponent<ShipOwnershipComponent>(retrieved!.Value);
+                Assert.That(ownership.OwnerUserId.UserId, Is.EqualTo(buyer),
+                    "The grid must carry the row's owner, or the console refuses the buyer's store and the seller's store files it back under them.");
+            });
+
+            await pair.CleanReturnAsync();
+        }
+
+        private static Task<byte[]> ReadBlobs(IServerDbManager db, Guid shipId)
+        {
+            return db.RunTriadDbCommand(async (context, token) =>
+            {
+                var row = await context.DrydockBlob.AsNoTracking().SingleAsync(b => b.ShipGuid == shipId, token);
+                return row.Blob;
+            }, CancellationToken.None);
+        }
+
+        private static Task WriteBlobs(IServerDbManager db, Guid shipId, byte[] bytes)
+        {
+            return db.RunTriadDbCommand(async (context, token) =>
+            {
+                var rows = await context.DrydockBlob.Where(b => b.ShipGuid == shipId).ToListAsync(token);
+                foreach (var row in rows)
+                    row.Blob = bytes;
+
+                await context.SaveChangesAsync(token);
+            }, CancellationToken.None);
+        }
+
+        /// <summary>
         /// Damage is the second reason a ship needs a fidelity layer at all, and it is a different
         /// reason from the first. <c>DamageableComponent.Damage</c> is not unserializable, it is
         /// declared read-only to the serializer, so it is never written and a shot-up hull comes
@@ -156,6 +314,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
 
             var owner = Guid.NewGuid();
             await InsertPlayer(db, owner);
+            await server.ResolveDependency<DrydockStore>().AddBerth(owner, ShipSizeClass.SuperCapital, DrydockBerthKind.Granted, 0, null, null);
 
             var (station, shipGrid, airlock) = await BuildShipAndStation(pair);
 
@@ -223,6 +382,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
 
             var owner = Guid.NewGuid();
             await InsertPlayer(db, owner);
+            await server.ResolveDependency<DrydockStore>().AddBerth(owner, ShipSizeClass.SuperCapital, DrydockBerthKind.Granted, 0, null, null);
 
             // The airlock the wires assertion uses carries DeviceNetwork too, so one entity covers
             // both steps.
@@ -277,6 +437,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
 
             var owner = Guid.NewGuid();
             await InsertPlayer(db, owner);
+            await server.ResolveDependency<DrydockStore>().AddBerth(owner, ShipSizeClass.SuperCapital, DrydockBerthKind.Granted, 0, null, null);
 
             var (station, shipGrid, _) = await BuildShipAndStation(pair);
 
@@ -350,6 +511,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
 
             var owner = Guid.NewGuid();
             await InsertPlayer(db, owner);
+            await server.ResolveDependency<DrydockStore>().AddBerth(owner, ShipSizeClass.SuperCapital, DrydockBerthKind.Granted, 0, null, null);
 
             var (station, shipGrid, _) = await BuildShipAndStation(pair);
 
@@ -423,6 +585,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
 
             var owner = Guid.NewGuid();
             await InsertPlayer(db, owner);
+            await server.ResolveDependency<DrydockStore>().AddBerth(owner, ShipSizeClass.SuperCapital, DrydockBerthKind.Granted, 0, null, null);
 
             var (station, shipGrid, _) = await BuildShipAndStation(pair);
 
@@ -505,6 +668,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
 
             var owner = Guid.NewGuid();
             await InsertPlayer(db, owner);
+            await server.ResolveDependency<DrydockStore>().AddBerth(owner, ShipSizeClass.SuperCapital, DrydockBerthKind.Granted, 0, null, null);
 
             var (station, shipGrid, _) = await BuildShipAndStation(pair);
 
@@ -579,6 +743,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
 
             var owner = Guid.NewGuid();
             await InsertPlayer(db, owner);
+            await server.ResolveDependency<DrydockStore>().AddBerth(owner, ShipSizeClass.SuperCapital, DrydockBerthKind.Granted, 0, null, null);
 
             var (station, shipGrid, _) = await BuildShipAndStation(pair);
 

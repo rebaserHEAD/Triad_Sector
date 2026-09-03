@@ -15,6 +15,7 @@ using Content.Server.Shuttles.Components;
 using Content.Shared._NF.Shipyard;
 using Content.Shared._NF.Shipyard.Components;
 using Content.Shared._Triad.CCVar;
+using Content.Shared._Triad.ShipSize;
 using Content.Shared.Containers.ItemSlots;
 using Robust.Server.Player;
 using Robust.Shared.Configuration;
@@ -62,6 +63,10 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             var drydockStore = server.ResolveDependency<DrydockStore>();
 
             var session = playerMan.Sessions.First();
+
+            // A store needs a berth on the operator's account; the console is not where berths
+            // are bought, so grant one.
+            await server.ResolveDependency<DrydockStore>().AddBerth(session.UserId.UserId, ShipSizeClass.SuperCapital, DrydockBerthKind.Granted, 0, null, null);
 
             var (station, stationGrid, ship, console, consoleComp, card, operatorEnt) = await BuildConsoleAndShip(pair, session.UserId);
 
@@ -166,6 +171,10 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
 
             var session = playerMan.Sessions.First();
 
+            // A store needs a berth on the operator's account; the console is not where berths
+            // are bought, so grant one.
+            await server.ResolveDependency<DrydockStore>().AddBerth(session.UserId.UserId, ShipSizeClass.SuperCapital, DrydockBerthKind.Granted, 0, null, null);
+
             var (station, stationGrid, ship, console, consoleComp, card, operatorEnt) = await BuildConsoleAndShip(pair, session.UserId);
 
             var stored = await RunOnServer(pair,
@@ -239,6 +248,10 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
 
             var session = playerMan.Sessions.First();
 
+            // A store needs a berth on the operator's account; the console is not where berths
+            // are bought, so grant one.
+            await server.ResolveDependency<DrydockStore>().AddBerth(session.UserId.UserId, ShipSizeClass.SuperCapital, DrydockBerthKind.Granted, 0, null, null);
+
             // The ship belongs to somebody who is not at the console.
             var absentOwner = new Robust.Shared.Network.NetUserId(Guid.NewGuid());
             var (station, stationGrid, ship, console, consoleComp, card, operatorEnt) = await BuildConsoleAndShip(pair, absentOwner);
@@ -282,6 +295,10 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
 
             var map = await pair.CreateTestMap();
             var session = playerMan.Sessions.First();
+
+            // A store needs a berth on the operator's account; the console is not where berths
+            // are bought, so grant one.
+            await server.ResolveDependency<DrydockStore>().AddBerth(session.UserId.UserId, ShipSizeClass.SuperCapital, DrydockBerthKind.Granted, 0, null, null);
 
             EntityUid station = default;
             EntityUid ship = default;
