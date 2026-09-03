@@ -40,11 +40,14 @@ public sealed record DrydockAdminShipDto(
     string? SizeClass,
     string? VesselProto,
     int? BerthId,
+    int? LastBerthId,
     int? CheckedOutRoundId,
     DateTime StateChangedAt,
     int CurrentRevision,
     // A grid carrying this hull's id exists in the current round. Restore is refused while true.
-    bool LiveThisRound);
+    bool LiveThisRound,
+    // While in escrow: when the standing offer runs out, so the row can carry a clock.
+    DateTime? EscrowExpiresAt);
 
 [Serializable, NetSerializable]
 public sealed record DrydockAdminRevisionDto(
@@ -57,7 +60,8 @@ public sealed record DrydockAdminRevisionDto(
     int SizeBytes,
     // Pruning takes blobs and never history; a revision without one is history only.
     bool HasBlob,
-    int? DerivedFromRevision);
+    int? DerivedFromRevision,
+    int? AppraisedValue);
 
 [Serializable, NetSerializable]
 public sealed record DrydockAdminAuditDto(
@@ -71,7 +75,9 @@ public sealed record DrydockAdminAuditDto(
     int? Revision,
     int? BerthId,
     int? RoundId,
-    string? Reason);
+    string? Reason,
+    // The name the ship had when the row was written, so a rename shows its old name in place.
+    string? ShipName);
 
 [Serializable, NetSerializable]
 public sealed record DrydockAdminBerthDto(
@@ -80,14 +86,40 @@ public sealed record DrydockAdminBerthDto(
     string Kind,
     int PricePaid,
     Guid? OccupantShipGuid,
-    string? OccupantName);
+    string? OccupantName,
+    string? OccupantSizeClass,
+    string? OccupantState);
+
+/// <summary>The standing offer on a ship in escrow, as the escrow card draws it.</summary>
+[Serializable, NetSerializable]
+public sealed record DrydockAdminEscrowDto(
+    long TransferId,
+    Guid FromUserId,
+    string? FromName,
+    Guid ToUserId,
+    string? ToName,
+    DateTime CreatedAt,
+    DateTime ExpiresAt,
+    // The recipient's berth it would land in if accepted now, or null when nothing of theirs fits.
+    int? LandsInBerthId);
+
+/// <summary>The most recent sale of a sold ship, for the restore-from-sale dialog.</summary>
+[Serializable, NetSerializable]
+public sealed record DrydockAdminSaleDto(
+    int Price,
+    DateTime At,
+    // The owner's current balance, from their session or their saved character, or null when
+    // neither could be read. The dialog unticks "take the money back" when it cannot cover.
+    int? OwnerBalance);
 
 [Serializable, NetSerializable]
 public sealed record DrydockAdminShipDetailDto(
     DrydockAdminShipDto Ship,
     string? AdminNotes,
     List<DrydockAdminRevisionDto> Revisions,
-    List<DrydockAdminAuditDto> Timeline);
+    List<DrydockAdminAuditDto> Timeline,
+    DrydockAdminEscrowDto? Escrow,
+    DrydockAdminSaleDto? LastSale);
 
 [Serializable, NetSerializable]
 public sealed class DrydockAdminRequestPageMessage : EuiMessageBase
@@ -95,16 +127,17 @@ public sealed class DrydockAdminRequestPageMessage : EuiMessageBase
     public int Page { get; set; }
     public int PageSize { get; set; }
 
-    /// <summary>Owner name contains, or an exact user id if it parses as one.</summary>
-    public string? Owner { get; set; }
+    /// <summary>
+    /// One box: a player name, a ship name including any name it used to have, a ship id, or
+    /// an account id. The server decides which it was.
+    /// </summary>
+    public string? Search { get; set; }
 
-    public string? ShipNameContains { get; set; }
-
-    /// <summary>A <c>DrydockShipState</c> name, or null for every state.</summary>
-    public string? State { get; set; }
-
-    /// <summary>Only ships checked out in a round that is not the current one: the adjudication list.</summary>
-    public bool StrandedOnly { get; set; }
+    /// <summary>
+    /// A <c>DrydockShipState</c> name, or one of the two flags "Stranded" (checked out in a round
+    /// that is not the current one) and "Investigating", or null for every state.
+    /// </summary>
+    public string? Chip { get; set; }
 }
 
 [Serializable, NetSerializable]
@@ -141,6 +174,24 @@ public sealed class DrydockAdminRestoreMessage : EuiMessageBase
 {
     public Guid ShipGuid { get; set; }
     public int BerthId { get; set; }
+    public string? Reason { get; set; }
+}
+
+/// <summary>Undo a sale: the ship returns to a berth, and by default the price is taken back.</summary>
+[Serializable, NetSerializable]
+public sealed class DrydockAdminRestoreFromSaleMessage : EuiMessageBase
+{
+    public Guid ShipGuid { get; set; }
+    public int BerthId { get; set; }
+    public bool TakeMoneyBack { get; set; }
+    public string? Reason { get; set; }
+}
+
+/// <summary>An admin withdraws someone else's standing offer. The ship leaves escrow.</summary>
+[Serializable, NetSerializable]
+public sealed class DrydockAdminCancelOfferMessage : EuiMessageBase
+{
+    public long TransferId { get; set; }
     public string? Reason { get; set; }
 }
 

@@ -1029,7 +1029,9 @@ public sealed class DrydockStore
         DrydockTransferResolution resolution,
         Guid? actorUserId,
         int? roundId,
-        CancellationToken ct = default)
+        CancellationToken ct = default,
+        bool adminOverride = false,
+        string? reason = null)
     {
         return _db.RunTriadDbCommand<DrydockTransfer?>(async (db, token) =>
         {
@@ -1040,49 +1042,104 @@ public sealed class DrydockStore
             if (transfer == null)
                 return null;
 
-            var allowed = resolution switch
+            if (!adminOverride)
             {
-                DrydockTransferResolution.Declined => actorUserId == transfer.ToUserId,
-                DrydockTransferResolution.Cancelled => actorUserId == transfer.FromUserId,
-                DrydockTransferResolution.Expired => actorUserId == null,
-                _ => false,
-            };
-            if (!allowed)
-                return null;
-
-            var now = DateTime.UtcNow;
-            transfer.Resolution = resolution;
-            transfer.ResolvedAt = now;
-
-            var ship = await db.DrydockShip.SingleOrDefaultAsync(s => s.ShipGuid == transfer.ShipGuid, token);
-            if (ship is { State: DrydockShipState.InEscrow })
-            {
-                ship.State = DrydockShipState.Stored;
-                ship.StateChangedAt = now;
-                ship.UpdatedAt = now;
+                var allowed = resolution switch
+                {
+                    DrydockTransferResolution.Declined => actorUserId == transfer.ToUserId,
+                    DrydockTransferResolution.Cancelled => actorUserId == transfer.FromUserId,
+                    DrydockTransferResolution.Expired => actorUserId == null,
+                    _ => false,
+                };
+                if (!allowed)
+                    return null;
             }
 
-            db.DrydockAudit.Add(new DrydockAudit
-            {
-                ShipGuid = transfer.ShipGuid,
-                ShipName = ship?.ShipName,
-                BerthId = ship?.BerthId,
-                Action = resolution switch
-                {
-                    DrydockTransferResolution.Declined => DrydockAuditAction.TransferDeclined,
-                    DrydockTransferResolution.Cancelled => DrydockAuditAction.TransferCancelled,
-                    _ => DrydockAuditAction.TransferExpired,
-                },
-                ActorUserId = actorUserId,
-                SubjectUserId = resolution == DrydockTransferResolution.Cancelled ? transfer.ToUserId : transfer.FromUserId,
-                Revision = ship?.CurrentRevision,
-                RoundId = roundId,
-                CreatedAt = now,
-            });
+            var ship = await db.DrydockShip.SingleOrDefaultAsync(s => s.ShipGuid == transfer.ShipGuid, token);
+            var now = DateTime.UtcNow;
+            await ResolveTransferRow(db, transfer, ship, resolution, actorUserId, roundId, reason, now);
 
             await db.SaveChangesAsync(token);
             await tx.CommitAsync(token);
             return transfer;
+        }, ct);
+    }
+
+    /// <summary>
+    /// The shared tail of ending an offer without moving the ship: mark the row, put the ship
+    /// back to Stored, write the timeline row. Inside the caller's transaction.
+    /// </summary>
+    private static Task ResolveTransferRow(ServerDbContext db, DrydockTransfer transfer, DrydockShip? ship, DrydockTransferResolution resolution, Guid? actorUserId, int? roundId, string? reason, DateTime now)
+    {
+        transfer.Resolution = resolution;
+        transfer.ResolvedAt = now;
+
+        if (ship is { State: DrydockShipState.InEscrow })
+        {
+            ship.State = DrydockShipState.Stored;
+            ship.StateChangedAt = now;
+            ship.UpdatedAt = now;
+        }
+
+        db.DrydockAudit.Add(new DrydockAudit
+        {
+            ShipGuid = transfer.ShipGuid,
+            ShipName = ship?.ShipName,
+            BerthId = ship?.BerthId,
+            Action = resolution switch
+            {
+                DrydockTransferResolution.Declined => DrydockAuditAction.TransferDeclined,
+                DrydockTransferResolution.Cancelled => DrydockAuditAction.TransferCancelled,
+                _ => DrydockAuditAction.TransferExpired,
+            },
+            ActorUserId = actorUserId,
+            SubjectUserId = resolution == DrydockTransferResolution.Cancelled ? transfer.ToUserId : transfer.FromUserId,
+            Revision = ship?.CurrentRevision,
+            RoundId = roundId,
+            Reason = reason,
+            CreatedAt = now,
+        });
+
+        return Task.CompletedTask;
+    }
+
+    /// <summary>The standing offer on one ship, or null when it has none.</summary>
+    public Task<DrydockTransfer?> GetPendingOfferForShip(Guid shipGuid, CancellationToken ct = default)
+    {
+        return _db.RunTriadDbCommand(async (db, token) => await db.DrydockTransfer.AsNoTracking()
+            .SingleOrDefaultAsync(t => t.ShipGuid == shipGuid && t.Resolution == DrydockTransferResolution.Pending, token), ct);
+    }
+
+    /// <summary>The standing offers on a set of ships, keyed by ship: the clock on the admin panel's rows.</summary>
+    public Task<Dictionary<Guid, DrydockTransfer>> GetPendingOffersForShips(IEnumerable<Guid> shipGuids, CancellationToken ct = default)
+    {
+        var ids = shipGuids.Distinct().ToList();
+        if (ids.Count == 0)
+            return Task.FromResult(new Dictionary<Guid, DrydockTransfer>());
+
+        return _db.RunTriadDbCommand(async (db, token) => await db.DrydockTransfer.AsNoTracking()
+            .Where(t => ids.Contains(t.ShipGuid) && t.Resolution == DrydockTransferResolution.Pending)
+            .ToDictionaryAsync(t => t.ShipGuid, token), ct);
+    }
+
+    /// <summary>
+    /// The most recent sale of a ship, read back from its timeline row, which is where the price
+    /// was written. Null when the ship has never been sold.
+    /// </summary>
+    public Task<(int Price, DateTime At)?> GetLastSale(Guid shipGuid, CancellationToken ct = default)
+    {
+        return _db.RunTriadDbCommand<(int, DateTime)?>(async (db, token) =>
+        {
+            var row = await db.DrydockAudit.AsNoTracking()
+                .Where(a => a.ShipGuid == shipGuid && a.Action == DrydockAuditAction.ShipSold)
+                .OrderByDescending(a => a.CreatedAt)
+                .FirstOrDefaultAsync(token);
+
+            if (row?.Reason == null)
+                return null;
+
+            var match = System.Text.RegularExpressions.Regex.Match(row.Reason, @"sold for (\d+)");
+            return match.Success && int.TryParse(match.Groups[1].Value, out var price) ? (price, row.CreatedAt) : null;
         }, ct);
     }
 
@@ -1388,8 +1445,29 @@ public sealed class DrydockStore
                 query = query.Where(s => s.ShipName.ToLower().Contains(needle));
             }
 
+            if (!string.IsNullOrWhiteSpace(filter.Search))
+            {
+                var search = filter.Search.Trim();
+                if (Guid.TryParse(search, out var id))
+                {
+                    query = query.Where(s => s.ShipGuid == id || s.OwnerUserId == id);
+                }
+                else
+                {
+                    // Past names live on the audit rows as snapshots, so a ship renamed to hide
+                    // is still found under the name the complaint was filed with.
+                    var needle = search.ToLowerInvariant();
+                    query = query.Where(s => s.ShipName.ToLower().Contains(needle)
+                        || s.Owner.LastSeenUserName.ToLower().Contains(needle)
+                        || db.DrydockAudit.Any(a => a.ShipGuid == s.ShipGuid && a.ShipName != null && a.ShipName.ToLower().Contains(needle)));
+                }
+            }
+
             if (filter.State is { } state)
                 query = query.Where(s => s.State == state);
+
+            if (filter.InvestigatingOnly)
+                query = query.Where(s => s.Investigating);
 
             // Checked out in a round that is over, or in no round at all: the adjudication list.
             if (filter.StrandedOnly)
@@ -1468,6 +1546,16 @@ public sealed class DrydockStore
             var now = DateTime.UtcNow;
             ship.Investigating = investigating;
             ship.UpdatedAt = now;
+
+            // An investigation ends any standing offer: a ship under question does not change
+            // hands while the question is open, and the recipient's alert goes with it.
+            if (investigating)
+            {
+                var offer = await db.DrydockTransfer
+                    .SingleOrDefaultAsync(t => t.ShipGuid == shipGuid && t.Resolution == DrydockTransferResolution.Pending, token);
+                if (offer != null)
+                    await ResolveTransferRow(db, offer, ship, DrydockTransferResolution.Cancelled, actorUserId, roundId, "investigation opened", now);
+            }
 
             db.DrydockAudit.Add(new DrydockAudit
             {
@@ -1780,7 +1868,11 @@ public sealed record DrydockShipFilter(
     string? ShipNameContains,
     DrydockShipState? State,
     bool StrandedOnly,
-    int? CurrentRoundId);
+    int? CurrentRoundId,
+    // One box from the admin panel: a ship id or account id when it parses as one, else text
+    // matched against the owner's name, the ship's name, and every name the ship has had.
+    string? Search = null,
+    bool InvestigatingOnly = false);
 
 /// <summary>One hull with its history and timeline, newest first, and which revisions still have a document.</summary>
 public sealed record DrydockShipDetail(
