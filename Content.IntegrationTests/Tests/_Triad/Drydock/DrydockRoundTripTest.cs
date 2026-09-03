@@ -272,6 +272,69 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             await pair.CleanReturnAsync();
         }
 
+        /// <summary>
+        /// A ship whose grid is still in the world is not lost, and restoring its row would let it
+        /// be retrieved into a second copy while the first flies. The guard is the system's, since
+        /// only the entity world knows; the store cannot. Deleting the grid is what makes the same
+        /// restore legitimate.
+        /// </summary>
+        [Test]
+        public async Task AnAdminCannotRestoreAShipThatIsStillInTheWorld()
+        {
+            await using var pair = await PoolManager.GetServerClient();
+            var server = pair.Server;
+            var entMan = server.EntMan;
+
+            var db = server.ResolveDependency<IServerDbManager>();
+            var store = server.ResolveDependency<DrydockStore>();
+            var drydock = server.System<DrydockSystem>();
+
+            var owner = Guid.NewGuid();
+            var admin = Guid.NewGuid();
+            await InsertPlayer(db, owner);
+            await InsertPlayer(db, admin);
+            var berth = await store.AddBerth(owner, ShipSizeClass.SuperCapital, DrydockBerthKind.Granted, 0, null, null);
+
+            var (station, shipGrid, _) = await BuildShipAndStation(pair);
+
+            var (result, shipId) = await RunOnServer(pair, () => drydock.TryStoreShip(shipGrid, owner, null));
+            Assert.That(result, Is.EqualTo(DrydockStoreResult.Success));
+
+            var retrieved = await RunOnServer(pair, () => drydock.TryRetrieveShip(shipId!.Value, owner, station, null));
+            Assert.That(retrieved, Is.Not.Null);
+            await pair.RunTicksSync(5);
+
+            await server.WaitAssertion(() =>
+            {
+                Assert.That(drydock.IsShipLive(shipId!.Value), Is.True, "The control: the retrieved grid carries the hull's id.");
+            });
+
+            var refused = await RunOnServer(pair, () => drydock.TryAdminRestore(shipId!.Value, berth, admin, null, "player says it vanished"));
+            Assert.That(refused, Is.EqualTo(DrydockBerthResult.WrongState), "A hull that is in the world cannot be restored: that would be a duplicate.");
+            Assert.That((await store.LoadCurrent(shipId!.Value))!.Ship.State, Is.EqualTo(DrydockShipState.CheckedOut));
+
+            // Now it really is gone.
+            await server.WaitPost(() => entMan.DeleteEntity(retrieved!.Value));
+            await pair.RunTicksSync(5);
+
+            await server.WaitAssertion(() =>
+            {
+                Assert.That(drydock.IsShipLive(shipId!.Value), Is.False);
+            });
+
+            var restored = await RunOnServer(pair, () => drydock.TryAdminRestore(shipId!.Value, berth, admin, null, "hull lost to a bug"));
+            Assert.That(restored, Is.EqualTo(DrydockBerthResult.Success));
+
+            var row = (await store.LoadCurrent(shipId!.Value))!.Ship;
+            Assert.Multiple(() =>
+            {
+                Assert.That(row.State, Is.EqualTo(DrydockShipState.Stored));
+                Assert.That(row.BerthId, Is.EqualTo(berth));
+            });
+
+            await pair.CleanReturnAsync();
+        }
+
         private static Task<byte[]> ReadBlobs(IServerDbManager db, Guid shipId)
         {
             return db.RunTriadDbCommand(async (context, token) =>

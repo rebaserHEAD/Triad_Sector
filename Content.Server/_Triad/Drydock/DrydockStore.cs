@@ -897,6 +897,273 @@ public sealed class DrydockStore
         }, ct);
     }
 
+    /// <summary>A filtered page of hulls for the admin panel, newest activity first, owners loaded.</summary>
+    public Task<(List<DrydockShip> Rows, int Total)> QueryShips(DrydockShipFilter filter, int page, int pageSize, CancellationToken ct = default)
+    {
+        return _db.RunTriadDbCommand(async (db, token) =>
+        {
+            var query = db.DrydockShip.AsNoTracking().Include(s => s.Owner).AsQueryable();
+
+            if (filter.OwnerUserId is { } owner)
+                query = query.Where(s => s.OwnerUserId == owner);
+            else if (!string.IsNullOrWhiteSpace(filter.OwnerNameContains))
+            {
+                var needle = filter.OwnerNameContains.ToLowerInvariant();
+                query = query.Where(s => s.Owner.LastSeenUserName.ToLower().Contains(needle));
+            }
+
+            if (!string.IsNullOrWhiteSpace(filter.ShipNameContains))
+            {
+                var needle = filter.ShipNameContains.ToLowerInvariant();
+                query = query.Where(s => s.ShipName.ToLower().Contains(needle));
+            }
+
+            if (filter.State is { } state)
+                query = query.Where(s => s.State == state);
+
+            // Checked out in a round that is over, or in no round at all: the adjudication list.
+            if (filter.StrandedOnly)
+            {
+                var round = filter.CurrentRoundId;
+                query = query.Where(s => s.State == DrydockShipState.CheckedOut
+                    && (s.CheckedOutRoundId == null || s.CheckedOutRoundId != round));
+            }
+
+            var total = await query.CountAsync(token);
+            var rows = await query
+                .OrderByDescending(s => s.UpdatedAt)
+                .Skip(Math.Max(0, page) * pageSize)
+                .Take(pageSize)
+                .ToListAsync(token);
+
+            return (rows, total);
+        }, ct);
+    }
+
+    /// <summary>One hull with its whole history and timeline, for the admin panel's detail view.</summary>
+    public Task<DrydockShipDetail?> GetShipDetail(Guid shipGuid, CancellationToken ct = default)
+    {
+        return _db.RunTriadDbCommand<DrydockShipDetail?>(async (db, token) =>
+        {
+            var ship = await db.DrydockShip.AsNoTracking()
+                .Include(s => s.Owner)
+                .SingleOrDefaultAsync(s => s.ShipGuid == shipGuid, token);
+
+            if (ship == null)
+                return null;
+
+            var revisions = await db.DrydockRevision.AsNoTracking()
+                .Where(r => r.ShipGuid == shipGuid)
+                .OrderByDescending(r => r.Revision)
+                .ToListAsync(token);
+
+            var withBlob = await db.DrydockBlob.AsNoTracking()
+                .Where(b => b.ShipGuid == shipGuid)
+                .Select(b => b.Revision)
+                .ToListAsync(token);
+
+            var timeline = await db.DrydockAudit.AsNoTracking()
+                .Where(a => a.ShipGuid == shipGuid)
+                .OrderByDescending(a => a.CreatedAt)
+                .ToListAsync(token);
+
+            return new DrydockShipDetail(ship, revisions, withBlob.ToHashSet(), timeline);
+        }, ct);
+    }
+
+    /// <summary>Display names for a set of players, from the player table. Online sessions are the caller's to prefer.</summary>
+    public Task<Dictionary<Guid, string>> GetPlayerNames(IEnumerable<Guid> userIds, CancellationToken ct = default)
+    {
+        var ids = userIds.Distinct().ToList();
+        if (ids.Count == 0)
+            return Task.FromResult(new Dictionary<Guid, string>());
+
+        return _db.RunTriadDbCommand(async (db, token) => await db.Player.AsNoTracking()
+            .Where(p => ids.Contains(p.UserId))
+            .Select(p => new { p.UserId, p.LastSeenUserName })
+            .ToDictionaryAsync(p => p.UserId, p => p.LastSeenUserName, token), ct);
+    }
+
+    /// <summary>Admin: flags or clears a ship for investigation, on the timeline. Retrieve refuses while flagged.</summary>
+    public Task<bool> SetInvestigating(Guid shipGuid, bool investigating, Guid? actorUserId, int? roundId, string? reason, CancellationToken ct = default)
+    {
+        return _db.RunTriadDbCommand(async (db, token) =>
+        {
+            await using var tx = await db.Database.BeginTransactionAsync(token);
+
+            var ship = await db.DrydockShip.SingleOrDefaultAsync(s => s.ShipGuid == shipGuid, token);
+            if (ship == null || ship.Investigating == investigating)
+                return false;
+
+            var now = DateTime.UtcNow;
+            ship.Investigating = investigating;
+            ship.UpdatedAt = now;
+
+            db.DrydockAudit.Add(new DrydockAudit
+            {
+                ShipGuid = shipGuid,
+                ShipName = ship.ShipName,
+                BerthId = ship.BerthId,
+                Action = investigating ? DrydockAuditAction.InvestigationOpened : DrydockAuditAction.InvestigationClosed,
+                ActorUserId = actorUserId,
+                SubjectUserId = ship.OwnerUserId,
+                Revision = ship.CurrentRevision,
+                RoundId = roundId,
+                Reason = reason,
+                CreatedAt = now,
+            });
+
+            await db.SaveChangesAsync(token);
+            await tx.CommitAsync(token);
+            return true;
+        }, ct);
+    }
+
+    /// <summary>Admin scratch notes on a hull. Not on the timeline: the timeline is for decisions.</summary>
+    public Task<bool> SetAdminNotes(Guid shipGuid, string? notes, CancellationToken ct = default)
+    {
+        return _db.RunTriadDbCommand(async (db, token) =>
+        {
+            var moved = await db.DrydockShip
+                .Where(s => s.ShipGuid == shipGuid)
+                .ExecuteUpdateAsync(set => set
+                    .SetProperty(s => s.AdminNotes, notes)
+                    .SetProperty(s => s.UpdatedAt, DateTime.UtcNow), token);
+
+            return moved > 0;
+        }, ct);
+    }
+
+    /// <summary>
+    /// Admin: promotes an older revision to current by filing it again as a new one, kind
+    /// AdminRestore, derived from the original. History stays append-only; the promoted document
+    /// is copied, never moved, and the usual keep-N pruning runs with the new revision as floor.
+    /// </summary>
+    public Task<(DrydockBerthResult Outcome, int Revision)> TryPromoteRevision(
+        Guid shipGuid,
+        int revision,
+        Guid? actorUserId,
+        int? roundId,
+        string? reason,
+        int keepBlobs,
+        CancellationToken ct = default)
+    {
+        return _db.RunTriadDbCommand<(DrydockBerthResult, int)>(async (db, token) =>
+        {
+            await using var tx = await db.Database.BeginTransactionAsync(token);
+
+            var ship = await db.DrydockShip.SingleOrDefaultAsync(s => s.ShipGuid == shipGuid, token);
+            if (ship == null)
+                return (DrydockBerthResult.NotFound, 0);
+
+            var source = await db.DrydockRevision.AsNoTracking()
+                .SingleOrDefaultAsync(r => r.ShipGuid == shipGuid && r.Revision == revision, token);
+
+            var blob = await db.DrydockBlob.AsNoTracking()
+                .SingleOrDefaultAsync(b => b.ShipGuid == shipGuid && b.Revision == revision, token);
+
+            // History without a document cannot be promoted; that is what pruning took.
+            if (source == null || blob == null)
+                return (DrydockBerthResult.NotFound, 0);
+
+            var now = DateTime.UtcNow;
+            var next = ship.CurrentRevision + 1;
+
+            db.DrydockRevision.Add(new DrydockRevision
+            {
+                ShipGuid = shipGuid,
+                Revision = next,
+                Kind = DrydockRevisionKind.AdminRestore,
+                DerivedFromRevision = revision,
+                RebakeVersion = source.RebakeVersion,
+                ActorUserId = actorUserId,
+                CreatedRoundId = roundId,
+                CreatedAt = now,
+                EngineFormatVer = source.EngineFormatVer,
+                DrydockFormatVer = source.DrydockFormatVer,
+                ProtoFingerprint = source.ProtoFingerprint,
+                CapturedKeyHash = source.CapturedKeyHash,
+                Checksum = source.Checksum,
+                SizeBytes = source.SizeBytes,
+                Manifest = source.Manifest,
+            });
+
+            db.DrydockBlob.Add(new DrydockBlob
+            {
+                ShipGuid = shipGuid,
+                Revision = next,
+                Blob = blob.Blob,
+            });
+
+            ship.CurrentRevision = next;
+            ship.UpdatedAt = now;
+
+            if (keepBlobs > 0)
+            {
+                var floor = next - keepBlobs + 1;
+                var stale = await db.DrydockBlob
+                    .Where(b => b.ShipGuid == shipGuid && b.Revision < floor)
+                    .ToListAsync(token);
+                db.DrydockBlob.RemoveRange(stale);
+            }
+
+            db.DrydockAudit.Add(new DrydockAudit
+            {
+                ShipGuid = shipGuid,
+                ShipName = ship.ShipName,
+                BerthId = ship.BerthId,
+                Action = DrydockAuditAction.Restore,
+                ActorUserId = actorUserId,
+                SubjectUserId = ship.OwnerUserId,
+                Revision = next,
+                RoundId = roundId,
+                Reason = $"promoted revision {revision}: {reason}",
+                CreatedAt = now,
+            });
+
+            await db.SaveChangesAsync(token);
+            await tx.CommitAsync(token);
+            return (DrydockBerthResult.Success, next);
+        }, ct);
+    }
+
+    /// <summary>
+    /// Admin: deletes a hull and, by cascade, its revisions and blobs. The timeline row is written
+    /// first and has no foreign key, so the evidence of the deletion outlives the thing deleted.
+    /// The berth the hull sat in is left empty rather than removed.
+    /// </summary>
+    public Task<DrydockBerthResult> TryDeleteShip(Guid shipGuid, Guid? actorUserId, int? roundId, string? reason, CancellationToken ct = default)
+    {
+        return _db.RunTriadDbCommand(async (db, token) =>
+        {
+            await using var tx = await db.Database.BeginTransactionAsync(token);
+
+            var ship = await db.DrydockShip.SingleOrDefaultAsync(s => s.ShipGuid == shipGuid, token);
+            if (ship == null)
+                return DrydockBerthResult.NotFound;
+
+            db.DrydockAudit.Add(new DrydockAudit
+            {
+                ShipGuid = shipGuid,
+                ShipName = ship.ShipName,
+                BerthId = ship.BerthId,
+                Action = DrydockAuditAction.Delete,
+                ActorUserId = actorUserId,
+                SubjectUserId = ship.OwnerUserId,
+                Revision = ship.CurrentRevision,
+                RoundId = roundId,
+                Reason = reason,
+                CreatedAt = DateTime.UtcNow,
+            });
+
+            db.DrydockShip.Remove(ship);
+
+            await db.SaveChangesAsync(token);
+            await tx.CommitAsync(token);
+            return DrydockBerthResult.Success;
+        }, ct);
+    }
+
     /// <summary>
     /// Admin: returns a ship that is out or held to the drydock, into a named berth. Whether the
     /// ship is really lost is the admin's call. The one thing this cannot know is whether a live
@@ -1032,3 +1299,19 @@ public sealed class DrydockRevisionRequest
 
 /// <summary>What a retrieve reads: the hull row, the revision it is about to rebuild, and the document.</summary>
 public sealed record DrydockLoad(DrydockShip Ship, DrydockRevision Revision, byte[] Blob);
+
+/// <summary>The admin panel's list filter. Every field null or false means "any".</summary>
+public sealed record DrydockShipFilter(
+    Guid? OwnerUserId,
+    string? OwnerNameContains,
+    string? ShipNameContains,
+    DrydockShipState? State,
+    bool StrandedOnly,
+    int? CurrentRoundId);
+
+/// <summary>One hull with its history and timeline, newest first, and which revisions still have a document.</summary>
+public sealed record DrydockShipDetail(
+    DrydockShip Ship,
+    List<DrydockRevision> Revisions,
+    HashSet<int> RevisionsWithBlob,
+    List<DrydockAudit> Timeline);

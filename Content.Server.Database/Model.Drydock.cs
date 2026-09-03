@@ -455,4 +455,9 @@ public enum DrydockAuditAction
     /// document still exists until pruning reaches it, which is why this is on the timeline.
     /// </summary>
     Fallback = 14,
+
+    /// <summary>An admin flagged the ship; retrieve refuses while the flag is set.</summary>
+    InvestigationOpened = 15,
+
+    InvestigationClosed = 16,
 }
