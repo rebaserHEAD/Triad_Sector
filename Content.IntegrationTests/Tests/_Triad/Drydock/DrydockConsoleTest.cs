@@ -512,6 +512,134 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
         /// Builds a station, a ship stamped to <paramref name="shipOwner"/>, and a console holding a
         /// deed card for it, with the operator standing clear of the grid.
         /// </summary>
+        /// <summary>
+        /// The three verbs behind the row menu. Rename is a row update that the hull and its deed
+        /// take at the next retrieve, so the retrieved grid is read to prove the stamp; move lands
+        /// in the berth it names; a sale needs the ship's exact name typed, frees the berth, marks
+        /// the row Sold with the price on the timeline, and pays from the appraisal captured at
+        /// store. Every verb is refused for a ship the account does not own and written down.
+        /// </summary>
+        [Test]
+        public async Task AStoredShipCanBeRenamedMovedAndSold()
+        {
+            await using var pair = await PoolManager.GetServerClient(new PoolSettings { Connected = true });
+            var server = pair.Server;
+            var entMan = server.EntMan;
+
+            var playerMan = server.ResolveDependency<IPlayerManager>();
+            var store = server.ResolveDependency<DrydockStore>();
+            var shipyard = server.System<ShipyardSystem>();
+
+            var session = playerMan.Sessions.First();
+            var me = session.UserId.UserId;
+            var (station, stationGrid, ship, console, consoleComp, card, operatorEnt) = await BuildConsoleAndShip(pair, session.UserId);
+
+            var stored = await RunOnServer(pair,
+                () => shipyard.TryDrydockStore(console, consoleComp, operatorEnt, ShipyardConsoleUiKey.Shipyard));
+            Assert.That(stored?.Result, Is.EqualTo(DrydockStoreResult.Success));
+            var shipId = stored!.Value.ShipId!.Value;
+            await pair.RunTicksSync(5);
+
+            // Rename: the shape is enforced, then the row changes and nothing else does yet.
+            var badName = await RunOnServer(pair,
+                () => shipyard.TryRenameStoredShip(console, consoleComp, operatorEnt, shipId, "Falcon!!", ShipyardConsoleUiKey.Shipyard));
+            Assert.That(badName, Is.False, "Punctuation outside the allowed shape is refused.");
+
+            var renamed = await RunOnServer(pair,
+                () => shipyard.TryRenameStoredShip(console, consoleComp, operatorEnt, shipId, "Falcon", ShipyardConsoleUiKey.Shipyard));
+            Assert.That(renamed, Is.True);
+            Assert.That((await store.GetShipHeader(shipId))!.ShipName, Is.EqualTo("Falcon"));
+
+            var renames = await RunOnServer(pair, () => store.GetAuditByActor(me, 20));
+            Assert.That(renames.Any(a => a.Action == DrydockAuditAction.Renamed && a.ShipGuid == shipId && a.ShipName == "Kestrel"),
+                "The rename row carries the OLD name, so the old name stays searchable.");
+
+            // Move: into a berth the store would not have picked on its own.
+            var named = await store.AddBerth(me, ShipSizeClass.Capital, DrydockBerthKind.Granted, 0, null, null);
+            var moved = await RunOnServer(pair,
+                () => shipyard.TryMoveStoredShip(console, consoleComp, operatorEnt, shipId, named, ShipyardConsoleUiKey.Shipyard));
+            Assert.That(moved, Is.True);
+            Assert.That((await store.GetShipHeader(shipId))!.BerthId, Is.EqualTo(named));
+
+            // Retrieve: the hull comes back wearing the row's name.
+            var grid = await RunOnServer(pair,
+                () => shipyard.TryDrydockRetrieve(console, consoleComp, operatorEnt, shipId, ShipyardConsoleUiKey.Shipyard));
+            Assert.That(grid, Is.Not.Null);
+            await server.WaitAssertion(() =>
+            {
+                Assert.That(entMan.GetComponent<MetaDataComponent>(grid!.Value).EntityName, Is.EqualTo("Falcon"),
+                    "A rename made while stored is stamped onto the hull at retrieve.");
+            });
+            await pair.RunTicksSync(5);
+
+            // Store again, which captures the appraisal the sale quotes from.
+            var restored = await RunOnServer(pair,
+                () => shipyard.TryDrydockStore(console, consoleComp, operatorEnt, ShipyardConsoleUiKey.Shipyard));
+            Assert.That(restored?.Result, Is.EqualTo(DrydockStoreResult.Success));
+            Assert.That(restored!.Value.ShipId, Is.EqualTo(shipId), "The same hull files a new revision, not a new ship.");
+            await pair.RunTicksSync(5);
+
+            var appraisals = await store.GetCurrentAppraisals(me);
+            Assert.That(appraisals[shipId], Is.Not.Null, "A store captures the appraisal on its revision.");
+
+            await server.WaitPost(() => entMan.EnsureComponent<Content.Shared._NF.Bank.Components.BankAccountComponent>(operatorEnt));
+
+            // Sell: the typed name is the safety. The old name no longer matches.
+            var wrongName = await RunOnServer(pair,
+                () => shipyard.TrySellStoredShip(console, consoleComp, operatorEnt, shipId, "Kestrel", ShipyardConsoleUiKey.Shipyard));
+            Assert.That(wrongName.Sold, Is.False, "A sale needs the ship's exact current name typed.");
+            Assert.That((await store.GetShipHeader(shipId))!.State, Is.EqualTo(DrydockShipState.Stored));
+
+            var sale = await RunOnServer(pair,
+                () => shipyard.TrySellStoredShip(console, consoleComp, operatorEnt, shipId, "Falcon", ShipyardConsoleUiKey.Shipyard));
+            Assert.That(sale.Sold, Is.True);
+            var soldHeader = (await store.GetShipHeader(shipId))!;
+            Assert.Multiple(() =>
+            {
+                Assert.That(soldHeader.State, Is.EqualTo(DrydockShipState.Sold));
+                Assert.That(soldHeader.BerthId, Is.Null, "A sold ship leaves its berth.");
+                Assert.That(soldHeader.LastBerthId, Is.Not.Null, "But remembers it, for an admin restore.");
+            });
+
+            var audit = await RunOnServer(pair, () => store.GetAuditByActor(me, 30));
+            var soldRow = audit.FirstOrDefault(a => a.Action == DrydockAuditAction.ShipSold && a.ShipGuid == shipId);
+            Assert.That(soldRow, Is.Not.Null);
+            Assert.That(soldRow!.Reason, Does.Contain($"sold for {sale.Price}"), "The price paid is on the timeline for the reversal to read.");
+
+            // A ship this account does not own: refused and written down, whatever was typed.
+            var stranger = Guid.NewGuid();
+            var theirs = Guid.NewGuid();
+            await DrydockStoreTest.InsertPlayer(server.ResolveDependency<IServerDbManager>(), stranger);
+            await store.AddBerth(stranger, ShipSizeClass.SuperCapital, DrydockBerthKind.Granted, 0, null, null);
+            await store.FileRevision(new DrydockRevisionRequest
+            {
+                ShipGuid = theirs,
+                OwnerUserId = stranger,
+                ShipName = "NotYours",
+                SizeClass = nameof(ShipSizeClass.Cutter),
+                MarkStored = true,
+                Kind = DrydockRevisionKind.PlayerStore,
+                EngineFormatVer = 7,
+                ProtoFingerprint = new byte[] { 1 },
+                CapturedKeyHash = new byte[] { 1 },
+                Checksum = new byte[] { 1 },
+                SizeBytes = 1,
+                Manifest = "{}",
+                AppraisedValue = 1000,
+            }, new byte[] { 1 }, 3);
+
+            var forged = await RunOnServer(pair,
+                () => shipyard.TrySellStoredShip(console, consoleComp, operatorEnt, theirs, "NotYours", ShipyardConsoleUiKey.Shipyard));
+            Assert.That(forged.Sold, Is.False);
+            Assert.That((await store.GetShipHeader(theirs))!.State, Is.EqualTo(DrydockShipState.Stored));
+
+            var refusals = await RunOnServer(pair, () => store.GetAuditByActor(me, 30));
+            Assert.That(refusals.Any(a => a.Action == DrydockAuditAction.AccessRefused && a.ShipGuid == theirs && a.Reason == "sell"),
+                "A forged sale is the stolen-card signal and goes on the timeline.");
+
+            await pair.CleanReturnAsync();
+        }
+
         private static async Task<(EntityUid Station, EntityUid StationGrid, EntityUid Ship, EntityUid Console, ShipyardConsoleComponent Comp, EntityUid Card, EntityUid Operator)>
             BuildConsoleAndShip(TestPair pair, Robust.Shared.Network.NetUserId shipOwner)
         {

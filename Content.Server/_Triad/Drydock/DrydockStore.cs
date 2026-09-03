@@ -1220,6 +1220,124 @@ public sealed class DrydockStore
         }, ct);
     }
 
+    // ---------------------------------------------------------------- Sell, rename, move
+
+    /// <summary>
+    /// The appraisal on each of an account's ships' current revision, for the sale quote on the
+    /// tab. Null for a revision filed before the column existed; such a ship cannot be sold until
+    /// it has been out and stored again.
+    /// </summary>
+    public Task<Dictionary<Guid, int?>> GetCurrentAppraisals(Guid ownerUserId, CancellationToken ct = default)
+    {
+        return _db.RunTriadDbCommand(async (db, token) => await db.DrydockShip.AsNoTracking()
+            .Where(s => s.OwnerUserId == ownerUserId)
+            .Join(db.DrydockRevision.AsNoTracking(),
+                s => new { s.ShipGuid, Revision = s.CurrentRevision },
+                r => new { r.ShipGuid, r.Revision },
+                (s, r) => new { s.ShipGuid, r.AppraisedValue })
+            .ToDictionaryAsync(x => x.ShipGuid, x => x.AppraisedValue, token), ct);
+    }
+
+    /// <summary>
+    /// The owner scraps a stored ship. The row goes to <see cref="DrydockShipState.Sold"/> and
+    /// leaves its berth; revisions and blobs stay under normal retention so an admin can undo a
+    /// sale made in anger. The price was computed by the caller from the appraisal it read; both
+    /// are written to the timeline so the reversal knows what to take back.
+    /// </summary>
+    public Task<(DrydockBerthResult Outcome, DrydockShip? Ship)> TrySellShip(
+        Guid shipGuid,
+        Guid ownerUserId,
+        int price,
+        int appraisal,
+        int? roundId,
+        CancellationToken ct = default)
+    {
+        return _db.RunTriadDbCommand<(DrydockBerthResult, DrydockShip?)>(async (db, token) =>
+        {
+            await using var tx = await db.Database.BeginTransactionAsync(token);
+
+            var ship = await db.DrydockShip.SingleOrDefaultAsync(s => s.ShipGuid == shipGuid, token);
+            if (ship == null || ship.OwnerUserId != ownerUserId)
+                return (DrydockBerthResult.NotFound, null);
+
+            if (ship.State != DrydockShipState.Stored || ship.Investigating)
+                return (DrydockBerthResult.WrongState, null);
+
+            var now = DateTime.UtcNow;
+            ship.LastBerthId = ship.BerthId;
+            ship.BerthId = null;
+            ship.State = DrydockShipState.Sold;
+            ship.StateChangedAt = now;
+            ship.UpdatedAt = now;
+
+            db.DrydockAudit.Add(new DrydockAudit
+            {
+                ShipGuid = shipGuid,
+                ShipName = ship.ShipName,
+                BerthId = ship.LastBerthId,
+                Action = DrydockAuditAction.ShipSold,
+                ActorUserId = ownerUserId,
+                SubjectUserId = ownerUserId,
+                Revision = ship.CurrentRevision,
+                RoundId = roundId,
+                Reason = $"sold for {price} (appraisal {appraisal})",
+                CreatedAt = now,
+            });
+
+            await db.SaveChangesAsync(token);
+            await tx.CommitAsync(token);
+            return (DrydockBerthResult.Success, ship);
+        }, ct);
+    }
+
+    /// <summary>
+    /// The owner renames a stored ship. A row update only: the hull and its deed take the name
+    /// the next time the ship is retrieved. The old and new names go on the timeline, and the
+    /// old one stays searchable there.
+    /// </summary>
+    public Task<DrydockBerthResult> TryRenameShip(
+        Guid shipGuid,
+        Guid ownerUserId,
+        string newName,
+        int? roundId,
+        CancellationToken ct = default)
+    {
+        return _db.RunTriadDbCommand(async (db, token) =>
+        {
+            await using var tx = await db.Database.BeginTransactionAsync(token);
+
+            var ship = await db.DrydockShip.SingleOrDefaultAsync(s => s.ShipGuid == shipGuid, token);
+            if (ship == null || ship.OwnerUserId != ownerUserId)
+                return DrydockBerthResult.NotFound;
+
+            if (ship.State != DrydockShipState.Stored || ship.Investigating)
+                return DrydockBerthResult.WrongState;
+
+            var now = DateTime.UtcNow;
+            var oldName = ship.ShipName;
+            ship.ShipName = newName;
+            ship.UpdatedAt = now;
+
+            db.DrydockAudit.Add(new DrydockAudit
+            {
+                ShipGuid = shipGuid,
+                ShipName = oldName,
+                BerthId = ship.BerthId,
+                Action = DrydockAuditAction.Renamed,
+                ActorUserId = ownerUserId,
+                SubjectUserId = ownerUserId,
+                Revision = ship.CurrentRevision,
+                RoundId = roundId,
+                Reason = $"{oldName} -> {newName}",
+                CreatedAt = now,
+            });
+
+            await db.SaveChangesAsync(token);
+            await tx.CommitAsync(token);
+            return DrydockBerthResult.Success;
+        }, ct);
+    }
+
     /// <summary>Pending offers an account has made, keyed by ship: what the owner's berth rows say about escrow.</summary>
     public Task<Dictionary<Guid, DrydockTransfer>> GetPendingOffersFrom(Guid fromUserId, CancellationToken ct = default)
     {

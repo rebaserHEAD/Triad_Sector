@@ -150,6 +150,10 @@ public sealed partial class DrydockSystem : EntitySystem
 
             var shipName = Comp<MetaDataComponent>(gridUid).EntityName;
 
+            // The sale quote, taken while the hull is whole and before any sidecar or strip
+            // touches it, so what a scrap pays is what the shipyard would have paid at this moment.
+            var appraisal = _shipyard.AppraiseHull(gridUid);
+
             // A pipe net's air lives on the node-group graph, which the serializer cannot reach.
             // Distribute each net's gas across its members by volume. The live net is left alone,
             // since the ship stays flyable until it despawns.
@@ -233,6 +237,7 @@ public sealed partial class DrydockSystem : EntitySystem
                 CapturedKeyHash = fidelity.ComputeCapturedKeyHash(),
                 Checksum = checksum,
                 SizeBytes = yamlBytes.Length,
+                AppraisedValue = appraisal,
                 Manifest = BuildManifest(gridUid, fidelity).Serialize(),
             };
 

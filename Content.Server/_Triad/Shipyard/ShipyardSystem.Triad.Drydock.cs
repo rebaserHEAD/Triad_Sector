@@ -10,6 +10,7 @@ using Content.Server._Triad.Drydock;
 using Content.Server._Triad.Market;
 using Content.Server.Database;
 using Content.Shared._Mono.Shipyard;
+using Content.Shared._NF.Bank.BUI;
 using Content.Shared._NF.Bank.Components;
 using Content.Shared._NF.Shipyard;
 using Content.Shared._NF.Shipyard.BUI;
@@ -18,6 +19,7 @@ using Content.Shared._NF.Shipyard.Events;
 using Content.Shared._Triad.CCVar;
 using Content.Shared._Triad.Drydock;
 using Content.Shared._Triad.ShipSize;
+using Content.Shared.Database;
 using Robust.Shared.Map.Components;
 using Robust.Shared.Network;
 using Robust.Shared.Player;
@@ -255,6 +257,53 @@ public sealed partial class ShipyardSystem
         }
     }
 
+    private async void OnSellStoredShipMessage(EntityUid uid, ShipyardConsoleComponent component, ShipyardConsoleSellStoredShipMessage args)
+    {
+        if (args.Actor is not { Valid: true } player)
+            return;
+
+        try
+        {
+            await TrySellStoredShip(uid, component, player, args.ShipId, args.TypedName, (ShipyardConsoleUiKey)args.UiKey);
+        }
+        catch (Exception e)
+        {
+            Log.Error($"Drydock: sale of {args.ShipId} at {ToPrettyString(uid)} by {ToPrettyString(player)} threw: {e}");
+            if (!TerminatingOrDeleted(player))
+                ConsolePopup(player, Loc.GetString("shipyard-console-sell-failed"));
+        }
+    }
+
+    private async void OnRenameStoredShipMessage(EntityUid uid, ShipyardConsoleComponent component, ShipyardConsoleRenameStoredShipMessage args)
+    {
+        if (args.Actor is not { Valid: true } player)
+            return;
+
+        try
+        {
+            await TryRenameStoredShip(uid, component, player, args.ShipId, args.NewName, (ShipyardConsoleUiKey)args.UiKey);
+        }
+        catch (Exception e)
+        {
+            Log.Error($"Drydock: rename of {args.ShipId} at {ToPrettyString(uid)} by {ToPrettyString(player)} threw: {e}");
+        }
+    }
+
+    private async void OnMoveStoredShipMessage(EntityUid uid, ShipyardConsoleComponent component, ShipyardConsoleMoveStoredShipMessage args)
+    {
+        if (args.Actor is not { Valid: true } player)
+            return;
+
+        try
+        {
+            await TryMoveStoredShip(uid, component, player, args.ShipId, args.BerthId, (ShipyardConsoleUiKey)args.UiKey);
+        }
+        catch (Exception e)
+        {
+            Log.Error($"Drydock: move of {args.ShipId} at {ToPrettyString(uid)} by {ToPrettyString(player)} threw: {e}");
+        }
+    }
+
     private async void OnAcceptTransferMessage(EntityUid uid, ShipyardConsoleComponent component, ShipyardConsoleAcceptTransferMessage args)
     {
         if (args.Actor is not { Valid: true } player)
@@ -301,6 +350,7 @@ public sealed partial class ShipyardSystem
         var slots = await _drydockStore.GetBerths(owner);
         var offersOut = await _drydockStore.GetPendingOffersFrom(owner);
         var offersIn = await _drydockStore.GetPendingOffersFor(owner);
+        var appraisals = await _drydockStore.GetCurrentAppraisals(owner);
 
         // Everyone else online, for the transfer picker, with the classes of their free berths so
         // the picker can grey the captains with nowhere to put the ship. Read in one query.
@@ -333,8 +383,13 @@ public sealed partial class ShipyardSystem
             }
 
             DrydockTransfer? escrow = null;
+            int? sellPrice = null;
             if (slot.Occupant != null)
+            {
                 offersOut.TryGetValue(slot.Occupant.ShipGuid, out escrow);
+                if (appraisals.TryGetValue(slot.Occupant.ShipGuid, out var appraisal) && appraisal is { } value)
+                    sellPrice = DrydockSalePrice((uid, component), value).Net;
+            }
 
             component.CachedBerths.Add(new DrydockBerthInfo(
                 slot.Berth.BerthId,
@@ -346,7 +401,7 @@ public sealed partial class ShipyardSystem
                 slot.Occupant?.ShipName,
                 slot.Occupant?.SizeClass,
                 slot.Occupant?.State.ToString(),
-                null,
+                sellPrice,
                 escrow?.Id,
                 escrow != null ? CaptainName(escrow.ToUserId, names) : null,
                 escrow != null ? SecondsLeft(escrow.ExpiresAt, now) : null));
@@ -1105,6 +1160,276 @@ public sealed partial class ShipyardSystem
         PlayConfirmSound(player, uid, component);
         await RefreshDrydockState(uid, component, player, uiKey);
         KickDrydockRefreshForAccount(transfer.FromUserId);
+        return true;
+    }
+
+    // ---------------------------------------------------------------- Sell, rename, move
+
+    /// <summary>The shipyard's appraisal of a live hull, as the sale path prices it. Captured at store as the scrap quote.</summary>
+    public int AppraiseHull(EntityUid grid)
+    {
+        return (int)_pricing.AppraiseGrid(grid, LacksPreserveOnSaleComp);
+    }
+
+    /// <summary>
+    /// What scrapping a stored ship pays and what each tax account takes, from the appraisal
+    /// captured at store. The same arithmetic as the live sale's, so the figure on the menu is
+    /// the figure that lands.
+    /// </summary>
+    public (int Gross, int Net, List<(SectorBankAccount Account, int Tax)> Taxes) DrydockSalePrice(Entity<ShipyardConsoleComponent> console, int appraisal)
+    {
+        var gross = console.Comp.IgnoreBaseSaleRate ? appraisal : (int)(appraisal * _baseSaleRate);
+        gross = Math.Max(0, gross);
+
+        var taxes = new List<(SectorBankAccount, int)>();
+        var net = gross;
+        foreach (var (account, coeff) in console.Comp.TaxAccounts)
+        {
+            var tax = CalculateSalesTax(gross, coeff);
+            taxes.Add((account, tax));
+            net -= tax;
+        }
+
+        return (gross, Math.Max(0, net), taxes);
+    }
+
+    /// <summary>
+    /// Writes the row's name onto a retrieved hull and its grid-side deed, split the way the
+    /// shipyard splits a typed name into name and suffix. Called by the retrieve pipeline before
+    /// the station is recreated, since the station takes the grid's name.
+    /// </summary>
+    public void StampStoredName(EntityUid grid, string fullName)
+    {
+        fullName = fullName.Trim();
+        if (fullName.Length == 0)
+            return;
+
+        if (TryComp<ShuttleDeedComponent>(grid, out var deed))
+        {
+            var (name, suffix) = SplitShuttleName(fullName);
+            deed.ShuttleName = name;
+            deed.ShuttleNameSuffix = suffix;
+            Dirty(grid, deed);
+        }
+
+        _metaData.SetEntityName(grid, fullName);
+    }
+
+    /// <summary>
+    /// The shipyard's own rule for telling a suffix from a name: a short last word with a dash
+    /// in it is the suffix. Duplicated from the private parse in the console file rather than
+    /// widened there, so the upstream file stays untouched.
+    /// </summary>
+    private static (string Name, string? Suffix) SplitShuttleName(string fullName)
+    {
+        var parts = fullName.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        var hasSuffix = parts.Length > 1 && parts[^1].Length < ShuttleDeedComponent.MaxSuffixLength && parts[^1].Contains('-');
+        return hasSuffix
+            ? (string.Join(' ', parts[..^1]), parts[^1])
+            : (fullName, null);
+    }
+
+    /// <summary>
+    /// The one shape a stored ship's new name may take. The client mirrors this for the counter
+    /// and the greyed button; this is the check that counts.
+    /// </summary>
+    public static bool IsValidStoredShipName(string name)
+    {
+        if (name.Length == 0 || name.Length > ShuttleDeedComponent.MaxNameLength)
+            return false;
+
+        foreach (var c in name)
+        {
+            if (!char.IsAsciiLetterOrDigit(c) && c != ' ' && c != '-')
+                return false;
+        }
+
+        return name.Trim().Length == name.Length;
+    }
+
+    /// <summary>
+    /// The owner scraps a stored ship. The typed name is compared with the row's name here,
+    /// exactly, which is the safety the modal exists for: the client's locked button is a
+    /// convenience and this comparison is the rule. Money moves after the row is Sold, the
+    /// same order as the live sale.
+    /// </summary>
+    internal async Task<(bool Sold, int Price, bool Paid)> TrySellStoredShip(EntityUid uid, ShipyardConsoleComponent component, EntityUid player, Guid shipId, string typedName, ShipyardConsoleUiKey uiKey)
+    {
+        if (!TryGetOperatorAccount(player, out var owner))
+            return (false, 0, false);
+
+        if (!HasComp<BankAccountComponent>(player))
+        {
+            ConsolePopup(player, Loc.GetString("shipyard-console-no-bank"));
+            PlayDenySound(player, uid, component);
+            return (false, 0, false);
+        }
+
+        var header = await _drydockStore.GetShipHeader(shipId);
+        var appraisals = await _drydockStore.GetCurrentAppraisals(owner);
+
+        if (TerminatingOrDeleted(uid) || TerminatingOrDeleted(player))
+            return (false, 0, false);
+
+        if (header != null && header.OwnerUserId != owner)
+        {
+            RefuseAccess(uid, component, player, owner, shipId, header.ShipName, header.OwnerUserId, header.BerthId, "sell");
+            return (false, 0, false);
+        }
+
+        if (header == null || header.State != DrydockShipState.Stored || header.Investigating)
+        {
+            ConsolePopup(player, Loc.GetString("shipyard-console-sell-not-available"));
+            PlayDenySound(player, uid, component);
+            return (false, 0, false);
+        }
+
+        if (!string.Equals(typedName.Trim(), header.ShipName.Trim(), StringComparison.Ordinal))
+        {
+            ConsolePopup(player, Loc.GetString("shipyard-console-sell-name-mismatch"));
+            PlayDenySound(player, uid, component);
+            return (false, 0, false);
+        }
+
+        if (!appraisals.TryGetValue(shipId, out var appraisal) || appraisal is not { } value)
+        {
+            ConsolePopup(player, Loc.GetString("shipyard-console-sell-no-appraisal"));
+            PlayDenySound(player, uid, component);
+            return (false, 0, false);
+        }
+
+        var price = DrydockSalePrice((uid, component), value);
+        var (outcome, sold) = await _drydockStore.TrySellShip(shipId, owner, price.Net, value, DrydockRoundId);
+
+        if (TerminatingOrDeleted(uid) || TerminatingOrDeleted(player))
+            return (outcome == DrydockBerthResult.Success, price.Net, false);
+
+        if (outcome != DrydockBerthResult.Success || sold == null)
+        {
+            ConsolePopup(player, Loc.GetString("shipyard-console-sell-not-available"));
+            PlayDenySound(player, uid, component);
+            return (false, 0, false);
+        }
+
+        foreach (var (account, tax) in price.Taxes)
+            _bank.TrySectorDeposit(account, tax, LedgerEntryType.ShipyardTax);
+
+        var paid = price.Net <= 0 || _bank.TryBankDeposit(player, price.Net, new MarketRecord { Kind = MarketTransactionKind.ShipyardSale });
+        if (!paid)
+            Log.Error($"Drydock: {sold.ShipGuid} ({sold.ShipName}) was sold by {owner} for {price.Net} but the deposit to {ToPrettyString(player)} failed; the timeline row carries the amount.");
+
+        _adminLogger.Add(LogType.ShipYardUsage, LogImpact.Low, $"{ToPrettyString(player):actor} scrapped stored ship {sold.ShipName} ({sold.ShipGuid}) for {price.Net} credits via {ToPrettyString(uid)}");
+
+        ConsolePopup(player, Loc.GetString("shipyard-console-sell-complete", ("ship", sold.ShipName), ("price", price.Net)));
+        PlayConfirmSound(player, uid, component);
+        await RefreshDrydockState(uid, component, player, uiKey);
+        return (true, price.Net, paid);
+    }
+
+    /// <summary>
+    /// The owner renames a stored ship. The suffix the shipyard gave the hull survives: only the
+    /// name part changes, and the hull and deed take the new full name at the next retrieve.
+    /// </summary>
+    internal async Task<bool> TryRenameStoredShip(EntityUid uid, ShipyardConsoleComponent component, EntityUid player, Guid shipId, string newName, ShipyardConsoleUiKey uiKey)
+    {
+        if (!TryGetOperatorAccount(player, out var owner))
+            return false;
+
+        newName = newName.Trim();
+        if (!IsValidStoredShipName(newName))
+        {
+            ConsolePopup(player, Loc.GetString("shipyard-console-rename-invalid", ("max", ShuttleDeedComponent.MaxNameLength)));
+            PlayDenySound(player, uid, component);
+            return false;
+        }
+
+        var header = await _drydockStore.GetShipHeader(shipId);
+
+        if (TerminatingOrDeleted(uid) || TerminatingOrDeleted(player))
+            return false;
+
+        if (header != null && header.OwnerUserId != owner)
+        {
+            RefuseAccess(uid, component, player, owner, shipId, header.ShipName, header.OwnerUserId, header.BerthId, "rename");
+            return false;
+        }
+
+        if (header == null || header.State != DrydockShipState.Stored || header.Investigating)
+        {
+            ConsolePopup(player, Loc.GetString("shipyard-console-rename-not-available"));
+            PlayDenySound(player, uid, component);
+            return false;
+        }
+
+        var (_, suffix) = SplitShuttleName(header.ShipName);
+        var fullName = suffix == null ? newName : $"{newName} {suffix}";
+
+        var outcome = await _drydockStore.TryRenameShip(shipId, owner, fullName, DrydockRoundId);
+
+        if (TerminatingOrDeleted(uid) || TerminatingOrDeleted(player))
+            return outcome == DrydockBerthResult.Success;
+
+        if (outcome != DrydockBerthResult.Success)
+        {
+            ConsolePopup(player, Loc.GetString("shipyard-console-rename-not-available"));
+            PlayDenySound(player, uid, component);
+            return false;
+        }
+
+        ConsolePopup(player, Loc.GetString("shipyard-console-rename-complete", ("ship", fullName)));
+        PlayConfirmSound(player, uid, component);
+        await RefreshDrydockState(uid, component, player, uiKey);
+        return true;
+    }
+
+    /// <summary>
+    /// The owner moves a stored ship to another of their own empty berths that fits. The store's
+    /// admin move does the work; the composite key on the ship row already refuses another
+    /// owner's berth, and the ownership check here is what turns a forged move into a timeline row.
+    /// </summary>
+    internal async Task<bool> TryMoveStoredShip(EntityUid uid, ShipyardConsoleComponent component, EntityUid player, Guid shipId, int berthId, ShipyardConsoleUiKey uiKey)
+    {
+        if (!TryGetOperatorAccount(player, out var owner))
+            return false;
+
+        var header = await _drydockStore.GetShipHeader(shipId);
+
+        if (TerminatingOrDeleted(uid) || TerminatingOrDeleted(player))
+            return false;
+
+        if (header != null && header.OwnerUserId != owner)
+        {
+            RefuseAccess(uid, component, player, owner, shipId, header.ShipName, header.OwnerUserId, header.BerthId, "move");
+            return false;
+        }
+
+        if (header == null || header.State != DrydockShipState.Stored || header.Investigating)
+        {
+            ConsolePopup(player, Loc.GetString("shipyard-console-move-not-available"));
+            PlayDenySound(player, uid, component);
+            return false;
+        }
+
+        var outcome = await _drydockStore.TryMoveShip(shipId, berthId, owner, DrydockRoundId, "moved at the console");
+
+        if (TerminatingOrDeleted(uid) || TerminatingOrDeleted(player))
+            return outcome == DrydockBerthResult.Success;
+
+        if (outcome != DrydockBerthResult.Success)
+        {
+            ConsolePopup(player, Loc.GetString(outcome switch
+            {
+                DrydockBerthResult.BerthTooSmall => "shipyard-console-store-berth-too-small",
+                DrydockBerthResult.BerthOccupied => "shipyard-console-berth-occupied",
+                _ => "shipyard-console-move-not-available",
+            }));
+            PlayDenySound(player, uid, component);
+            return false;
+        }
+
+        ConsolePopup(player, Loc.GetString("shipyard-console-move-complete", ("ship", header.ShipName), ("berth", berthId)));
+        PlayConfirmSound(player, uid, component);
+        await RefreshDrydockState(uid, component, player, uiKey);
         return true;
     }
 

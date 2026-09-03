@@ -289,6 +289,10 @@ public sealed partial class DrydockSystem
         // nor the purchase event, and the repair system subscribes only to the latter.
         _shipRepair.GenerateRepairData(grid);
 
+        // The row is authoritative for the name too: a rename made while the ship was stored is a
+        // row update, and this is where the hull and its deed learn it. Before the station, which
+        // takes its name from the grid.
+        _shipyard.StampStoredName(grid, record.ShipName);
         RefreshShipOwnership(grid, record);
         RecreateStation(grid, record);
     }

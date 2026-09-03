@@ -82,6 +82,9 @@ public sealed partial class ShipyardConsoleBoundUserInterface : BoundUserInterfa
         _menu.OnCancelTransfer += transferId => SendMessage(new ShipyardConsoleCancelTransferMessage(transferId));
         _menu.OnAcceptTransfer += transferId => SendMessage(new ShipyardConsoleAcceptTransferMessage(transferId));
         _menu.OnDeclineTransfer += transferId => SendMessage(new ShipyardConsoleDeclineTransferMessage(transferId));
+        _menu.OnSellStoredShip += (shipId, typed) => SendMessage(new ShipyardConsoleSellStoredShipMessage(shipId, typed));
+        _menu.OnRenameStoredShip += (shipId, name) => SendMessage(new ShipyardConsoleRenameStoredShipMessage(shipId, name));
+        _menu.OnMoveStoredShip += (shipId, berthId) => SendMessage(new ShipyardConsoleMoveStoredShipMessage(shipId, berthId));
         var targetIdButton = _menu.FindControl<Button>("TargetIdButton");
         if (targetIdButton != null)
             targetIdButton.OnPressed += _ => SendMessage(new ItemSlotButtonPressedEvent("ShipyardConsole-targetId"));
