@@ -4251,3 +4251,155 @@ Entries:
   id: 2553
   time: '2026-08-28T01:50:56.0000000+00:00'
   url: https://github.com/Triad-Sector/Triad_Sector/pull/536
+- author: Minerva
+  changes:
+    - type: Tweak
+      message: >-
+        Decorative ELINT greebles can now be built everywhere an antenna can be
+        built. Including on walls.
+  id: 2554
+  time: '2026-08-28T15:02:45.0000000+00:00'
+  url: https://github.com/Triad-Sector/Triad_Sector/pull/566
+- author: Minerva
+  changes:
+    - type: Tweak
+      message: >-
+        The default Pilot jumpsuit has been swapped to the darker military
+        variant. If you haven't explicitly set a jumpsuit on existing
+        characters, it will be changed to the military variant. If you wish to
+        continue using the lighter-colored jumpsuit, just switch back to it in
+        loadout.
+  id: 2555
+  time: '2026-08-28T15:03:12.0000000+00:00'
+  url: https://github.com/Triad-Sector/Triad_Sector/pull/564
+- author: Minerva
+  changes:
+    - type: Tweak
+      message: Leather satchels have been added to the general backpack loadout.
+  id: 2556
+  time: '2026-08-28T15:03:28.0000000+00:00'
+  url: https://github.com/Triad-Sector/Triad_Sector/pull/563
+- author: rebaserHEAD
+  changes:
+    - type: Fix
+      message: >-
+        The RPD now follows the same placement rules as the construction menu:
+        no more stacking devices on one tile, air alarms need a wall, and
+        T-junctions, half pipes and manifolds fit under walls.
+    - type: Fix
+      message: A freshly picked-up RPD places pipes facing the way its ghost shows.
+    - type: Fix
+      message: >-
+        Moving the cursor during an RPD placement no longer changes which layer
+        the pipe lands on.
+  id: 2557
+  time: '2026-08-28T19:19:46.0000000+00:00'
+  url: https://github.com/Triad-Sector/Triad_Sector/pull/568
+- author: TheRealMasterChief117
+  changes:
+    - type: Tweak
+      message: Renamed TDF warden into 'Lieutenant'!
+    - type: Tweak
+      message: Tweaked TDF combat medic's PDA sprite.
+    - type: Add
+      message: Added new job icons for the Lieutenant and Chief Enforcer.
+    - type: Tweak
+      message: Resprited TDF energy shield
+    - type: Tweak
+      message: >-
+        TDF SOP - Changed mentions of 'Warden' to 'Lieutenant'. Brig sentences
+        should be done by the Commander, if possible.
+  id: 2558
+  time: '2026-08-29T02:27:19.0000000+00:00'
+  url: https://github.com/Triad-Sector/Triad_Sector/pull/567
+- author: rebaserHEAD
+  changes:
+    - type: Tweak
+      message: >-
+        Radiators are now copper-cored: they cost 2 steel + 2 copper, shed more
+        heat per tile, and spread heat along a connected array much faster.
+  id: 2559
+  time: '2026-08-29T03:11:08.0000000+00:00'
+  url: https://github.com/Triad-Sector/Triad_Sector/pull/570
+- author: Eillyrea
+  changes:
+    - type: Tweak
+      message: Rules 1.4.  Please reread the rules next time you join a round.
+  id: 2560
+  time: '2026-08-29T14:37:36.0000000+00:00'
+  url: https://github.com/Triad-Sector/Triad_Sector/pull/553
+- author: mirrorcult
+  changes:
+    - type: Tweak
+      message: Made do-after animations smoother.
+  id: 2561
+  time: '2026-08-29T17:33:21.0000000+00:00'
+  url: https://github.com/Triad-Sector/Triad_Sector/pull/572
+- author: TheRealMasterChief117
+  changes:
+    - type: Add
+      message: >-
+        Added coin tossing (coins can now land on heads or tails), ported from
+        wizden!
+  id: 2562
+  time: '2026-08-29T19:05:06.0000000+00:00'
+  url: https://github.com/Triad-Sector/Triad_Sector/pull/574
+- author: Wizden
+  changes:
+    - type: Add
+      message: >-
+        Ghosts can now click a follow button next to chat messages to jump there
+        immediately! Can be turned off in settings.
+  id: 2563
+  time: '2026-08-29T19:12:02.0000000+00:00'
+  url: https://github.com/Triad-Sector/Triad_Sector/pull/573
+- author: Nox38
+  changes:
+    - type: Tweak
+      message: Minor fixes for the TDF Phalanx.
+  id: 2564
+  time: '2026-08-29T21:27:41.0000000+00:00'
+  url: https://github.com/Triad-Sector/Triad_Sector/pull/554
+- author: TheRealMasterChief117
+  changes:
+    - type: Tweak
+      message: >-
+        Laser pointers on guns and the like are no longer blocked by ship
+        shields, so they should be useable on grids with shields.
+  id: 2565
+  time: '2026-08-30T01:13:14.0000000+00:00'
+  url: https://github.com/Triad-Sector/Triad_Sector/pull/577
+- author: gaywolfgirl6
+  changes:
+    - type: Add
+      message: 'Added new Undergarment: Messy Tube Top! Be the mess you''re meant to be!'
+  id: 2566
+  time: '2026-08-30T12:21:53.0000000+00:00'
+  url: https://github.com/Triad-Sector/Triad_Sector/pull/579
+- author: Eillyrea
+  changes:
+    - type: Remove
+      message: Shipyard consoles saving on Ships
+  id: 2567
+  time: '2026-08-30T13:16:23.0000000+00:00'
+  url: https://github.com/Triad-Sector/Triad_Sector/pull/575
+- author: TheRealMasterChief117
+  changes:
+    - type: Add
+      message: >-
+        Added a new m̵̹̎o̷̝̒n̸̬̑o̸͋͜l̸̟̃i̵̬͌t̵̥́h̵̗̕ic fragment.. NT Central
+        Command Outpost. A remnant of the past.
+  id: 2568
+  time: '2026-08-30T23:41:33.0000000+00:00'
+  url: https://github.com/Triad-Sector/Triad_Sector/pull/582
+- author: gaywolfgirl6
+  changes:
+    - type: Add
+      message: Added a new successful melee hit sound to the Tintreach
+    - type: Tweak
+      message: >-
+        Gave the Tintreach, Breaching Hammer, and Kanabou knockback and tuned
+        down their stamina damage done to self on wide swing slightly.
+  id: 2569
+  time: '2026-08-31T02:18:24.0000000+00:00'
+  url: https://github.com/Triad-Sector/Triad_Sector/pull/571

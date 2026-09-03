@@ -69,6 +69,15 @@ public sealed class PalletSaleCaptureTest
         var containers = entMan.System<SharedContainerSystem>();
         var xformSys = entMan.System<SharedTransformSystem>();
 
+        // The pooled server's database outlives any one test, and MarketDataStoreTest writes a
+        // PalletSale row of its own; whichever of the two lands second on a reused server sees both.
+        // Every read below is scoped to rows this test creates.
+        long baseline = 0;
+        await db.RunTriadDbCommand(async (ctx, ct) =>
+        {
+            baseline = await ctx.MarketTransaction.MaxAsync(t => (long?)t.Id, ct) ?? 0;
+        }, default);
+
         var testMap = await pair.CreateTestMap();
         var grid = testMap.Grid.Owner;
 
@@ -154,7 +163,7 @@ public sealed class PalletSaleCaptureTest
             var tx = await ctx.MarketTransaction
                 .Include(t => t.Lines)
                 .Include(t => t.Splits)
-                .Where(t => t.Kind == MarketTransactionKind.PalletSale)
+                .Where(t => t.Id > baseline && t.Kind == MarketTransactionKind.PalletSale)
                 .SingleAsync(ct);
 
             var roots = tx.Lines.Where(l => l.ParentLineIndex == null).ToList();
@@ -205,7 +214,7 @@ public sealed class PalletSaleCaptureTest
             // Taxes belong to this sale, not to rows of their own. Whether any fire depends on the
             // console's tax configuration, so assert the relationship rather than a count.
             var standalone = await ctx.MarketTransaction
-                .CountAsync(t => t.Kind == MarketTransactionKind.SectorLedger, ct);
+                .CountAsync(t => t.Id > baseline && t.Kind == MarketTransactionKind.SectorLedger, ct);
 
             Assert.That(standalone, Is.Zero,
                 "a pallet sale's taxes attach as splits; a standalone ledger row here means the "
