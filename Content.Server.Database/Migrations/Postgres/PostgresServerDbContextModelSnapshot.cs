@@ -1122,6 +1122,10 @@ namespace Content.Server.Database.Migrations.Postgres
                         .HasColumnType("uuid")
                         .HasColumnName("actor_user_id");
 
+                    b.Property<int?>("AppraisedValue")
+                        .HasColumnType("integer")
+                        .HasColumnName("appraised_value");
+
                     b.Property<byte[]>("CapturedKeyHash")
                         .IsRequired()
                         .HasColumnType("bytea")
@@ -1272,6 +1276,61 @@ namespace Content.Server.Database.Migrations.Postgres
                     b.HasIndex("State", "StateChangedAt");
 
                     b.ToTable("drydock_ship", (string)null);
+                });
+
+            modelBuilder.Entity("Content.Server.Database.DrydockTransfer", b =>
+                {
+                    b.Property<long>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint")
+                        .HasColumnName("drydock_transfer_id");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<long>("Id"));
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at");
+
+                    b.Property<DateTime>("ExpiresAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("expires_at");
+
+                    b.Property<Guid>("FromUserId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("from_user_id");
+
+                    b.Property<int>("Resolution")
+                        .HasColumnType("integer")
+                        .HasColumnName("resolution");
+
+                    b.Property<DateTime?>("ResolvedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("resolved_at");
+
+                    b.Property<int?>("RoundId")
+                        .HasColumnType("integer")
+                        .HasColumnName("round_id");
+
+                    b.Property<Guid>("ShipGuid")
+                        .HasColumnType("uuid")
+                        .HasColumnName("ship_guid");
+
+                    b.Property<Guid>("ToUserId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("to_user_id");
+
+                    b.HasKey("Id")
+                        .HasName("PK_drydock_transfer");
+
+                    b.HasIndex("ShipGuid")
+                        .IsUnique()
+                        .HasFilter("resolution = 0");
+
+                    b.HasIndex("Resolution", "ExpiresAt");
+
+                    b.HasIndex("ToUserId", "Resolution");
+
+                    b.ToTable("drydock_transfer", (string)null);
                 });
 
             modelBuilder.Entity("Content.Server.Database.IPIntelCache", b =>
@@ -2878,6 +2937,18 @@ namespace Content.Server.Database.Migrations.Postgres
                     b.Navigation("LastBerth");
 
                     b.Navigation("Owner");
+                });
+
+            modelBuilder.Entity("Content.Server.Database.DrydockTransfer", b =>
+                {
+                    b.HasOne("Content.Server.Database.DrydockShip", "Ship")
+                        .WithMany()
+                        .HasForeignKey("ShipGuid")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired()
+                        .HasConstraintName("FK_drydock_transfer_drydock_ship_ship_temp_id1");
+
+                    b.Navigation("Ship");
                 });
 
             modelBuilder.Entity("Content.Server.Database.Job", b =>

@@ -31,8 +31,11 @@ public sealed class ShipyardConsoleInterfaceState : BoundUserInterfaceState
     /// <summary>Triad: berth purchase price per size class name, for the buy control.</summary>
     public readonly Dictionary<string, int> BerthPrices;
 
-    /// <summary>Triad: the transfer waiting at this console, if any.</summary>
-    public readonly DrydockTransferOfferInfo? TransferOffer;
+    /// <summary>Triad: every standing offer addressed to the operator, oldest deadline first.</summary>
+    public readonly List<DrydockTransferOfferInfo> TransferOffers;
+
+    /// <summary>Triad: the captains online right now, for the transfer picker.</summary>
+    public readonly List<DrydockCaptainInfo> Captains;
 
     /// <summary>
     /// Triad: the account that owns the ship on the inserted card's deed, or null when the card
@@ -60,13 +63,15 @@ public sealed class ShipyardConsoleInterfaceState : BoundUserInterfaceState
         bool drydockEnabled, // Triad: drydock tab
         List<DrydockBerthInfo> berths, // Triad: drydock tab
         Dictionary<string, int> berthPrices, // Triad: drydock tab
-        DrydockTransferOfferInfo? transferOffer, // Triad: drydock tab
+        List<DrydockTransferOfferInfo> transferOffers, // Triad: drydock tab
+        List<DrydockCaptainInfo> captains, // Triad: drydock tab
         Guid? deedOwnerUserId, // Triad: drydock tab
         DrydockDeedShipInfo? deedShip) // Triad: drydock tab
     {
         Berths = berths; // Triad: drydock tab
         BerthPrices = berthPrices; // Triad: drydock tab
-        TransferOffer = transferOffer; // Triad: drydock tab
+        TransferOffers = transferOffers; // Triad: drydock tab
+        Captains = captains; // Triad: drydock tab
         DeedOwnerUserId = deedOwnerUserId; // Triad: drydock tab
         DeedShip = deedShip; // Triad: drydock tab
         Balance = balance;

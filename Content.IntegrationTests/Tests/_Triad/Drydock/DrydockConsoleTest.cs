@@ -297,14 +297,19 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
         /// this harness spawns has a session and no mind, which is the control: a mind is exactly
         /// what a dead player loses when they are reprinted into a fresh body, and a ship must
         /// never become untransferable because of it. A session that does not own the row is
-        /// refused and the refusal is written down.
+        /// refused and the refusal is written down; so is a session answering an offer that was
+        /// not addressed to it.
+        ///
+        /// <para>The harness has one session, so a console-side offer to another live captain
+        /// cannot be exercised here: the recipient gate refuses an offline account, which is
+        /// checked, and the escrow itself is opened at the store level and then driven from the
+        /// console for everything that follows.</para>
         /// </summary>
         [Test]
         public async Task ATransferOfferIsBoundToTheOfferingAccount()
         {
             await using var pair = await PoolManager.GetServerClient(new PoolSettings { Connected = true });
             var server = pair.Server;
-            var entMan = server.EntMan;
 
             var playerMan = server.ResolveDependency<IPlayerManager>();
             var store = server.ResolveDependency<DrydockStore>();
@@ -312,6 +317,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             var mindSys = server.System<Content.Server.Mind.MindSystem>();
 
             var session = playerMan.Sessions.First();
+            var me = session.UserId.UserId;
             var (station, stationGrid, ship, console, consoleComp, card, operatorEnt) = await BuildConsoleAndShip(pair, session.UserId);
 
             var stored = await RunOnServer(pair,
@@ -327,34 +333,11 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                     "The operator must have no mind, or an offer succeeding says nothing about the account check.");
             });
 
-            var offered = await RunOnServer(pair,
-                () => shipyard.TryOfferTransfer(console, consoleComp, operatorEnt, shipId, ShipyardConsoleUiKey.Shipyard));
-            Assert.That(offered, Is.True, "The account owns the row; the character's mind is not consulted.");
-            Assert.Multiple(() =>
-            {
-                Assert.That(consoleComp.PendingTransfer, Is.Not.Null);
-                Assert.That(consoleComp.PendingTransfer!.ShipId, Is.EqualTo(shipId));
-                Assert.That(consoleComp.PendingTransfer.OwnerUserId, Is.EqualTo(session.UserId.UserId));
-            });
-
-            // The offerer's own session cannot complete the handshake.
-            var selfAccept = await RunOnServer(pair,
-                () => shipyard.TryAcceptTransfer(console, consoleComp, operatorEnt, ShipyardConsoleUiKey.Shipyard));
-            Assert.That(selfAccept, Is.False, "Accepting your own offer would be a no-op transfer at best; it is refused outright.");
-            Assert.That((await store.LoadCurrent(shipId))!.Ship.OwnerUserId, Is.EqualTo(session.UserId.UserId));
-            Assert.That(consoleComp.PendingTransfer, Is.Not.Null, "A refused accept leaves the offer standing for the right person.");
-
-            var cancelled = await RunOnServer(pair,
-                () => shipyard.TryCancelTransfer(console, consoleComp, operatorEnt, ShipyardConsoleUiKey.Shipyard));
-            Assert.That(cancelled, Is.True);
-            Assert.That(consoleComp.PendingTransfer, Is.Null);
-
-            // A ship this account does not own: refused, and the refusal is on the timeline with
-            // both accounts named. This is the only way a console ever writes such a row, since
-            // the tab never offers the click.
+            // Another account with room for two hulls, and a hull of its own already in one.
             var stranger = Guid.NewGuid();
             var theirs = Guid.NewGuid();
             await DrydockStoreTest.InsertPlayer(server.ResolveDependency<IServerDbManager>(), stranger);
+            await store.AddBerth(stranger, ShipSizeClass.SuperCapital, DrydockBerthKind.Granted, 0, null, null);
             await store.AddBerth(stranger, ShipSizeClass.SuperCapital, DrydockBerthKind.Granted, 0, null, null);
             await store.FileRevision(new DrydockRevisionRequest
             {
@@ -372,20 +355,91 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                 Manifest = "{}",
             }, new byte[] { 1 }, 3);
 
-            var forged = await RunOnServer(pair,
-                () => shipyard.TryOfferTransfer(console, consoleComp, operatorEnt, theirs, ShipyardConsoleUiKey.Shipyard));
-            Assert.That(forged, Is.False, "A session that does not own the row cannot offer it, whatever card is in the slot.");
-            Assert.That(consoleComp.PendingTransfer, Is.Null);
+            // The recipient gate: the stranger is not online, so the console refuses before any
+            // row is written. The ownership check passed, so nothing is on the timeline for it.
+            var offline = await RunOnServer(pair,
+                () => shipyard.TryOfferTransfer(console, consoleComp, operatorEnt, shipId, stranger, ShipyardConsoleUiKey.Shipyard));
+            Assert.That(offline, Is.False, "An offer to a captain who is not online is refused.");
+            Assert.That((await store.GetShipHeader(shipId))!.State, Is.EqualTo(DrydockShipState.Stored));
 
-            var refusals = await RunOnServer(pair, () => store.GetAuditByActor(session.UserId.UserId, 20));
+            // A ship this account does not own: refused, and the refusal is on the timeline with
+            // both accounts named. This is the only way a console ever writes such a row, since
+            // the tab never offers the click.
+            var forged = await RunOnServer(pair,
+                () => shipyard.TryOfferTransfer(console, consoleComp, operatorEnt, theirs, stranger, ShipyardConsoleUiKey.Shipyard));
+            Assert.That(forged, Is.False, "A session that does not own the row cannot offer it, whatever card is in the slot.");
+
+            var refusals = await RunOnServer(pair, () => store.GetAuditByActor(me, 20));
             var refusal = refusals.FirstOrDefault(a => a.Action == DrydockAuditAction.AccessRefused && a.ShipGuid == theirs);
             Assert.That(refusal, Is.Not.Null, "A refused offer must be on the timeline: it is the stolen-card signal.");
             Assert.Multiple(() =>
             {
-                Assert.That(refusal!.ActorUserId, Is.EqualTo(session.UserId.UserId));
+                Assert.That(refusal!.ActorUserId, Is.EqualTo(me));
                 Assert.That(refusal.SubjectUserId, Is.EqualTo(stranger));
                 Assert.That(refusal.Reason, Is.EqualTo("transfer"));
             });
+
+            // Escrow, opened at the store: the ship keeps its berth and cannot come out.
+            var (offered, transfer) = await store.TryOfferTransfer(shipId, me, stranger, TimeSpan.FromMinutes(30), null);
+            Assert.That(offered, Is.EqualTo(DrydockBerthResult.Success));
+            var inEscrow = (await store.GetShipHeader(shipId))!;
+            Assert.Multiple(() =>
+            {
+                Assert.That(inEscrow.State, Is.EqualTo(DrydockShipState.InEscrow));
+                Assert.That(inEscrow.BerthId, Is.Not.Null, "A ship in escrow keeps its berth.");
+            });
+
+            var retrieved = await RunOnServer(pair,
+                () => shipyard.TryDrydockRetrieve(console, consoleComp, operatorEnt, shipId, ShipyardConsoleUiKey.Shipyard));
+            Assert.That(retrieved, Is.Null, "A ship in escrow does not come out.");
+            Assert.That((await store.GetShipHeader(shipId))!.State, Is.EqualTo(DrydockShipState.InEscrow));
+
+            // The wrong party answering: the owner cannot decline their own offer, and the
+            // attempt is written down against the ship.
+            var selfDecline = await RunOnServer(pair,
+                () => shipyard.TryDeclineTransfer(console, consoleComp, operatorEnt, transfer!.Id, ShipyardConsoleUiKey.Shipyard));
+            Assert.That(selfDecline, Is.False);
+            refusals = await RunOnServer(pair, () => store.GetAuditByActor(me, 20));
+            Assert.That(refusals.Any(a => a.Action == DrydockAuditAction.AccessRefused && a.ShipGuid == shipId && a.Reason == "decline offer"),
+                "Declining an offer you made is a forged message and goes on the timeline.");
+
+            // The owner withdraws it from the console: the ship is stored again.
+            var cancelled = await RunOnServer(pair,
+                () => shipyard.TryCancelTransfer(console, consoleComp, operatorEnt, transfer!.Id, ShipyardConsoleUiKey.Shipyard));
+            Assert.That(cancelled, Is.True);
+            Assert.That((await store.GetShipHeader(shipId))!.State, Is.EqualTo(DrydockShipState.Stored));
+
+            // The other direction: an offer addressed to this session, accepted at the console.
+            // The ship changes hands into one of this account's free berths.
+            var spare = await store.AddBerth(me, ShipSizeClass.Cutter, DrydockBerthKind.Granted, 0, null, null);
+            var (offeredBack, incoming) = await store.TryOfferTransfer(theirs, stranger, me, TimeSpan.FromMinutes(30), null);
+            Assert.That(offeredBack, Is.EqualTo(DrydockBerthResult.Success));
+
+            var accepted = await RunOnServer(pair,
+                () => shipyard.TryAcceptTransfer(console, consoleComp, operatorEnt, incoming!.Id, ShipyardConsoleUiKey.Shipyard));
+            Assert.That(accepted, Is.True, "The account the offer names accepts it; the character's mind is not consulted.");
+            var mine = (await store.GetShipHeader(theirs))!;
+            var myBerths = await store.GetBerths(me);
+            Assert.Multiple(() =>
+            {
+                Assert.That(mine.OwnerUserId, Is.EqualTo(me));
+                Assert.That(mine.State, Is.EqualTo(DrydockShipState.Stored));
+                Assert.That(myBerths.Select(b => b.Berth.BerthId), Does.Contain(mine.BerthId!.Value), "The accepted ship lands in one of the recipient's own berths.");
+            });
+
+            // Expiry: a deadline already past is swept, the ship returns to Stored, and the
+            // owner does not change.
+            var (offeredStale, stale) = await store.TryOfferTransfer(theirs, me, stranger, TimeSpan.FromSeconds(-1), null);
+            Assert.That(offeredStale, Is.EqualTo(DrydockBerthResult.Success));
+            var released = await store.ExpireTransfers(DateTime.UtcNow, null);
+            Assert.That(released, Does.Contain(theirs), "The sweep releases every offer past its deadline.");
+            var afterSweep = (await store.GetShipHeader(theirs))!;
+            Assert.Multiple(() =>
+            {
+                Assert.That(afterSweep.State, Is.EqualTo(DrydockShipState.Stored));
+                Assert.That(afterSweep.OwnerUserId, Is.EqualTo(me));
+            });
+            Assert.That(await store.GetPendingTransfer(stale!.Id), Is.Null, "An expired offer is no longer pending.");
 
             await pair.CleanReturnAsync();
         }

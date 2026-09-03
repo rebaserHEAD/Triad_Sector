@@ -19,6 +19,7 @@ using Content.Shared._Triad.CCVar;
 using Content.Shared._Triad.Drydock;
 using Content.Shared._Triad.ShipSize;
 using Robust.Shared.Map.Components;
+using Robust.Shared.Network;
 using Robust.Shared.Player;
 using Robust.Shared.Timing;
 
@@ -214,11 +215,13 @@ public sealed partial class ShipyardSystem
 
         try
         {
-            await TryOfferTransfer(uid, component, player, args.ShipId, (ShipyardConsoleUiKey)args.UiKey);
+            await TryOfferTransfer(uid, component, player, args.ShipId, args.RecipientUserId, (ShipyardConsoleUiKey)args.UiKey);
         }
         catch (Exception e)
         {
             Log.Error($"Drydock: transfer offer at {ToPrettyString(uid)} by {ToPrettyString(player)} threw: {e}");
+            if (!TerminatingOrDeleted(player))
+                ConsolePopup(player, Loc.GetString("shipyard-console-transfer-failed"));
         }
     }
 
@@ -229,11 +232,26 @@ public sealed partial class ShipyardSystem
 
         try
         {
-            await TryCancelTransfer(uid, component, player, (ShipyardConsoleUiKey)args.UiKey);
+            await TryCancelTransfer(uid, component, player, args.TransferId, (ShipyardConsoleUiKey)args.UiKey);
         }
         catch (Exception e)
         {
             Log.Error($"Drydock: transfer cancel at {ToPrettyString(uid)} by {ToPrettyString(player)} threw: {e}");
+        }
+    }
+
+    private async void OnDeclineTransferMessage(EntityUid uid, ShipyardConsoleComponent component, ShipyardConsoleDeclineTransferMessage args)
+    {
+        if (args.Actor is not { Valid: true } player)
+            return;
+
+        try
+        {
+            await TryDeclineTransfer(uid, component, player, args.TransferId, (ShipyardConsoleUiKey)args.UiKey);
+        }
+        catch (Exception e)
+        {
+            Log.Error($"Drydock: transfer decline at {ToPrettyString(uid)} by {ToPrettyString(player)} threw: {e}");
         }
     }
 
@@ -244,7 +262,7 @@ public sealed partial class ShipyardSystem
 
         try
         {
-            await TryAcceptTransfer(uid, component, player, (ShipyardConsoleUiKey)args.UiKey);
+            await TryAcceptTransfer(uid, component, player, args.TransferId, (ShipyardConsoleUiKey)args.UiKey);
         }
         catch (Exception e)
         {
@@ -252,16 +270,6 @@ public sealed partial class ShipyardSystem
             if (!TerminatingOrDeleted(player))
                 ConsolePopup(player, Loc.GetString("shipyard-console-transfer-failed"));
         }
-    }
-
-    /// <summary>An offer dies with the console session that made it, so a walk-away never leaves a live offer for a stranger.</summary>
-    private void OnConsoleUIClosed(EntityUid uid, ShipyardConsoleComponent component, BoundUIClosedEvent args)
-    {
-        if (component.PendingTransfer is not { } offer)
-            return;
-
-        if (TryComp<ActorComponent>(args.Actor, out var actor) && actor.PlayerSession.UserId.UserId == offer.OwnerUserId)
-            component.PendingTransfer = null;
     }
 
     // ---------------------------------------------------------------- State
@@ -276,6 +284,8 @@ public sealed partial class ShipyardSystem
         component.CachedStoredShips = new();
         component.CachedBerths = new();
         component.CachedDeedShip = null;
+        component.CachedOffers = new();
+        component.CachedCaptains = new();
 
         // No card, no account to list against: the drydock tab is per-operator, and an empty list
         // is the honest answer rather than everything the console has ever seen.
@@ -289,6 +299,14 @@ public sealed partial class ShipyardSystem
         var owner = actor.PlayerSession.UserId.UserId;
         var rows = await _drydockStore.GetShipsByOwner(owner);
         var slots = await _drydockStore.GetBerths(owner);
+        var offersOut = await _drydockStore.GetPendingOffersFrom(owner);
+        var offersIn = await _drydockStore.GetPendingOffersFor(owner);
+
+        // Everyone else online, for the transfer picker, with the classes of their free berths so
+        // the picker can grey the captains with nowhere to put the ship. Read in one query.
+        var online = _player.Sessions.Where(s => s.UserId.UserId != owner).ToList();
+        var freeClasses = await _drydockStore.GetFreeBerthClasses(online.Select(s => s.UserId.UserId));
+        var names = await _drydockStore.GetPlayerNames(offersOut.Values.Select(t => t.ToUserId).Concat(offersIn.Select(o => o.Transfer.FromUserId)));
 
         // The console or the operator may have gone during the reads.
         if (TerminatingOrDeleted(uid) || TerminatingOrDeleted(player))
@@ -302,6 +320,7 @@ public sealed partial class ShipyardSystem
             .Select(r => new StoredShipInfo(r.ShipGuid, r.ShipName, r.SizeClass, r.State.ToString(), r.BerthId))
             .ToList();
 
+        var now = DateTime.UtcNow;
         var refund = _configManager.GetCVar(TriadCCVars.DrydockBerthRefund);
         foreach (var slot in slots)
         {
@@ -313,6 +332,10 @@ public sealed partial class ShipyardSystem
                 upgradeClass = next.ToString();
             }
 
+            DrydockTransfer? escrow = null;
+            if (slot.Occupant != null)
+                offersOut.TryGetValue(slot.Occupant.ShipGuid, out escrow);
+
             component.CachedBerths.Add(new DrydockBerthInfo(
                 slot.Berth.BerthId,
                 slot.Berth.MaxSizeClass,
@@ -322,11 +345,69 @@ public sealed partial class ShipyardSystem
                 slot.Occupant?.ShipGuid,
                 slot.Occupant?.ShipName,
                 slot.Occupant?.SizeClass,
-                slot.Occupant?.State.ToString()));
+                slot.Occupant?.State.ToString(),
+                null,
+                escrow?.Id,
+                escrow != null ? CaptainName(escrow.ToUserId, names) : null,
+                escrow != null ? SecondsLeft(escrow.ExpiresAt, now) : null));
+        }
+
+        // The alerts: every offer addressed to this account, with where the ship would land if
+        // accepted right now. The berth is chosen again at accept, so this is a preview.
+        foreach (var (transfer, ship) in offersIn)
+        {
+            int? lands = slots
+                .Where(s => s.Occupant == null && DrydockStore.Fits(ship.SizeClass, s.Berth.MaxSizeClass))
+                .OrderBy(s => DrydockStore.TryParseClass(s.Berth.MaxSizeClass, out var max) ? (int)max : int.MaxValue)
+                .ThenBy(s => s.Berth.BerthId)
+                .Select(s => (int?)s.Berth.BerthId)
+                .FirstOrDefault();
+
+            component.CachedOffers.Add(new DrydockTransferOfferInfo(
+                transfer.Id,
+                ship.ShipGuid,
+                ship.ShipName,
+                ship.SizeClass,
+                CaptainName(transfer.FromUserId, names),
+                transfer.FromUserId,
+                lands,
+                SecondsLeft(transfer.ExpiresAt, now)));
+        }
+
+        foreach (var session in online)
+        {
+            var id = session.UserId.UserId;
+            component.CachedCaptains.Add(new DrydockCaptainInfo(id, SessionDisplayName(session), freeClasses.GetValueOrDefault(id) ?? new List<string>()));
         }
 
         component.CachedDeedShip = BuildDeedShip(targetId, rows, slots);
         RefreshDrydockUi(uid, component, player, uiKey);
+    }
+
+    private static int SecondsLeft(DateTime expiresAt, DateTime now)
+    {
+        return (int)Math.Max(0, Math.Ceiling((expiresAt - now).TotalSeconds));
+    }
+
+    /// <summary>The character's name while they are online, else the account's last seen name, else a placeholder.</summary>
+    private string CaptainName(Guid userId, Dictionary<Guid, string> lastSeen)
+    {
+        if (_player.TryGetSessionById(new NetUserId(userId), out var session))
+            return SessionDisplayName(session);
+
+        return lastSeen.TryGetValue(userId, out var name) ? name : Loc.GetString("shipyard-console-transfer-someone");
+    }
+
+    private string SessionDisplayName(ICommonSession session)
+    {
+        if (session.AttachedEntity is { } ent && !TerminatingOrDeleted(ent))
+        {
+            var name = Name(ent).Trim();
+            if (name.Length > 0)
+                return name;
+        }
+
+        return session.Name;
     }
 
     /// <summary>
@@ -395,25 +476,50 @@ public sealed partial class ShipyardSystem
     }
 
     /// <summary>
-    /// The drydock half of the console state, read from the caches and the pending offer. Called
-    /// by the upstream state builder so it carries one line of ours rather than a block.
+    /// Re-fills the drydock tab on every console this account has open, wherever it is. Called
+    /// when the other side of an offer acts, so the alert or the escrow row changes under them
+    /// without a reopen.
     /// </summary>
-    internal (List<StoredShipInfo> Ships, List<DrydockBerthInfo> Berths, Dictionary<string, int> Prices, DrydockTransferOfferInfo? Offer, Guid? DeedOwner, DrydockDeedShipInfo? DeedShip) BuildDrydockState(EntityUid uid)
+    internal void KickDrydockRefreshForAccount(Guid userId)
+    {
+        KickDrydockRefreshWhere(actorUserId => actorUserId == userId);
+    }
+
+    /// <summary>Re-fills every open drydock tab. The expiry sweep calls this, since it does not know who was watching.</summary>
+    internal void KickDrydockRefreshAll()
+    {
+        KickDrydockRefreshWhere(_ => true);
+    }
+
+    private void KickDrydockRefreshWhere(Func<Guid, bool> accountMatches)
+    {
+        if (!_configManager.GetCVar(TriadCCVars.DrydockEnabled))
+            return;
+
+        var query = EntityQueryEnumerator<ShipyardConsoleComponent>();
+        while (query.MoveNext(out var uid, out var console))
+        {
+            foreach (var key in Enum.GetValues<ShipyardConsoleUiKey>())
+            {
+                foreach (var viewer in _ui.GetActors(uid, key))
+                {
+                    if (TryComp<ActorComponent>(viewer, out var actor) && accountMatches(actor.PlayerSession.UserId.UserId))
+                        KickDrydockRefresh(uid, console, viewer, key);
+                }
+            }
+        }
+    }
+
+    /// <summary>
+    /// The drydock half of the console state, read from the caches. Called by the upstream state
+    /// builder so it carries one line of ours rather than a block.
+    /// </summary>
+    internal (List<StoredShipInfo> Ships, List<DrydockBerthInfo> Berths, Dictionary<string, int> Prices, List<DrydockTransferOfferInfo> Offers, List<DrydockCaptainInfo> Captains, Guid? DeedOwner, DrydockDeedShipInfo? DeedShip) BuildDrydockState(EntityUid uid)
     {
         if (!TryComp<ShipyardConsoleComponent>(uid, out var console))
-            return (new(), new(), DrydockBerthPrices(), null, null, null);
+            return (new(), new(), DrydockBerthPrices(), new(), new(), null, null);
 
-        DrydockTransferOfferInfo? offer = null;
-        if (console.PendingTransfer is { } pending)
-        {
-            var left = (int)Math.Ceiling((pending.ExpiresAt - _timing.CurTime).TotalSeconds);
-            if (left <= 0)
-                console.PendingTransfer = null;
-            else
-                offer = new DrydockTransferOfferInfo(pending.ShipId, pending.ShipName, pending.SizeClass, pending.OwnerName, pending.OwnerUserId, left);
-        }
-
-        return (console.CachedStoredShips, console.CachedBerths, DrydockBerthPrices(), offer, DeedOwnerAccount(console), console.CachedDeedShip);
+        return (console.CachedStoredShips, console.CachedBerths, DrydockBerthPrices(), console.CachedOffers, console.CachedCaptains, DeedOwnerAccount(console), console.CachedDeedShip);
     }
 
     /// <summary>
@@ -798,7 +904,13 @@ public sealed partial class ShipyardSystem
 
     // ---------------------------------------------------------------- Transfer
 
-    internal async Task<bool> TryOfferTransfer(EntityUid uid, ShipyardConsoleComponent component, EntityUid player, Guid shipId, ShipyardConsoleUiKey uiKey)
+    /// <summary>
+    /// Opens an offer of one of the operator's stored ships to another account. The recipient has
+    /// to be online right now, which is the one social gate: an offer is a conversation, not a
+    /// parcel left on a doorstep. From here the offer is a persisted row with a deadline, the
+    /// ship waits in escrow in its own berth, and the recipient answers from any console.
+    /// </summary>
+    internal async Task<bool> TryOfferTransfer(EntityUid uid, ShipyardConsoleComponent component, EntityUid player, Guid shipId, Guid recipient, ShipyardConsoleUiKey uiKey)
     {
         if (!TryGetOperatorAccount(player, out var owner))
         {
@@ -807,9 +919,9 @@ public sealed partial class ShipyardSystem
             return false;
         }
 
-        if (component.PendingTransfer != null && component.PendingTransfer.ExpiresAt > _timing.CurTime)
+        if (recipient == owner)
         {
-            ConsolePopup(player, Loc.GetString("shipyard-console-transfer-busy"));
+            ConsolePopup(player, Loc.GetString("shipyard-console-transfer-own"));
             PlayDenySound(player, uid, component);
             return false;
         }
@@ -819,7 +931,9 @@ public sealed partial class ShipyardSystem
         if (TerminatingOrDeleted(uid) || TerminatingOrDeleted(player))
             return false;
 
-        // The account behind the click must own the row. The card in the slot says nothing here.
+        // The account behind the click must own the row. The card in the slot says nothing here,
+        // and this is checked before anything about the recipient so a forged offer of someone
+        // else's ship lands on the timeline whoever it was addressed to.
         if (current != null && current.OwnerUserId != owner)
         {
             RefuseAccess(uid, component, player, owner, shipId, current.ShipName, current.OwnerUserId, current.BerthId, "transfer");
@@ -828,62 +942,117 @@ public sealed partial class ShipyardSystem
 
         if (current == null || current.State != DrydockShipState.Stored || current.Investigating)
         {
-            ConsolePopup(player, Loc.GetString("shipyard-console-transfer-not-yours"));
+            ConsolePopup(player, Loc.GetString(current is { State: DrydockShipState.InEscrow }
+                ? "shipyard-console-transfer-busy"
+                : "shipyard-console-transfer-not-yours"));
             PlayDenySound(player, uid, component);
             return false;
         }
 
-        var seconds = Math.Max(5, _configManager.GetCVar(TriadCCVars.DrydockTransferOfferSeconds));
-        component.PendingTransfer = new DrydockTransferOffer
+        if (!_player.TryGetSessionById(new NetUserId(recipient), out var recipientSession))
         {
-            ShipId = shipId,
-            ShipName = current.ShipName,
-            SizeClass = current.SizeClass,
-            OwnerUserId = owner,
-            OwnerName = Name(player).Trim(),
-            ExpiresAt = _timing.CurTime + TimeSpan.FromSeconds(seconds),
-        };
+            ConsolePopup(player, Loc.GetString("shipyard-console-transfer-offline"));
+            PlayDenySound(player, uid, component);
+            return false;
+        }
 
-        ConsolePopup(player, Loc.GetString("shipyard-console-transfer-offered", ("seconds", seconds)));
+        var seconds = Math.Max(60, _configManager.GetCVar(TriadCCVars.DrydockTransferOfferSeconds));
+        var (outcome, transfer) = await _drydockStore.TryOfferTransfer(shipId, owner, recipient, TimeSpan.FromSeconds(seconds), DrydockRoundId);
+
+        if (TerminatingOrDeleted(uid) || TerminatingOrDeleted(player))
+            return outcome == DrydockBerthResult.Success;
+
+        if (outcome != DrydockBerthResult.Success || transfer == null)
+        {
+            ConsolePopup(player, Loc.GetString(outcome switch
+            {
+                DrydockBerthResult.NoBerth or DrydockBerthResult.BerthTooSmall => "shipyard-console-transfer-recipient-full",
+                DrydockBerthResult.Conflict => "shipyard-console-transfer-busy",
+                _ => "shipyard-console-transfer-not-yours",
+            }));
+            PlayDenySound(player, uid, component);
+            return false;
+        }
+
+        ConsolePopup(player, Loc.GetString("shipyard-console-transfer-offered",
+            ("name", SessionDisplayName(recipientSession)), ("minutes", (int)Math.Ceiling(seconds / 60.0))));
         PlayConfirmSound(player, uid, component);
         await RefreshDrydockState(uid, component, player, uiKey);
+        KickDrydockRefreshForAccount(recipient);
         return true;
     }
 
-    internal Task<bool> TryCancelTransfer(EntityUid uid, ShipyardConsoleComponent component, EntityUid player, ShipyardConsoleUiKey uiKey)
+    /// <summary>The owner withdraws a standing offer. The ship leaves escrow; the recipient's alert goes.</summary>
+    internal async Task<bool> TryCancelTransfer(EntityUid uid, ShipyardConsoleComponent component, EntityUid player, long transferId, ShipyardConsoleUiKey uiKey)
     {
-        if (component.PendingTransfer is not { } offer)
-            return Task.FromResult(false);
-
-        // Only the offerer withdraws a live offer; anyone may clear a lapsed one.
-        var lapsed = offer.ExpiresAt <= _timing.CurTime;
-        if (!lapsed && (!TryComp<ActorComponent>(player, out var actor) || actor.PlayerSession.UserId.UserId != offer.OwnerUserId))
-            return Task.FromResult(false);
-
-        component.PendingTransfer = null;
-        return RefreshDrydockState(uid, component, player, uiKey).ContinueWith(_ => true, TaskScheduler.Default);
+        return await TryEndTransfer(uid, component, player, transferId, DrydockTransferResolution.Cancelled, uiKey);
     }
 
-    internal async Task<bool> TryAcceptTransfer(EntityUid uid, ShipyardConsoleComponent component, EntityUid player, ShipyardConsoleUiKey uiKey)
+    /// <summary>The recipient turns an offer down. The ship leaves escrow; the owner's row goes back to Stored.</summary>
+    internal async Task<bool> TryDeclineTransfer(EntityUid uid, ShipyardConsoleComponent component, EntityUid player, long transferId, ShipyardConsoleUiKey uiKey)
     {
-        if (component.PendingTransfer is not { } offer || offer.ExpiresAt <= _timing.CurTime)
+        return await TryEndTransfer(uid, component, player, transferId, DrydockTransferResolution.Declined, uiKey);
+    }
+
+    private async Task<bool> TryEndTransfer(EntityUid uid, ShipyardConsoleComponent component, EntityUid player, long transferId, DrydockTransferResolution resolution, ShipyardConsoleUiKey uiKey)
+    {
+        if (!TryGetOperatorAccount(player, out var operatorAccount))
+            return false;
+
+        var pending = await _drydockStore.GetPendingTransfer(transferId);
+
+        if (TerminatingOrDeleted(uid) || TerminatingOrDeleted(player))
+            return false;
+
+        if (pending is not var (transfer, ship))
         {
-            component.PendingTransfer = null;
             ConsolePopup(player, Loc.GetString("shipyard-console-transfer-none"));
             PlayDenySound(player, uid, component);
             return false;
         }
 
-        if (!TryGetOperatorAccount(player, out var recipient))
+        // Cancel is the owner's verb and decline the recipient's; the console never offers the
+        // other one, so the wrong party here is a forged message and goes on the timeline.
+        var (rightParty, verb) = resolution == DrydockTransferResolution.Cancelled
+            ? (transfer.FromUserId, "cancel offer")
+            : (transfer.ToUserId, "decline offer");
+        if (rightParty != operatorAccount)
         {
-            ConsolePopup(player, Loc.GetString("shipyard-console-transfer-not-verified"));
+            RefuseAccess(uid, component, player, operatorAccount, ship.ShipGuid, ship.ShipName, ship.OwnerUserId, ship.BerthId, verb);
+            return false;
+        }
+
+        var resolved = await _drydockStore.TryResolveTransfer(transferId, resolution, operatorAccount, DrydockRoundId);
+
+        if (TerminatingOrDeleted(uid) || TerminatingOrDeleted(player))
+            return resolved != null;
+
+        if (resolved == null)
+        {
+            ConsolePopup(player, Loc.GetString("shipyard-console-transfer-none"));
             PlayDenySound(player, uid, component);
             return false;
         }
 
-        if (recipient == offer.OwnerUserId)
+        ConsolePopup(player, Loc.GetString(resolution == DrydockTransferResolution.Cancelled
+            ? "shipyard-console-transfer-cancelled"
+            : "shipyard-console-transfer-declined"));
+        PlayConfirmSound(player, uid, component);
+        await RefreshDrydockState(uid, component, player, uiKey);
+        KickDrydockRefreshForAccount(resolution == DrydockTransferResolution.Cancelled ? resolved.ToUserId : resolved.FromUserId);
+        return true;
+    }
+
+    /// <summary>
+    /// The recipient takes the ship. The store re-checks the deadline and picks the berth now,
+    /// so an alert that outlived its offer, or a garage that filled up meanwhile, is a refusal
+    /// with a reason rather than a ship in two places.
+    /// </summary>
+    internal async Task<bool> TryAcceptTransfer(EntityUid uid, ShipyardConsoleComponent component, EntityUid player, long transferId, ShipyardConsoleUiKey uiKey)
+    {
+        if (!TryGetOperatorAccount(player, out var recipient))
         {
-            ConsolePopup(player, Loc.GetString("shipyard-console-transfer-own"));
+            ConsolePopup(player, Loc.GetString("shipyard-console-transfer-not-verified"));
             PlayDenySound(player, uid, component);
             return false;
         }
@@ -897,18 +1066,34 @@ public sealed partial class ShipyardSystem
             return false;
         }
 
-        var (outcome, _) = await _drydockStore.TryTransferShip(offer.ShipId, offer.OwnerUserId, recipient, DrydockRoundId,
-            $"transferred at the console to {Name(player).Trim()}");
+        var pending = await _drydockStore.GetPendingTransfer(transferId);
+
+        if (TerminatingOrDeleted(uid) || TerminatingOrDeleted(player))
+            return false;
+
+        if (pending is not var (transfer, ship))
+        {
+            ConsolePopup(player, Loc.GetString("shipyard-console-transfer-none"));
+            PlayDenySound(player, uid, component);
+            return false;
+        }
+
+        if (transfer.ToUserId != recipient)
+        {
+            RefuseAccess(uid, component, player, recipient, ship.ShipGuid, ship.ShipName, ship.OwnerUserId, ship.BerthId, "accept offer");
+            return false;
+        }
+
+        var (outcome, _, accepted) = await _drydockStore.TryAcceptTransfer(transferId, recipient, DrydockRoundId);
 
         if (TerminatingOrDeleted(uid) || TerminatingOrDeleted(player))
             return outcome == DrydockBerthResult.Success;
 
-        if (outcome != DrydockBerthResult.Success)
+        if (outcome != DrydockBerthResult.Success || accepted == null)
         {
             ConsolePopup(player, Loc.GetString(outcome switch
             {
-                DrydockBerthResult.NoBerth => "shipyard-console-store-no-berth",
-                DrydockBerthResult.BerthTooSmall => "shipyard-console-store-berth-too-small",
+                DrydockBerthResult.NoBerth or DrydockBerthResult.BerthTooSmall => "shipyard-console-store-no-berth",
                 DrydockBerthResult.WrongState or DrydockBerthResult.NotFound => "shipyard-console-transfer-gone",
                 _ => "shipyard-console-transfer-failed",
             }));
@@ -916,10 +1101,10 @@ public sealed partial class ShipyardSystem
             return false;
         }
 
-        component.PendingTransfer = null;
-        ConsolePopup(player, Loc.GetString("shipyard-console-transfer-complete", ("ship", offer.ShipName)));
+        ConsolePopup(player, Loc.GetString("shipyard-console-transfer-complete", ("ship", accepted.ShipName)));
         PlayConfirmSound(player, uid, component);
         await RefreshDrydockState(uid, component, player, uiKey);
+        KickDrydockRefreshForAccount(transfer.FromUserId);
         return true;
     }
 

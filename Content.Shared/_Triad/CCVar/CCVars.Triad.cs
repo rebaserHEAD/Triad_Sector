@@ -94,11 +94,12 @@ public sealed class TriadCCVars
         CVarDef.Create("triad.drydock.berth_refund", 0.5f, CVar.SERVERONLY);
 
     /// <summary>
-    /// How long a transfer offer at the shipyard console waits for the recipient's accept before
-    /// it lapses. The offer also lapses when the console closes.
+    /// How long a transfer offer stands before it expires and the ship leaves escrow. The clock is
+    /// the persisted deadline on the offer row, so it keeps running through the recipient logging
+    /// off and through a server restart, and both sides read the same remaining time from it.
     /// </summary>
     public static readonly CVarDef<int> DrydockTransferOfferSeconds =
-        CVarDef.Create("triad.drydock.transfer_offer_seconds", 30, CVar.SERVERONLY);
+        CVarDef.Create("triad.drydock.transfer_offer_seconds", 1800, CVar.SERVERONLY);
     // End Triad
     // Triad: market data
     // The queue knobs mirror the admin log ones, which solve the same problem at production volume

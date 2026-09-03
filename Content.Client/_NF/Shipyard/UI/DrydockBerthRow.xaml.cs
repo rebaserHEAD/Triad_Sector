@@ -14,6 +14,12 @@ public sealed partial class DrydockBerthRow : PanelContainer
 
     public Guid? OccupantShipId;
 
+    /// <summary>The standing offer on the occupant, when it is in escrow. Cancel sends this.</summary>
+    public long? OccupantTransferId;
+
+    private readonly string _occupantText = string.Empty;
+    private readonly string? _escrowText;
+
     /// <param name="canRetrieve">
     /// Whether anything may come out right now: false while the card already carries a deed, since
     /// one card holds one ship, or while no card is in. The row hides Retrieve rather than greying
@@ -25,6 +31,7 @@ public sealed partial class DrydockBerthRow : PanelContainer
 
         BerthId = berth.BerthId;
         OccupantShipId = berth.OccupantShipId;
+        OccupantTransferId = berth.OccupantTransferId;
 
         // Class text is whatever the row was filed with, shown as-is: a berth or ship stored by an
         // older build can name a class this one no longer has, and a label beats a refused row.
@@ -32,16 +39,50 @@ public sealed partial class DrydockBerthRow : PanelContainer
 
         if (berth.OccupantName != null)
         {
-            OccupantLabel.Text = Loc.GetString("shipyard-console-berth-occupant",
+            _occupantText = Loc.GetString("shipyard-console-berth-occupant",
                 ("ship", berth.OccupantName), ("class", berth.OccupantSizeClass ?? "?"));
             OccupantLabel.Modulate = Color.White;
         }
         else
         {
-            OccupantLabel.Text = Loc.GetString("shipyard-console-berth-empty");
+            _occupantText = Loc.GetString("shipyard-console-berth-empty");
             OccupantLabel.Modulate = Color.FromHex("#777777");
         }
 
-        RetrieveButton.Visible = canRetrieve && berth.OccupantShipId != null && berth.OccupantState == "Stored";
+        // In escrow the row says so in place of Retrieve: the ship keeps its berth and cannot
+        // come out until the offer is answered, withdrawn, or expires.
+        if (berth.OccupantTransferId != null)
+        {
+            _escrowText = Loc.GetString("shipyard-console-transfer-escrow",
+                ("name", berth.OccupantOfferedTo ?? Loc.GetString("shipyard-console-transfer-someone")));
+            OccupantLabel.Modulate = Color.FromHex("#d9a441");
+            CancelButton.Visible = true;
+            SetTimeLeft(berth.OccupantOfferSecondsLeft ?? 0);
+        }
+        else
+        {
+            OccupantLabel.Text = _occupantText;
+            RetrieveButton.Visible = canRetrieve && berth.OccupantShipId != null && berth.OccupantState == "Stored";
+        }
+    }
+
+    /// <summary>Redraws the escrow clock. The menu ticks this once a second from the last state it received.</summary>
+    public void SetTimeLeft(int seconds)
+    {
+        if (_escrowText == null)
+            return;
+
+        OccupantLabel.Text = $"{_occupantText} · {_escrowText} · {DrydockClock.Left(seconds)}";
+    }
+}
+
+/// <summary>The one way an offer's remaining time is written, so the alert and the escrow row agree.</summary>
+internal static class DrydockClock
+{
+    public static string Left(int seconds)
+    {
+        return seconds >= 60
+            ? Loc.GetString("shipyard-console-transfer-minutes-left", ("minutes", (int)Math.Ceiling(seconds / 60.0)))
+            : Loc.GetString("shipyard-console-transfer-seconds-left", ("seconds", Math.Max(0, seconds)));
     }
 }

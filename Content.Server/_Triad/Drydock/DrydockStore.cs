@@ -179,6 +179,7 @@ public sealed class DrydockStore
             CapturedKeyHash = request.CapturedKeyHash,
             Checksum = request.Checksum,
             SizeBytes = request.SizeBytes,
+            AppraisedValue = request.AppraisedValue,
             Manifest = request.Manifest,
         });
 
@@ -941,6 +942,313 @@ public sealed class DrydockStore
         }, ct);
     }
 
+    // ---------------------------------------------------------------- Transfers
+
+    /// <summary>
+    /// Opens an offer: the ship goes into escrow, keeping its berth, and one pending transfer row
+    /// says to whom and until when. The recipient must have a free berth the hull fits right now,
+    /// so an offer that could never be accepted is refused at the start rather than after thirty
+    /// minutes. The filtered unique index makes a second pending offer on the same ship fail at
+    /// the database, which reads back as a conflict.
+    /// </summary>
+    public Task<(DrydockBerthResult Outcome, DrydockTransfer? Transfer)> TryOfferTransfer(
+        Guid shipGuid,
+        Guid fromUserId,
+        Guid toUserId,
+        TimeSpan duration,
+        int? roundId,
+        CancellationToken ct = default)
+    {
+        return _db.RunTriadDbCommand<(DrydockBerthResult, DrydockTransfer?)>(async (db, token) =>
+        {
+            await using var tx = await db.Database.BeginTransactionAsync(token);
+
+            var ship = await db.DrydockShip.SingleOrDefaultAsync(s => s.ShipGuid == shipGuid, token);
+            if (ship == null || ship.OwnerUserId != fromUserId)
+                return (DrydockBerthResult.NotFound, null);
+
+            if (fromUserId == toUserId || ship.State != DrydockShipState.Stored || ship.Investigating)
+                return (DrydockBerthResult.WrongState, null);
+
+            var (fit, _) = await PickFreeBerth(db, toUserId, ship.SizeClass, null, new HashSet<int>(), token);
+            if (fit != DrydockBerthResult.Success)
+                return (fit, null);
+
+            var now = DateTime.UtcNow;
+            ship.State = DrydockShipState.InEscrow;
+            ship.StateChangedAt = now;
+            ship.UpdatedAt = now;
+
+            var transfer = new DrydockTransfer
+            {
+                ShipGuid = shipGuid,
+                FromUserId = fromUserId,
+                ToUserId = toUserId,
+                CreatedAt = now,
+                ExpiresAt = now + duration,
+                Resolution = DrydockTransferResolution.Pending,
+                RoundId = roundId,
+            };
+            db.DrydockTransfer.Add(transfer);
+
+            db.DrydockAudit.Add(new DrydockAudit
+            {
+                ShipGuid = shipGuid,
+                ShipName = ship.ShipName,
+                BerthId = ship.BerthId,
+                Action = DrydockAuditAction.TransferOffered,
+                ActorUserId = fromUserId,
+                SubjectUserId = toUserId,
+                Revision = ship.CurrentRevision,
+                RoundId = roundId,
+                Reason = $"expires {transfer.ExpiresAt:u}",
+                CreatedAt = now,
+            });
+
+            try
+            {
+                await db.SaveChangesAsync(token);
+                await tx.CommitAsync(token);
+            }
+            catch (DbUpdateException)
+            {
+                return (DrydockBerthResult.Conflict, null);
+            }
+
+            return (DrydockBerthResult.Success, transfer);
+        }, ct);
+    }
+
+    /// <summary>
+    /// Ends a pending offer without moving the ship: declined by the recipient, cancelled by the
+    /// owner, or expired by the sweep. The ship leaves escrow and is stored again. The actor has to
+    /// be the right party for the resolution, or null for the sweep.
+    /// </summary>
+    public Task<DrydockTransfer?> TryResolveTransfer(
+        long transferId,
+        DrydockTransferResolution resolution,
+        Guid? actorUserId,
+        int? roundId,
+        CancellationToken ct = default)
+    {
+        return _db.RunTriadDbCommand<DrydockTransfer?>(async (db, token) =>
+        {
+            await using var tx = await db.Database.BeginTransactionAsync(token);
+
+            var transfer = await db.DrydockTransfer
+                .SingleOrDefaultAsync(t => t.Id == transferId && t.Resolution == DrydockTransferResolution.Pending, token);
+            if (transfer == null)
+                return null;
+
+            var allowed = resolution switch
+            {
+                DrydockTransferResolution.Declined => actorUserId == transfer.ToUserId,
+                DrydockTransferResolution.Cancelled => actorUserId == transfer.FromUserId,
+                DrydockTransferResolution.Expired => actorUserId == null,
+                _ => false,
+            };
+            if (!allowed)
+                return null;
+
+            var now = DateTime.UtcNow;
+            transfer.Resolution = resolution;
+            transfer.ResolvedAt = now;
+
+            var ship = await db.DrydockShip.SingleOrDefaultAsync(s => s.ShipGuid == transfer.ShipGuid, token);
+            if (ship is { State: DrydockShipState.InEscrow })
+            {
+                ship.State = DrydockShipState.Stored;
+                ship.StateChangedAt = now;
+                ship.UpdatedAt = now;
+            }
+
+            db.DrydockAudit.Add(new DrydockAudit
+            {
+                ShipGuid = transfer.ShipGuid,
+                ShipName = ship?.ShipName,
+                BerthId = ship?.BerthId,
+                Action = resolution switch
+                {
+                    DrydockTransferResolution.Declined => DrydockAuditAction.TransferDeclined,
+                    DrydockTransferResolution.Cancelled => DrydockAuditAction.TransferCancelled,
+                    _ => DrydockAuditAction.TransferExpired,
+                },
+                ActorUserId = actorUserId,
+                SubjectUserId = resolution == DrydockTransferResolution.Cancelled ? transfer.ToUserId : transfer.FromUserId,
+                Revision = ship?.CurrentRevision,
+                RoundId = roundId,
+                CreatedAt = now,
+            });
+
+            await db.SaveChangesAsync(token);
+            await tx.CommitAsync(token);
+            return transfer;
+        }, ct);
+    }
+
+    /// <summary>
+    /// The recipient takes the ship: owner and berth move in one transaction, the offer resolves,
+    /// and the ship is stored again under its new owner. The berth is picked now, not when the
+    /// offer was made, because the recipient's garage may have changed in the meantime; a
+    /// recipient with nowhere left to put it is told so and the offer stands.
+    /// </summary>
+    public Task<(DrydockBerthResult Outcome, int? BerthId, DrydockShip? Ship)> TryAcceptTransfer(
+        long transferId,
+        Guid toUserId,
+        int? roundId,
+        CancellationToken ct = default)
+    {
+        return _db.RunTriadDbCommand<(DrydockBerthResult, int?, DrydockShip?)>(async (db, token) =>
+        {
+            await using var tx = await db.Database.BeginTransactionAsync(token);
+
+            var transfer = await db.DrydockTransfer
+                .SingleOrDefaultAsync(t => t.Id == transferId && t.Resolution == DrydockTransferResolution.Pending, token);
+            if (transfer == null || transfer.ToUserId != toUserId)
+                return (DrydockBerthResult.NotFound, null, null);
+
+            var now = DateTime.UtcNow;
+            if (transfer.ExpiresAt <= now)
+                return (DrydockBerthResult.WrongState, null, null);
+
+            var ship = await db.DrydockShip.SingleOrDefaultAsync(s => s.ShipGuid == transfer.ShipGuid, token);
+            if (ship == null || ship.OwnerUserId != transfer.FromUserId || ship.State != DrydockShipState.InEscrow)
+                return (DrydockBerthResult.WrongState, null, null);
+
+            var (outcome, pick) = await PickFreeBerth(db, toUserId, ship.SizeClass, null, new HashSet<int>(), token);
+            if (outcome != DrydockBerthResult.Success)
+                return (outcome, null, null);
+
+            ship.OwnerUserId = toUserId;
+            ship.BerthId = pick;
+            ship.LastBerthId = null;
+            ship.State = DrydockShipState.Stored;
+            ship.StateChangedAt = now;
+            ship.UpdatedAt = now;
+
+            transfer.Resolution = DrydockTransferResolution.Accepted;
+            transfer.ResolvedAt = now;
+
+            db.DrydockAudit.Add(new DrydockAudit
+            {
+                ShipGuid = ship.ShipGuid,
+                ShipName = ship.ShipName,
+                BerthId = pick,
+                Action = DrydockAuditAction.Transfer,
+                ActorUserId = toUserId,
+                SubjectUserId = transfer.FromUserId,
+                Revision = ship.CurrentRevision,
+                RoundId = roundId,
+                Reason = "accepted the offer",
+                CreatedAt = now,
+            });
+
+            try
+            {
+                await db.SaveChangesAsync(token);
+                await tx.CommitAsync(token);
+            }
+            catch (DbUpdateException)
+            {
+                return (DrydockBerthResult.Conflict, null, null);
+            }
+
+            return (DrydockBerthResult.Success, pick, ship);
+        }, ct);
+    }
+
+    /// <summary>
+    /// Expires every pending offer past its deadline and returns the ships released. Run on boot,
+    /// so a restart mid-offer cannot strand a ship in escrow, and on a slow tick after that.
+    /// </summary>
+    public async Task<List<Guid>> ExpireTransfers(DateTime now, int? roundId, CancellationToken ct = default)
+    {
+        var due = await _db.RunTriadDbCommand(async (db, token) => await db.DrydockTransfer
+            .AsNoTracking()
+            .Where(t => t.Resolution == DrydockTransferResolution.Pending && t.ExpiresAt <= now)
+            .Select(t => new { t.Id, t.ShipGuid })
+            .ToListAsync(token), ct);
+
+        var released = new List<Guid>();
+        foreach (var row in due)
+        {
+            if (await TryResolveTransfer(row.Id, DrydockTransferResolution.Expired, null, roundId, ct) != null)
+                released.Add(row.ShipGuid);
+        }
+
+        return released;
+    }
+
+    /// <summary>
+    /// One standing offer with the ship it names, or null when there is no pending offer by that
+    /// id. The console reads this before answering an offer so a message from the wrong party
+    /// can be refused by name and written to the timeline, rather than swallowed by the resolve.
+    /// </summary>
+    public Task<(DrydockTransfer Transfer, DrydockShip Ship)?> GetPendingTransfer(long transferId, CancellationToken ct = default)
+    {
+        return _db.RunTriadDbCommand<(DrydockTransfer, DrydockShip)?>(async (db, token) =>
+        {
+            var transfer = await db.DrydockTransfer.AsNoTracking()
+                .SingleOrDefaultAsync(t => t.Id == transferId && t.Resolution == DrydockTransferResolution.Pending, token);
+            if (transfer == null)
+                return null;
+
+            var ship = await db.DrydockShip.AsNoTracking().SingleOrDefaultAsync(s => s.ShipGuid == transfer.ShipGuid, token);
+            return ship == null ? null : (transfer, ship);
+        }, ct);
+    }
+
+    /// <summary>Pending offers addressed to an account, each with the ship it is for: the recipient's alert.</summary>
+    public Task<List<(DrydockTransfer Transfer, DrydockShip Ship)>> GetPendingOffersFor(Guid toUserId, CancellationToken ct = default)
+    {
+        return _db.RunTriadDbCommand(async (db, token) =>
+        {
+            var transfers = await db.DrydockTransfer.AsNoTracking()
+                .Where(t => t.ToUserId == toUserId && t.Resolution == DrydockTransferResolution.Pending)
+                .OrderBy(t => t.ExpiresAt)
+                .ToListAsync(token);
+
+            var guids = transfers.Select(t => t.ShipGuid).ToList();
+            var ships = await db.DrydockShip.AsNoTracking()
+                .Where(s => guids.Contains(s.ShipGuid))
+                .ToDictionaryAsync(s => s.ShipGuid, token);
+
+            return transfers
+                .Where(t => ships.ContainsKey(t.ShipGuid))
+                .Select(t => (t, ships[t.ShipGuid]))
+                .ToList();
+        }, ct);
+    }
+
+    /// <summary>Pending offers an account has made, keyed by ship: what the owner's berth rows say about escrow.</summary>
+    public Task<Dictionary<Guid, DrydockTransfer>> GetPendingOffersFrom(Guid fromUserId, CancellationToken ct = default)
+    {
+        return _db.RunTriadDbCommand(async (db, token) => await db.DrydockTransfer.AsNoTracking()
+            .Where(t => t.FromUserId == fromUserId && t.Resolution == DrydockTransferResolution.Pending)
+            .ToDictionaryAsync(t => t.ShipGuid, token), ct);
+    }
+
+    /// <summary>
+    /// The classes of every free berth each of these accounts owns, in one query, so the transfer
+    /// picker can say who has room without a round trip per online player.
+    /// </summary>
+    public Task<Dictionary<Guid, List<string>>> GetFreeBerthClasses(IEnumerable<Guid> owners, CancellationToken ct = default)
+    {
+        var ids = owners.Distinct().ToList();
+        if (ids.Count == 0)
+            return Task.FromResult(new Dictionary<Guid, List<string>>());
+
+        return _db.RunTriadDbCommand(async (db, token) =>
+        {
+            var free = await db.DrydockBerth.AsNoTracking()
+                .Where(b => ids.Contains(b.OwnerUserId) && !db.DrydockShip.Any(s => s.BerthId == b.BerthId))
+                .Select(b => new { b.OwnerUserId, b.MaxSizeClass })
+                .ToListAsync(token);
+
+            return free.GroupBy(b => b.OwnerUserId).ToDictionary(g => g.Key, g => g.Select(b => b.MaxSizeClass).ToList());
+        }, ct);
+    }
+
     /// <summary>A filtered page of hulls for the admin panel, newest activity first, owners loaded.</summary>
     public Task<(List<DrydockShip> Rows, int Total)> QueryShips(DrydockShipFilter filter, int page, int pageSize, CancellationToken ct = default)
     {
@@ -1337,6 +1645,9 @@ public sealed class DrydockRevisionRequest
     public required byte[] Checksum { get; init; }
 
     public required int SizeBytes { get; init; }
+
+    /// <summary>The shipyard's appraisal of the live hull, so a sale of the stored ship has a price. Null when nothing appraised it.</summary>
+    public int? AppraisedValue { get; init; }
 
     public required string Manifest { get; init; }
 }

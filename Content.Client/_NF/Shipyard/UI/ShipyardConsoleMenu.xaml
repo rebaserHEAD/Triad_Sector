@@ -188,19 +188,8 @@
             </BoxContainer>
         </PanelContainer>
 
-        <PanelContainer Name="TransferPanel" Visible="False" Margin="0 8 0 6">
-            <PanelContainer.PanelOverride>
-                <gfx:StyleBoxFlat BorderThickness="2" BorderColor="#3e5e82" BackgroundColor="#1a2430"/>
-            </PanelContainer.PanelOverride>
-            <BoxContainer Orientation="Vertical" Margin="6 4">
-                <Label Name="TransferOfferLabel" />
-                <Label Name="TransferWarningLabel" Visible="False" Modulate="#d9a441" />
-                <BoxContainer Orientation="Horizontal" Margin="0 4 0 0">
-                    <Button Name="AcceptTransferButton" Text="{Loc 'shipyard-console-transfer-accept-button'}" StyleClasses="ButtonSquare" MinWidth="160" />
-                    <Button Name="CancelTransferButton" Text="{Loc 'shipyard-console-transfer-cancel-button'}" StyleClasses="ButtonSquare ButtonCaution" MinWidth="120" Margin="4 0 0 0" />
-                </BoxContainer>
-            </BoxContainer>
-        </PanelContainer>
+        <!-- One alert per offer addressed to the operator, built by PopulateOffers. -->
+        <BoxContainer Name="Offers" Orientation="Vertical" />
 
         <BoxContainer Orientation="Horizontal" Margin="2 4 2 4" VerticalAlignment="Center">
             <Label Name="BerthSummaryLabel" HorizontalExpand="True" Modulate="#999999" />

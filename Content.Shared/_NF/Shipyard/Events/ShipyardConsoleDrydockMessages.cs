@@ -1,4 +1,7 @@
-// Triad: drydock tab. The berth and transfer messages, beside the store and retrieve ones.
+// Triad: drydock tab. The berth, transfer, sale, rename and move messages, beside the store and
+// retrieve ones. Every one names a ship or berth by an id the server sent, and the server checks
+// the sending account owns it before anything else; a message that fails that check is refused
+// and written to the timeline.
 using Robust.Shared.Serialization;
 
 namespace Content.Shared._NF.Shipyard.Events;
@@ -40,31 +43,101 @@ public sealed class ShipyardConsoleUpgradeBerthMessage : BoundUserInterfaceMessa
 }
 
 /// <summary>
-/// Offer one of the operator's stored ships to whoever accepts next at this console. The server
-/// verifies the offering session owns the row, not the card in the slot: cards get lent and lost.
+/// Offer one of the operator's stored ships to another account. The recipient must be online when
+/// the offer is made and must have a free berth the hull fits; the ship then waits in escrow, in
+/// its own berth, until they answer or the offer expires.
 /// </summary>
 [Serializable, NetSerializable]
 public sealed class ShipyardConsoleOfferTransferMessage : BoundUserInterfaceMessage
 {
     public readonly Guid ShipId;
+    public readonly Guid RecipientUserId;
 
-    public ShipyardConsoleOfferTransferMessage(Guid shipId)
+    public ShipyardConsoleOfferTransferMessage(Guid shipId, Guid recipientUserId)
     {
         ShipId = shipId;
+        RecipientUserId = recipientUserId;
     }
 }
 
+/// <summary>The owner withdraws a standing offer. The ship leaves escrow.</summary>
 [Serializable, NetSerializable]
 public sealed class ShipyardConsoleCancelTransferMessage : BoundUserInterfaceMessage
 {
+    public readonly long TransferId;
+
+    public ShipyardConsoleCancelTransferMessage(long transferId)
+    {
+        TransferId = transferId;
+    }
 }
 
-/// <summary>
-/// Accept the pending offer at this console into the accepting account's own drydock. The
-/// accepting account must not be the offering one and must have a free berth the hull fits. The
-/// account is the session's, never the character's mind: a reprinted body still owns its ships.
-/// </summary>
+/// <summary>The recipient takes the ship into a free berth of theirs that fits.</summary>
 [Serializable, NetSerializable]
 public sealed class ShipyardConsoleAcceptTransferMessage : BoundUserInterfaceMessage
 {
+    public readonly long TransferId;
+
+    public ShipyardConsoleAcceptTransferMessage(long transferId)
+    {
+        TransferId = transferId;
+    }
+}
+
+/// <summary>The recipient turns the offer down. The ship leaves escrow.</summary>
+[Serializable, NetSerializable]
+public sealed class ShipyardConsoleDeclineTransferMessage : BoundUserInterfaceMessage
+{
+    public readonly long TransferId;
+
+    public ShipyardConsoleDeclineTransferMessage(long transferId)
+    {
+        TransferId = transferId;
+    }
+}
+
+/// <summary>
+/// Scrap a stored ship for credits. Carries the name the player typed, which the server compares
+/// with the ship's own name before paying anything: the client's locked button is a convenience,
+/// this comparison is the safety.
+/// </summary>
+[Serializable, NetSerializable]
+public sealed class ShipyardConsoleSellStoredShipMessage : BoundUserInterfaceMessage
+{
+    public readonly Guid ShipId;
+    public readonly string TypedName;
+
+    public ShipyardConsoleSellStoredShipMessage(Guid shipId, string typedName)
+    {
+        ShipId = shipId;
+        TypedName = typedName;
+    }
+}
+
+/// <summary>Rename a stored ship. Applied to hull and deed the next time it is retrieved.</summary>
+[Serializable, NetSerializable]
+public sealed class ShipyardConsoleRenameStoredShipMessage : BoundUserInterfaceMessage
+{
+    public readonly Guid ShipId;
+    public readonly string NewName;
+
+    public ShipyardConsoleRenameStoredShipMessage(Guid shipId, string newName)
+    {
+        ShipId = shipId;
+        NewName = newName;
+    }
+}
+
+/// <summary>Move a stored ship to another of the operator's own empty berths that fits.</summary>
+[Serializable, NetSerializable]
+public sealed class ShipyardConsoleMoveStoredShipMessage : BoundUserInterfaceMessage
+{
+    public readonly Guid ShipId;
+    public readonly int BerthId;
+
+    public ShipyardConsoleMoveStoredShipMessage(Guid shipId, int berthId)
+    {
+        ShipId = shipId;
+        BerthId = berthId;
+    }
 }

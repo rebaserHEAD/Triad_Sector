@@ -31,8 +31,19 @@ public sealed class DrydockBerthInfo
     /// <summary>The occupant's row state as text; only a Stored occupant offers Retrieve.</summary>
     public string? OccupantState;
 
+    /// <summary>What scrapping the occupant pays right now, or null when no appraisal was captured.</summary>
+    public int? OccupantSellPrice;
+
+    /// <summary>When the occupant is in escrow: the standing offer, who it went to, and how long it has left.</summary>
+    public long? OccupantTransferId;
+
+    public string? OccupantOfferedTo;
+
+    public int? OccupantOfferSecondsLeft;
+
     public DrydockBerthInfo(int berthId, string maxSizeClass, int sellValue, int? upgradePrice, string? upgradeClass,
-        Guid? occupantShipId, string? occupantName, string? occupantSizeClass, string? occupantState)
+        Guid? occupantShipId, string? occupantName, string? occupantSizeClass, string? occupantState, int? occupantSellPrice,
+        long? occupantTransferId, string? occupantOfferedTo, int? occupantOfferSecondsLeft)
     {
         BerthId = berthId;
         MaxSizeClass = maxSizeClass;
@@ -43,6 +54,10 @@ public sealed class DrydockBerthInfo
         OccupantName = occupantName;
         OccupantSizeClass = occupantSizeClass;
         OccupantState = occupantState;
+        OccupantSellPrice = occupantSellPrice;
+        OccupantTransferId = occupantTransferId;
+        OccupantOfferedTo = occupantOfferedTo;
+        OccupantOfferSecondsLeft = occupantOfferSecondsLeft;
     }
 }
 
@@ -80,33 +95,54 @@ public sealed class DrydockDeedShipInfo
 }
 
 /// <summary>
-/// A transfer waiting at this console for someone to accept. Carries names, never ids of people,
-/// because the client only needs to say who is offering what; the server holds the real offer.
+/// An offer addressed to the operator, as the alert on their tab draws it. Carries the offering
+/// account's id only so the client can refuse to draw the offerer's own offers as alerts; the
+/// server holds the real offer and decides everything about it.
 /// </summary>
 [Serializable, NetSerializable]
 public sealed class DrydockTransferOfferInfo
 {
+    public long TransferId;
     public Guid ShipId;
     public string ShipName = string.Empty;
     public string? SizeClass;
     public string OfferedBy = string.Empty;
-
-    /// <summary>
-    /// The offering account, so the client can show Cancel to the offerer and Accept to everyone
-    /// else. One console state is shared by every viewer, so this cannot be a per-viewer flag.
-    /// Ownership ids are already networked on every deeded ship, so this exposes nothing new.
-    /// </summary>
     public Guid OfferedByUserId;
 
+    /// <summary>The berth the ship lands in if accepted now, or null when nothing fits any more.</summary>
+    public int? LandsInBerthId;
+
+    /// <summary>Read from the persisted deadline, so every console shows the same clock.</summary>
     public int SecondsLeft;
 
-    public DrydockTransferOfferInfo(Guid shipId, string shipName, string? sizeClass, string offeredBy, Guid offeredByUserId, int secondsLeft)
+    public DrydockTransferOfferInfo(long transferId, Guid shipId, string shipName, string? sizeClass, string offeredBy, Guid offeredByUserId, int? landsInBerthId, int secondsLeft)
     {
+        TransferId = transferId;
         ShipId = shipId;
         ShipName = shipName;
         SizeClass = sizeClass;
         OfferedBy = offeredBy;
         OfferedByUserId = offeredByUserId;
+        LandsInBerthId = landsInBerthId;
         SecondsLeft = secondsLeft;
+    }
+}
+
+/// <summary>
+/// A captain online right now, for the transfer picker: their account, the name to show, and the
+/// classes of their free berths so the picker can grey the ones with nowhere to put the ship.
+/// </summary>
+[Serializable, NetSerializable]
+public sealed class DrydockCaptainInfo
+{
+    public Guid UserId;
+    public string Name = string.Empty;
+    public List<string> FreeBerthClasses = new();
+
+    public DrydockCaptainInfo(Guid userId, string name, List<string> freeBerthClasses)
+    {
+        UserId = userId;
+        Name = name;
+        FreeBerthClasses = freeBerthClasses;
     }
 }

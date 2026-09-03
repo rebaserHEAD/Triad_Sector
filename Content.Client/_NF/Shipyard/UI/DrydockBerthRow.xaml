@@ -1,5 +1,6 @@
 <!-- Triad: drydock tab. One berth: its number and class, the ship in it or "empty", Retrieve when
-     that ship can come out, and the menu holding everything rarer. -->
+     that ship can come out, Cancel offer while it waits in escrow, and the menu holding
+     everything rarer. -->
 <PanelContainer xmlns="https://spacestation14.io"
                 xmlns:gfx="clr-namespace:Robust.Client.Graphics;assembly=Robust.Client"
                 xmlns:ui="clr-namespace:Content.Client._NF.Shipyard.UI"
@@ -24,6 +25,13 @@
             Text="{Loc 'shipyard-console-retrieve-button'}"
             StyleClasses="ButtonSquare"
             MinWidth="90"
+            Margin="0 0 4 0"
+            Visible="False" />
+        <Button Name="CancelButton"
+            Access="Public"
+            Text="{Loc 'shipyard-console-transfer-cancel-button'}"
+            StyleClasses="ButtonSquare ButtonCaution"
+            MinWidth="110"
             Margin="0 0 4 0"
             Visible="False" />
         <ui:DrydockMenuButton Name="MenuButton"

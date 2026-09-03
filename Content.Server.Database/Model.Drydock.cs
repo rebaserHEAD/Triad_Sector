@@ -120,7 +120,74 @@ internal static class ModelDrydock
             .WithMany()
             .HasForeignKey(s => s.LastBerthId)
             .OnDelete(DeleteBehavior.SetNull);
+
+        // Transfers. A ship in escrow has exactly one pending offer, and the database says so:
+        // the filtered unique index refuses a second while the first stands, whatever the code
+        // thinks. Resolved offers stay as history beside the audit row that resolved them.
+        modelBuilder.Entity<DrydockTransfer>()
+            .HasOne(t => t.Ship)
+            .WithMany()
+            .HasForeignKey(t => t.ShipGuid)
+            .OnDelete(DeleteBehavior.Cascade);
+
+        modelBuilder.Entity<DrydockTransfer>()
+            .HasIndex(t => t.ShipGuid)
+            .IsUnique()
+            .HasFilter("resolution = 0");
+
+        // The recipient's alert: every pending offer addressed to an account.
+        modelBuilder.Entity<DrydockTransfer>()
+            .HasIndex(t => new { t.ToUserId, t.Resolution });
+
+        // The expiry sweep walks pending offers by their deadline.
+        modelBuilder.Entity<DrydockTransfer>()
+            .HasIndex(t => new { t.Resolution, t.ExpiresAt });
     }
+}
+
+/// <summary>
+/// One transfer offer, addressed to one account, persisted so that a restart cannot leave a ship
+/// in escrow with nobody able to resolve it. The ship's state says "in escrow"; this row says to
+/// whom and until when, and its resolution says how it ended.
+/// </summary>
+public sealed class DrydockTransfer
+{
+    public long Id { get; set; }
+
+    public Guid ShipGuid { get; set; }
+
+    public DrydockShip Ship { get; set; } = default!;
+
+    /// <summary>The owner who made the offer. Not a foreign key, for the same reason the audit's actor is not.</summary>
+    public Guid FromUserId { get; set; }
+
+    /// <summary>The account the offer is addressed to. Online when the offer was made; the clock runs regardless after that.</summary>
+    public Guid ToUserId { get; set; }
+
+    public DateTime CreatedAt { get; set; }
+
+    public DateTime ExpiresAt { get; set; }
+
+    public DrydockTransferResolution Resolution { get; set; }
+
+    public DateTime? ResolvedAt { get; set; }
+
+    public int? RoundId { get; set; }
+}
+
+public enum DrydockTransferResolution
+{
+    /// <summary>Standing. The ship is in escrow for it. Zero on purpose: the filtered unique index names it.</summary>
+    Pending = 0,
+
+    Accepted = 1,
+    Declined = 2,
+
+    /// <summary>Withdrawn by the owner.</summary>
+    Cancelled = 3,
+
+    /// <summary>The clock ran out, by the sweep or by the boot check.</summary>
+    Expired = 4,
 }
 
 /// <summary>
@@ -261,6 +328,19 @@ public enum DrydockShipState
     /// decided anything, which is the point: the system records and a person adjudicates.
     /// </summary>
     Held = 2,
+
+    /// <summary>
+    /// Offered to another player and waiting on their answer. The ship keeps its berth and
+    /// refuses retrieve, sale, rename and move until the offer resolves; the pending
+    /// <see cref="DrydockTransfer"/> row says to whom and until when.
+    /// </summary>
+    InEscrow = 3,
+
+    /// <summary>
+    /// Scrapped by its owner for credits. The berth is freed and the blobs are kept under the
+    /// normal retention, so an admin can undo a sale made in anger; nothing else can.
+    /// </summary>
+    Sold = 4,
 }
 
 /// <summary>
@@ -327,6 +407,13 @@ public sealed class DrydockRevision
 
     /// <summary>Uncompressed document size. The only source of a real blob-size distribution.</summary>
     public int SizeBytes { get; set; }
+
+    /// <summary>
+    /// What the shipyard appraised the hull at when this revision was filed, captured while the
+    /// grid was still live because a stored ship has nothing left to appraise. Null on a re-bake
+    /// and on rows filed before the column existed; a sale quotes from the current revision.
+    /// </summary>
+    public int? AppraisedValue { get; set; }
 
     /// <summary>
     /// What the drift sweep and the admin diff query. JSON: jsonb on Postgres with a GIN index,
@@ -467,4 +554,25 @@ public enum DrydockAuditAction
     /// actor and subject together are the stolen-card signal an admin looks for.
     /// </summary>
     AccessRefused = 17,
+
+    /// <summary>The owner offered the ship to another account; subject is the recipient.</summary>
+    TransferOffered = 18,
+
+    /// <summary>The recipient turned the offer down.</summary>
+    TransferDeclined = 19,
+
+    /// <summary>The owner withdrew the offer.</summary>
+    TransferCancelled = 20,
+
+    /// <summary>The offer's clock ran out. Written by the sweep, so the actor is null.</summary>
+    TransferExpired = 21,
+
+    /// <summary>The owner scrapped the ship; the reason carries the price and the appraisal.</summary>
+    ShipSold = 22,
+
+    /// <summary>The owner renamed the ship; the reason carries old and new.</summary>
+    Renamed = 23,
+
+    /// <summary>An admin undid a sale; the reason says whether the money came back.</summary>
+    SaleReversed = 24,
 }
