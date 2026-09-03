@@ -460,4 +460,11 @@ public enum DrydockAuditAction
     InvestigationOpened = 15,
 
     InvestigationClosed = 16,
+
+    /// <summary>
+    /// A session sent a drydock message for a ship or berth its account does not own. The console
+    /// never offers such a click, so a row here is a modified client or a forged message, and the
+    /// actor and subject together are the stolen-card signal an admin looks for.
+    /// </summary>
+    AccessRefused = 17,
 }

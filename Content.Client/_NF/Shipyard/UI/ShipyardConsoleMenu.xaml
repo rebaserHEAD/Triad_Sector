@@ -174,6 +174,7 @@
     <!-- Triad: drydock tab. Store acts on the deed in the console's card slot, so it needs no
          selection. Berths, ships and the pending transfer are the operator's own, filled by the
          server; the window is sized for this tab rather than the purchase list. -->
+    <Control Name="DrydockTabRoot">
     <BoxContainer Name="DrydockTab" Orientation="Vertical" Margin="5 0 5 0">
         <BoxContainer Orientation="Horizontal" Margin="0 8 0 4">
             <Button Name="StoreButton" Text="{Loc 'shipyard-console-store-button'}" StyleClasses="ButtonSquare" MinWidth="180" />
@@ -216,6 +217,21 @@
             </BoxContainer>
         </ScrollContainer>
     </BoxContainer>
+    <!-- Triad: the lockout. Shown when the inserted card's ship belongs to another account. It
+         swallows input, but the server refuses every message under it regardless; this is what the
+         player sees, not what stops them. -->
+    <PanelContainer Name="LockoutPanel" Visible="False" MouseFilter="Stop" VerticalExpand="True" HorizontalExpand="True">
+        <PanelContainer.PanelOverride>
+            <gfx:StyleBoxFlat BackgroundColor="#14000090"/>
+        </PanelContainer.PanelOverride>
+        <TextureRect TexturePath="/Textures/_Triad/Interface/drydock_lockout_stripes.png" Stretch="Tile" VerticalExpand="True" HorizontalExpand="True" />
+        <BoxContainer Orientation="Vertical" VerticalAlignment="Center" HorizontalAlignment="Center">
+            <Label Text="{Loc 'shipyard-console-lockout-title'}" StyleClasses="LabelBig" Modulate="#ff4a4a" Align="Center" />
+            <Label Text="{Loc 'shipyard-console-lockout-subtitle'}" Modulate="#ffb0b0" Align="Center" Margin="0 10 0 0" />
+            <Label Text="{Loc 'shipyard-console-lockout-body'}" Modulate="#d08080" Align="Center" Margin="0 4 0 0" />
+        </BoxContainer>
+    </PanelContainer>
+    </Control>
     </TabContainer>
         </PanelContainer>
     </PanelContainer>

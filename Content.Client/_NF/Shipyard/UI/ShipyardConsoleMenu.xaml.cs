@@ -400,6 +400,11 @@ public sealed partial class ShipyardConsoleMenu : FancyWindow
         // Triad: drydock tab. Hidden outright when the master switch is off, rather than shown with
         // buttons that would every one of them come back refused.
         Tabs.SetTabVisible(1, state.DrydockEnabled);
+
+        // The lockout: someone else's registered card in the slot. Decided here because one console
+        // state is shared by every viewer and only the client knows which viewer it is.
+        LockoutPanel.Visible = LocalUserId != null && state.DeedOwnerUserId is { } deedOwner && deedOwner != LocalUserId;
+
         _lastShips = state.StoredShips;
         _lastBerths = state.Berths;
         _transferWarningArmed = false;

@@ -34,6 +34,14 @@ public sealed class ShipyardConsoleInterfaceState : BoundUserInterfaceState
     /// <summary>Triad: the transfer waiting at this console, if any.</summary>
     public readonly DrydockTransferOfferInfo? TransferOffer;
 
+    /// <summary>
+    /// Triad: the account that owns the ship on the inserted card's deed, or null when the card
+    /// carries no deed to a live ship. The client compares it with its own account and covers the
+    /// drydock tab with the lockout when they differ. Presentation only: the server refuses every
+    /// message the lockout hides, and the id is already networked on the ship's ownership component.
+    /// </summary>
+    public readonly Guid? DeedOwnerUserId;
+
     public ShipyardConsoleInterfaceState(
         int balance,
         bool accessGranted,
@@ -49,11 +57,13 @@ public sealed class ShipyardConsoleInterfaceState : BoundUserInterfaceState
         bool drydockEnabled, // Triad: drydock tab
         List<DrydockBerthInfo> berths, // Triad: drydock tab
         Dictionary<string, int> berthPrices, // Triad: drydock tab
-        DrydockTransferOfferInfo? transferOffer) // Triad: drydock tab
+        DrydockTransferOfferInfo? transferOffer, // Triad: drydock tab
+        Guid? deedOwnerUserId) // Triad: drydock tab
     {
         Berths = berths; // Triad: drydock tab
         BerthPrices = berthPrices; // Triad: drydock tab
         TransferOffer = transferOffer; // Triad: drydock tab
+        DeedOwnerUserId = deedOwnerUserId; // Triad: drydock tab
         Balance = balance;
         AccessGranted = accessGranted;
         ShipDeedTitle = shipDeedTitle;

@@ -462,6 +462,18 @@ public sealed class DrydockStore
         }, ct);
     }
 
+    /// <summary>
+    /// The hull row alone, for the ownership and state checks a console makes before it commits
+    /// to anything. Deliberately not <see cref="LoadCurrent"/>: that reads the document too, and a
+    /// refusal should not cost a blob.
+    /// </summary>
+    public Task<DrydockShip?> GetShipHeader(Guid shipGuid, CancellationToken ct = default)
+    {
+        return _db.RunTriadDbCommand(async (db, token) => await db.DrydockShip
+            .AsNoTracking()
+            .SingleOrDefaultAsync(s => s.ShipGuid == shipGuid, token), ct);
+    }
+
     /// <summary>The stored-ship list for a console, drawn from the display cache alone.</summary>
     public Task<List<DrydockShip>> GetShipsByOwner(Guid ownerUserId, CancellationToken ct = default)
     {
@@ -565,6 +577,20 @@ public sealed class DrydockStore
             db.DrydockAudit.Add(entry);
             await db.SaveChangesAsync(token);
         }, ct);
+    }
+
+    /// <summary>
+    /// What one account has done, newest first. This is the read behind "what has this player been
+    /// sending", which the ship timeline cannot answer for a refusal on a ship that has no row yet.
+    /// </summary>
+    public Task<List<DrydockAudit>> GetAuditByActor(Guid actorUserId, int limit, CancellationToken ct = default)
+    {
+        return _db.RunTriadDbCommand(async (db, token) => await db.DrydockAudit
+            .AsNoTracking()
+            .Where(a => a.ActorUserId == actorUserId)
+            .OrderByDescending(a => a.CreatedAt)
+            .Take(Math.Max(1, limit))
+            .ToListAsync(token), ct);
     }
 
     /// <summary>The ship's timeline, oldest first.</summary>

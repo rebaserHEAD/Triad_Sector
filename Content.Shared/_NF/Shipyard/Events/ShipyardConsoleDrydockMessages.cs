@@ -60,9 +60,9 @@ public sealed class ShipyardConsoleCancelTransferMessage : BoundUserInterfaceMes
 }
 
 /// <summary>
-/// Accept the pending offer at this console into the accepting session's own drydock. The
-/// accepting session must not be the offering one, must have a character with a mind at the
-/// console, and must have a free berth the hull fits.
+/// Accept the pending offer at this console into the accepting account's own drydock. The
+/// accepting account must not be the offering one and must have a free berth the hull fits. The
+/// account is the session's, never the character's mind: a reprinted body still owns its ships.
 /// </summary>
 [Serializable, NetSerializable]
 public sealed class ShipyardConsoleAcceptTransferMessage : BoundUserInterfaceMessage

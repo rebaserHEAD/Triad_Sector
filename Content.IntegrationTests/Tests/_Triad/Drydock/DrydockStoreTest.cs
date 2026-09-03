@@ -194,7 +194,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
         /// The owner column is a real foreign key, so a ship cannot be filed for a player who does
         /// not exist. That is the intended behaviour, and it means this test has to supply one.
         /// </summary>
-        private static Task InsertPlayer(IServerDbManager db, Guid userId)
+        internal static Task InsertPlayer(IServerDbManager db, Guid userId)
         {
             return db.RunTriadDbCommand(async (context, token) =>
             {

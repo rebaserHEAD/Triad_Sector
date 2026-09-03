@@ -329,10 +329,10 @@ public sealed partial class ShipyardSystem
     /// The drydock half of the console state, read from the caches and the pending offer. Called
     /// by the upstream state builder so it carries one line of ours rather than a block.
     /// </summary>
-    internal (List<StoredShipInfo> Ships, List<DrydockBerthInfo> Berths, Dictionary<string, int> Prices, DrydockTransferOfferInfo? Offer) BuildDrydockState(EntityUid uid)
+    internal (List<StoredShipInfo> Ships, List<DrydockBerthInfo> Berths, Dictionary<string, int> Prices, DrydockTransferOfferInfo? Offer, Guid? DeedOwner) BuildDrydockState(EntityUid uid)
     {
         if (!TryComp<ShipyardConsoleComponent>(uid, out var console))
-            return (new(), new(), DrydockBerthPrices(), null);
+            return (new(), new(), DrydockBerthPrices(), null, null);
 
         DrydockTransferOfferInfo? offer = null;
         if (console.PendingTransfer is { } pending)
@@ -344,7 +344,79 @@ public sealed partial class ShipyardSystem
                 offer = new DrydockTransferOfferInfo(pending.ShipId, pending.ShipName, pending.SizeClass, pending.OwnerName, pending.OwnerUserId, left);
         }
 
-        return (console.CachedStoredShips, console.CachedBerths, DrydockBerthPrices(), offer);
+        return (console.CachedStoredShips, console.CachedBerths, DrydockBerthPrices(), offer, DeedOwnerAccount(console));
+    }
+
+    /// <summary>
+    /// The account that owns the ship on the inserted card's deed, or null when the card carries no
+    /// deed to a live ship. The client compares it with its own account to draw the lockout; every
+    /// message the lockout hides is refused server-side regardless, so this is presentation, and
+    /// the id it exposes is already networked on the ship's ownership component.
+    /// </summary>
+    private Guid? DeedOwnerAccount(ShipyardConsoleComponent console)
+    {
+        if (console.TargetIdSlot.ContainerSlot?.ContainedEntity is not { Valid: true } targetId
+            || !TryComp<ShuttleDeedComponent>(targetId, out var deed)
+            || deed.ShuttleUid is not { Valid: true } shuttle
+            || !TryComp<ShipOwnershipComponent>(shuttle, out var ownership))
+        {
+            return null;
+        }
+
+        return ownership.OwnerUserId.UserId;
+    }
+
+    /// <summary>
+    /// The account behind the click, which is the only identity any drydock verb is checked
+    /// against. Deliberately not the character's mind: a mind is what goes missing when a dead
+    /// player is reprinted into a body without its components, and that has stranded ships before.
+    /// A session's account survives every body.
+    /// </summary>
+    private bool TryGetOperatorAccount(EntityUid player, out Guid userId)
+    {
+        userId = default;
+        if (!TryComp<ActorComponent>(player, out var actor))
+            return false;
+
+        userId = actor.PlayerSession.UserId.UserId;
+        return true;
+    }
+
+    /// <summary>
+    /// Refuses a message whose sender does not own what it names, and writes the refusal to the
+    /// timeline. The console never offers such a click, so a row here means a modified client or a
+    /// forged message, which is exactly what an admin wants to see beside a stolen-card report.
+    /// </summary>
+    private void RefuseAccess(EntityUid uid, ShipyardConsoleComponent component, EntityUid player, Guid actor, Guid? shipGuid, string? shipName, Guid? ownerUserId, int? berthId, string verb)
+    {
+        Log.Info($"Drydock: {verb} by {ToPrettyString(player)} ({actor}) refused, not the owner of {shipName ?? shipGuid?.ToString() ?? $"berth {berthId}"}.");
+
+        _ = WriteRefusalAsync(new DrydockAudit
+        {
+            ShipGuid = shipGuid,
+            ShipName = shipName,
+            BerthId = berthId,
+            Action = DrydockAuditAction.AccessRefused,
+            ActorUserId = actor,
+            SubjectUserId = ownerUserId,
+            RoundId = DrydockRoundId,
+            Reason = verb,
+        });
+
+        ConsolePopup(player, Loc.GetString("shipyard-console-not-owner"));
+        PlayDenySound(player, uid, component);
+    }
+
+    private async Task WriteRefusalAsync(DrydockAudit entry)
+    {
+        try
+        {
+            await _drydockStore.WriteAudit(entry);
+        }
+        catch (Exception e)
+        {
+            Log.Error($"Drydock: refused-access audit row could not be written: {e.Message}");
+        }
     }
 
     /// <summary>
@@ -407,12 +479,19 @@ public sealed partial class ShipyardSystem
             return null;
         }
 
+        if (!TryGetOperatorAccount(player, out var operatorAccount))
+            return null;
+
         if (!TryComp<ShipOwnershipComponent>(shuttleUid, out var ownership)
-            || !TryComp<ActorComponent>(player, out var actor)
-            || ownership.OwnerUserId != actor.PlayerSession.UserId)
+            || ownership.OwnerUserId.UserId != operatorAccount)
         {
-            ConsolePopup(player, Loc.GetString("shipyard-console-store-not-owner"));
-            PlayDenySound(player, uid, component);
+            // A ship that has been stored before carries its id; a new hull has none yet, and the
+            // refusal is filed against the actor alone.
+            Guid? knownId = TryComp<DrydockIdentityComponent>(shuttleUid, out var identity) && identity.ShipId != Guid.Empty
+                ? identity.ShipId
+                : null;
+
+            RefuseAccess(uid, component, player, operatorAccount, knownId, Name(shuttleUid), ownership?.OwnerUserId.UserId, null, "store");
             return null;
         }
 
@@ -468,7 +547,7 @@ public sealed partial class ShipyardSystem
             return null;
         }
 
-        if (!TryComp<ActorComponent>(player, out var actor))
+        if (!TryGetOperatorAccount(player, out var operatorAccount))
             return null;
 
         if (_station.GetOwningStation(uid) is not { Valid: true } station)
@@ -478,7 +557,20 @@ public sealed partial class ShipyardSystem
             return null;
         }
 
-        var grid = await _drydock.TryRetrieveShip(shipId, actor.PlayerSession.UserId.UserId, station, DrydockRoundId);
+        // The pipeline re-reads the owner and refuses on its own; this earlier read is what turns
+        // a forged retrieve into a timeline row rather than a silent null.
+        var header = await _drydockStore.GetShipHeader(shipId);
+
+        if (TerminatingOrDeleted(uid) || TerminatingOrDeleted(player))
+            return null;
+
+        if (header != null && header.OwnerUserId != operatorAccount)
+        {
+            RefuseAccess(uid, component, player, operatorAccount, shipId, header.ShipName, header.OwnerUserId, header.BerthId, "retrieve");
+            return null;
+        }
+
+        var grid = await _drydock.TryRetrieveShip(shipId, operatorAccount, station, DrydockRoundId);
 
         if (grid is null)
         {
@@ -637,24 +729,9 @@ public sealed partial class ShipyardSystem
 
     // ---------------------------------------------------------------- Transfer
 
-    /// <summary>
-    /// A person at the console, not just a card in it. Both halves of a transfer are gated on this
-    /// and on the session behind the click, so a found or stolen ID card cannot give away or take
-    /// a ship: the card is the console's key, the character's mind is the signature.
-    /// </summary>
-    private bool DrydockOperatorVerified(EntityUid player, out Guid userId)
-    {
-        userId = default;
-        if (!TryComp<ActorComponent>(player, out var actor) || !_mind.TryGetMind(player, out _, out _))
-            return false;
-
-        userId = actor.PlayerSession.UserId.UserId;
-        return true;
-    }
-
     internal async Task<bool> TryOfferTransfer(EntityUid uid, ShipyardConsoleComponent component, EntityUid player, Guid shipId, ShipyardConsoleUiKey uiKey)
     {
-        if (!DrydockOperatorVerified(player, out var owner))
+        if (!TryGetOperatorAccount(player, out var owner))
         {
             ConsolePopup(player, Loc.GetString("shipyard-console-transfer-not-verified"));
             PlayDenySound(player, uid, component);
@@ -668,14 +745,19 @@ public sealed partial class ShipyardSystem
             return false;
         }
 
-        var current = await _drydockStore.LoadCurrent(shipId);
+        var current = await _drydockStore.GetShipHeader(shipId);
 
         if (TerminatingOrDeleted(uid) || TerminatingOrDeleted(player))
             return false;
 
-        // The session behind the click must own the row. The card in the slot says nothing here.
-        if (current == null || current.Ship.OwnerUserId != owner
-            || current.Ship.State != DrydockShipState.Stored || current.Ship.Investigating)
+        // The account behind the click must own the row. The card in the slot says nothing here.
+        if (current != null && current.OwnerUserId != owner)
+        {
+            RefuseAccess(uid, component, player, owner, shipId, current.ShipName, current.OwnerUserId, current.BerthId, "transfer");
+            return false;
+        }
+
+        if (current == null || current.State != DrydockShipState.Stored || current.Investigating)
         {
             ConsolePopup(player, Loc.GetString("shipyard-console-transfer-not-yours"));
             PlayDenySound(player, uid, component);
@@ -686,8 +768,8 @@ public sealed partial class ShipyardSystem
         component.PendingTransfer = new DrydockTransferOffer
         {
             ShipId = shipId,
-            ShipName = current.Ship.ShipName,
-            SizeClass = current.Ship.SizeClass,
+            ShipName = current.ShipName,
+            SizeClass = current.SizeClass,
             OwnerUserId = owner,
             OwnerName = Name(player).Trim(),
             ExpiresAt = _timing.CurTime + TimeSpan.FromSeconds(seconds),
@@ -723,7 +805,7 @@ public sealed partial class ShipyardSystem
             return false;
         }
 
-        if (!DrydockOperatorVerified(player, out var recipient))
+        if (!TryGetOperatorAccount(player, out var recipient))
         {
             ConsolePopup(player, Loc.GetString("shipyard-console-transfer-not-verified"));
             PlayDenySound(player, uid, component);

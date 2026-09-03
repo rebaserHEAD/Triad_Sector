@@ -917,7 +917,8 @@ public sealed partial class ShipyardSystem : SharedShipyardSystem
             _configManager.GetCVar(TriadCCVars.DrydockEnabled), // Triad: drydock tab
             drydock.Berths, // Triad: drydock tab
             drydock.Prices, // Triad: drydock tab
-            drydock.Offer); // Triad: drydock tab
+            drydock.Offer, // Triad: drydock tab
+            drydock.DeedOwner); // Triad: drydock tab
 
         _ui.SetUiState(uid, uiKey, newState);
     }
