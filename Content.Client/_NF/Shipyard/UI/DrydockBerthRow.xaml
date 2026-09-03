@@ -1,0 +1,36 @@
+<!-- Triad: drydock tab. One berth: what it can hold, what is in it, and what it can be sold or
+     upgraded for. -->
+<PanelContainer xmlns="https://spacestation14.io"
+                xmlns:gfx="clr-namespace:Robust.Client.Graphics;assembly=Robust.Client"
+                HorizontalExpand="True"
+                SetHeight="40">
+    <PanelContainer.PanelOverride>
+        <gfx:StyleBoxFlat BorderThickness="3" BorderColor="#101010" BackgroundColor="#1e2428"/>
+    </PanelContainer.PanelOverride>
+    <BoxContainer Orientation="Horizontal"
+                  HorizontalExpand="True">
+        <Label Name="BerthLabel"
+            Access="Public"
+            MinWidth="150"
+            HorizontalAlignment="Left"
+            Margin="5 0 2 0" />
+        <Label Name="OccupantLabel"
+            Access="Public"
+            HorizontalExpand="True"
+            HorizontalAlignment="Left"
+            Modulate="#bbbbbb"
+            Margin="0 0 8 0" />
+        <Button Name="UpgradeButton"
+            Access="Public"
+            StyleClasses="ButtonSquare"
+            MinWidth="190"
+            Margin="0 0 4 0"
+            HorizontalAlignment="Right" />
+        <Button Name="SellButton"
+            Access="Public"
+            StyleClasses="ButtonSquare ButtonCaution"
+            MinWidth="110"
+            Margin="0 0 12 0"
+            HorizontalAlignment="Right" />
+    </BoxContainer>
+</PanelContainer>

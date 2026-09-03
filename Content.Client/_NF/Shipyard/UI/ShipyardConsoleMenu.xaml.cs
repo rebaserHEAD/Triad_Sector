@@ -27,6 +27,21 @@ public sealed partial class ShipyardConsoleMenu : FancyWindow
     // in the slot; retrieve carries the id of the row that was clicked.
     public event Action? OnStore;
     public event Action<Guid>? OnRetrieve;
+    public event Action<string>? OnBuyBerth;
+    public event Action<int>? OnSellBerth;
+    public event Action<int>? OnUpgradeBerth;
+    public event Action<Guid>? OnOfferTransfer;
+    public event Action? OnCancelTransfer;
+    public event Action? OnAcceptTransfer;
+
+    /// <summary>
+    /// Triad: the viewing account, so the offer panel can tell the offerer from everyone else.
+    /// One console state is shared by every viewer, so this is decided here.
+    /// </summary>
+    public Guid? LocalUserId;
+
+    private readonly List<string> _berthClassOptions = new();
+    private bool _transferWarningArmed;
     private readonly List<VesselSize> _categoryStrings = new();
     private readonly List<VesselClass> _classStrings = new();
     private readonly List<VesselEngine> _engineStrings = new();
@@ -56,7 +71,44 @@ public sealed partial class ShipyardConsoleMenu : FancyWindow
         Tabs.SetTabTitle(0, Loc.GetString("shipyard-console-tab-purchase"));
         Tabs.SetTabTitle(1, Loc.GetString("shipyard-console-tab-drydock"));
         StoreButton.OnPressed += _ => OnStore?.Invoke();
+        BerthClassDropdown.OnItemSelected += args => BerthClassDropdown.SelectId(args.Id);
+        BuyBerthButton.OnPressed += _ =>
+        {
+            var index = BerthClassDropdown.SelectedId;
+            if (index >= 0 && index < _berthClassOptions.Count)
+                OnBuyBerth?.Invoke(_berthClassOptions[index]);
+        };
+        CancelTransferButton.OnPressed += _ => OnCancelTransfer?.Invoke();
+        AcceptTransferButton.OnPressed += _ => AcceptTransferPressed();
         SaveShipButton.OnPressed += (args) => { OnSaveShip?.Invoke(args); };
+    }
+
+    /// <summary>
+    /// Triad: accepting a transfer that takes the last free berth while a ship is out is allowed,
+    /// but it is the trap the warning exists for. First press shows it and arms the button; the
+    /// second press sends. A fresh state from the server disarms it again.
+    /// </summary>
+    private void AcceptTransferPressed()
+    {
+        if (!_transferWarningArmed && WouldLeaveAShipWithoutABerth(consumes: 1))
+        {
+            _transferWarningArmed = true;
+            TransferWarningLabel.Visible = true;
+            AcceptTransferButton.Text = Loc.GetString("shipyard-console-transfer-confirm-button");
+            return;
+        }
+
+        OnAcceptTransfer?.Invoke();
+    }
+
+    private List<StoredShipInfo> _lastShips = new();
+    private List<DrydockBerthInfo> _lastBerths = new();
+
+    private bool WouldLeaveAShipWithoutABerth(int consumes)
+    {
+        var free = _lastBerths.Count(b => b.OccupantShipId == null);
+        var shipsOut = _lastShips.Count(s => s.State == "CheckedOut");
+        return shipsOut > 0 && free - consumes < shipsOut;
     }
 
 
@@ -348,12 +400,23 @@ public sealed partial class ShipyardConsoleMenu : FancyWindow
         // Triad: drydock tab. Hidden outright when the master switch is off, rather than shown with
         // buttons that would every one of them come back refused.
         Tabs.SetTabVisible(1, state.DrydockEnabled);
+        _lastShips = state.StoredShips;
+        _lastBerths = state.Berths;
+        _transferWarningArmed = false;
         PopulateStoredShips(state.StoredShips);
+        PopulateBerths(state.Berths);
+        PopulateBerthPrices(state.BerthPrices);
+        UpdateTransferPanel(state.TransferOffer);
+
+        var free = state.Berths.Count(b => b.OccupantShipId == null);
+        var shipsOut = state.StoredShips.Count(s => s.State == "CheckedOut");
+        BerthSummaryLabel.Text = Loc.GetString("shipyard-console-berth-summary",
+            ("free", free), ("total", state.Berths.Count), ("out", shipsOut));
     }
 
     /// <summary>
-    /// Triad: rebuilds the retrieve list from the server's stored-ship index. The list is whatever
-    /// the server last read for this operator, so it is empty until a drydock action fills it.
+    /// Triad: rebuilds the ship list from the server's index. The list is whatever the server last
+    /// read for this operator, so it is empty until a drydock action fills it.
     /// </summary>
     public void PopulateStoredShips(List<StoredShipInfo> ships)
     {
@@ -363,7 +426,68 @@ public sealed partial class ShipyardConsoleMenu : FancyWindow
         {
             var row = new DrydockShipRow(ship);
             row.RetrieveButton.OnPressed += _ => OnRetrieve?.Invoke(row.ShipId);
+            row.TransferButton.OnPressed += _ => OnOfferTransfer?.Invoke(row.ShipId);
             StoredShips.AddChild(row);
         }
+    }
+
+    /// <summary>Triad: the operator's berths, one row each with sell and upgrade.</summary>
+    public void PopulateBerths(List<DrydockBerthInfo> berths)
+    {
+        Berths.RemoveAllChildren();
+
+        foreach (var berth in berths)
+        {
+            var row = new DrydockBerthRow(berth);
+            row.SellButton.OnPressed += _ => OnSellBerth?.Invoke(row.BerthId);
+            row.UpgradeButton.OnPressed += _ => OnUpgradeBerth?.Invoke(row.BerthId);
+            Berths.AddChild(row);
+        }
+    }
+
+    /// <summary>Triad: the buy control lists every class with its price; the selection survives a refresh.</summary>
+    private void PopulateBerthPrices(Dictionary<string, int> prices)
+    {
+        var selected = BerthClassDropdown.SelectedId;
+        BerthClassDropdown.Clear();
+        _berthClassOptions.Clear();
+
+        var id = 0;
+        foreach (var (sizeClass, price) in prices)
+        {
+            BerthClassDropdown.AddItem($"{sizeClass} ({BankSystemExtensions.ToSpesoString(price)})", id++);
+            _berthClassOptions.Add(sizeClass);
+        }
+
+        if (_berthClassOptions.Count > 0)
+            BerthClassDropdown.SelectId(selected >= 0 && selected < _berthClassOptions.Count ? selected : 0);
+
+        BuyBerthButton.Disabled = _berthClassOptions.Count == 0 || !_validId;
+    }
+
+    /// <summary>
+    /// Triad: the offer panel. The offerer sees Cancel; everyone else sees Accept. The warning
+    /// under it is armed by the first press of Accept, never shown pre-emptively.
+    /// </summary>
+    private void UpdateTransferPanel(DrydockTransferOfferInfo? offer)
+    {
+        TransferWarningLabel.Visible = false;
+        AcceptTransferButton.Text = Loc.GetString("shipyard-console-transfer-accept-button");
+        TransferWarningLabel.Text = Loc.GetString("shipyard-console-transfer-warning");
+
+        if (offer == null)
+        {
+            TransferPanel.Visible = false;
+            return;
+        }
+
+        TransferPanel.Visible = true;
+        TransferOfferLabel.Text = Loc.GetString("shipyard-console-transfer-offer",
+            ("owner", offer.OfferedBy), ("ship", offer.ShipName), ("class", offer.SizeClass ?? "?"), ("seconds", offer.SecondsLeft));
+
+        var mine = LocalUserId != null && offer.OfferedByUserId == LocalUserId;
+        AcceptTransferButton.Visible = !mine;
+        AcceptTransferButton.Disabled = !_validId;
+        CancelTransferButton.Visible = mine;
     }
 }

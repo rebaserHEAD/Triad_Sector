@@ -26,10 +26,21 @@ public sealed class StoredShipInfo
     /// </summary>
     public string? SizeClass;
 
-    public StoredShipInfo(Guid shipId, string name, string? sizeClass)
+    /// <summary>
+    /// The row state as text: Stored, CheckedOut or Held. A ship that is out is listed so the
+    /// player sees why their berth is empty and so the tab can warn when an action would leave it
+    /// with nowhere to dock; only a stored ship offers Retrieve.
+    /// </summary>
+    public string State = string.Empty;
+
+    public int? BerthId;
+
+    public StoredShipInfo(Guid shipId, string name, string? sizeClass, string state, int? berthId)
     {
         ShipId = shipId;
         Name = name;
         SizeClass = sizeClass;
+        State = state;
+        BerthId = berthId;
     }
 }

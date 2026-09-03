@@ -218,10 +218,15 @@ public sealed partial class ShipyardSystem : SharedShipyardSystem
         }
         else
         {
-            if (bank.Balance <= vessel.Price)
+            // Triad: drydock. A berth for the hull's class is part of every purchase and is charged
+            // after the vessel by the purchase event handler, so the whole amount is required here.
+            var berthPrice = _configManager.GetCVar(TriadCCVars.DrydockEnabled) ? DrydockBerthPriceFor(shuttleUid) : 0;
+            // if (bank.Balance <= vessel.Price)
+            if (bank.Balance <= vessel.Price + berthPrice) // Triad: drydock, berth included
             {
                 Del(shuttleUid);
-                ConsolePopup(player, Loc.GetString("cargo-console-insufficient-funds", ("cost", vessel.Price)));
+                // ConsolePopup(player, Loc.GetString("cargo-console-insufficient-funds", ("cost", vessel.Price)));
+                ConsolePopup(player, Loc.GetString("cargo-console-insufficient-funds", ("cost", vessel.Price + berthPrice))); // Triad: drydock, berth included
                 PlayDenySound(player, shipyardConsoleUid, component);
                 return;
             }
@@ -894,6 +899,7 @@ public sealed partial class ShipyardSystem : SharedShipyardSystem
 
     private void RefreshState(EntityUid uid, int balance, bool access, string? shipDeed, int shipSellValue, EntityUid? targetId, ShipyardConsoleUiKey uiKey, bool freeListings)
     {
+        var drydock = BuildDrydockState(uid); // Triad: drydock tab
         var newState = new ShipyardConsoleInterfaceState(
             balance,
             access,
@@ -907,10 +913,11 @@ public sealed partial class ShipyardSystem : SharedShipyardSystem
             CalculateSellRate(uid),
             // Triad: drydock tab. Whatever the drydock handlers last read from the database; empty
             // until one of them runs, so an unrelated refresh cannot blank a list that is showing.
-            TryComp<ShipyardConsoleComponent>(uid, out var drydockConsole)
-                ? drydockConsole.CachedStoredShips
-                : new(),
-            _configManager.GetCVar(TriadCCVars.DrydockEnabled)); // Triad: drydock tab
+            drydock.Ships,
+            _configManager.GetCVar(TriadCCVars.DrydockEnabled), // Triad: drydock tab
+            drydock.Berths, // Triad: drydock tab
+            drydock.Prices, // Triad: drydock tab
+            drydock.Offer); // Triad: drydock tab
 
         _ui.SetUiState(uid, uiKey, newState);
     }

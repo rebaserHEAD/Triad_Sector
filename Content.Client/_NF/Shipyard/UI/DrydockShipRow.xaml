@@ -1,9 +1,9 @@
-<!-- Triad: drydock tab. One stored ship in the retrieve list. -->
+<!-- Triad: drydock tab. One of the operator's ships: stored ones offer retrieve and transfer, a ship
+     that is out is listed so the player sees why a berth is empty. -->
 <PanelContainer xmlns="https://spacestation14.io"
                 xmlns:gfx="clr-namespace:Robust.Client.Graphics;assembly=Robust.Client"
                 HorizontalExpand="True"
-                SetHeight="40"
-                MaxWidth="590">
+                SetHeight="40">
     <PanelContainer.PanelOverride>
         <gfx:StyleBoxFlat BorderThickness="3" BorderColor="#101010" BackgroundColor="#242424"/>
     </PanelContainer.PanelOverride>
@@ -21,11 +21,24 @@
             Margin="0 0 5 0"
             Modulate="#999999"
             HorizontalAlignment="Right" />
+        <Label Name="StateLabel"
+            Access="Public"
+            MinWidth="120"
+            Align="Right"
+            Margin="0 0 8 0"
+            HorizontalAlignment="Right" />
+        <Button Name="TransferButton"
+            Access="Public"
+            Text="{Loc 'shipyard-console-transfer-button'}"
+            StyleClasses="ButtonSquare"
+            MinWidth="90"
+            Margin="0 0 4 0"
+            HorizontalAlignment="Right" />
         <Button Name="RetrieveButton"
             Access="Public"
             Text="{Loc 'shipyard-console-retrieve-button'}"
             StyleClasses="ButtonSquare"
-            MinWidth="130"
+            MinWidth="110"
             Margin="0 0 12 0"
             HorizontalAlignment="Right" />
     </BoxContainer>

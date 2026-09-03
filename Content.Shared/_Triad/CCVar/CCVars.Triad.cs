@@ -85,6 +85,20 @@ public sealed class TriadCCVars
     /// </summary>
     public static readonly CVarDef<int> DrydockKeepBlobs =
         CVarDef.Create("triad.drydock.keep_blobs", 3, CVar.SERVERONLY);
+
+    /// <summary>
+    /// The fraction of what was paid for a berth that selling it returns. A grant was paid nothing
+    /// for and returns nothing whatever this says.
+    /// </summary>
+    public static readonly CVarDef<float> DrydockBerthRefund =
+        CVarDef.Create("triad.drydock.berth_refund", 0.5f, CVar.SERVERONLY);
+
+    /// <summary>
+    /// How long a transfer offer at the shipyard console waits for the recipient's accept before
+    /// it lapses. The offer also lapses when the console closes.
+    /// </summary>
+    public static readonly CVarDef<int> DrydockTransferOfferSeconds =
+        CVarDef.Create("triad.drydock.transfer_offer_seconds", 30, CVar.SERVERONLY);
     // End Triad
     // Triad: market data
     // The queue knobs mirror the admin log ones, which solve the same problem at production volume

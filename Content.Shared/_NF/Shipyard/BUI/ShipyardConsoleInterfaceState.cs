@@ -25,6 +25,15 @@ public sealed class ShipyardConsoleInterfaceState : BoundUserInterfaceState
     /// </summary>
     public readonly bool DrydockEnabled;
 
+    /// <summary>Triad: the operator's berths, occupants included.</summary>
+    public readonly List<DrydockBerthInfo> Berths;
+
+    /// <summary>Triad: berth purchase price per size class name, for the buy control.</summary>
+    public readonly Dictionary<string, int> BerthPrices;
+
+    /// <summary>Triad: the transfer waiting at this console, if any.</summary>
+    public readonly DrydockTransferOfferInfo? TransferOffer;
+
     public ShipyardConsoleInterfaceState(
         int balance,
         bool accessGranted,
@@ -37,8 +46,14 @@ public sealed class ShipyardConsoleInterfaceState : BoundUserInterfaceState
         bool freeListings,
         float sellRate,
         List<StoredShipInfo> storedShips, // Triad: drydock tab
-        bool drydockEnabled) // Triad: drydock tab
+        bool drydockEnabled, // Triad: drydock tab
+        List<DrydockBerthInfo> berths, // Triad: drydock tab
+        Dictionary<string, int> berthPrices, // Triad: drydock tab
+        DrydockTransferOfferInfo? transferOffer) // Triad: drydock tab
     {
+        Berths = berths; // Triad: drydock tab
+        BerthPrices = berthPrices; // Triad: drydock tab
+        TransferOffer = transferOffer; // Triad: drydock tab
         Balance = balance;
         AccessGranted = accessGranted;
         ShipDeedTitle = shipDeedTitle;

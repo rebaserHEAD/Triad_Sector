@@ -96,6 +96,14 @@ public sealed partial class ShipyardSystem : SharedShipyardSystem
         SubscribeLocalEvent<ShipyardConsoleComponent, ShipyardConsoleLoadMessage>(OnLoadMessage);
         SubscribeLocalEvent<ShipyardConsoleComponent, ShipyardConsoleStoreMessage>(OnStoreMessage); // Triad: drydock tab
         SubscribeLocalEvent<ShipyardConsoleComponent, ShipyardConsoleRetrieveMessage>(OnRetrieveMessage); // Triad: drydock tab
+        SubscribeLocalEvent<ShipyardConsoleComponent, ShipyardConsoleBuyBerthMessage>(OnBuyBerthMessage); // Triad: drydock tab
+        SubscribeLocalEvent<ShipyardConsoleComponent, ShipyardConsoleSellBerthMessage>(OnSellBerthMessage); // Triad: drydock tab
+        SubscribeLocalEvent<ShipyardConsoleComponent, ShipyardConsoleUpgradeBerthMessage>(OnUpgradeBerthMessage); // Triad: drydock tab
+        SubscribeLocalEvent<ShipyardConsoleComponent, ShipyardConsoleOfferTransferMessage>(OnOfferTransferMessage); // Triad: drydock tab
+        SubscribeLocalEvent<ShipyardConsoleComponent, ShipyardConsoleCancelTransferMessage>(OnCancelTransferMessage); // Triad: drydock tab
+        SubscribeLocalEvent<ShipyardConsoleComponent, ShipyardConsoleAcceptTransferMessage>(OnAcceptTransferMessage); // Triad: drydock tab
+        SubscribeLocalEvent<ShipyardConsoleComponent, BoundUIClosedEvent>(OnConsoleUIClosed); // Triad: drydock tab
+        SubscribeLocalEvent<ShipyardShuttlePurchaseEvent>(OnShuttlePurchased); // Triad: drydock, bundled berth
         SubscribeLocalEvent<ShipyardConsoleComponent, EntInsertedIntoContainerMessage>(OnItemSlotChanged);
         SubscribeLocalEvent<ShipyardConsoleComponent, EntRemovedFromContainerMessage>(OnItemSlotChanged);
         SubscribeLocalEvent<RoundRestartCleanupEvent>(OnRoundRestart);

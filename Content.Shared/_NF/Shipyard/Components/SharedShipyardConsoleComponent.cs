@@ -92,4 +92,25 @@ public sealed partial class ShipyardConsoleComponent : Component
     /// list onto a mapped console would show it to the next person who opened it.</para>
     /// </summary>
     public List<BUI.StoredShipInfo> CachedStoredShips = new();
+
+    /// <summary>Triad: the operator's berths, cached for the same reason as the ship list.</summary>
+    public List<BUI.DrydockBerthInfo> CachedBerths = new();
+
+    /// <summary>
+    /// Triad: the transfer offer waiting at this console. Server-side scratch, never persisted.
+    /// The offering session is recorded by user id so accept can refuse the offerer's own
+    /// session, and so a lost card cannot complete an offer the owner never made.
+    /// </summary>
+    public DrydockTransferOffer? PendingTransfer;
+}
+
+/// <summary>Triad: a transfer in flight at one console. See <see cref="ShipyardConsoleComponent.PendingTransfer"/>.</summary>
+public sealed class DrydockTransferOffer
+{
+    public Guid ShipId;
+    public string ShipName = string.Empty;
+    public string? SizeClass;
+    public Guid OwnerUserId;
+    public string OwnerName = string.Empty;
+    public TimeSpan ExpiresAt;
 }

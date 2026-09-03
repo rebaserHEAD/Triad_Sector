@@ -392,6 +392,9 @@ public enum MarketTransactionKind
     LoadoutSpawn,
     AdminAdjust,
 
+    /// <summary>Buying, upgrading or selling a drydock berth, at the shipyard console or bundled into a ship purchase.</summary>
+    DrydockBerth,
+
     /// <summary>
     /// A sector account movement captured at the ledger chokepoint rather than at a site that knew
     /// what was happening. The <c>LedgerEntryType</c> carries the real taxonomy for these; this kind

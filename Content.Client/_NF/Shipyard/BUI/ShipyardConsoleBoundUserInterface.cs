@@ -72,8 +72,15 @@ public sealed partial class ShipyardConsoleBoundUserInterface : BoundUserInterfa
         _menu.OnRenameShip += RenameShip;
         _menu.OnSaveShip += SaveShip;
         // Triad: drydock tab
+        _menu.LocalUserId = _player.LocalSession?.UserId.UserId;
         _menu.OnStore += () => SendMessage(new ShipyardConsoleStoreMessage());
         _menu.OnRetrieve += shipId => SendMessage(new ShipyardConsoleRetrieveMessage(shipId));
+        _menu.OnBuyBerth += sizeClass => SendMessage(new ShipyardConsoleBuyBerthMessage(sizeClass));
+        _menu.OnSellBerth += berthId => SendMessage(new ShipyardConsoleSellBerthMessage(berthId));
+        _menu.OnUpgradeBerth += berthId => SendMessage(new ShipyardConsoleUpgradeBerthMessage(berthId));
+        _menu.OnOfferTransfer += shipId => SendMessage(new ShipyardConsoleOfferTransferMessage(shipId));
+        _menu.OnCancelTransfer += () => SendMessage(new ShipyardConsoleCancelTransferMessage());
+        _menu.OnAcceptTransfer += () => SendMessage(new ShipyardConsoleAcceptTransferMessage());
         var targetIdButton = _menu.FindControl<Button>("TargetIdButton");
         if (targetIdButton != null)
             targetIdButton.OnPressed += _ => SendMessage(new ItemSlotButtonPressedEvent("ShipyardConsole-targetId"));

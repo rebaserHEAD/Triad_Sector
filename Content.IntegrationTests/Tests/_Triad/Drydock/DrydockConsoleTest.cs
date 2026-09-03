@@ -217,8 +217,13 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
 
             await server.WaitAssertion(() =>
             {
-                Assert.That(consoleComp.CachedStoredShips.Any(s => s.ShipId == shipId), Is.False,
-                    "A ship that is already out is not retrievable, so the console must not advertise it.");
+                // A ship that is out stays on the list so its owner can see why a berth is empty,
+                // but it is listed as out, which is what disables its retrieve button. The row
+                // state below is what actually refuses; this is the console telling the truth.
+                var listed = consoleComp.CachedStoredShips.SingleOrDefault(s => s.ShipId == shipId);
+                Assert.That(listed, Is.Not.Null, "A ship that is out is still the player's ship and still on their list.");
+                Assert.That(listed!.State, Is.EqualTo(nameof(DrydockShipState.CheckedOut)),
+                    "The list must say the ship is out, or the tab would offer a retrieve that the row refuses.");
             });
 
             var second = await RunOnServer(pair,
@@ -270,6 +275,74 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                 Assert.That(entMan.HasComponent<ShuttleDeedComponent>(card), Is.True,
                     "A refused store must not strip the deed off a card it had no business acting on.");
             });
+
+            await pair.CleanReturnAsync();
+        }
+
+        /// <summary>
+        /// A transfer is bound to the player, not the card. The offer needs a character with a
+        /// mind behind the click and a session that owns the row; the accept needs a different
+        /// session. The operator this harness spawns has no mind, which is the control: the same
+        /// click that is refused for a bare entity is accepted once a mind is attached.
+        /// </summary>
+        [Test]
+        public async Task ATransferOfferIsBoundToTheOfferingPlayer()
+        {
+            await using var pair = await PoolManager.GetServerClient(new PoolSettings { Connected = true });
+            var server = pair.Server;
+            var entMan = server.EntMan;
+
+            var playerMan = server.ResolveDependency<IPlayerManager>();
+            var store = server.ResolveDependency<DrydockStore>();
+            var shipyard = server.System<ShipyardSystem>();
+            var mindSys = server.System<Content.Server.Mind.MindSystem>();
+
+            var session = playerMan.Sessions.First();
+            var (station, stationGrid, ship, console, consoleComp, card, operatorEnt) = await BuildConsoleAndShip(pair, session.UserId);
+
+            var stored = await RunOnServer(pair,
+                () => shipyard.TryDrydockStore(console, consoleComp, operatorEnt, ShipyardConsoleUiKey.Shipyard));
+            Assert.That(stored?.Result, Is.EqualTo(DrydockStoreResult.Success));
+            var shipId = stored!.Value.ShipId!.Value;
+            await pair.RunTicksSync(5);
+
+            // No mind yet: a card in a console is not a person at a console.
+            var unverified = await RunOnServer(pair,
+                () => shipyard.TryOfferTransfer(console, consoleComp, operatorEnt, shipId, ShipyardConsoleUiKey.Shipyard));
+            Assert.Multiple(() =>
+            {
+                Assert.That(unverified, Is.False, "An operator with no mind cannot offer a ship, whatever card is in the slot.");
+                Assert.That(consoleComp.PendingTransfer, Is.Null);
+            });
+
+            await server.WaitPost(() =>
+            {
+                var mind = mindSys.CreateMind(session.UserId, "Operator");
+                mindSys.TransferTo(mind, operatorEnt);
+            });
+            await pair.RunTicksSync(2);
+
+            var offered = await RunOnServer(pair,
+                () => shipyard.TryOfferTransfer(console, consoleComp, operatorEnt, shipId, ShipyardConsoleUiKey.Shipyard));
+            Assert.That(offered, Is.True);
+            Assert.Multiple(() =>
+            {
+                Assert.That(consoleComp.PendingTransfer, Is.Not.Null);
+                Assert.That(consoleComp.PendingTransfer!.ShipId, Is.EqualTo(shipId));
+                Assert.That(consoleComp.PendingTransfer.OwnerUserId, Is.EqualTo(session.UserId.UserId));
+            });
+
+            // The offerer's own session cannot complete the handshake.
+            var selfAccept = await RunOnServer(pair,
+                () => shipyard.TryAcceptTransfer(console, consoleComp, operatorEnt, ShipyardConsoleUiKey.Shipyard));
+            Assert.That(selfAccept, Is.False, "Accepting your own offer would be a no-op transfer at best; it is refused outright.");
+            Assert.That((await store.LoadCurrent(shipId))!.Ship.OwnerUserId, Is.EqualTo(session.UserId.UserId));
+            Assert.That(consoleComp.PendingTransfer, Is.Not.Null, "A refused accept leaves the offer standing for the right person.");
+
+            var cancelled = await RunOnServer(pair,
+                () => shipyard.TryCancelTransfer(console, consoleComp, operatorEnt, ShipyardConsoleUiKey.Shipyard));
+            Assert.That(cancelled, Is.True);
+            Assert.That(consoleComp.PendingTransfer, Is.Null);
 
             await pair.CleanReturnAsync();
         }
