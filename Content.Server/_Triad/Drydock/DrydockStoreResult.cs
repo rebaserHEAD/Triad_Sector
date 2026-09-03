@@ -48,4 +48,7 @@ public enum DrydockStoreResult : byte
 
     /// <summary>A store of this grid is already in flight. The second request does nothing.</summary>
     InProgress,
+
+    /// <summary>The berth the player named already has a ship in it.</summary>
+    BerthOccupied,
 }

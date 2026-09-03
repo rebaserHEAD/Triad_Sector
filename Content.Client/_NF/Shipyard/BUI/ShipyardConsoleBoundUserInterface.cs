@@ -73,7 +73,7 @@ public sealed partial class ShipyardConsoleBoundUserInterface : BoundUserInterfa
         _menu.OnSaveShip += SaveShip;
         // Triad: drydock tab
         _menu.LocalUserId = _player.LocalSession?.UserId.UserId;
-        _menu.OnStore += () => SendMessage(new ShipyardConsoleStoreMessage());
+        _menu.OnStore += berthId => SendMessage(new ShipyardConsoleStoreMessage(berthId));
         _menu.OnRetrieve += shipId => SendMessage(new ShipyardConsoleRetrieveMessage(shipId));
         _menu.OnBuyBerth += sizeClass => SendMessage(new ShipyardConsoleBuyBerthMessage(sizeClass));
         _menu.OnSellBerth += berthId => SendMessage(new ShipyardConsoleSellBerthMessage(berthId));

@@ -376,7 +376,7 @@ public sealed class DrydockStore
     /// anything so a full garage refuses cheaply. The answer is advisory: the filing transaction
     /// checks again and the unique index makes that one final.
     /// </summary>
-    public Task<DrydockBerthResult> CheckBerthForStore(Guid shipGuid, Guid ownerUserId, string hullClass, CancellationToken ct = default)
+    public Task<DrydockBerthResult> CheckBerthForStore(Guid shipGuid, Guid ownerUserId, string hullClass, int? requestedBerth = null, CancellationToken ct = default)
     {
         return _db.RunTriadDbCommand(async (db, token) =>
         {
@@ -386,13 +386,31 @@ public sealed class DrydockStore
             // The row's owner, not the caller's: a store never moves a ship between garages.
             var owner = ship?.OwnerUserId ?? ownerUserId;
 
-            if (ship?.BerthId is { } held)
+            if (ship?.BerthId is { } held && (requestedBerth == null || requestedBerth == held))
             {
                 var current = await db.DrydockBerth.AsNoTracking()
                     .SingleOrDefaultAsync(b => b.BerthId == held, token);
 
                 if (current != null && Fits(hullClass, current.MaxSizeClass))
                     return DrydockBerthResult.Success;
+            }
+
+            // The same three checks the filing transaction makes for a named berth, so the
+            // player hears "too small" or "occupied" before anything aboard is touched.
+            if (requestedBerth is { } wanted)
+            {
+                var named = await db.DrydockBerth.AsNoTracking()
+                    .SingleOrDefaultAsync(b => b.BerthId == wanted && b.OwnerUserId == owner, token);
+
+                if (named == null)
+                    return DrydockBerthResult.NotFound;
+
+                if (!Fits(hullClass, named.MaxSizeClass))
+                    return DrydockBerthResult.BerthTooSmall;
+
+                return await db.DrydockShip.AnyAsync(s => s.BerthId == wanted && s.ShipGuid != shipGuid, token)
+                    ? DrydockBerthResult.BerthOccupied
+                    : DrydockBerthResult.Success;
             }
 
             var (outcome, _) = await PickFreeBerth(db, owner, hullClass, ship?.LastBerthId, new HashSet<int>(), token);

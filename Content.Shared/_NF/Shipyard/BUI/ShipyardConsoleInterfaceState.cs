@@ -42,6 +42,9 @@ public sealed class ShipyardConsoleInterfaceState : BoundUserInterfaceState
     /// </summary>
     public readonly Guid? DeedOwnerUserId;
 
+    /// <summary>Triad: the ship on the inserted card's deed and the berths it can go into, or null.</summary>
+    public readonly DrydockDeedShipInfo? DeedShip;
+
     public ShipyardConsoleInterfaceState(
         int balance,
         bool accessGranted,
@@ -58,12 +61,14 @@ public sealed class ShipyardConsoleInterfaceState : BoundUserInterfaceState
         List<DrydockBerthInfo> berths, // Triad: drydock tab
         Dictionary<string, int> berthPrices, // Triad: drydock tab
         DrydockTransferOfferInfo? transferOffer, // Triad: drydock tab
-        Guid? deedOwnerUserId) // Triad: drydock tab
+        Guid? deedOwnerUserId, // Triad: drydock tab
+        DrydockDeedShipInfo? deedShip) // Triad: drydock tab
     {
         Berths = berths; // Triad: drydock tab
         BerthPrices = berthPrices; // Triad: drydock tab
         TransferOffer = transferOffer; // Triad: drydock tab
         DeedOwnerUserId = deedOwnerUserId; // Triad: drydock tab
+        DeedShip = deedShip; // Triad: drydock tab
         Balance = balance;
         AccessGranted = accessGranted;
         ShipDeedTitle = shipDeedTitle;

@@ -626,6 +626,7 @@ public sealed partial class ShipyardSystem : SharedShipyardSystem
         }
 
         RefreshState(uid, bank.Balance, true, fullName, sellValue, targetId, (ShipyardConsoleUiKey)args.UiKey, voucherUsed);
+        KickDrydockRefresh(uid, component, player, (ShipyardConsoleUiKey)args.UiKey); // Triad: drydock tab
     }
 
     private void ConsolePopup(EntityUid uid, string text)
@@ -724,7 +725,7 @@ public sealed partial class ShipyardSystem : SharedShipyardSystem
                 targetId,
                 (ShipyardConsoleUiKey)uiComp.Key,
                 voucherUsed);
-
+            KickDrydockRefresh(uid, component, player, (ShipyardConsoleUiKey)uiComp.Key); // Triad: drydock tab
         }
     }
 
@@ -918,7 +919,8 @@ public sealed partial class ShipyardSystem : SharedShipyardSystem
             drydock.Berths, // Triad: drydock tab
             drydock.Prices, // Triad: drydock tab
             drydock.Offer, // Triad: drydock tab
-            drydock.DeedOwner); // Triad: drydock tab
+            drydock.DeedOwner, // Triad: drydock tab
+            drydock.DeedShip); // Triad: drydock tab
 
         _ui.SetUiState(uid, uiKey, newState);
     }

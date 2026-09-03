@@ -135,7 +135,7 @@ public sealed partial class ShipyardSystem
 
         try
         {
-            await TryDrydockStore(uid, component, player, (ShipyardConsoleUiKey)args.UiKey);
+            await TryDrydockStore(uid, component, player, (ShipyardConsoleUiKey)args.UiKey, args.BerthId);
         }
         catch (Exception e)
         {
@@ -275,10 +275,11 @@ public sealed partial class ShipyardSystem
     {
         component.CachedStoredShips = new();
         component.CachedBerths = new();
+        component.CachedDeedShip = null;
 
         // No card, no account to list against: the drydock tab is per-operator, and an empty list
         // is the honest answer rather than everything the console has ever seen.
-        if (component.TargetIdSlot.ContainerSlot?.ContainedEntity is not { Valid: true }
+        if (component.TargetIdSlot.ContainerSlot?.ContainedEntity is not { Valid: true } targetId
             || !TryComp<ActorComponent>(player, out var actor))
         {
             RefreshDrydockUi(uid, component, player, uiKey);
@@ -293,9 +294,9 @@ public sealed partial class ShipyardSystem
         if (TerminatingOrDeleted(uid) || TerminatingOrDeleted(player))
             return;
 
-        // Every hull the account has, including the ones that are out: the player sees why a
-        // berth is empty, and the tab can warn when an action would leave a ship with nowhere to
-        // dock. A ship under investigation is hidden, and retrieve refuses it regardless.
+        // Every hull the account has, including the ones that are out: the tab warns when an
+        // action would leave a ship with nowhere to dock. A ship under investigation is hidden,
+        // and retrieve refuses it regardless.
         component.CachedStoredShips = rows
             .Where(r => !r.Investigating)
             .Select(r => new StoredShipInfo(r.ShipGuid, r.ShipName, r.SizeClass, r.State.ToString(), r.BerthId))
@@ -319,20 +320,88 @@ public sealed partial class ShipyardSystem
                 upgradePrice,
                 upgradeClass,
                 slot.Occupant?.ShipGuid,
-                slot.Occupant?.ShipName));
+                slot.Occupant?.ShipName,
+                slot.Occupant?.SizeClass,
+                slot.Occupant?.State.ToString()));
         }
 
+        component.CachedDeedShip = BuildDeedShip(targetId, rows, slots);
         RefreshDrydockUi(uid, component, player, uiKey);
+    }
+
+    /// <summary>
+    /// The card at the top of the tab: the ship on the inserted deed, how long it has been out,
+    /// and which of the operator's free berths it fits. Read from the live grid, never from the
+    /// cached class text, for the same reason the store itself does.
+    /// </summary>
+    private DrydockDeedShipInfo? BuildDeedShip(EntityUid targetId, List<DrydockShip> rows, List<DrydockBerthSlot> slots)
+    {
+        if (!TryComp<ShuttleDeedComponent>(targetId, out var deed)
+            || deed.ShuttleUid is not { Valid: true } shuttle
+            || !TryComp<MapGridComponent>(shuttle, out var map))
+        {
+            return null;
+        }
+
+        var sizeClass = _drydockSizes.GetSizeClass((shuttle, map));
+        var hullClass = sizeClass.ToString();
+
+        DrydockShip? row = null;
+        if (TryComp<DrydockIdentityComponent>(shuttle, out var identity) && identity.ShipId != Guid.Empty)
+            row = rows.FirstOrDefault(r => r.ShipGuid == identity.ShipId);
+
+        int? minutesOut = row is { State: DrydockShipState.CheckedOut }
+            ? (int)Math.Max(0, (DateTime.UtcNow - row.StateChangedAt).TotalMinutes)
+            : null;
+
+        // The same preference the store applies: the ship's own last berth if it is free and
+        // fits, else the smallest free berth that fits. The dropdown lists the rest.
+        var fitting = slots
+            .Where(s => s.Occupant == null && DrydockStore.Fits(hullClass, s.Berth.MaxSizeClass))
+            .OrderBy(s => DrydockStore.TryParseClass(s.Berth.MaxSizeClass, out var max) ? (int)max : int.MaxValue)
+            .ThenBy(s => s.Berth.BerthId)
+            .Select(s => s.Berth.BerthId)
+            .ToList();
+
+        int? preferred = row?.LastBerthId is { } last && fitting.Contains(last) ? last : fitting.FirstOrDefault();
+        if (fitting.Count == 0)
+            preferred = null;
+
+        return new DrydockDeedShipInfo(GetFullName(deed), hullClass, minutesOut, preferred, fitting);
+    }
+
+    /// <summary>
+    /// Fills the tab without waiting: the upstream open and card-slot handlers are synchronous and
+    /// the drydock lists come from the database. Called from one marked line in each.
+    /// </summary>
+    internal void KickDrydockRefresh(EntityUid uid, ShipyardConsoleComponent component, EntityUid player, ShipyardConsoleUiKey uiKey)
+    {
+        if (!_configManager.GetCVar(TriadCCVars.DrydockEnabled))
+            return;
+
+        _ = RefreshDrydockStateSafe(uid, component, player, uiKey);
+    }
+
+    private async Task RefreshDrydockStateSafe(EntityUid uid, ShipyardConsoleComponent component, EntityUid player, ShipyardConsoleUiKey uiKey)
+    {
+        try
+        {
+            await RefreshDrydockState(uid, component, player, uiKey);
+        }
+        catch (Exception e)
+        {
+            Log.Error($"Drydock: refreshing the tab on {ToPrettyString(uid)} for {ToPrettyString(player)} threw: {e}");
+        }
     }
 
     /// <summary>
     /// The drydock half of the console state, read from the caches and the pending offer. Called
     /// by the upstream state builder so it carries one line of ours rather than a block.
     /// </summary>
-    internal (List<StoredShipInfo> Ships, List<DrydockBerthInfo> Berths, Dictionary<string, int> Prices, DrydockTransferOfferInfo? Offer, Guid? DeedOwner) BuildDrydockState(EntityUid uid)
+    internal (List<StoredShipInfo> Ships, List<DrydockBerthInfo> Berths, Dictionary<string, int> Prices, DrydockTransferOfferInfo? Offer, Guid? DeedOwner, DrydockDeedShipInfo? DeedShip) BuildDrydockState(EntityUid uid)
     {
         if (!TryComp<ShipyardConsoleComponent>(uid, out var console))
-            return (new(), new(), DrydockBerthPrices(), null, null);
+            return (new(), new(), DrydockBerthPrices(), null, null, null);
 
         DrydockTransferOfferInfo? offer = null;
         if (console.PendingTransfer is { } pending)
@@ -344,7 +413,7 @@ public sealed partial class ShipyardSystem
                 offer = new DrydockTransferOfferInfo(pending.ShipId, pending.ShipName, pending.SizeClass, pending.OwnerName, pending.OwnerUserId, left);
         }
 
-        return (console.CachedStoredShips, console.CachedBerths, DrydockBerthPrices(), offer, DeedOwnerAccount(console));
+        return (console.CachedStoredShips, console.CachedBerths, DrydockBerthPrices(), offer, DeedOwnerAccount(console), console.CachedDeedShip);
     }
 
     /// <summary>
@@ -463,7 +532,7 @@ public sealed partial class ShipyardSystem
     /// <para>Returns null when this console refused before the pipeline was entered, so a caller
     /// can tell "we did not try" from "we tried and it said no".</para>
     /// </summary>
-    internal async Task<(DrydockStoreResult Result, Guid? ShipId)?> TryDrydockStore(EntityUid uid, ShipyardConsoleComponent component, EntityUid player, ShipyardConsoleUiKey uiKey)
+    internal async Task<(DrydockStoreResult Result, Guid? ShipId)?> TryDrydockStore(EntityUid uid, ShipyardConsoleComponent component, EntityUid player, ShipyardConsoleUiKey uiKey, int? berthId = null)
     {
         if (component.TargetIdSlot.ContainerSlot?.ContainedEntity is not { Valid: true } targetId)
         {
@@ -495,7 +564,7 @@ public sealed partial class ShipyardSystem
             return null;
         }
 
-        var result = await _drydock.TryStoreShip(shuttleUid, ownership.OwnerUserId.UserId, DrydockRoundId);
+        var result = await _drydock.TryStoreShip(shuttleUid, ownership.OwnerUserId.UserId, DrydockRoundId, berthId);
 
         // The write yielded. The store itself has already succeeded or refused; everything below is
         // the console epilogue.
@@ -870,6 +939,7 @@ public sealed partial class ShipyardSystem
             DrydockStoreResult.NoBerth => "shipyard-console-store-no-berth",
             DrydockStoreResult.BerthTooSmall => "shipyard-console-store-berth-too-small",
             DrydockStoreResult.InProgress => "shipyard-console-store-in-progress",
+            DrydockStoreResult.BerthOccupied => "shipyard-console-berth-occupied",
             _ => "shipyard-console-store-failed",
         };
     }

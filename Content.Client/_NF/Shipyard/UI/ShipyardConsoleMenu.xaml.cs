@@ -23,9 +23,9 @@ public sealed partial class ShipyardConsoleMenu : FancyWindow
     public event Action<ButtonEventArgs>? OnOrderApproved;
     public event Action<ButtonEventArgs>? OnUnassignDeed;
     public event Action<string>? OnRenameShip;
-    // Triad: drydock tab. Store carries nothing because the server resolves the ship from the card
-    // in the slot; retrieve carries the id of the row that was clicked.
-    public event Action? OnStore;
+    // Triad: drydock tab. Store carries only the berth to land in, because the server resolves the
+    // ship from the card in the slot; retrieve carries the id of the row that was clicked.
+    public event Action<int?>? OnStore;
     public event Action<Guid>? OnRetrieve;
     public event Action<string>? OnBuyBerth;
     public event Action<int>? OnSellBerth;
@@ -40,7 +40,7 @@ public sealed partial class ShipyardConsoleMenu : FancyWindow
     /// </summary>
     public Guid? LocalUserId;
 
-    private readonly List<string> _berthClassOptions = new();
+    private int? _defaultBerth;
     private bool _transferWarningArmed;
     private readonly List<VesselSize> _categoryStrings = new();
     private readonly List<VesselClass> _classStrings = new();
@@ -70,14 +70,7 @@ public sealed partial class ShipyardConsoleMenu : FancyWindow
         // Triad: drydock tab
         Tabs.SetTabTitle(0, Loc.GetString("shipyard-console-tab-purchase"));
         Tabs.SetTabTitle(1, Loc.GetString("shipyard-console-tab-drydock"));
-        StoreButton.OnPressed += _ => OnStore?.Invoke();
-        BerthClassDropdown.OnItemSelected += args => BerthClassDropdown.SelectId(args.Id);
-        BuyBerthButton.OnPressed += _ =>
-        {
-            var index = BerthClassDropdown.SelectedId;
-            if (index >= 0 && index < _berthClassOptions.Count)
-                OnBuyBerth?.Invoke(_berthClassOptions[index]);
-        };
+        StoreButton.OnPressed += _ => OnStore?.Invoke(_defaultBerth);
         CancelTransferButton.OnPressed += _ => OnCancelTransfer?.Invoke();
         AcceptTransferButton.OnPressed += _ => AcceptTransferPressed();
         SaveShipButton.OnPressed += (args) => { OnSaveShip?.Invoke(args); };
@@ -408,66 +401,93 @@ public sealed partial class ShipyardConsoleMenu : FancyWindow
         _lastShips = state.StoredShips;
         _lastBerths = state.Berths;
         _transferWarningArmed = false;
-        PopulateStoredShips(state.StoredShips);
-        PopulateBerths(state.Berths);
-        PopulateBerthPrices(state.BerthPrices);
+        PopulateDeedShip(state.DeedShip);
+        PopulateBerths(state.Berths, canRetrieve: state.IsTargetIdPresent && state.ShipDeedTitle == null);
+        PopulateBuyMenu(state.BerthPrices);
         UpdateTransferPanel(state.TransferOffer);
 
         var free = state.Berths.Count(b => b.OccupantShipId == null);
-        var shipsOut = state.StoredShips.Count(s => s.State == "CheckedOut");
-        BerthSummaryLabel.Text = Loc.GetString("shipyard-console-berth-summary",
-            ("free", free), ("total", state.Berths.Count), ("out", shipsOut));
+        BerthSummaryLabel.Text = Loc.GetString("shipyard-console-berths-free", ("free", free), ("total", state.Berths.Count));
     }
 
     /// <summary>
-    /// Triad: rebuilds the ship list from the server's index. The list is whatever the server last
-    /// read for this operator, so it is empty until a drydock action fills it.
+    /// Triad: the card at the top. Store lands in the server's preferred berth; the arrow beside it
+    /// lists the other free berths the hull fits. With nothing that fits, Store says so and stays
+    /// disabled rather than sending a request the server would refuse.
     /// </summary>
-    public void PopulateStoredShips(List<StoredShipInfo> ships)
+    private void PopulateDeedShip(DrydockDeedShipInfo? ship)
     {
-        StoredShips.RemoveAllChildren();
+        DeedShipPanel.Visible = ship != null;
+        _defaultBerth = ship?.DefaultBerthId;
+        if (ship == null)
+            return;
 
-        foreach (var ship in ships)
-        {
-            var row = new DrydockShipRow(ship);
-            row.RetrieveButton.OnPressed += _ => OnRetrieve?.Invoke(row.ShipId);
-            row.TransferButton.OnPressed += _ => OnOfferTransfer?.Invoke(row.ShipId);
-            StoredShips.AddChild(row);
-        }
+        DeedShipLabel.Text = ship.MinutesOut is { } minutes
+            ? Loc.GetString("shipyard-console-deed-ship-out", ("ship", ship.Name), ("class", ship.SizeClass ?? "?"), ("minutes", minutes))
+            : Loc.GetString("shipyard-console-deed-ship-new", ("ship", ship.Name), ("class", ship.SizeClass ?? "?"));
+
+        StoreButton.Text = ship.DefaultBerthId is { } berth
+            ? Loc.GetString("shipyard-console-store-in-button", ("berth", berth))
+            : Loc.GetString("shipyard-console-store-no-fit-button");
+        StoreButton.Disabled = ship.DefaultBerthId == null || !_validId;
+
+        StoreMenuButton.SetItems(ship.FittingBerthIds
+            .Where(id => id != ship.DefaultBerthId)
+            .Select(id => new DrydockMenuButton.Item(
+                Loc.GetString("shipyard-console-store-in-button", ("berth", id)),
+                _lastBerths.FirstOrDefault(b => b.BerthId == id)?.MaxSizeClass,
+                _validId,
+                () => OnStore?.Invoke(id))));
     }
 
-    /// <summary>Triad: the operator's berths, one row each with sell and upgrade.</summary>
-    public void PopulateBerths(List<DrydockBerthInfo> berths)
+    /// <summary>
+    /// Triad: one row per berth. Retrieve is the row's one button, shown only when it would work;
+    /// the rarer verbs sit in the row's menu, with a disabled entry saying why.
+    /// </summary>
+    private void PopulateBerths(List<DrydockBerthInfo> berths, bool canRetrieve)
     {
         Berths.RemoveAllChildren();
 
         foreach (var berth in berths)
         {
-            var row = new DrydockBerthRow(berth);
-            row.SellButton.OnPressed += _ => OnSellBerth?.Invoke(row.BerthId);
-            row.UpgradeButton.OnPressed += _ => OnUpgradeBerth?.Invoke(row.BerthId);
+            var row = new DrydockBerthRow(berth, canRetrieve);
+            row.RetrieveButton.OnPressed += _ =>
+            {
+                if (row.OccupantShipId is { } shipId)
+                    OnRetrieve?.Invoke(shipId);
+            };
+
+            var items = new List<DrydockMenuButton.Item>();
+            var occupied = berth.OccupantShipId != null;
+
+            if (berth.OccupantShipId is { } occupant && berth.OccupantState == "Stored")
+                items.Add(new DrydockMenuButton.Item(Loc.GetString("shipyard-console-menu-transfer"), null, _validId, () => OnOfferTransfer?.Invoke(occupant)));
+
+            if (berth.UpgradePrice is { } price && berth.UpgradeClass != null)
+            {
+                items.Add(new DrydockMenuButton.Item(Loc.GetString("shipyard-console-menu-upgrade-berth"),
+                    $"{berth.UpgradeClass} {BankSystemExtensions.ToSpesoString(price)}", _validId,
+                    () => OnUpgradeBerth?.Invoke(row.BerthId)));
+            }
+
+            items.Add(new DrydockMenuButton.Item(Loc.GetString("shipyard-console-menu-sell-berth"),
+                occupied ? Loc.GetString("shipyard-console-menu-occupied") : $"+{BankSystemExtensions.ToSpesoString(berth.SellValue)}",
+                !occupied && _validId,
+                () => OnSellBerth?.Invoke(row.BerthId)));
+
+            row.MenuButton.SetItems(items);
             Berths.AddChild(row);
         }
     }
 
-    /// <summary>Triad: the buy control lists every class with its price; the selection survives a refresh.</summary>
-    private void PopulateBerthPrices(Dictionary<string, int> prices)
+    /// <summary>Triad: Buy berth drops the class ladder with its prices.</summary>
+    private void PopulateBuyMenu(Dictionary<string, int> prices)
     {
-        var selected = BerthClassDropdown.SelectedId;
-        BerthClassDropdown.Clear();
-        _berthClassOptions.Clear();
-
-        var id = 0;
-        foreach (var (sizeClass, price) in prices)
-        {
-            BerthClassDropdown.AddItem($"{sizeClass} ({BankSystemExtensions.ToSpesoString(price)})", id++);
-            _berthClassOptions.Add(sizeClass);
-        }
-
-        if (_berthClassOptions.Count > 0)
-            BerthClassDropdown.SelectId(selected >= 0 && selected < _berthClassOptions.Count ? selected : 0);
-
-        BuyBerthButton.Disabled = _berthClassOptions.Count == 0 || !_validId;
+        BuyBerthButton.SetItems(prices.Select(pair => new DrydockMenuButton.Item(
+            pair.Key,
+            BankSystemExtensions.ToSpesoString(pair.Value),
+            _validId,
+            () => OnBuyBerth?.Invoke(pair.Key))));
     }
 
     /// <summary>

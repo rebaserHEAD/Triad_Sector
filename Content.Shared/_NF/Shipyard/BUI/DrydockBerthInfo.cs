@@ -25,7 +25,14 @@ public sealed class DrydockBerthInfo
 
     public string? OccupantName;
 
-    public DrydockBerthInfo(int berthId, string maxSizeClass, int sellValue, int? upgradePrice, string? upgradeClass, Guid? occupantShipId, string? occupantName)
+    /// <summary>The occupant's stored class text, so the row can say "Kestrel · Cutter".</summary>
+    public string? OccupantSizeClass;
+
+    /// <summary>The occupant's row state as text; only a Stored occupant offers Retrieve.</summary>
+    public string? OccupantState;
+
+    public DrydockBerthInfo(int berthId, string maxSizeClass, int sellValue, int? upgradePrice, string? upgradeClass,
+        Guid? occupantShipId, string? occupantName, string? occupantSizeClass, string? occupantState)
     {
         BerthId = berthId;
         MaxSizeClass = maxSizeClass;
@@ -34,6 +41,41 @@ public sealed class DrydockBerthInfo
         UpgradeClass = upgradeClass;
         OccupantShipId = occupantShipId;
         OccupantName = occupantName;
+        OccupantSizeClass = occupantSizeClass;
+        OccupantState = occupantState;
+    }
+}
+
+/// <summary>
+/// The ship on the inserted card's deed, as the card at the top of the tab draws it: the one ship
+/// the operator has out, and where it can go. Null when the card carries no deed.
+/// </summary>
+[Serializable, NetSerializable]
+public sealed class DrydockDeedShipInfo
+{
+    public string Name = string.Empty;
+
+    public string? SizeClass;
+
+    /// <summary>Minutes since the ship was retrieved, or null for a hull that has never been stored.</summary>
+    public int? MinutesOut;
+
+    /// <summary>
+    /// The berth a plain Store lands in: the ship's own last berth if it is free and fits, else
+    /// the smallest free berth that fits. Null when nothing fits, which is what disables Store.
+    /// </summary>
+    public int? DefaultBerthId;
+
+    /// <summary>Every free berth the hull fits, for the dropdown beside Store.</summary>
+    public List<int> FittingBerthIds = new();
+
+    public DrydockDeedShipInfo(string name, string? sizeClass, int? minutesOut, int? defaultBerthId, List<int> fittingBerthIds)
+    {
+        Name = name;
+        SizeClass = sizeClass;
+        MinutesOut = minutesOut;
+        DefaultBerthId = defaultBerthId;
+        FittingBerthIds = fittingBerthIds;
     }
 }
 

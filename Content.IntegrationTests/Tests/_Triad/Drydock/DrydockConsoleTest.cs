@@ -391,6 +391,70 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
         }
 
         /// <summary>
+        /// The card at the top of the tab and the berth it names. The console reads the deed ship
+        /// from the live grid and offers the berths it fits, and a store that names one of them
+        /// lands there rather than wherever the store would have picked.
+        /// </summary>
+        [Test]
+        public async Task AStoreLandsInTheBerthItNames()
+        {
+            await using var pair = await PoolManager.GetServerClient(new PoolSettings { Connected = true });
+            var server = pair.Server;
+
+            var playerMan = server.ResolveDependency<IPlayerManager>();
+            var store = server.ResolveDependency<DrydockStore>();
+            var shipyard = server.System<ShipyardSystem>();
+
+            var session = playerMan.Sessions.First();
+            var (station, stationGrid, ship, console, consoleComp, card, operatorEnt) = await BuildConsoleAndShip(pair, session.UserId);
+
+            // A berth the store would not pick on its own: the harness grants SuperCapital ones,
+            // and a Cutter is the smallest, so the picker would prefer this one. Name a larger
+            // one instead and check the request wins over the preference.
+            var named = await store.AddBerth(session.UserId.UserId, ShipSizeClass.Capital, DrydockBerthKind.Granted, 0, null, null);
+
+            await RunOnServer(pair, async () =>
+            {
+                await shipyard.RefreshDrydockState(console, consoleComp, operatorEnt, ShipyardConsoleUiKey.Shipyard);
+                return true;
+            });
+
+            await server.WaitAssertion(() =>
+            {
+                var deedShip = consoleComp.CachedDeedShip;
+                Assert.That(deedShip, Is.Not.Null, "With a deed in the slot the tab must describe the ship on it.");
+                Assert.That(deedShip!.Name, Is.EqualTo("Kestrel"));
+                Assert.That(deedShip.MinutesOut, Is.Null, "A hull that has never been stored has no time out.");
+                Assert.That(deedShip.DefaultBerthId, Is.Not.Null, "A free berth that fits must be offered as the default.");
+                Assert.That(deedShip.FittingBerthIds, Does.Contain(named), "Every free berth the hull fits is offered, including the one about to be named.");
+            });
+
+            var stored = await RunOnServer(pair,
+                () => shipyard.TryDrydockStore(console, consoleComp, operatorEnt, ShipyardConsoleUiKey.Shipyard, named));
+            Assert.That(stored?.Result, Is.EqualTo(DrydockStoreResult.Success));
+            await pair.RunTicksSync(5);
+
+            var header = await RunOnServer(pair, () => store.GetShipHeader(stored!.Value.ShipId!.Value));
+            Assert.That(header!.BerthId, Is.EqualTo(named), "A store that names a berth lands in that berth.");
+
+            await RunOnServer(pair, async () =>
+            {
+                await shipyard.RefreshDrydockState(console, consoleComp, operatorEnt, ShipyardConsoleUiKey.Shipyard);
+                return true;
+            });
+
+            await server.WaitAssertion(() =>
+            {
+                Assert.That(consoleComp.CachedDeedShip, Is.Null, "The deed came off with the store, so the card at the top goes with it.");
+                var row = consoleComp.CachedBerths.Single(b => b.BerthId == named);
+                Assert.That(row.OccupantName, Is.EqualTo("Kestrel"));
+                Assert.That(row.OccupantState, Is.EqualTo(nameof(DrydockShipState.Stored)));
+            });
+
+            await pair.CleanReturnAsync();
+        }
+
+        /// <summary>
         /// Builds a station, a ship stamped to <paramref name="shipOwner"/>, and a console holding a
         /// deed card for it, with the operator standing clear of the grid.
         /// </summary>

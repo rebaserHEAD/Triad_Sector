@@ -1,36 +1,37 @@
-<!-- Triad: drydock tab. One berth: what it can hold, what is in it, and what it can be sold or
-     upgraded for. -->
+<!-- Triad: drydock tab. One berth: its number and class, the ship in it or "empty", Retrieve when
+     that ship can come out, and the menu holding everything rarer. -->
 <PanelContainer xmlns="https://spacestation14.io"
                 xmlns:gfx="clr-namespace:Robust.Client.Graphics;assembly=Robust.Client"
+                xmlns:ui="clr-namespace:Content.Client._NF.Shipyard.UI"
                 HorizontalExpand="True"
                 SetHeight="40">
     <PanelContainer.PanelOverride>
         <gfx:StyleBoxFlat BorderThickness="3" BorderColor="#101010" BackgroundColor="#1e2428"/>
     </PanelContainer.PanelOverride>
     <BoxContainer Orientation="Horizontal"
-                  HorizontalExpand="True">
+                  HorizontalExpand="True"
+                  VerticalAlignment="Center">
         <Label Name="BerthLabel"
             Access="Public"
-            MinWidth="150"
-            HorizontalAlignment="Left"
-            Margin="5 0 2 0" />
+            MinWidth="110"
+            Margin="8 0 4 0" />
         <Label Name="OccupantLabel"
             Access="Public"
             HorizontalExpand="True"
-            HorizontalAlignment="Left"
-            Modulate="#bbbbbb"
             Margin="0 0 8 0" />
-        <Button Name="UpgradeButton"
+        <Button Name="RetrieveButton"
             Access="Public"
+            Text="{Loc 'shipyard-console-retrieve-button'}"
             StyleClasses="ButtonSquare"
-            MinWidth="190"
+            MinWidth="90"
             Margin="0 0 4 0"
-            HorizontalAlignment="Right" />
-        <Button Name="SellButton"
+            Visible="False" />
+        <ui:DrydockMenuButton Name="MenuButton"
             Access="Public"
-            StyleClasses="ButtonSquare ButtonCaution"
-            MinWidth="110"
-            Margin="0 0 12 0"
-            HorizontalAlignment="Right" />
+            Text="···"
+            StyleClasses="ButtonSquare"
+            MinWidth="30"
+            AlignRight="True"
+            Margin="0 0 8 0" />
     </BoxContainer>
 </PanelContainer>

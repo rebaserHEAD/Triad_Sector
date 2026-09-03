@@ -96,6 +96,9 @@ public sealed partial class ShipyardConsoleComponent : Component
     /// <summary>Triad: the operator's berths, cached for the same reason as the ship list.</summary>
     public List<BUI.DrydockBerthInfo> CachedBerths = new();
 
+    /// <summary>Triad: the ship on the inserted card's deed and where it can be stored, cached for the same reason.</summary>
+    public BUI.DrydockDeedShipInfo? CachedDeedShip;
+
     /// <summary>
     /// Triad: the transfer offer waiting at this console. Server-side scratch, never persisted.
     /// The offering session is recorded by user id so accept can refuse the offerer's own

@@ -80,7 +80,12 @@ public sealed partial class DrydockSystem : EntitySystem
     /// retrievable row on every store while the old one stays retrievable too, which is unbounded
     /// duplication on the happy path.</para>
     /// </summary>
-    public async Task<(DrydockStoreResult Result, Guid? ShipId)> TryStoreShip(EntityUid gridUid, Guid ownerUserId, int? roundId)
+    /// <param name="berthId">
+    /// The berth to land in, or null to let the store pick: the ship's own last berth if free and
+    /// fitting, else the smallest free berth that fits. A named berth still has to be the owner's,
+    /// free, and large enough.
+    /// </param>
+    public async Task<(DrydockStoreResult Result, Guid? ShipId)> TryStoreShip(EntityUid gridUid, Guid ownerUserId, int? roundId, int? berthId = null)
     {
         if (!_cfg.GetCVar(TriadCCVars.DrydockEnabled) || _cfg.GetCVar(TriadCCVars.DrydockReadOnly))
             return (DrydockStoreResult.Disabled, null);
@@ -120,7 +125,7 @@ public sealed partial class DrydockSystem : EntitySystem
             var shipId = ResolveOrMintShipId(gridUid);
             var sizeClass = _shipSize.GetSizeClass((gridUid, Comp<MapGridComponent>(gridUid))).ToString();
 
-            var capacity = await _store.CheckBerthForStore(shipId, ownerUserId, sizeClass);
+            var capacity = await _store.CheckBerthForStore(shipId, ownerUserId, sizeClass, berthId);
             if (capacity != DrydockBerthResult.Success)
                 return (BerthRefusal(capacity), null);
 
@@ -219,6 +224,7 @@ public sealed partial class DrydockSystem : EntitySystem
                 ShipName = shipName,
                 VesselProto = vesselProto,
                 SizeClass = sizeClass,
+                BerthId = berthId,
                 Kind = DrydockRevisionKind.PlayerStore,
                 ActorUserId = ownerUserId,
                 CreatedRoundId = roundId,
@@ -320,9 +326,12 @@ public sealed partial class DrydockSystem : EntitySystem
     /// </summary>
     private static DrydockStoreResult BerthRefusal(DrydockBerthResult outcome)
     {
-        return outcome == DrydockBerthResult.BerthTooSmall
-            ? DrydockStoreResult.BerthTooSmall
-            : DrydockStoreResult.NoBerth;
+        return outcome switch
+        {
+            DrydockBerthResult.BerthTooSmall => DrydockStoreResult.BerthTooSmall,
+            DrydockBerthResult.BerthOccupied => DrydockStoreResult.BerthOccupied,
+            _ => DrydockStoreResult.NoBerth,
+        };
     }
 
     /// <summary>
