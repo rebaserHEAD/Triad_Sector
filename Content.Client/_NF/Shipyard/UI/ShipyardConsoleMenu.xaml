@@ -182,7 +182,7 @@
                 <gfx:StyleBoxFlat BorderThickness="2" BorderColor="#3e5e82" BackgroundColor="#1a2430"/>
             </PanelContainer.PanelOverride>
             <BoxContainer Orientation="Horizontal" Margin="10 6" VerticalAlignment="Center">
-                <Label Name="DeedShipLabel" HorizontalExpand="True" />
+                <RichTextLabel Name="DeedShipLabel" HorizontalExpand="True" VerticalAlignment="Center" />
                 <Button Name="StoreButton" StyleClasses="ButtonSquare" MinWidth="130" />
                 <ui:DrydockMenuButton Name="StoreMenuButton" Text="▼" StyleClasses="ButtonSquare" MinWidth="30" AlignRight="True" Margin="2 0 0 0" />
             </BoxContainer>

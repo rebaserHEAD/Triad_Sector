@@ -13,6 +13,7 @@ using Robust.Client.UserInterface.XAML;
 using Robust.Shared.Maths;
 using Robust.Shared.Prototypes;
 using Robust.Shared.Timing;
+using Robust.Shared.Utility;
 using static Robust.Client.UserInterface.Controls.BaseButton;
 
 namespace Content.Client._NF.Shipyard.UI;
@@ -447,9 +448,16 @@ public sealed partial class ShipyardConsoleMenu : FancyWindow
         if (ship == null)
             return;
 
-        DeedShipLabel.Text = ship.MinutesOut is { } minutes
-            ? Loc.GetString("shipyard-console-deed-ship-out", ("ship", ship.Name), ("class", ship.SizeClass ?? "?"), ("minutes", minutes))
-            : Loc.GetString("shipyard-console-deed-ship-new", ("ship", ship.Name), ("class", ship.SizeClass ?? "?"));
+        // The hull's name carries the weight; its class and how long it has been out sit behind it
+        // in the dim colour, the same shape every drydock row uses.
+        var deed = new FormattedMessage();
+        deed.AddText(Loc.GetString("shipyard-console-deed-ship-name", ("ship", ship.Name)));
+        deed.PushColor(Color.FromHex("#999999"));
+        deed.AddText(" " + (ship.MinutesOut is { } minutes
+            ? Loc.GetString("shipyard-console-deed-ship-out", ("class", ship.SizeClass ?? "?"), ("minutes", minutes))
+            : Loc.GetString("shipyard-console-deed-ship-new", ("class", ship.SizeClass ?? "?"))));
+        deed.Pop();
+        DeedShipLabel.SetMessage(deed);
 
         StoreButton.Text = ship.DefaultBerthId is { } berth
             ? Loc.GetString("shipyard-console-store-in-button", ("berth", berth))
