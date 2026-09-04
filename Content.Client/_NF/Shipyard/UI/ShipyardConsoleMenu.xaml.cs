@@ -60,6 +60,19 @@ public sealed partial class ShipyardConsoleMenu : FancyWindow
     // counts down from there between states rather than asking the server every second.
     private float _sinceState;
     private int _lastElapsed = -1;
+
+    // Storing a hull serializes the whole grid and compresses it on the server's game thread, so
+    // the server sends nothing at all while it works and cannot report how far along it is. The
+    // client is a separate process and keeps drawing, so what it can honestly show is that the
+    // press landed and the work is still going: a moving indicator, never a percentage.
+    // Cleared by the next state, which the server pushes on success and on refusal alike.
+    private float _storingFor = -1f;
+
+    /// <summary>How long the indicator runs before giving the button back, if no state ever arrives.</summary>
+    private const float StoreFeedbackTimeout = 30f;
+
+    /// <summary>The last deed ship drawn, so the timeout can put the card back as it was.</summary>
+    private DrydockDeedShipInfo? _lastDeedShip;
     private readonly List<(Label Label, string Prefix, int Seconds)> _offerClocks = new();
     private readonly List<(DrydockBerthRow Row, int Seconds)> _escrowRows = new();
     private List<DrydockCaptainInfo> _lastCaptains = new();
@@ -91,7 +104,11 @@ public sealed partial class ShipyardConsoleMenu : FancyWindow
         // Triad: drydock tab
         Tabs.SetTabTitle(0, Loc.GetString("shipyard-console-tab-purchase"));
         Tabs.SetTabTitle(1, Loc.GetString("shipyard-console-tab-drydock"));
-        StoreButton.OnPressed += _ => OnStore?.Invoke(_defaultBerth);
+        StoreButton.OnPressed += _ =>
+        {
+            BeginStoreFeedback();
+            OnStore?.Invoke(_defaultBerth);
+        };
         SaveShipButton.OnPressed += (args) => { OnSaveShip?.Invoke(args); };
     }
 
@@ -104,6 +121,26 @@ public sealed partial class ShipyardConsoleMenu : FancyWindow
         base.FrameUpdate(args);
 
         _sinceState += args.DeltaSeconds;
+
+        // Every frame, not once a second: this is the only thing moving while the server is busy,
+        // so it has to look alive.
+        if (_storingFor >= 0f)
+        {
+            _storingFor += args.DeltaSeconds;
+            if (_storingFor >= StoreFeedbackTimeout)
+            {
+                // The server never answered. Give the button back rather than stranding the
+                // operator at a console that looks permanently busy.
+                _storingFor = -1f;
+                PopulateDeedShip(_lastDeedShip);
+            }
+            else
+            {
+                var dots = new string('.', (int)(_storingFor * 2) % 4);
+                StoreButton.Text = Loc.GetString("shipyard-console-storing-button") + dots;
+            }
+        }
+
         var elapsed = (int)_sinceState;
         if (elapsed == _lastElapsed)
             return;
@@ -443,6 +480,11 @@ public sealed partial class ShipyardConsoleMenu : FancyWindow
     /// </summary>
     private void PopulateDeedShip(DrydockDeedShipInfo? ship)
     {
+        // A state arriving is the server answering, whether it stored the hull or refused it, so
+        // the indicator stops here and the button is drawn fresh below.
+        _storingFor = -1f;
+        _lastDeedShip = ship;
+
         DeedShipPanel.Visible = ship != null;
         _defaultBerth = ship?.DefaultBerthId;
         if (ship == null)
@@ -470,7 +512,24 @@ public sealed partial class ShipyardConsoleMenu : FancyWindow
                 Loc.GetString("shipyard-console-store-in-button", ("berth", id)),
                 _lastBerths.FirstOrDefault(b => b.BerthId == id)?.MaxSizeClass,
                 _validId,
-                () => OnStore?.Invoke(id))));
+                () =>
+                {
+                    BeginStoreFeedback();
+                    OnStore?.Invoke(id);
+                })));
+    }
+
+    /// <summary>
+    /// The press landed and the server has gone quiet to do the work. Both ways into a store go
+    /// through here, and the button is taken away while it runs so a second press cannot be
+    /// mistaken for the first not having registered. A second store is refused server-side by the
+    /// in-progress sentinel regardless; this is about the operator knowing what is happening.
+    /// </summary>
+    private void BeginStoreFeedback()
+    {
+        _storingFor = 0f;
+        StoreButton.Disabled = true;
+        StoreMenuButton.Disabled = true;
     }
 
     /// <summary>

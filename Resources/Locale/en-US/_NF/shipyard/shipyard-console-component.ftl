@@ -127,6 +127,9 @@ shipyard-console-deed-ship-name = {$ship}
 shipyard-console-deed-ship-out = · {$class} · out {$minutes} m
 shipyard-console-deed-ship-new = · {$class} · never stored
 shipyard-console-berths-free = {$free} of {$total} berths free
+# Shown while the server is serializing and compressing the hull. It cannot say how far along it
+# is, so this never carries a number.
+shipyard-console-storing-button = Storing
 shipyard-console-berth-row = #{$berth}
 shipyard-console-berth-row-class = {$class}
 shipyard-console-berth-occupant = {$ship}
