@@ -153,6 +153,114 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             await pair.CleanReturnAsync();
         }
 
+        /// <summary>
+        /// Opening an investigation withdraws whatever offer was standing. A hull under question
+        /// does not change hands while the question is open, and it refuses to be offered again
+        /// until the flag comes off, so the two rules are asserted together.
+        /// </summary>
+        [Test]
+        public async Task OpeningAnInvestigationWithdrawsTheStandingOffer()
+        {
+            await using var pair = await PoolManager.GetServerClient();
+            var store = pair.Server.ResolveDependency<DrydockStore>();
+            var db = pair.Server.ResolveDependency<IServerDbManager>();
+
+            var owner = Guid.NewGuid();
+            var recipient = Guid.NewGuid();
+            var admin = Guid.NewGuid();
+            await InsertPlayer(db, owner);
+            await InsertPlayer(db, recipient);
+            await InsertPlayer(db, admin);
+
+            await store.AddBerth(owner, ShipSizeClass.Cutter, DrydockBerthKind.Granted, 0, null, null);
+            // The offer is refused outright unless the recipient has somewhere to put it.
+            await store.AddBerth(recipient, ShipSizeClass.Cutter, DrydockBerthKind.Granted, 0, null, null);
+
+            var ship = Guid.NewGuid();
+            await store.FileRevision(Request(ship, owner, "Contested"), Encoding.UTF8.GetBytes("doc"), keepBlobs: 3);
+
+            var (offered, transfer) = await store.TryOfferTransfer(ship, owner, recipient, TimeSpan.FromMinutes(30), null);
+            Assert.Multiple(() =>
+            {
+                Assert.That(offered, Is.EqualTo(DrydockBerthResult.Success));
+                Assert.That(transfer, Is.Not.Null);
+                Assert.That(transfer!.ToUserId, Is.EqualTo(recipient));
+            });
+            Assert.That((await store.LoadCurrent(ship))!.Ship.State, Is.EqualTo(DrydockShipState.InEscrow));
+
+            Assert.That(await store.SetInvestigating(ship, true, admin, null, "recipient reported for scamming"), Is.True);
+
+            var standing = await store.GetPendingOfferForShip(ship);
+            var after = (await store.LoadCurrent(ship))!.Ship;
+            Assert.Multiple(() =>
+            {
+                Assert.That(standing, Is.Null, "The offer is gone, so the recipient's alert is too.");
+                Assert.That(after.State, Is.EqualTo(DrydockShipState.Stored), "Escrow releases back to the owner's own berth.");
+                Assert.That(after.Investigating, Is.True);
+                Assert.That(after.BerthId, Is.Not.Null, "A ship in escrow keeps its berth, so there is one to come back to.");
+            });
+
+            var audit = await store.GetAudit(ship);
+            var cancelled = audit.Single(a => a.Action == DrydockAuditAction.TransferCancelled);
+            Assert.Multiple(() =>
+            {
+                Assert.That(cancelled.Reason, Is.EqualTo("investigation opened"), "The timeline says why the offer died, not just that it did.");
+                Assert.That(cancelled.ActorUserId, Is.EqualTo(admin));
+                Assert.That(cancelled.SubjectUserId, Is.EqualTo(recipient), "Subject is who lost the offer.");
+            });
+
+            var (again, _) = await store.TryOfferTransfer(ship, owner, recipient, TimeSpan.FromMinutes(30), null);
+            Assert.That(again, Is.EqualTo(DrydockBerthResult.WrongState), "An investigated ship refuses a fresh offer.");
+
+            await pair.CleanReturnAsync();
+        }
+
+        /// <summary>
+        /// A rename does not hide a hull. The admin box searches every name a ship has carried,
+        /// because the complaint is filed under the name it had at the time.
+        /// </summary>
+        [Test]
+        public async Task APastNameIsStillSearchableAfterARename()
+        {
+            await using var pair = await PoolManager.GetServerClient();
+            var store = pair.Server.ResolveDependency<DrydockStore>();
+            var db = pair.Server.ResolveDependency<IServerDbManager>();
+
+            var owner = Guid.NewGuid();
+            await InsertPlayer(db, owner);
+            await store.AddBerth(owner, ShipSizeClass.Cutter, DrydockBerthKind.Granted, 0, null, null);
+
+            // Pooled pairs share one database, so the needles carry a token no other test uses.
+            var token = Guid.NewGuid().ToString("N")[..8];
+            var oldName = $"Wanderer{token}";
+            var newName = $"Vagrant{token}";
+
+            var ship = Guid.NewGuid();
+            await store.FileRevision(Request(ship, owner, oldName), Encoding.UTF8.GetBytes("doc"), keepBlobs: 3);
+            Assert.That(await store.TryRenameShip(ship, owner, newName, null), Is.EqualTo(DrydockBerthResult.Success));
+
+            var byOldName = await store.QueryShips(Search(oldName), 0, 50);
+            var byNewName = await store.QueryShips(Search(newName), 0, 50);
+            var byNothing = await store.QueryShips(Search($"Nomad{token}"), 0, 50);
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(byNewName.Rows.Select(s => s.ShipGuid), Does.Contain(ship), "The name it wears now.");
+                Assert.That(byOldName.Rows.Select(s => s.ShipGuid), Does.Contain(ship),
+                    "The name it wore then, held on the audit snapshot rather than the row.");
+                Assert.That(byNothing.Rows, Is.Empty, "A name it never had matches nothing, so the search is not matching everything.");
+            });
+
+            // The id boxes are the same box: a guid searches ship and owner, not text.
+            var byId = await store.QueryShips(Search(ship.ToString()), 0, 50);
+            Assert.That(byId.Rows.Select(s => s.ShipGuid), Is.EquivalentTo(new[] { ship }));
+
+            await pair.CleanReturnAsync();
+        }
+
+        private static DrydockShipFilter Search(string needle)
+            => new(null, null, null, null, StrandedOnly: false, CurrentRoundId: null, Search: needle);
+
         private static DrydockRevisionRequest Request(Guid shipId, Guid owner, string name) => new()
         {
             ShipGuid = shipId,

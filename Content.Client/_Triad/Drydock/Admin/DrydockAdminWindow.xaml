@@ -1,105 +1,160 @@
-<DefaultWindow xmlns="https://spacestation14.io"
-               xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml"
-               Title="Drydock Admin"
-               MinSize="1000 600"
-               SetSize="1600 900">
-    <PanelContainer StyleClasses="PanelBackgroundBaseDark">
-        <BoxContainer Orientation="Horizontal" VerticalExpand="True" HorizontalExpand="True" Margin="4">
+<!-- Triad: the drydock admin panel. It wears the shipyard console's own chrome, because it is the
+     same machine seen from the other side: one search box and a row of state chips on the left,
+     the selected hull on the right with its escrow, berths, revisions and timeline. Every button
+     sends a message and the server pushes the whole state back, so nothing here guesses at an
+     outcome. Tooltips live on this surface only; the player tab has none. -->
+<controls:FancyWindow xmlns="https://spacestation14.io"
+                      xmlns:gfx="clr-namespace:Robust.Client.Graphics;assembly=Robust.Client"
+                      xmlns:controls="clr-namespace:Content.Client.UserInterface.Controls"
+                      xmlns:ui="clr-namespace:Content.Client._NF.Shipyard.UI"
+                      SetSize="1400 800"
+                      MinSize="1100 640">
+    <PanelContainer VerticalExpand="True" HorizontalExpand="True" Margin="0 8 0 2">
+        <PanelContainer.PanelOverride>
+            <gfx:StyleBoxFlat BorderThickness="7" BorderColor="#252525" BackgroundColor="#3d474d"/>
+        </PanelContainer.PanelOverride>
+        <PanelContainer VerticalExpand="True" HorizontalExpand="True" Margin="4 4 4 4">
+            <PanelContainer.PanelOverride>
+                <gfx:StyleBoxFlat BorderThickness="2" BorderColor="#333333" BackgroundColor="#181818"/>
+            </PanelContainer.PanelOverride>
+            <BoxContainer Orientation="Vertical" Margin="5 0 5 0">
 
-            <!-- ===================== SHIPS ===================== -->
-            <BoxContainer Orientation="Vertical" MinWidth="420" VerticalExpand="True">
-                <PanelContainer StyleClasses="AngleRect">
-                    <BoxContainer Orientation="Vertical" Margin="6">
-                        <Label Text="Filters" StyleClasses="LabelHeading" />
-                        <Label Text="Owner (name contains, or user id)" />
-                        <LineEdit Name="OwnerInput" HorizontalExpand="True" />
-                        <Label Text="Ship name" Margin="0 4 0 0" />
-                        <LineEdit Name="ShipNameInput" PlaceHolder="name contains" HorizontalExpand="True" />
-                        <Label Text="State" Margin="0 4 0 0" />
-                        <OptionButton Name="StateDropdown" HorizontalExpand="True" />
-                        <CheckBox Name="StrandedOnly" Text="Stranded only: checked out in a past round" Margin="0 4 0 0" />
-                        <Button Name="ApplyButton" Text="Apply Filters" HorizontalExpand="True" Margin="0 4 0 0" />
+                <BoxContainer Orientation="Horizontal" VerticalExpand="True" HorizontalExpand="True" Margin="0 8 0 0">
+
+                    <!-- ======================== Search and results ======================== -->
+                    <BoxContainer Orientation="Vertical" MinWidth="470" VerticalExpand="True">
+                        <BoxContainer Orientation="Horizontal" HorizontalExpand="True">
+                            <LineEdit Name="SearchInput"
+                                      HorizontalExpand="True"
+                                      PlaceHolder="{Loc 'drydock-admin-search-placeholder'}"
+                                      ToolTip="{Loc 'drydock-admin-search-tooltip'}" />
+                            <Button Name="SearchButton"
+                                    Text="{Loc 'drydock-admin-search-button'}"
+                                    StyleClasses="ButtonSquare"
+                                    MinWidth="80"
+                                    Margin="4 0 0 0" />
+                        </BoxContainer>
+
+                        <!-- Chips are built in code so the one in force can be drawn as pressed. -->
+                        <BoxContainer Name="ChipRowTop" Orientation="Horizontal" Margin="0 6 0 0" />
+                        <BoxContainer Name="ChipRowBottom" Orientation="Horizontal" Margin="0 2 0 0" />
+
+                        <Label Name="CountLabel" Margin="2 6 0 3" Modulate="#999999" />
+
+                        <PanelContainer VerticalExpand="True" HorizontalExpand="True">
+                            <PanelContainer.PanelOverride>
+                                <gfx:StyleBoxFlat BorderThickness="2" BorderColor="#333333" BackgroundColor="#141414"/>
+                            </PanelContainer.PanelOverride>
+                            <ScrollContainer Name="ShipScroll" VerticalExpand="True" HorizontalExpand="True" HScrollEnabled="False">
+                                <BoxContainer Name="ShipContainer" Orientation="Vertical" HorizontalExpand="True" />
+                            </ScrollContainer>
+                        </PanelContainer>
+
+                        <BoxContainer Orientation="Horizontal" Margin="0 4 0 0" VerticalAlignment="Center">
+                            <Button Name="PrevPageButton" Text="{Loc 'drydock-admin-prev'}" StyleClasses="ButtonSquare" MinWidth="70" />
+                            <Label Name="PageLabel" Margin="8 0" HorizontalExpand="True" Align="Center" Modulate="#999999" />
+                            <Button Name="NextPageButton" Text="{Loc 'drydock-admin-next'}" StyleClasses="ButtonSquare" MinWidth="70" />
+                        </BoxContainer>
                     </BoxContainer>
-                </PanelContainer>
 
-                <Label Name="CountLabel" Margin="0 4 0 2" />
-                <PanelContainer VerticalExpand="True" StyleClasses="AngleRect">
-                    <ScrollContainer Name="ShipScroll" VerticalExpand="True" HorizontalExpand="True" HScrollEnabled="False">
-                        <BoxContainer Name="ShipContainer" Orientation="Vertical" VerticalExpand="True" />
-                    </ScrollContainer>
-                </PanelContainer>
-                <BoxContainer Orientation="Horizontal" Margin="0 4 0 0">
-                    <Button Name="PrevPageButton" Text="Prev" />
-                    <Label Name="PageLabel" Margin="8 0" />
-                    <Button Name="NextPageButton" Text="Next" />
+                    <!-- ======================== The selected hull ======================== -->
+                    <BoxContainer Orientation="Vertical" HorizontalExpand="True" VerticalExpand="True" Margin="8 0 0 0">
+
+                        <PanelContainer HorizontalExpand="True">
+                            <PanelContainer.PanelOverride>
+                                <gfx:StyleBoxFlat BorderThickness="2" BorderColor="#333333" BackgroundColor="#141414"/>
+                            </PanelContainer.PanelOverride>
+                            <BoxContainer Orientation="Vertical" Margin="8 6">
+                                <RichTextLabel Name="HeaderLabel" />
+
+                                <!-- The standing offer, when there is one. Cancel is the first verb in this state. -->
+                                <PanelContainer Name="EscrowPanel" Visible="False" Margin="0 6 0 0">
+                                    <PanelContainer.PanelOverride>
+                                        <gfx:StyleBoxFlat BorderThickness="2" BorderColor="#6b5320" BackgroundColor="#241d0e"/>
+                                    </PanelContainer.PanelOverride>
+                                    <BoxContainer Orientation="Vertical" Margin="8 5">
+                                        <Label Text="{Loc 'drydock-admin-escrow-title'}" StyleClasses="LabelHeading" Modulate="#d9a441" />
+                                        <Label Name="EscrowBodyLabel" Margin="0 2 0 0" />
+                                        <Label Name="EscrowLandsLabel" Margin="0 2 0 0" Modulate="#999999" />
+                                    </BoxContainer>
+                                </PanelContainer>
+
+                                <!-- Verbs are built in code: which ones exist, and their order, follow the state. -->
+                                <BoxContainer Name="VerbRow" Orientation="Horizontal" Margin="0 6 0 0" />
+
+                                <LineEdit Name="ReasonInput"
+                                          HorizontalExpand="True"
+                                          Margin="0 4 0 0"
+                                          PlaceHolder="{Loc 'drydock-admin-reason-placeholder'}"
+                                          ToolTip="{Loc 'drydock-admin-reason-tooltip'}" />
+
+                                <BoxContainer Orientation="Horizontal" Margin="0 4 0 0">
+                                    <LineEdit Name="NotesInput" HorizontalExpand="True" PlaceHolder="{Loc 'drydock-admin-notes-placeholder'}" />
+                                    <Button Name="SaveNotesButton" Text="{Loc 'drydock-admin-save-notes'}" StyleClasses="ButtonSquare" MinWidth="70" Margin="4 0 0 0" />
+                                </BoxContainer>
+                            </BoxContainer>
+                        </PanelContainer>
+
+                        <BoxContainer Orientation="Horizontal" VerticalExpand="True" Margin="0 6 0 0">
+
+                            <BoxContainer Orientation="Vertical" HorizontalExpand="True" VerticalExpand="True">
+                                <BoxContainer Orientation="Horizontal" VerticalAlignment="Center">
+                                    <Label Text="{Loc 'drydock-admin-berths-title'}" StyleClasses="LabelHeading" HorizontalExpand="True" />
+                                    <ui:DrydockMenuButton Name="GrantBerthButton"
+                                                          Text="{Loc 'drydock-admin-grant-berth'}"
+                                                          StyleClasses="ButtonSquare"
+                                                          AlignRight="True"
+                                                          ToolTip="{Loc 'drydock-admin-grant-berth-tooltip'}" />
+                                </BoxContainer>
+                                <PanelContainer VerticalExpand="True" Margin="0 3 0 0">
+                                    <PanelContainer.PanelOverride>
+                                        <gfx:StyleBoxFlat BorderThickness="2" BorderColor="#333333" BackgroundColor="#141414"/>
+                                    </PanelContainer.PanelOverride>
+                                    <ScrollContainer Name="BerthScroll" HScrollEnabled="False" VerticalExpand="True" HorizontalExpand="True">
+                                        <BoxContainer Name="BerthContainer" Orientation="Vertical" HorizontalExpand="True" />
+                                    </ScrollContainer>
+                                </PanelContainer>
+
+                                <Label Text="{Loc 'drydock-admin-revisions-title'}" StyleClasses="LabelHeading" Margin="0 8 0 3" />
+                                <PanelContainer VerticalExpand="True">
+                                    <PanelContainer.PanelOverride>
+                                        <gfx:StyleBoxFlat BorderThickness="2" BorderColor="#333333" BackgroundColor="#141414"/>
+                                    </PanelContainer.PanelOverride>
+                                    <ScrollContainer Name="RevisionScroll" HScrollEnabled="False" VerticalExpand="True" HorizontalExpand="True">
+                                        <BoxContainer Name="RevisionContainer" Orientation="Vertical" HorizontalExpand="True" />
+                                    </ScrollContainer>
+                                </PanelContainer>
+                            </BoxContainer>
+
+                            <BoxContainer Orientation="Vertical" HorizontalExpand="True" VerticalExpand="True" Margin="8 0 0 0">
+                                <Label Text="{Loc 'drydock-admin-timeline-title'}" StyleClasses="LabelHeading" Margin="0 0 0 3" />
+                                <PanelContainer VerticalExpand="True">
+                                    <PanelContainer.PanelOverride>
+                                        <gfx:StyleBoxFlat BorderThickness="2" BorderColor="#333333" BackgroundColor="#141414"/>
+                                    </PanelContainer.PanelOverride>
+                                    <ScrollContainer Name="TimelineScroll" HScrollEnabled="False" VerticalExpand="True" HorizontalExpand="True">
+                                        <BoxContainer Name="TimelineContainer" Orientation="Vertical" HorizontalExpand="True" />
+                                    </ScrollContainer>
+                                </PanelContainer>
+                            </BoxContainer>
+                        </BoxContainer>
+                    </BoxContainer>
+                </BoxContainer>
+
+                <Label Name="NoticeLabel" Margin="2 6 0 0" Text="{Loc 'drydock-admin-no-selection'}" />
+
+                <!-- The shipyard console's own footer, because this is the same machine. -->
+                <BoxContainer Orientation="Vertical" Margin="0 5 0 0">
+                    <PanelContainer StyleClasses="LowDivider" Margin="0 5 0 0" />
+                    <BoxContainer Orientation="Horizontal" Margin="10 5 5 0" VerticalAlignment="Bottom">
+                        <Label Text="{Loc 'drydock-admin-flavor-left'}" StyleClasses="WindowFooterText" />
+                        <Label Text="{Loc 'apc-menu-flavor-right'}" StyleClasses="WindowFooterText"
+                               HorizontalAlignment="Right" HorizontalExpand="True" Margin="0 0 5 0" />
+                        <TextureRect StyleClasses="NTLogoDark" Stretch="KeepAspectCentered"
+                                     VerticalAlignment="Center" HorizontalAlignment="Right" SetSize="19 19"/>
+                    </BoxContainer>
                 </BoxContainer>
             </BoxContainer>
-
-            <!-- ===================== DETAIL ===================== -->
-            <BoxContainer Orientation="Vertical" HorizontalExpand="True" VerticalExpand="True" Margin="4 0 0 0">
-                <PanelContainer StyleClasses="PanelBackgroundBaseLight">
-                    <BoxContainer Orientation="Vertical" Margin="6 4">
-                        <RichTextLabel Name="HeaderLabel" />
-                        <BoxContainer Orientation="Horizontal" Margin="0 4 0 0">
-                            <Label Text="Notes" Margin="0 0 4 0" />
-                            <LineEdit Name="NotesInput" HorizontalExpand="True" />
-                            <Button Name="SaveNotesButton" Text="Save" Margin="4 0 0 0" />
-                        </BoxContainer>
-                        <BoxContainer Orientation="Horizontal" Margin="0 4 0 0">
-                            <Label Text="Reason" Margin="0 0 4 0" />
-                            <LineEdit Name="ReasonInput" PlaceHolder="why, for the timeline" HorizontalExpand="True" />
-                        </BoxContainer>
-                        <BoxContainer Orientation="Horizontal" Margin="0 4 0 0">
-                            <Button Name="HoldButton" Text="Hold" Disabled="True" />
-                            <Button Name="InvestigateButton" Text="Open Investigation" Disabled="True" Margin="4 0 0 0" />
-                            <Button Name="VacateButton" Text="Vacate Berth" Disabled="True" Margin="4 0 0 0" />
-                            <Control HorizontalExpand="True" />
-                            <Button Name="DeleteShipButton" Text="Delete Ship Record" Disabled="True" StyleClasses="Danger" />
-                        </BoxContainer>
-                        <BoxContainer Orientation="Horizontal" Margin="0 4 0 0">
-                            <Label Text="Berth" Margin="0 0 4 0" />
-                            <OptionButton Name="BerthDropdown" MinWidth="260" />
-                            <Button Name="RestoreButton" Text="Restore Into Berth" Disabled="True" Margin="4 0 0 0" />
-                            <Button Name="MoveButton" Text="Move Into Berth" Disabled="True" Margin="4 0 0 0" />
-                        </BoxContainer>
-                    </BoxContainer>
-                </PanelContainer>
-
-                <BoxContainer Orientation="Horizontal" VerticalExpand="True" Margin="0 4 0 0">
-                    <BoxContainer Orientation="Vertical" HorizontalExpand="True" VerticalExpand="True">
-                        <Label Text="Owner's Berths" StyleClasses="LabelHeading" />
-                        <PanelContainer StyleClasses="AngleRect" VerticalExpand="True">
-                            <ScrollContainer Name="BerthScroll" HScrollEnabled="False" VerticalExpand="True">
-                                <BoxContainer Name="BerthContainer" Orientation="Vertical" />
-                            </ScrollContainer>
-                        </PanelContainer>
-                        <BoxContainer Orientation="Horizontal" Margin="0 4 0 0">
-                            <OptionButton Name="GrantClassDropdown" MinWidth="160" />
-                            <Button Name="GrantBerthButton" Text="Grant Berth" Disabled="True" Margin="4 0 0 0" />
-                        </BoxContainer>
-
-                        <Label Text="Revisions" StyleClasses="LabelHeading" Margin="0 6 0 0" />
-                        <PanelContainer StyleClasses="AngleRect" VerticalExpand="True">
-                            <ScrollContainer Name="RevisionScroll" HScrollEnabled="False" VerticalExpand="True">
-                                <BoxContainer Name="RevisionContainer" Orientation="Vertical" />
-                            </ScrollContainer>
-                        </PanelContainer>
-                    </BoxContainer>
-
-                    <BoxContainer Orientation="Vertical" HorizontalExpand="True" VerticalExpand="True" Margin="4 0 0 0">
-                        <Label Text="Timeline" StyleClasses="LabelHeading" />
-                        <PanelContainer StyleClasses="AngleRect" VerticalExpand="True">
-                            <ScrollContainer Name="TimelineScroll" HScrollEnabled="False" VerticalExpand="True">
-                                <BoxContainer Name="TimelineContainer" Orientation="Vertical" />
-                            </ScrollContainer>
-                        </PanelContainer>
-                    </BoxContainer>
-                </BoxContainer>
-
-                <PanelContainer StyleClasses="PanelBackgroundBaseLight" Margin="0 4 0 0">
-                    <Label Name="NoticeLabel" Margin="6 4" Text="Select a ship." />
-                </PanelContainer>
-            </BoxContainer>
-        </BoxContainer>
+        </PanelContainer>
     </PanelContainer>
-</DefaultWindow>
+</controls:FancyWindow>

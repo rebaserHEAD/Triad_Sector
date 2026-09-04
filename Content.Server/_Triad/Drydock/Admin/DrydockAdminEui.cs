@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 using Content.Server._NF.Bank;
 using Content.Server._NF.Shipyard.Systems;
@@ -376,7 +377,7 @@ public sealed class DrydockAdminEui : BaseEui
         if (_prefs.TryGetCachedPreferences(id, out var cached))
             return cached;
 
-        return await _db.GetPlayerPreferencesAsync(id);
+        return await _db.GetPlayerPreferencesAsync(id, CancellationToken.None);
     }
 
     /// <summary>Every open drydock tab re-reads after an admin action, so the player sees it without reopening.</summary>
