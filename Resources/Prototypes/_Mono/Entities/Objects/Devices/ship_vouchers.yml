@@ -13,8 +13,8 @@
 - type: entity
   parent: BaseShipVoucher
   id: ShipVoucherFrontierIronMan
-  name: Ironman Voucher
-  description: Allows purchase of one free Framework from the Shipyard. Destroyed on sale.
+  name: ironman voucher
+  description: Allows purchase of one free Framework or Sleipnir from the Shipyard. Destroyed on sale.
   components:
   - type: Sprite
     layers:
@@ -22,7 +22,8 @@
   - type: ShipyardVoucher
     vessels:
     - Framework
-    consoleType: Shipyard
+    - Sleipnir
+    consoleTypes: [Shipyard, Scrap] # Triad - Scrapyard addition
 
 # PDV
 
@@ -39,7 +40,7 @@
     - state: vouchermilitary
   - type: ShipyardVoucher
     destroyOnEmpty: true
-    consoleType: Custom
+    consoleTypes: [Custom]
     companyName: PDV
     vessels:
     - Mock
@@ -59,7 +60,7 @@
     - state: vouchermilitary
   - type: ShipyardVoucher
     destroyOnEmpty: true
-    consoleType: Custom
+    consoleTypes: [Custom]
     companyName: PDV
     vessels:
     - Inertia
@@ -79,7 +80,7 @@
     - state: vouchermilitary
   - type: ShipyardVoucher
     destroyOnEmpty: true
-    consoleType: Custom
+    consoleTypes: [Custom]
     companyName: PDV
     vessels:
     - Snakelet
@@ -100,7 +101,7 @@
     - state: vouchermilitary
   - type: ShipyardVoucher
     destroyOnEmpty: true
-    consoleType: Security
+    consoleTypes: [Security]
     companyName: TDF
     vessels:
     - Phalanx # Triad - modified this voucher
@@ -120,7 +121,7 @@
     - state: vouchermilitary
   - type: ShipyardVoucher
     destroyOnEmpty: true
-    consoleType: Custom
+    consoleTypes: [Custom]
     companyName: Colonial
     vessels:
     - Rook
@@ -140,7 +141,7 @@
     - state: vouchermilitary
   - type: ShipyardVoucher
     destroyOnEmpty: true
-    consoleType: Custom
+    consoleTypes: [Custom]
     companyName: Colonial
     vessels:
     - Taser
@@ -160,7 +161,7 @@
     - state: vouchermilitary
   - type: ShipyardVoucher
     destroyOnEmpty: true
-    consoleType: Custom
+    consoleTypes: [Custom]
     companyName: Colonial
     vessels:
     - Hound

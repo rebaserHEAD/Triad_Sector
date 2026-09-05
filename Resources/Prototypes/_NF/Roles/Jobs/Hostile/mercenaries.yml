@@ -54,7 +54,7 @@
     outerClothing: ClothingOuterArmorBasicSlim
     neck: ClothingNeckIFFNeutral
     belt: ClothingBeltMilitaryWebbing
-    pocket1: Machete
+    pocket1: SpaceCash1000
     pocket2: SpaceCash1000
     shoes: ClothingShoesBootsCombat
   inhand:
