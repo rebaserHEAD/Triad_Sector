@@ -48,6 +48,12 @@ public sealed class ShipyardConsoleInterfaceState : BoundUserInterfaceState
     /// <summary>Triad: the ship on the inserted card's deed and the berths it can go into, or null.</summary>
     public readonly DrydockDeedShipInfo? DeedShip;
 
+    /// <summary>
+    /// Triad: how long a transfer offer stands, in whole minutes, for the sentence in the transfer
+    /// prompt. The cvar behind it is server-only, so the client has to be told.
+    /// </summary>
+    public readonly int TransferOfferMinutes;
+
     public ShipyardConsoleInterfaceState(
         int balance,
         bool accessGranted,
@@ -66,8 +72,10 @@ public sealed class ShipyardConsoleInterfaceState : BoundUserInterfaceState
         List<DrydockTransferOfferInfo> transferOffers, // Triad: drydock tab
         List<DrydockCaptainInfo> captains, // Triad: drydock tab
         Guid? deedOwnerUserId, // Triad: drydock tab
-        DrydockDeedShipInfo? deedShip) // Triad: drydock tab
+        DrydockDeedShipInfo? deedShip, // Triad: drydock tab
+        int transferOfferMinutes) // Triad: drydock tab
     {
+        TransferOfferMinutes = transferOfferMinutes; // Triad: drydock tab
         Berths = berths; // Triad: drydock tab
         BerthPrices = berthPrices; // Triad: drydock tab
         TransferOffers = transferOffers; // Triad: drydock tab

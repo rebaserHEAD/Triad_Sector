@@ -1,6 +1,6 @@
 <!-- Triad: drydock tab. One berth: its number and class, the ship in it or "empty", Retrieve when
-     that ship can come out, Cancel offer while it waits in escrow, and the menu holding
-     everything rarer.
+     that ship can come out, Cancel in place of the menu while it waits in escrow, and the menu
+     holding everything rarer.
 
      Retrieve sits in a fixed-width slot that stays reserved whenever anything on the list could
      come out, so the row menus line up in a column instead of sliding left on the empty rows. -->
@@ -33,16 +33,16 @@
             <Button Name="RetrieveButton"
                 Access="Public"
                 Text="{Loc 'shipyard-console-retrieve-button'}"
-                StyleClasses="ButtonSquare"
+                StyleClasses="ButtonSquare ButtonPrimary"
                 HorizontalExpand="True"
                 Visible="False" />
         </BoxContainer>
         <Button Name="CancelButton"
             Access="Public"
             Text="{Loc 'shipyard-console-transfer-cancel-button'}"
-            StyleClasses="ButtonSquare ButtonCaution"
-            MinWidth="110"
-            Margin="0 0 4 0"
+            StyleClasses="ButtonSquare"
+            MinWidth="90"
+            Margin="0 0 8 0"
             Visible="False" />
         <ui:DrydockMenuButton Name="MenuButton"
             Access="Public"

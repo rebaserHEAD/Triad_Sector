@@ -34,6 +34,12 @@ public sealed class DrydockBerthInfo
     /// <summary>What scrapping the occupant pays right now, or null when no appraisal was captured.</summary>
     public int? OccupantSellPrice;
 
+    /// <summary>
+    /// The appraisal that price was cut from, so the sale prompt can say what fraction of the hull's
+    /// worth the scrap pays. Null whenever <see cref="OccupantSellPrice"/> is.
+    /// </summary>
+    public int? OccupantAppraisal;
+
     /// <summary>When the occupant is in escrow: the standing offer, who it went to, and how long it has left.</summary>
     public long? OccupantTransferId;
 
@@ -43,8 +49,9 @@ public sealed class DrydockBerthInfo
 
     public DrydockBerthInfo(int berthId, string maxSizeClass, int sellValue, int? upgradePrice, string? upgradeClass,
         Guid? occupantShipId, string? occupantName, string? occupantSizeClass, string? occupantState, int? occupantSellPrice,
-        long? occupantTransferId, string? occupantOfferedTo, int? occupantOfferSecondsLeft)
+        long? occupantTransferId, string? occupantOfferedTo, int? occupantOfferSecondsLeft, int? occupantAppraisal = null)
     {
+        OccupantAppraisal = occupantAppraisal;
         BerthId = berthId;
         MaxSizeClass = maxSizeClass;
         SellValue = sellValue;

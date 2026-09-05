@@ -921,7 +921,8 @@ public sealed partial class ShipyardSystem : SharedShipyardSystem
             drydock.Offers, // Triad: drydock tab
             drydock.Captains, // Triad: drydock tab
             drydock.DeedOwner, // Triad: drydock tab
-            drydock.DeedShip); // Triad: drydock tab
+            drydock.DeedShip, // Triad: drydock tab
+            drydock.OfferMinutes); // Triad: drydock tab
 
         _ui.SetUiState(uid, uiKey, newState);
     }

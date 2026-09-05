@@ -384,11 +384,15 @@ public sealed partial class ShipyardSystem
 
             DrydockTransfer? escrow = null;
             int? sellPrice = null;
+            int? sellBasis = null;
             if (slot.Occupant != null)
             {
                 offersOut.TryGetValue(slot.Occupant.ShipGuid, out escrow);
                 if (appraisals.TryGetValue(slot.Occupant.ShipGuid, out var appraisal) && appraisal is { } value)
+                {
                     sellPrice = DrydockSalePrice((uid, component), value).Net;
+                    sellBasis = value;
+                }
             }
 
             component.CachedBerths.Add(new DrydockBerthInfo(
@@ -404,7 +408,8 @@ public sealed partial class ShipyardSystem
                 sellPrice,
                 escrow?.Id,
                 escrow != null ? CaptainName(escrow.ToUserId, names) : null,
-                escrow != null ? SecondsLeft(escrow.ExpiresAt, now) : null));
+                escrow != null ? SecondsLeft(escrow.ExpiresAt, now) : null,
+                sellBasis));
         }
 
         // The alerts: every offer addressed to this account, with where the ship would land if
@@ -569,12 +574,15 @@ public sealed partial class ShipyardSystem
     /// The drydock half of the console state, read from the caches. Called by the upstream state
     /// builder so it carries one line of ours rather than a block.
     /// </summary>
-    internal (List<StoredShipInfo> Ships, List<DrydockBerthInfo> Berths, Dictionary<string, int> Prices, List<DrydockTransferOfferInfo> Offers, List<DrydockCaptainInfo> Captains, Guid? DeedOwner, DrydockDeedShipInfo? DeedShip) BuildDrydockState(EntityUid uid)
+    internal (List<StoredShipInfo> Ships, List<DrydockBerthInfo> Berths, Dictionary<string, int> Prices, List<DrydockTransferOfferInfo> Offers, List<DrydockCaptainInfo> Captains, Guid? DeedOwner, DrydockDeedShipInfo? DeedShip, int OfferMinutes) BuildDrydockState(EntityUid uid)
     {
-        if (!TryComp<ShipyardConsoleComponent>(uid, out var console))
-            return (new(), new(), DrydockBerthPrices(), new(), new(), null, null);
+        // The same floor the offer itself applies, so the prompt never promises less than an offer gets.
+        var offerMinutes = (int)Math.Ceiling(Math.Max(60, _configManager.GetCVar(TriadCCVars.DrydockTransferOfferSeconds)) / 60.0);
 
-        return (console.CachedStoredShips, console.CachedBerths, DrydockBerthPrices(), console.CachedOffers, console.CachedCaptains, DeedOwnerAccount(console), console.CachedDeedShip);
+        if (!TryComp<ShipyardConsoleComponent>(uid, out var console))
+            return (new(), new(), DrydockBerthPrices(), new(), new(), null, null, offerMinutes);
+
+        return (console.CachedStoredShips, console.CachedBerths, DrydockBerthPrices(), console.CachedOffers, console.CachedCaptains, DeedOwnerAccount(console), console.CachedDeedShip, offerMinutes);
     }
 
     /// <summary>

@@ -2,8 +2,8 @@
                            xmlns:gfx="clr-namespace:Robust.Client.Graphics;assembly=Robust.Client"
                            xmlns:controls="clr-namespace:Content.Client.UserInterface.Controls"
                            xmlns:ui="clr-namespace:Content.Client._NF.Shipyard.UI"
-                           SetSize="900 620"
-                           MinSize="860 560">
+                           SetSize="900 540"
+                           MinSize="860 500">
     <PanelContainer VerticalExpand="True" HorizontalExpand="True" Margin="0 8 0 2">
         <PanelContainer.PanelOverride>
             <gfx:StyleBoxFlat BorderThickness="7" BorderColor="#252525" BackgroundColor="#3d474d"/>
@@ -173,8 +173,8 @@
         </BoxContainer>
     </BoxContainer>
     <!-- Triad: drydock tab. One list, one row per berth. The ship on the inserted card's deed is a
-         card at the top with a single Store; everything rarer sits behind a row's menu. Berths and
-         the pending transfer are the operator's own, filled by the server. -->
+         card at the top with a single Store dropdown; everything rarer sits behind a row's menu.
+         Berths and the pending transfers are the operator's own, filled by the server. -->
     <Control Name="DrydockTabRoot">
     <BoxContainer Name="DrydockTab" Orientation="Vertical" Margin="5 0 5 0">
         <PanelContainer Name="DeedShipPanel" Visible="False" Margin="0 8 0 6">
@@ -183,8 +183,8 @@
             </PanelContainer.PanelOverride>
             <BoxContainer Orientation="Horizontal" Margin="10 6" VerticalAlignment="Center">
                 <RichTextLabel Name="DeedShipLabel" HorizontalExpand="True" VerticalAlignment="Center" />
-                <Button Name="StoreButton" StyleClasses="ButtonSquare" MinWidth="130" />
-                <ui:DrydockMenuButton Name="StoreMenuButton" Text="▼" StyleClasses="ButtonSquare" MinWidth="30" AlignRight="True" Margin="2 0 0 0" />
+                <!-- Store is the dropdown itself: it lists every free berth, the ones too small greyed. -->
+                <ui:DrydockMenuButton Name="StoreButton" StyleClasses="ButtonSquare ButtonPrimary" MinWidth="130" AlignRight="True" />
             </BoxContainer>
         </PanelContainer>
 
@@ -193,7 +193,7 @@
 
         <BoxContainer Orientation="Horizontal" Margin="2 4 2 4" VerticalAlignment="Center">
             <Label Name="BerthSummaryLabel" HorizontalExpand="True" Modulate="#999999" />
-            <ui:DrydockMenuButton Name="BuyBerthButton" Text="{Loc 'shipyard-console-berth-buy-button'}" StyleClasses="ButtonSquare" AlignRight="True" />
+            <ui:DrydockMenuButton Name="BuyBerthButton" StyleClasses="ButtonSquare" AlignRight="True" />
         </BoxContainer>
         <ScrollContainer HorizontalExpand="True" VerticalExpand="True">
             <BoxContainer Name="Berths"
@@ -223,10 +223,11 @@
             <gfx:StyleBoxFlat BackgroundColor="#14000090"/>
         </PanelContainer.PanelOverride>
         <TextureRect TexturePath="/Textures/_Triad/Interface/drydock_lockout_stripes.png" Stretch="Tile" VerticalExpand="True" HorizontalExpand="True" />
+        <!-- The two big lines take their fonts in code; Nano has no 44 pt face to name here. -->
         <BoxContainer Orientation="Vertical" VerticalAlignment="Center" HorizontalAlignment="Center">
-            <Label Text="{Loc 'shipyard-console-lockout-title'}" StyleClasses="LabelBig" Modulate="#ff4a4a" Align="Center" />
-            <Label Text="{Loc 'shipyard-console-lockout-subtitle'}" Modulate="#ffb0b0" Align="Center" Margin="0 10 0 0" />
-            <Label Text="{Loc 'shipyard-console-lockout-body'}" Modulate="#d08080" Align="Center" Margin="0 4 0 0" />
+            <Label Name="LockoutTitle" Text="{Loc 'shipyard-console-lockout-title'}" Modulate="#ff4a4a" Align="Center" />
+            <Label Name="LockoutSubtitle" Text="{Loc 'shipyard-console-lockout-subtitle'}" Modulate="#ffb0b0" Align="Center" Margin="0 10 0 0" />
+            <Label Text="{Loc 'shipyard-console-lockout-body'}" Modulate="#d08080" Align="Center" Margin="0 6 0 0" />
         </BoxContainer>
     </PanelContainer>
     </Control>

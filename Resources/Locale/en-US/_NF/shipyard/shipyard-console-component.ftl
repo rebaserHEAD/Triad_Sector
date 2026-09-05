@@ -109,6 +109,10 @@ shipyard-console-tab-drydock = Drydock
 shipyard-console-retrieve-button = Retrieve
 shipyard-console-store-in-button = Store in #{$berth}
 shipyard-console-store-no-fit-button = No berth fits
+# The Store dropdown: one entry per free berth, the too-small ones greyed with the reason.
+shipyard-console-store-item = #{$berth} {$class}
+shipyard-console-store-too-small = too small
+shipyard-console-store-takes-landing = Takes the berth the offer below lands in.
 shipyard-console-store-success = Ship stored. Retrieve it from any shipyard console.
 shipyard-console-store-not-owner = That ship is registered to another account.
 shipyard-console-not-owner = That is registered to another account.
@@ -123,9 +127,11 @@ shipyard-console-store-no-berth = Your drydock has no free berth. Buy one, or re
 shipyard-console-store-berth-too-small = None of your free berths can take a hull this size. Upgrade a berth or buy a larger one.
 shipyard-console-store-in-progress = That ship is already being stored.
 # The name is drawn on its own so it can carry the weight the class and the clock do not.
-shipyard-console-deed-ship-name = {$ship}
-shipyard-console-deed-ship-out = · {$class} · out {$minutes} m
+shipyard-console-deed-ship-out = · {$class} · out {$time}
 shipyard-console-deed-ship-new = · {$class} · never stored
+# How long a ship has been out: minutes alone under an hour, then hours and two-digit minutes.
+shipyard-console-time-minutes = {$minutes} m
+shipyard-console-time-hours = {$hours} h {$minutes} m
 shipyard-console-berths-free = {$free} of {$total} berths free
 # Shown while the server is serializing and compressing the hull. It cannot say how far along it
 # is, so this never carries a number.
@@ -135,6 +141,8 @@ shipyard-console-berth-row-class = {$class}
 shipyard-console-berth-occupant = {$ship}
 shipyard-console-berth-occupant-class = · {$class}
 shipyard-console-berth-empty = empty
+# An empty berth that an offer on the tab would fill.
+shipyard-console-berth-incoming = {$ship}, if accepted
 shipyard-console-berth-buy-button = Buy berth
 shipyard-console-menu-rename = Rename…
 shipyard-console-menu-move = Move…
@@ -153,20 +161,27 @@ shipyard-console-berth-occupied = That berth has a ship in it.
 shipyard-console-berth-failed = The drydock could not change that berth. Try again shortly.
 shipyard-console-transfer-accept-button = Accept
 shipyard-console-transfer-decline-button = Decline
-shipyard-console-transfer-confirm-button = Confirm: this takes your last free berth
-shipyard-console-transfer-cancel-button = Cancel offer
-shipyard-console-transfer-offer = {$owner} offers {$ship} · {$class}
-shipyard-console-transfer-lands-in = Lands in Berth {$berth}
-shipyard-console-transfer-no-room = No free berth fits it
-shipyard-console-transfer-minutes-left = {$minutes} min left
+shipyard-console-transfer-cancel-button = Cancel
+# The alert line: "<owner> offers <ship> · <class> · into #N", the names drawn bold around these.
+shipyard-console-transfer-offers = offers
+shipyard-console-transfer-into = · {$class} · into #{$berth}
+shipyard-console-transfer-no-room = · {$class} · no free berth fits
+shipyard-console-transfer-minutes-left = {$minutes} m left
 shipyard-console-transfer-seconds-left = {$seconds} s left
 shipyard-console-transfer-escrow = offered to {$name}
 shipyard-console-transfer-someone = another captain
 shipyard-console-transfer-picker-title = Transfer {$ship}
-shipyard-console-transfer-picker-hint = Only captains online right now are listed.
+shipyard-console-transfer-picker-placeholder = Captain's name
+shipyard-console-transfer-picker-body = {$ship} stays in berth #{$berth} and cannot be retrieved while the offer stands. The offer expires in {$minutes} minutes.
+shipyard-console-transfer-picker-button = Offer
 shipyard-console-transfer-picker-empty = No other captains online.
+shipyard-console-transfer-picker-berths = {$count ->
+    [one] 1 berth free
+   *[other] {$count} berths free
+}
 shipyard-console-transfer-picker-no-berth = no berth fits
-shipyard-console-transfer-warning = Last free berth while you have a ship out. It would have nowhere to dock.
+shipyard-console-transfer-warning = Last free berth. {$ship} would have nowhere to dock.
+shipyard-console-transfer-your-ship = Your ship
 shipyard-console-transfer-offered = Offer sent to {$name}. It expires in {$minutes} minutes.
 shipyard-console-transfer-busy = That ship already has an offer standing.
 shipyard-console-transfer-offline = That captain is not online.
@@ -181,7 +196,8 @@ shipyard-console-transfer-complete = {$ship} is now in your drydock.
 shipyard-console-transfer-cancelled = Offer withdrawn.
 shipyard-console-transfer-declined = Offer declined.
 shipyard-console-sell-title = Sell {$ship}
-shipyard-console-sell-body = {$ship} will be scrapped for {$price}. Cannot be undone.
+shipyard-console-sell-body = {$ship} scraps for [bold]{$price}[/bold], {$percent}% of its {$appraisal} appraisal. Berth #{$berth} is freed.
+shipyard-console-sell-warning = Cannot be undone.
 shipyard-console-sell-placeholder = Type {$ship} to confirm
 shipyard-console-sell-button = Sell
 shipyard-console-sell-name-mismatch = The name you typed does not match the ship.
@@ -190,6 +206,7 @@ shipyard-console-sell-not-available = That ship cannot be sold right now.
 shipyard-console-sell-failed = The sale could not be completed. Try again shortly.
 shipyard-console-sell-complete = {$ship} scrapped for {$price}.
 shipyard-console-rename-title = Rename {$ship}
+shipyard-console-rename-body = Applied to hull and deed on the next retrieve.
 shipyard-console-rename-placeholder = Letters, digits, spaces, dashes
 shipyard-console-rename-counter = {$count} / {$max}
 shipyard-console-rename-button = Rename
@@ -197,7 +214,7 @@ shipyard-console-rename-invalid = Names use letters, digits, spaces and dashes, 
 shipyard-console-rename-not-available = That ship cannot be renamed right now.
 shipyard-console-rename-complete = Renamed to {$ship}.
 shipyard-console-move-title = Move {$ship}
-shipyard-console-move-hint = Your empty berths that fit it.
+shipyard-console-move-button = Move
 shipyard-console-move-item = Berth {$berth}
 shipyard-console-move-not-available = That ship cannot be moved right now.
 shipyard-console-move-complete = {$ship} moved to Berth {$berth}.
