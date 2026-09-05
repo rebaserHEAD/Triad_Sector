@@ -1,27 +1,32 @@
 using Content.Server.Administration;
 using Content.Server.EUI;
 using Content.Shared.Administration;
-using Robust.Shared.Console;
-using Robust.Shared.IoC;
+using Robust.Shared.Toolshed;
+using Robust.Shared.Toolshed.Errors;
 
 namespace Content.Server._Triad.Drydock.Admin;
 
-[AdminCommand(AdminFlags.Admin)]
-public sealed class DrydockAdminCommand : IConsoleCommand
+/// <summary>
+/// Opens the drydock admin panel for the admin who ran it. The Admin menu's Drydock button runs
+/// this by name; the description and help ride the command attributes, so there is no locale
+/// entry to keep in step with them.
+/// </summary>
+[ToolshedCommand(Name = "drydockadmin"), AdminCommand(AdminFlags.Admin)]
+public sealed partial class DrydockAdminCommand : ToolshedCommand
 {
-    public string Command => "drydockadmin";
-    public string Description => "Opens the drydock admin panel: stored ships, berths, history, restore.";
-    public string Help => $"Usage: {Command}";
+    [Dependency] private EuiManager _eui = default!;
 
-    public void Execute(IConsoleShell shell, string argStr, string[] args)
+    [CommandImplementation]
+    [CommandDescription("Opens the drydock admin panel: stored ships, berths, history, restore.")]
+    [CommandHelp("Usage: drydockadmin")]
+    public void Open([CommandInvocationContext] IInvocationContext ctx)
     {
-        if (shell.Player is not { } player)
+        if (ctx.Session is not { } player)
         {
-            shell.WriteError(Loc.GetString("shell-cannot-run-command-from-server"));
+            ctx.ReportError(new NotForServerConsoleError());
             return;
         }
 
-        var eui = IoCManager.Resolve<EuiManager>();
-        eui.OpenEui(new DrydockAdminEui(), player);
+        _eui.OpenEui(new DrydockAdminEui(), player);
     }
 }
