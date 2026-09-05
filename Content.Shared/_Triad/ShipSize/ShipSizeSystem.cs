@@ -9,9 +9,9 @@ namespace Content.Shared._Triad.ShipSize;
 /// <summary>
 /// Classifies ship hulls into a <see cref="ShipSizeClass"/> based on their built (non-empty) tile count.
 /// </summary>
-public sealed class ShipSizeSystem : EntitySystem
+public sealed partial class ShipSizeSystem : EntitySystem
 {
-    [Dependency] private readonly SharedMapSystem _map = default!;
+    [Dependency] private SharedMapSystem _map = default!;
 
     /// <summary>
     /// Maps a built tile count to its <see cref="ShipSizeClass"/>.

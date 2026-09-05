@@ -42,15 +42,15 @@ namespace Content.Server._Triad.Drydock;
 /// </summary>
 public sealed partial class DrydockSystem : EntitySystem
 {
-    [Dependency] private readonly IConfigurationManager _cfg = default!;
-    [Dependency] private readonly ISerializationManager _serialization = default!;
-    [Dependency] private readonly DrydockStore _store = default!;
-    [Dependency] private readonly DrydockFidelitySystem _fidelity = default!;
-    [Dependency] private readonly MapLoaderSystem _mapLoader = default!;
-    [Dependency] private readonly ShipSizeSystem _shipSize = default!;
-    [Dependency] private readonly ShipyardSystem _shipyard = default!;
-    [Dependency] private readonly DockingSystem _docking = default!;
-    [Dependency] private readonly StationSystem _station = default!;
+    [Dependency] private IConfigurationManager _cfg = default!;
+    [Dependency] private ISerializationManager _serialization = default!;
+    [Dependency] private DrydockStore _store = default!;
+    [Dependency] private DrydockFidelitySystem _fidelity = default!;
+    [Dependency] private MapLoaderSystem _mapLoader = default!;
+    [Dependency] private ShipSizeSystem _shipSize = default!;
+    [Dependency] private ShipyardSystem _shipyard = default!;
+    [Dependency] private DockingSystem _docking = default!;
+    [Dependency] private StationSystem _station = default!;
 
     /// <summary>
     /// Components cut from the live grid before it is written, because they are derived state or
@@ -580,7 +580,7 @@ public sealed partial class DrydockSystem : EntitySystem
 
         foreach (var type in StoreStripList)
         {
-            if (!EntityManager.TryGetComponent(gridUid, type, out var comp))
+            if (!TryComp(gridUid, type, out var comp))
                 continue;
 
             stripped.Add(_serialization.CreateCopy(comp, notNullableOverride: true));

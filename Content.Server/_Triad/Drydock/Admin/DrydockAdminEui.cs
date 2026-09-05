@@ -34,14 +34,14 @@ namespace Content.Server._Triad.Drydock.Admin;
 /// the system's: a hull whose grid is still in the world cannot be restored, because that would
 /// be a duplicate rather than a recovery.</para>
 /// </summary>
-public sealed class DrydockAdminEui : BaseEui
+public sealed partial class DrydockAdminEui : BaseEui
 {
-    [Dependency] private readonly DrydockStore _store = default!;
-    [Dependency] private readonly IPlayerManager _players = default!;
-    [Dependency] private readonly IEntityManager _entMan = default!;
-    [Dependency] private readonly IConfigurationManager _cfg = default!;
-    [Dependency] private readonly IServerPreferencesManager _prefs = default!;
-    [Dependency] private readonly IServerDbManager _db = default!;
+    [Dependency] private DrydockStore _store = default!;
+    [Dependency] private IPlayerManager _players = default!;
+    [Dependency] private IEntityManager _entMan = default!;
+    [Dependency] private IConfigurationManager _cfg = default!;
+    [Dependency] private IServerPreferencesManager _prefs = default!;
+    [Dependency] private IServerDbManager _db = default!;
 
     private const int DefaultPageSize = 50;
 

@@ -29,9 +29,9 @@ namespace Content.Server._NF.Shipyard.Systems;
 
 public sealed partial class ShipyardSystem
 {
-    [Dependency] private readonly DrydockSystem _drydock = default!;
-    [Dependency] private readonly DrydockStore _drydockStore = default!;
-    [Dependency] private readonly ShipSizeSystem _drydockSizes = default!;
+    [Dependency] private DrydockSystem _drydock = default!;
+    [Dependency] private DrydockStore _drydockStore = default!;
+    [Dependency] private ShipSizeSystem _drydockSizes = default!;
 
     /// <summary>
     /// The round to stamp an audit row with, or null when there is no round yet.

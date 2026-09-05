@@ -69,6 +69,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
         private const string PipeProtoId = "GasPipeStraight";
         private const string MarketItemProtoId = "SheetSteel1";
         private const string AudioProtoId = "Audio";
+        private static readonly ProtoId<DamageTypePrototype> BluntDamage = "Blunt";
 
         [Test]
         public async Task AShipStoredComesBackWithItsContentsAndItsWires()
@@ -385,7 +386,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
 
             await server.WaitPost(() =>
             {
-                var blunt = protoMan.Index<DamageTypePrototype>("Blunt");
+                var blunt = protoMan.Index(BluntDamage);
                 var specifier = new DamageSpecifier(blunt, FixedPoint2.New(37));
                 damageSys.TryChangeDamage(airlock, specifier, ignoreResistances: true);
             });

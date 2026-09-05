@@ -12,7 +12,7 @@ namespace Content.Server._Triad.Drydock;
 /// </summary>
 public sealed partial class DrydockSystem
 {
-    [Dependency] private readonly GameTicker _ticker = default!;
+    [Dependency] private GameTicker _ticker = default!;
 
     /// <summary>
     /// How often the sweep runs. Coarse on purpose: the deadline the players see is thirty minutes,

@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 using Content.Server.Database;
@@ -17,9 +18,15 @@ namespace Content.Server._Triad.Drydock;
 /// feature-owned stores: the queries here make no sense in core, and keeping them out of an
 /// upstream file means an upstream pull conflicts on nothing.
 /// </summary>
-public sealed class DrydockStore
+public sealed partial class DrydockStore
 {
-    [Dependency] private readonly IServerDbManager _db = default!;
+    [Dependency] private IServerDbManager _db = default!;
+
+    /// <summary>
+    /// The sale price lives only in the ShipSold audit row's reason text; this reads it back for
+    /// the admin panel and the restore-from-sale dialog.
+    /// </summary>
+    private static readonly Regex SoldForPattern = new(@"sold for (\d+)", RegexOptions.Compiled);
 
     /// <summary>
     /// Files a new revision against a ship, creating the hull row if this is its first store.
@@ -1138,7 +1145,7 @@ public sealed class DrydockStore
             if (row?.Reason == null)
                 return null;
 
-            var match = System.Text.RegularExpressions.Regex.Match(row.Reason, @"sold for (\d+)");
+            var match = SoldForPattern.Match(row.Reason);
             return match.Success && int.TryParse(match.Groups[1].Value, out var price) ? (price, row.CreatedAt) : null;
         }, ct);
     }

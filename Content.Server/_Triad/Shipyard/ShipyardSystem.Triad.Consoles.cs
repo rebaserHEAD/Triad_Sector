@@ -31,9 +31,8 @@ using Content.Shared.Station.Components;
 using Content.Shared.StationRecords;
 using Content.Shared.Whitelist;
 using Robust.Shared.Player;
-﻿using Robust.Shared.Prototypes;
+using Robust.Shared.Prototypes;
 using Content.Server._Triad.Market;
-using Content.Server.Database;
 
 namespace Content.Server._NF.Shipyard.Systems;
 
@@ -549,7 +548,7 @@ public sealed partial class ShipyardSystem : SharedShipyardSystem
                     name: deedShuttle.ShuttleName ?? "",
                     suffix: deedShuttle.ShuttleNameSuffix ?? "",
                     ownerName: shuttleOwner,
-                    entityUid: EntityManager.GetNetEntity(shuttleUid),
+                    entityUid: GetNetEntity(shuttleUid),
                     purchasedWithVoucher: false,
                     loadedFromSave: loadedFromSave,
                     purchasePrice: (uint)(vesselProto?.Price ?? 0)

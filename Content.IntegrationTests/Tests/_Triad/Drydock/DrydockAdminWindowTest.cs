@@ -45,7 +45,6 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                 var lit = chips.Count(c => IsLit(c));
                 Assert.That(lit, Is.EqualTo(1), "Exactly one chip is ever lit, and at rest it is All.");
 
-                window.Dispose();
             });
 
             await pair.CleanReturnAsync();
@@ -80,7 +79,6 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                         Assert.That(labels, Does.Not.Contain(Text($"drydock-admin-{key}")), $"{state} does not offer {key}.");
                 });
 
-                window.Dispose();
             });
 
             await pair.CleanReturnAsync();
@@ -108,7 +106,6 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                 window.UpdateState(StateWith(Ship("Kestrel", "Stored")));
                 Assert.That(Named(window, "EscrowPanel").Visible, Is.False, "The card does not outlive the offer.");
 
-                window.Dispose();
             });
 
             await pair.CleanReturnAsync();
@@ -136,7 +133,6 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                         "One line per audit entry; a revision is a row here, not a panel of its own.");
                 });
 
-                window.Dispose();
             });
 
             await pair.CleanReturnAsync();
@@ -166,7 +162,6 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                         "Notes belong to a hull, so there is nothing to type into.");
                 });
 
-                window.Dispose();
             });
 
             await pair.CleanReturnAsync();
@@ -212,7 +207,6 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                 // Control: an absent key resolves to itself, which is what both checks look for.
                 Assert.That(Text("drydock-admin-not-a-real-key"), Is.EqualTo("drydock-admin-not-a-real-key"));
 
-                window.Dispose();
             });
 
             await pair.CleanReturnAsync();

@@ -43,16 +43,16 @@ namespace Content.Server._Triad.Drydock;
 /// </summary>
 public sealed partial class DrydockSystem
 {
-    [Dependency] private readonly ShuttleSystem _shuttle = default!;
-    [Dependency] private readonly DamageableSystem _damageable = default!;
-    [Dependency] private readonly SharedShipRepairSystem _shipRepair = default!;
-    [Dependency] private readonly IPlayerManager _player = default!;
-    [Dependency] private readonly IGameTiming _timing = default!;
-    [Dependency] private readonly IPrototypeManager _protoMan = default!;
-    [Dependency] private readonly NPCSystem _npc = default!;
-    [Dependency] private readonly WiresSystem _wires = default!;
-    [Dependency] private readonly DeviceNetworkSystem _deviceNetwork = default!;
-    [Dependency] private readonly ResearchSystem _research = default!;
+    [Dependency] private ShuttleSystem _shuttle = default!;
+    [Dependency] private DamageableSystem _damageable = default!;
+    [Dependency] private SharedShipRepairSystem _shipRepair = default!;
+    [Dependency] private IPlayerManager _player = default!;
+    [Dependency] private IGameTiming _timing = default!;
+    [Dependency] private IPrototypeManager _protoMan = default!;
+    [Dependency] private NPCSystem _npc = default!;
+    [Dependency] private WiresSystem _wires = default!;
+    [Dependency] private DeviceNetworkSystem _deviceNetwork = default!;
+    [Dependency] private ResearchSystem _research = default!;
 
     /// <summary>
     /// Retrieves a stored ship and presents it at <paramref name="stationUid"/>.

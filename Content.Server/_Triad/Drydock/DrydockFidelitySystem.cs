@@ -26,9 +26,9 @@ namespace Content.Server._Triad.Drydock;
 /// cannot write is to strip it, which is the safe direction: a stripped field comes back at its
 /// default, where a forgotten entity would come back not at all.</para>
 /// </summary>
-public sealed class DrydockFidelitySystem : EntitySystem
+public sealed partial class DrydockFidelitySystem : EntitySystem
 {
-    [Dependency] private readonly ISerializationManager _serialization = default!;
+    [Dependency] private ISerializationManager _serialization = default!;
 
     private DrydockReflectiveCapture _capture = default!;
 
@@ -79,7 +79,7 @@ public sealed class DrydockFidelitySystem : EntitySystem
         {
             DrydockCapturedStateComponent? sidecar = null;
 
-            foreach (var comp in EntityManager.GetComponents(uid).ToList())
+            foreach (var comp in AllComps(uid).ToList())
             {
                 if (comp is DrydockCapturedStateComponent)
                     continue;
@@ -164,7 +164,7 @@ public sealed class DrydockFidelitySystem : EntitySystem
 
             // Built once per entity rather than scanned per key. Component names are unique in the
             // registry, so the simple type name the key carries identifies one component.
-            var byName = EntityManager.GetComponents(uid).ToDictionary(c => c.GetType().Name, c => c);
+            var byName = AllComps(uid).ToDictionary(c => c.GetType().Name, c => c);
 
             foreach (var (key, encoded) in sidecar.Fields)
             {

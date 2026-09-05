@@ -53,7 +53,6 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                     Assert.That(store.Disabled, Is.False);
                 });
 
-                menu.Dispose();
             });
 
             await pair.CleanReturnAsync();
@@ -89,7 +88,6 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                     Assert.That(rows.Any(r => Named(r, "RetrieveSlot").Visible), Is.False, "No Retrieve anywhere, no slot reserved for it.");
                 });
 
-                menu.Dispose();
             });
 
             await pair.CleanReturnAsync();
@@ -126,7 +124,6 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                     Assert.That(IsFramed(stored, "#8a6a3a"), Is.False);
                 });
 
-                menu.Dispose();
             });
 
             await pair.CleanReturnAsync();
@@ -182,7 +179,6 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                     Assert.That(Rows(menu).Single(r => r.BerthId == 31).OccupantLabel.GetMessage(), Does.Contain("empty").And.Not.Contain("if accepted"));
                 });
 
-                menu.Dispose();
             });
 
             await pair.CleanReturnAsync();
@@ -207,7 +203,6 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                 menu.UpdateState(State(berths: ThreeBerths(), deedShip: null, deedOwner: null));
                 Assert.That(Named(menu, "LockoutPanel").Visible, Is.False, "No deed at all.");
 
-                menu.Dispose();
             });
 
             await pair.CleanReturnAsync();
@@ -277,10 +272,6 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                     Assert.That(Loc.GetString("shipyard-console-not-a-real-key"), Is.EqualTo("shipyard-console-not-a-real-key"));
                 });
 
-                transfer.Dispose();
-                rename.Dispose();
-                sell.Dispose();
-                menu.Dispose();
             });
 
             await pair.CleanReturnAsync();

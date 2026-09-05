@@ -13,9 +13,9 @@ namespace Content.Server._Triad.Drydock;
 /// when the first rebuild fires relative to load. Removing it immediately is what stops a player
 /// cutting a pipe later from re-firing the merge and duplicating the gas.</para>
 /// </summary>
-public sealed class DrydockPipeGasRestoreSystem : EntitySystem
+public sealed partial class DrydockPipeGasRestoreSystem : EntitySystem
 {
-    [Dependency] private readonly AtmosphereSystem _atmosphere = default!;
+    [Dependency] private AtmosphereSystem _atmosphere = default!;
 
     public override void Initialize()
     {

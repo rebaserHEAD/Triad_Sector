@@ -12,7 +12,7 @@ namespace Content.Server._Triad.Drydock;
 /// </summary>
 public sealed partial class DrydockSystem
 {
-    [Dependency] private readonly SharedContainerSystem _containers = default!;
+    [Dependency] private SharedContainerSystem _containers = default!;
 
     /// <summary>
     /// Empties any vacant station AI core aboard, before the grid is serialized.
