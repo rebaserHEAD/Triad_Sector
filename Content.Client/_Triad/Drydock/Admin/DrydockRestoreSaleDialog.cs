@@ -38,7 +38,9 @@ public sealed class DrydockRestoreSaleDialog : DefaultWindow
         Action<int, bool, string?> onConfirm)
     {
         Title = Loc.GetString("drydock-admin-sale-title", ("ship", ship.Name));
-        SetSize = new Vector2(460, 0);
+        // A NaN height is "measure the contents"; a zero height is a fixed zero, which the
+        // window then clips its contents to.
+        SetSize = new Vector2(460, float.NaN);
 
         _cannotCover = sale.OwnerBalance is { } balance && balance < sale.Price;
 

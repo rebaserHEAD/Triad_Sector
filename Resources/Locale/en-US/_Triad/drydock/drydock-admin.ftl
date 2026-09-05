@@ -3,6 +3,8 @@
 
 drydock-admin-title = Drydock Administration
 drydock-admin-flavor-left = SKR-OS Drydock Administration
+# The button on the Admin menu's Admin tab that opens the panel.
+drydock-admin-button = Drydock
 
 drydock-admin-search-placeholder = Player, ship (any name it has had), ship id, or account id
 drydock-admin-search-tooltip = One box. A player name, a ship name including any past name from its timeline, a ship id, or an account id.

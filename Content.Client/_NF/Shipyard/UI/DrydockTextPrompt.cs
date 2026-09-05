@@ -38,7 +38,9 @@ public sealed class DrydockTextPrompt : FancyWindow
         Action<string> onConfirm)
     {
         Title = title;
-        SetSize = new Vector2(430, 0);
+        // A NaN height is "measure the contents"; a zero height is a fixed zero, which the
+        // window then clips its contents to.
+        SetSize = new Vector2(430, float.NaN);
         _accepts = accepts;
         _maxLength = maxLength;
 

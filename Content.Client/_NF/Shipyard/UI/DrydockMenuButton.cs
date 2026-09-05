@@ -28,6 +28,7 @@ public sealed class DrydockMenuButton : Button
     private static readonly Color MenuBorder = Color.FromHex("#5a5a5a");
     private static readonly Color RowRule = Color.FromHex("#262626");
     private static readonly Color SectionRule = Color.FromHex("#3a3a3a");
+    private static readonly Color HoverFill = Color.FromHex("#2a3a4c");
 
     private readonly List<Item> _items = new();
 
@@ -79,19 +80,29 @@ public sealed class DrydockMenuButton : Button
             if (i > 0)
                 list.AddChild(Rule(item.DividerAbove ? SectionRule : RowRule));
 
+            // A flat row, not a button: no style class, so nothing draws a box around it, and
+            // the hover fill is painted by hand on the panel inside.
             var entry = new ContainerButton
             {
-                StyleClasses = { ContainerButton.StyleClassButton },
                 Disabled = !item.Enabled,
                 HorizontalExpand = true,
             };
+            var box = new StyleBoxFlat { BackgroundColor = Color.Transparent };
+            var fill = new PanelContainer { PanelOverride = box, HorizontalExpand = true };
             var text = item.Enabled ? Color.White : DrydockText.Disabled;
             var detail = item.Enabled ? DrydockText.Dim : DrydockText.Disabled;
             var line = new BoxContainer { Orientation = BoxContainer.LayoutOrientation.Horizontal, Margin = new Thickness(10, 7), HorizontalExpand = true };
             line.AddChild(new Label { Text = item.Label, HorizontalExpand = true, Modulate = text });
             if (item.Detail != null)
                 line.AddChild(new Label { Text = item.Detail, Modulate = detail, Margin = new Thickness(12, 0, 0, 0) });
-            entry.AddChild(line);
+            fill.AddChild(line);
+            entry.AddChild(fill);
+
+            if (item.Enabled)
+            {
+                entry.OnMouseEntered += _ => box.BackgroundColor = HoverFill;
+                entry.OnMouseExited += _ => box.BackgroundColor = Color.Transparent;
+            }
 
             var pressed = item.OnPressed;
             entry.OnPressed += _ =>

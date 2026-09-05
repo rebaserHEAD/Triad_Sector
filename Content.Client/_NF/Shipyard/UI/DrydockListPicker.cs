@@ -39,7 +39,9 @@ public sealed class DrydockListPicker : FancyWindow
     public DrydockListPicker(string title, string? filterPlaceholder, string? body, string confirmLabel, string emptyText, IReadOnlyList<Item> items)
     {
         Title = title;
-        SetSize = new Vector2(430, 0);
+        // A NaN height is "measure the contents"; a zero height is a fixed zero, which the
+        // window then clips its contents to.
+        SetSize = new Vector2(430, float.NaN);
 
         var column = new BoxContainer { Orientation = BoxContainer.LayoutOrientation.Vertical, Margin = new Thickness(14, 12) };
 
