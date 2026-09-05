@@ -71,6 +71,12 @@ public sealed partial class ShipyardConsoleMenu : FancyWindow
 
     /// <summary>The last deed ship drawn, so the timeout can put the card back as it was.</summary>
     private DrydockDeedShipInfo? _lastDeedShip;
+
+    // Retrieve has the same silence: the server loads the grid and docks it before it says a
+    // word. Same indicator, on the row that was pressed, with every other Retrieve greyed.
+    private float _retrievingFor = -1f;
+    private DrydockBerthRow? _retrievingRow;
+    private bool _lastCanRetrieve;
     private readonly List<(Label Label, int Seconds)> _offerClocks = new();
     private readonly List<(DrydockBerthRow Row, int Seconds)> _escrowRows = new();
     private List<DrydockCaptainInfo> _lastCaptains = new();
@@ -143,6 +149,24 @@ public sealed partial class ShipyardConsoleMenu : FancyWindow
             {
                 var dots = new string('.', (int)(_storingFor * 2) % 4);
                 StoreButton.Text = Loc.GetString("shipyard-console-storing-button") + dots;
+            }
+        }
+
+        if (_retrievingFor >= 0f)
+        {
+            _retrievingFor += args.DeltaSeconds;
+            if (_retrievingFor >= StoreFeedbackTimeout)
+            {
+                // The server never answered; redraw the rows as the last state had them.
+                _retrievingFor = -1f;
+                _retrievingRow = null;
+                _escrowRows.Clear();
+                PopulateBerths(_lastBerths, _lastCanRetrieve);
+            }
+            else if (_retrievingRow != null)
+            {
+                var dots = new string('.', (int)(_retrievingFor * 2) % 4);
+                _retrievingRow.RetrieveButton.Text = Loc.GetString("shipyard-console-retrieving-button") + dots;
             }
         }
 
@@ -545,6 +569,19 @@ public sealed partial class ShipyardConsoleMenu : FancyWindow
     }
 
     /// <summary>
+    /// The retrieve counterpart: every Retrieve on the list is taken away, since one card takes
+    /// one ship and the server would refuse a second anyway, and the pressed row says what is
+    /// happening until the next state redraws the list.
+    /// </summary>
+    private void BeginRetrieveFeedback(DrydockBerthRow row)
+    {
+        _retrievingFor = 0f;
+        _retrievingRow = row;
+        foreach (var other in Berths.Children.OfType<DrydockBerthRow>())
+            other.RetrieveButton.Disabled = true;
+    }
+
+    /// <summary>
     /// Triad: one row per berth. Retrieve is the row's one button, shown only when it would work;
     /// the rarer verbs sit in the row's menu, ship verbs above a rule and berth verbs below it,
     /// with a disabled entry saying why. The berth an offer on the tab would land in says what is
@@ -553,6 +590,11 @@ public sealed partial class ShipyardConsoleMenu : FancyWindow
     private void PopulateBerths(List<DrydockBerthInfo> berths, bool canRetrieve)
     {
         Berths.RemoveAllChildren();
+
+        // Fresh rows are the server answering, so any retrieve in flight is over.
+        _retrievingFor = -1f;
+        _retrievingRow = null;
+        _lastCanRetrieve = canRetrieve;
 
         var incoming = new Dictionary<int, string>();
         foreach (var offer in _lastOffers)
@@ -566,8 +608,11 @@ public sealed partial class ShipyardConsoleMenu : FancyWindow
             var row = new DrydockBerthRow(berth, canRetrieve, incoming.GetValueOrDefault(berth.BerthId));
             row.RetrieveButton.OnPressed += _ =>
             {
-                if (row.OccupantShipId is { } shipId)
-                    OnRetrieve?.Invoke(shipId);
+                if (row.OccupantShipId is not { } shipId)
+                    return;
+
+                BeginRetrieveFeedback(row);
+                OnRetrieve?.Invoke(shipId);
             };
 
             if (berth.OccupantTransferId is { } transferId)
