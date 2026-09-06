@@ -1,4 +1,5 @@
 using Content.Shared.Inventory;
+using Robust.Shared.Serialization.TypeSerializers.Implementations.Custom; // Triad - for TimeOffsetSerializer
 using Robust.Shared.GameStates; // Frontier
 
 namespace Content.Shared.Storage.Components; // Frontier: Server<Shared
@@ -10,9 +11,9 @@ namespace Content.Shared.Storage.Components; // Frontier: Server<Shared
 [NetworkedComponent, AutoGenerateComponentState] // Frontier
 public sealed partial class MagnetPickupComponent : Component
 {
-    [ViewVariables(VVAccess.ReadWrite), DataField("nextScan")]
+    [ViewVariables(VVAccess.ReadWrite), DataField("nextScan", customTypeSerializer: typeof(TimeOffsetSerializer))]
     [AutoPausedField]
-    public TimeSpan NextScan = TimeSpan.Zero;
+    public TimeSpan NextScan = TimeSpan.Zero; // Triad - TimeOffsetSerializer: absolute game time, re-based on load so a saved ship does not carry the previous server clock
 
     /// <summary>
     /// What container slot the magnet needs to be in to work.
