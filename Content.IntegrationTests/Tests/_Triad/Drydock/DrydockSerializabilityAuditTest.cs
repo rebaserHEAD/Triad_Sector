@@ -203,7 +203,6 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
 
             // dead across rounds whether captured or not, or regenerated per tick.
             "Content.Shared.StationRecords.StationRecordKey",
-            "Robust.Shared.GameObjects.Entity<Content.Server.Spreader.EdgeSpreaderComponent>",
             "System.Collections.Generic.Dictionary+Enumerator<Robust.Shared.GameObjects.EntityUid,Content.Shared.Climbing.Components.BonkableComponent>",
             "System.ValueTuple<System.Single,System.Numerics.Vector2,System.Single>",
         };
