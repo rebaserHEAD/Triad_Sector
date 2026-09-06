@@ -50,6 +50,7 @@ using Content.Shared.NodeContainer;
 using Content.Shared.Research.Components;
 using Content.Shared.Research.Prototypes;
 using Content.Shared.SmartFridge;
+using Content.Shared.Storage;
 using Content.Shared.Timing;
 using Content.Shared.Weapons.Ranged.Components;
 using Content.Shared.Xenoarchaeology.Artifact.Components;
@@ -60,6 +61,7 @@ using Robust.Shared.Containers;
 using Robust.Shared.GameObjects;
 using Robust.Shared.Log;
 using Robust.Shared.Map;
+using Robust.Shared.Map.Components;
 using Robust.Shared.Maths;
 using Robust.Shared.Network;
 using Robust.Shared.Prototypes;
@@ -1542,6 +1544,230 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             });
 
             await pair.CleanReturnAsync();
+        }
+
+        /// <summary>
+        /// Appearance data written by the game, rather than seeded by a prototype, survives a round
+        /// trip. No save has ever carried it: the component declares one read-only data field for
+        /// the prototype seed and keeps everything else in a dictionary the serializer never sees,
+        /// which is why a retrieved lathe froze mid-animation and a retrieved tray showed no dead
+        /// plant while still holding one.
+        /// </summary>
+        /// <remarks>
+        /// The two keys are deliberately ones nothing aboard this ship reads. A key some system
+        /// re-derives on startup would pass whether the carrier worked or not, and the carrier is
+        /// the only thing under test here. Two different enum types with two different value types,
+        /// because the sidecar has to resolve both halves of each entry by name on the way back.
+        /// </remarks>
+        [Test]
+        public async Task AppearanceSetOutsideMapInitSurvivesTheRoundTrip()
+        {
+            await using var pair = await PoolManager.GetServerClient();
+            var server = pair.Server;
+            var entMan = server.EntMan;
+
+            var db = server.ResolveDependency<IServerDbManager>();
+            var drydock = server.System<DrydockSystem>();
+
+            var owner = Guid.NewGuid();
+            await InsertPlayer(db, owner);
+            await server.ResolveDependency<DrydockStore>().AddBerth(owner, ShipSizeClass.SuperCapital, DrydockBerthKind.Granted, 0, null, null);
+
+            var (station, shipGrid, _) = await BuildShipAndStation(pair);
+
+            await server.WaitPost(() =>
+            {
+                var machine = entMan.SpawnEntity(CrystallizerProtoId, new EntityCoordinates(shipGrid, new Vector2(0.5f, 0.5f)));
+                entMan.EnsureComponent<AppearanceComponent>(machine);
+
+                var appearance = server.System<SharedAppearanceSystem>();
+                appearance.SetData(machine, LatheVisuals.IsRunning, true);
+                appearance.SetData(machine, StorageVisuals.StorageUsed, 7);
+            });
+
+            await pair.RunTicksSync(5);
+
+            var (result, shipId) = await RunOnServer(pair, () => drydock.TryStoreShip(shipGrid, owner, null));
+            Assert.That(result, Is.EqualTo(DrydockStoreResult.Success));
+            await pair.RunTicksSync(5);
+
+            var retrieved = await RunOnServer(pair, () => drydock.TryRetrieveShip(shipId!.Value, owner, station, null));
+            Assert.That(retrieved.Result, Is.EqualTo(DrydockRetrieveResult.Success));
+            await pair.RunTicksSync(5);
+
+            await server.WaitAssertion(() =>
+            {
+                var machine = FindChildWithComponentSync<CrystallizerComponent>(entMan, retrieved.Grid!.Value);
+                Assert.That(machine, Is.Not.Null, "The machine came back with the ship.");
+
+                var appearance = server.System<SharedAppearanceSystem>();
+                Assert.Multiple(() =>
+                {
+                    Assert.That(
+                        appearance.TryGetData<bool>(machine!.Value, LatheVisuals.IsRunning, out var running) && running,
+                        Is.True,
+                        "A boolean appearance value came back as it was set.");
+
+                    Assert.That(
+                        appearance.TryGetData<int>(machine!.Value, StorageVisuals.StorageUsed, out var used) ? used : -1,
+                        Is.EqualTo(7),
+                        "An integer appearance value under a second key type came back as it was set.");
+                });
+            });
+
+            await pair.CleanReturnAsync();
+        }
+
+        /// <summary>
+        /// The round trip compared against itself, rather than one machine at a time.
+        ///
+        /// <para>Every other test on this page asserts one thing somebody found broken by hand. This
+        /// one snapshots the whole grid before the store and after the retrieve and asserts nothing
+        /// moved, which is the only shape that can catch a gap nobody has thought of yet. When it
+        /// fails it prints what changed, and each line is either a bug or a difference that belongs
+        /// in the expected list below with a reason.</para>
+        /// </summary>
+        [Test]
+        public async Task NothingOnTheShipChangesAcrossTheRoundTrip()
+        {
+            await using var pair = await PoolManager.GetServerClient();
+            var server = pair.Server;
+            var entMan = server.EntMan;
+
+            var db = server.ResolveDependency<IServerDbManager>();
+            var drydock = server.System<DrydockSystem>();
+            var fidelity = server.System<DrydockFidelitySystem>();
+
+            var owner = Guid.NewGuid();
+            await InsertPlayer(db, owner);
+            await server.ResolveDependency<DrydockStore>().AddBerth(owner, ShipSizeClass.SuperCapital, DrydockBerthKind.Granted, 0, null, null);
+
+            var (station, shipGrid, _) = await BuildShipAndStation(pair);
+
+            // A spread wide enough that the machine classes every play test complained about are all
+            // aboard: atmos devices that switch, a lathe, a fridge, a research server, a turret and
+            // a crystallizer.
+            await server.WaitPost(() =>
+            {
+                // The shared builder lays a three-by-three hull, which is not enough floor for that
+                // spread. It has to be floor rather than open space: an entity spawned off the tiles
+                // is re-parented to the map instead of the ship, so it would never be stored and the
+                // walk below would never see it. The first draft of this test lost eight of eleven
+                // machines that way and reported six entities.
+                var mapSys = server.System<SharedMapSystem>();
+                var gridComp = entMan.GetComponent<MapGridComponent>(shipGrid);
+                for (var x = 0; x < 6; x++)
+                {
+                    for (var y = 0; y < 3; y++)
+                    {
+                        mapSys.SetTile(shipGrid, gridComp, new Vector2i(x, y), new Tile(1));
+                    }
+                }
+
+                // The research server goes down first on purpose. A lathe registers with whatever
+                // server is already aboard when it initialises, so spawning the server after it
+                // leaves the lathe's technology database empty before the store and filled after the
+                // retrieve, where the revive step registers it against a server that exists by then.
+                // That is this test's own doing rather than the drydock's, and it showed up as two
+                // diff lines until the order changed.
+                var protos = new[]
+                {
+                    ResearchServerProtoId,
+                    PressurePumpProtoId, VolumePumpProtoId, FilterProtoId, MixerProtoId,
+                    LatheProtoId, SmartFridgeProtoId, CrystallizerProtoId, TurretProtoId,
+                    ApcProtoId,
+                };
+
+                // Two rows, leaving the middle one to the builder's airlock. One machine per tile,
+                // because an anchored machine snaps to its tile centre and two on a tile would share
+                // a path and be dropped as ambiguous.
+                for (var i = 0; i < protos.Length; i++)
+                {
+                    var coords = new Vector2(i % 5 + 0.5f, i < 5 ? 0.5f : 2.5f);
+                    entMan.SpawnEntity(protos[i], new EntityCoordinates(shipGrid, coords));
+                }
+            });
+
+            await pair.RunTicksSync(10);
+
+            DrydockStateSnapshot before = default!;
+            await server.WaitPost(() => before = fidelity.SnapshotGrid(shipGrid));
+
+            var (result, shipId) = await RunOnServer(pair, () => drydock.TryStoreShip(shipGrid, owner, null));
+            Assert.That(result, Is.EqualTo(DrydockStoreResult.Success));
+            await pair.RunTicksSync(5);
+
+            var retrieved = await RunOnServer(pair, () => drydock.TryRetrieveShip(shipId!.Value, owner, station, null));
+            Assert.That(retrieved.Result, Is.EqualTo(DrydockRetrieveResult.Success));
+            await pair.RunTicksSync(10);
+
+            DrydockStateSnapshot after = default!;
+            await server.WaitPost(() => after = fidelity.SnapshotGrid(retrieved.Grid!.Value));
+
+            // Controls first. A snapshot that covered nothing would compare clean and prove nothing,
+            // which is the failure the serializability audit already learned to guard against.
+            Assert.Multiple(() =>
+            {
+                var covered = string.Join(", ", before.Values.Keys.Select(k => k[..k.IndexOf('|')]).Distinct());
+                Assert.That(before.Entities, Is.GreaterThan(10),
+                    $"The snapshot covered the ship rather than a corner of it. Ambiguous: {before.Ambiguous}. Covered: {covered}");
+                Assert.That(before.Values, Is.Not.Empty, "The snapshot rendered fields rather than nothing.");
+
+                // A floor on both sides rather than equality between them. An entity whose prototype
+                // declares save: false is aboard at the store and legitimately absent afterwards, so
+                // the counts can differ by design and an equality here is a flake waiting to happen.
+                // A machine that really went missing shows up as GONE lines in the diff below, which
+                // is where that belongs.
+                Assert.That(after.Entities, Is.GreaterThan(10),
+                    $"The ship came back. Ambiguous paths: {before.Ambiguous} before, {after.Ambiguous} after.");
+            });
+
+            var diff = DrydockStateSnapshot.Diff(before, after).Where(IsNotExpectedDifference).ToList();
+
+            Assert.That(diff, Is.Empty,
+                "The round trip changed state nothing intends it to change:\n  " + string.Join("\n  ", diff));
+
+            await pair.CleanReturnAsync();
+        }
+
+        /// <summary>
+        /// Differences that are not the round trip losing something. Every entry names why, and an
+        /// entry without a reason is a bug somebody gave up on rather than a difference by design.
+        /// </summary>
+        private static bool IsNotExpectedDifference(string line)
+        {
+            string[] byDesign =
+            {
+                // Minted fresh for whoever retrieved the ship, which is the point of a retrieve.
+                "ShuttleDeedComponent.",
+                "ShipOwnershipComponent.",
+
+                // Station membership is stripped at store and a fresh station is built at retrieve.
+                "StationMemberComponent.",
+
+                // The repair baseline is derived state, regenerated on arrival by design.
+                "ShipRepair",
+
+                // Stamped on the grid at retrieve so roundstart variation does not re-litter a ship
+                // every time it comes back.
+                "StationVariationHasRunComponent.",
+
+                // The loader puts this on any grid it reads. It is load bookkeeping, not ship state.
+                "MapSaveTileMapComponent.",
+            };
+
+            // These advance with the clock rather than with the round trip, so the two snapshots
+            // differ by however many ticks passed between them however well the drydock behaves.
+            // Whether a battery comes back at roughly the charge it left with is a question for a
+            // test that can assert a tolerance; this one only compares what should be identical.
+            string[] withTheClock =
+            {
+                "BatteryComponent.CurrentCharge",
+                "PowerNetworkBatteryComponent.SupplyRampPosition",
+                "SpreaderGridComponent.UpdateAccumulator",
+            };
+
+            return !byDesign.Any(line.Contains) && !withTheClock.Any(line.Contains);
         }
 
         private static EntityUid? FindChildWithComponentSync<T>(IEntityManager entMan, EntityUid grid) where T : IComponent
