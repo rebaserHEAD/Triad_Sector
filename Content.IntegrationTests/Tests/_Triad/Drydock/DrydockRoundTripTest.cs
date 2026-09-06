@@ -2,9 +2,11 @@
 
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using System.Net;
 using System.Numerics;
+using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using Content.IntegrationTests.Pair;
@@ -14,10 +16,12 @@ using Content.Server._NF.Market.Components;
 using Content.Server.Database;
 using Content.Server.DeviceNetwork.Systems;
 using Content.Server.NodeContainer.Nodes;
+using Content.Server.Power.Components;
 using Content.Server.Station.Components;
 using Content.Server.Station.Systems;
 using Content.Server.Shuttles.Components;
 using Content.Server.Wires;
+using Content.Shared._Crescent.ShipShields;
 using Content.Shared._NF.Market;
 using Content.Shared._NF.Shipyard.Components;
 using Content.Shared._Triad.CCVar;
@@ -39,6 +43,7 @@ using Robust.Shared.Map;
 using Robust.Shared.Maths;
 using Robust.Shared.Network;
 using Robust.Shared.Prototypes;
+using Robust.Shared.Utility;
 
 namespace Content.IntegrationTests.Tests._Triad.Drydock
 {
@@ -70,6 +75,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
         private const string MarketItemProtoId = "SheetSteel1";
         private const string AudioProtoId = "Audio";
         private static readonly ProtoId<DamageTypePrototype> BluntDamage = "Blunt";
+        private const string ShieldGeneratorProtoId = "ShieldGenerator";
 
         [Test]
         public async Task AShipStoredComesBackWithItsContentsAndItsWires()
@@ -245,6 +251,90 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             Assert.That(cleared.Result, Is.EqualTo(DrydockRetrieveResult.Success), "Control: with every reason cleared the same call succeeds.");
 
             await pair.RunTicksSync(5);
+            await pair.CleanReturnAsync();
+        }
+
+        /// <summary>
+        /// A ship shield is derived state: the emitter raises it whenever it has power, and the
+        /// grid carries a marker pointing at it. Neither may ride the document. Before this, the
+        /// marker was written without its fields and reloaded pointing at nothing, the emitter's
+        /// "already shielded" check then refused to raise a shield for the rest of the ship's
+        /// life, and the old shield reloaded as a ghost with a hard bullet fixture and no emitter
+        /// behind it (2026-09-05, first ship stored on the test server). The shield prototype now
+        /// opts out of saving and both linkage components are unsaved, so this is proven on the
+        /// document and on what comes back.
+        /// </summary>
+        [Test]
+        public async Task AShieldedShipComesBackWithAFreshShield()
+        {
+            await using var pair = await PoolManager.GetServerClient();
+            var server = pair.Server;
+            var entMan = server.EntMan;
+
+            var db = server.ResolveDependency<IServerDbManager>();
+            var drydock = server.System<DrydockSystem>();
+
+            var owner = Guid.NewGuid();
+            await InsertPlayer(db, owner);
+            await server.ResolveDependency<DrydockStore>().AddBerth(owner, ShipSizeClass.SuperCapital, DrydockBerthKind.Granted, 0, null, null);
+
+            var (station, shipGrid, _) = await BuildShipAndStation(pair);
+
+            await server.WaitPost(() =>
+            {
+                var emitter = entMan.SpawnEntity(ShieldGeneratorProtoId, new EntityCoordinates(shipGrid, new Vector2(0.5f, 2.5f)));
+                // A test grid has no power net; a receiver that needs no power reads as powered.
+                entMan.GetComponent<ApcPowerReceiverComponent>(emitter).NeedsPower = false;
+            });
+
+            // The emitter evaluates every 1.5 s; this covers two evaluations at 30 ticks a second.
+            await pair.RunTicksSync(100);
+
+            await server.WaitAssertion(() =>
+            {
+                Assert.That(entMan.TryGetComponent<ShipShieldedComponent>(shipGrid, out var shielded), Is.True,
+                    "Control: the emitter raised a shield on the live ship.");
+                Assert.That(entMan.EntityExists(shielded!.Shield), Is.True);
+                Assert.That(entMan.GetComponent<TransformComponent>(shielded.Shield).ParentUid, Is.EqualTo(shipGrid),
+                    "The shield is a child of the grid, which is what put it into the document before.");
+            });
+
+            var (result, shipId) = await RunOnServer(pair, () => drydock.TryStoreShip(shipGrid, owner, null));
+            Assert.That(result, Is.EqualTo(DrydockStoreResult.Success));
+            await pair.RunTicksSync(5);
+
+            var document = Encoding.UTF8.GetString(Decompress(await ReadBlobs(db, shipId!.Value)));
+            Assert.Multiple(() =>
+            {
+                Assert.That(document, Does.Contain("type: ShipShieldEmitter"), "Control: the generator itself is in the document.");
+                Assert.That(document, Does.Not.Contain("proto: ShipShield\n").And.Not.Contain("proto: ShipShield\r"), "The shield entity opts out of saving.");
+                Assert.That(document, Does.Not.Contain("ShipShielded"), "The grid's marker is an unsaved component.");
+            });
+
+            var retrieved = await RunOnServer(pair, () => drydock.TryRetrieveShip(shipId.Value, owner, station, null));
+            Assert.That(retrieved.Result, Is.EqualTo(DrydockRetrieveResult.Success));
+            var grid = retrieved.Grid!.Value;
+
+            await server.WaitPost(() =>
+            {
+                foreach (var receiver in ChildrenWith<ApcPowerReceiverComponent>(entMan, grid))
+                    entMan.GetComponent<ApcPowerReceiverComponent>(receiver).NeedsPower = false;
+            });
+            await pair.RunTicksSync(100);
+
+            await server.WaitAssertion(() =>
+            {
+                var shields = ChildrenWith<ShipShieldComponent>(entMan, grid).ToList();
+                Assert.That(shields, Has.Count.EqualTo(1), "Exactly one shield came up: a fresh one, no ghost.");
+                var shield = shields[0];
+                var newEmitter = ChildrenWith<ShipShieldEmitterComponent>(entMan, grid).Single();
+
+                Assert.That(entMan.TryGetComponent<ShipShieldedComponent>(grid, out var marker), Is.True);
+                Assert.That(marker!.Shield, Is.EqualTo(shield), "The marker points at the live shield.");
+                Assert.That(entMan.GetComponent<ShipShieldComponent>(shield).Source, Is.EqualTo(newEmitter), "The shield knows its emitter.");
+                Assert.That(entMan.GetComponent<ShipShieldEmitterComponent>(newEmitter).Shield, Is.EqualTo(shield), "The emitter knows its shield.");
+            });
+
             await pair.CleanReturnAsync();
         }
 
@@ -440,6 +530,25 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             });
 
             await pair.CleanReturnAsync();
+        }
+
+        private static IEnumerable<EntityUid> ChildrenWith<T>(IEntityManager entMan, EntityUid grid) where T : IComponent
+        {
+            var children = entMan.GetComponent<TransformComponent>(grid).ChildEnumerator;
+            while (children.MoveNext(out var child))
+            {
+                if (entMan.HasComponent<T>(child))
+                    yield return child;
+            }
+        }
+
+        /// <summary>The same zstd stream the pipeline writes with, so the test reads the document as filed.</summary>
+        private static byte[] Decompress(byte[] blob)
+        {
+            using var decompress = new ZStdDecompressStream(new MemoryStream(blob));
+            using var output = new MemoryStream();
+            decompress.CopyTo(output);
+            return output.ToArray();
         }
 
         private static Task<byte[]> ReadBlobs(IServerDbManager db, Guid shipId)
