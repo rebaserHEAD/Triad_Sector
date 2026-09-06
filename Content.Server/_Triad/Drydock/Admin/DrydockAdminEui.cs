@@ -122,12 +122,19 @@ public sealed partial class DrydockAdminEui : BaseEui
             case DrydockAdminHoldMessage hold:
                 _ = Act(async () =>
                 {
-                    var moved = hold.Hold
-                        ? await _store.TrySetState(hold.ShipGuid, null, DrydockShipState.Held, DrydockAuditAction.Hold, AdminId, RoundForAudit(), hold.Reason)
-                        : await _store.TrySetState(hold.ShipGuid, DrydockShipState.Held, DrydockShipState.Stored, DrydockAuditAction.Release, AdminId, RoundForAudit(), hold.Reason);
-                    return moved
-                        ? (hold.Hold ? "Ship held." : "Hold released; the ship is stored again.")
-                        : (hold.Hold ? "Already held, or unknown ship." : "Not held, so nothing to release.");
+                    if (hold.Hold)
+                    {
+                        var held = await _store.TrySetState(hold.ShipGuid, null, DrydockShipState.Held, DrydockAuditAction.Hold, AdminId, RoundForAudit(), hold.Reason);
+                        return held ? "Ship held." : "Already held, or unknown ship.";
+                    }
+
+                    // Back to wherever the hold found it. A ship held while out is still out.
+                    return await _store.TryReleaseHold(hold.ShipGuid, AdminId, RoundForAudit(), hold.Reason) switch
+                    {
+                        DrydockShipState.CheckedOut => "Hold released; the ship is still out.",
+                        DrydockShipState.Stored => "Hold released; the ship is stored again.",
+                        _ => "Not held, so nothing to release.",
+                    };
                 });
                 break;
 

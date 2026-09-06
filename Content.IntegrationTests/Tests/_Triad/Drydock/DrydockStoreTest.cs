@@ -171,7 +171,69 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             await pair.CleanReturnAsync();
         }
 
-        private static DrydockRevisionRequest Request(Guid shipId, Guid owner, string name) => new()
+        /// <summary>
+        /// A hold is an adjudication, not a location. Releasing one has to put the ship back where
+        /// the hold found it: a ship held while out flying is still out, and a release that called it
+        /// stored would make the same hull retrievable twice, once from the world and once from the
+        /// garage. That is what happened on the test server on 2026-09-06, and this pins the fix from
+        /// both sides: held-while-out releases to checked out, and a hull that is stored while held
+        /// releases to stored.
+        /// </summary>
+        [Test]
+        public async Task AReleasedHoldReturnsTheShipToWhereTheHoldFoundIt()
+        {
+            await using var pair = await PoolManager.GetServerClient();
+            var server = pair.Server;
+
+            var store = server.ResolveDependency<DrydockStore>();
+            var db = server.ResolveDependency<IServerDbManager>();
+
+            var owner = Guid.NewGuid();
+            await InsertPlayer(db, owner);
+            await store.AddBerth(owner, ShipSizeClass.Cutter, DrydockBerthKind.Granted, 0, null, null);
+            await store.AddBerth(owner, ShipSizeClass.Cutter, DrydockBerthKind.Granted, 0, null, null);
+
+            // A checkout records the round it left in, and that column is a foreign key, so the
+            // round has to exist. In play it always does: a retrieve happens inside a round.
+            var round = await db.AddNewRound(await db.AddOrGetServer("drydock-test"));
+
+            // Out flying, then held, then released: still out.
+            var flying = Guid.NewGuid();
+            await store.FileRevision(Request(flying, owner, "Harrier"), Encoding.UTF8.GetBytes("doc"), keepBlobs: 2);
+            Assert.That(await store.TrySetState(flying, DrydockShipState.Stored, DrydockShipState.CheckedOut, DrydockAuditAction.Retrieve, owner, round, null), Is.True);
+            Assert.That(await store.TrySetState(flying, null, DrydockShipState.Held, DrydockAuditAction.Hold, null, round, "suspect"), Is.True);
+
+            Assert.That(await store.TryReleaseHold(flying, null, round, "cleared"), Is.EqualTo(DrydockShipState.CheckedOut),
+                "The hull was in the world when it was held and nothing has put it away since, so the row must not say stored.");
+
+            // A control on the other side: a ship held at rest releases to stored.
+            var resting = Guid.NewGuid();
+            await store.FileRevision(Request(resting, owner, "Kestrel"), Encoding.UTF8.GetBytes("doc"), keepBlobs: 2);
+            Assert.That(await store.TrySetState(resting, null, DrydockShipState.Held, DrydockAuditAction.Hold, null, round, "suspect"), Is.True);
+            Assert.That(await store.TryReleaseHold(resting, null, round, "cleared"), Is.EqualTo(DrydockShipState.Stored));
+
+            // Held while out, then the owner puts it away through the pipeline's two-step filing.
+            // The hull is in the garage now, so a release must say stored, not out.
+            Assert.That(await store.TrySetState(flying, DrydockShipState.CheckedOut, DrydockShipState.Held, DrydockAuditAction.Hold, null, round, "suspect again"), Is.True);
+            var filed = await store.FileRevision(Request(flying, owner, "Harrier", markStored: false), Encoding.UTF8.GetBytes("doc2"), keepBlobs: 2);
+            Assert.That(filed.Outcome, Is.EqualTo(DrydockBerthResult.Success));
+            Assert.That(await store.MarkStored(flying), Is.False, "A held ship stays held through a store; only the hull's whereabouts changes.");
+            Assert.That(await store.TryReleaseHold(flying, null, round, "cleared"), Is.EqualTo(DrydockShipState.Stored),
+                "The store put the hull in the garage, so the hold now releases to stored.");
+
+            Assert.That(await store.TryReleaseHold(flying, null, round, "again"), Is.Null, "Nothing to release twice.");
+
+            var rows = await store.GetShipsByOwner(owner);
+            Assert.Multiple(() =>
+            {
+                Assert.That(rows.Single(r => r.ShipGuid == flying).State, Is.EqualTo(DrydockShipState.Stored));
+                Assert.That(rows.Single(r => r.ShipGuid == resting).State, Is.EqualTo(DrydockShipState.Stored));
+            });
+
+            await pair.CleanReturnAsync();
+        }
+
+        private static DrydockRevisionRequest Request(Guid shipId, Guid owner, string name, bool markStored = true) => new()
         {
             ShipGuid = shipId,
             OwnerUserId = owner,
@@ -179,7 +241,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             VesselProto = "TestVessel",
             SizeClass = nameof(ShipSizeClass.Cutter),
             Kind = DrydockRevisionKind.PlayerStore,
-            MarkStored = true,
+            MarkStored = markStored,
             ActorUserId = owner,
             CreatedRoundId = null,
             EngineFormatVer = 7,

@@ -114,7 +114,65 @@ public sealed partial class DrydockStore
                     .SetProperty(s => s.CheckedOutRoundId, (int?)null)
                     .SetProperty(s => s.UpdatedAt, now), token);
 
-            return moved > 0;
+            if (moved > 0)
+                return true;
+
+            // A held ship stays held, but the hull is now in the garage, so the round it left in
+            // is cleared: that column is what a release reads to decide where the ship goes back
+            // to, and left set it would send this ship back to checked out with no hull behind it.
+            await db.DrydockShip
+                .Where(s => s.ShipGuid == shipGuid && s.State == DrydockShipState.Held)
+                .ExecuteUpdateAsync(set => set
+                    .SetProperty(s => s.CheckedOutRoundId, (int?)null)
+                    .SetProperty(s => s.UpdatedAt, now), token);
+
+            return false;
+        }, ct);
+    }
+
+    /// <summary>
+    /// Lifts an administrative hold and returns the ship to the state it was in before the hold:
+    /// checked out if the hull was out flying when it was held (the row still carries the round
+    /// it left in), stored otherwise. The first draft released every hold to stored, and a ship
+    /// held while out then read as stored with its hull still in the world, which is the
+    /// duplicate every other state transition in here exists to prevent (test server audit,
+    /// 2026-09-06: hold, release, store, and the store's "did not move to stored" warning).
+    /// </summary>
+    /// <returns>The state the ship was released to, or null when it was not held.</returns>
+    public Task<DrydockShipState?> TryReleaseHold(Guid shipGuid, Guid? actorUserId, int? roundId, string? reason, CancellationToken ct = default)
+    {
+        return _db.RunTriadDbCommand<DrydockShipState?>(async (db, token) =>
+        {
+            await using var tx = await db.Database.BeginTransactionAsync(token);
+
+            var ship = await db.DrydockShip.SingleOrDefaultAsync(s => s.ShipGuid == shipGuid, token);
+            if (ship == null || ship.State != DrydockShipState.Held)
+                return null;
+
+            var now = DateTime.UtcNow;
+            var target = ship.CheckedOutRoundId != null ? DrydockShipState.CheckedOut : DrydockShipState.Stored;
+
+            ship.State = target;
+            ship.StateChangedAt = now;
+            ship.UpdatedAt = now;
+
+            db.DrydockAudit.Add(new DrydockAudit
+            {
+                ShipGuid = shipGuid,
+                BerthId = ship.BerthId,
+                ShipName = ship.ShipName,
+                Action = DrydockAuditAction.Release,
+                ActorUserId = actorUserId,
+                Revision = ship.CurrentRevision,
+                RoundId = roundId,
+                Reason = reason,
+                CreatedAt = now,
+            });
+
+            await db.SaveChangesAsync(token);
+            await tx.CommitAsync(token);
+
+            return target;
         }, ct);
     }
 
@@ -556,7 +614,12 @@ public sealed partial class DrydockStore
 
             // Only a checkout records a round. Coming back clears it, so "checked out in round N and
             // never came back" stays answerable from the row rather than by reading the timeline.
+            // A hold keeps it: a ship can be held while it is out flying, and the round it left in
+            // is then the only record that the hull is not in the garage. Releasing the hold reads
+            // it to decide whether the ship goes back to stored or back to checked out, and the
+            // store that puts the hull away clears it (see MarkStored).
             var checkedOutRound = state == DrydockShipState.CheckedOut ? roundId : null;
+            var keepCheckedOutRound = state == DrydockShipState.Held;
 
             var query = db.DrydockShip.Where(s => s.ShipGuid == shipGuid && s.State != state);
             if (expected is { } required)
@@ -566,7 +629,7 @@ public sealed partial class DrydockStore
                 .SetProperty(s => s.State, state)
                 .SetProperty(s => s.StateChangedAt, now)
                 .SetProperty(s => s.UpdatedAt, now)
-                .SetProperty(s => s.CheckedOutRoundId, checkedOutRound), token);
+                .SetProperty(s => s.CheckedOutRoundId, s => keepCheckedOutRound ? s.CheckedOutRoundId : checkedOutRound), token);
 
             if (moved == 0)
                 return false;
