@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Linq;
 using Robust.Shared.Map;
 using Robust.Shared.Map.Components;
@@ -203,6 +204,19 @@ public sealed partial class DrydockFidelitySystem
     /// </summary>
     private string? RenderValue(object value)
     {
+        // A time is compared to the millisecond, not to the tick of a double. Any timestamp written
+        // through TimeOffsetSerializer leaves as (time - CurTime) and returns as (offset + CurTime),
+        // and that subtract-and-re-add costs about a hundred nanoseconds through the YAML, so an
+        // exact text comparison reports 43.7332906 -> 43.7332905 as lost state on every re-based
+        // field. Rounding here rather than exempting the fields by name, because the exemption list
+        // would have to grow by one entry for every timestamp the fork ever re-bases.
+        //
+        // Three decimals is far below a tick at 30 Hz, so a deadline that genuinely moved still
+        // shows up: the failure this class exists to catch is a time off by a whole round, not by a
+        // microsecond.
+        if (value is TimeSpan span)
+            return span.TotalSeconds.ToString("F3", CultureInfo.InvariantCulture);
+
         try
         {
             return _serialization.WriteValue(value.GetType(), value, alwaysWrite: true, context: _probe)
