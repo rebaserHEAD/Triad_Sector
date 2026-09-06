@@ -13,7 +13,16 @@ public static class DrydockFormat
     /// re-bake ladder a step that migrates the old version forward. A stored ship is only as
     /// durable as our ability to tell which encoding it is written in.
     /// </summary>
-    public const int Current = 1;
+    /// <remarks>
+    /// Version 2, 2026-09-06: the absolute-time fields listed in the state fidelity design gained
+    /// <c>TimeOffsetSerializer</c>, so they are written as an offset from the storing server's clock
+    /// rather than raw. A version 1 revision holds raw values, and this reader adds the current
+    /// clock to them, which puts the machine's next tick that far further out: a stored microwave or
+    /// AME idles until the inflated deadline passes. Deliberately not a refusal, because the effect
+    /// is a delay on a few machines and it clears the next time the ship is stored, where refusing
+    /// would strand every ship filed before today.
+    /// </remarks>
+    public const int Current = 2;
 
     /// <summary>
     /// The oldest <see cref="Current"/> value a retrieve will still read. Raising this abandons
