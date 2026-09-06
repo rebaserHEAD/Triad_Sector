@@ -8,8 +8,9 @@ namespace Content.Server._Triad.Drydock.Admin;
 
 /// <summary>
 /// Opens the drydock admin panel for the admin who ran it. The Admin menu's Drydock button runs
-/// this by name; the description and help ride the command attributes, so there is no locale
-/// entry to keep in step with them.
+/// this by name. The description and help ride the command attributes, but Toolshed's loc test
+/// reads a Fluent key regardless, so `command-description-drydockadmin` in the drydock admin
+/// locale file has to say the same thing and move whenever this does.
 /// </summary>
 [ToolshedCommand(Name = "drydockadmin"), AdminCommand(AdminFlags.Admin)]
 public sealed partial class DrydockAdminCommand : ToolshedCommand
