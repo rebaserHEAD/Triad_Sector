@@ -18,6 +18,7 @@ using Content.Shared._NF.Shipyard.Components;
 using Content.Shared._NF.Shipyard.Events;
 using Content.Shared._Triad.CCVar;
 using Content.Shared._Triad.Drydock;
+using Content.Shared._Triad.Shipyard.Save;
 using Content.Shared._Triad.ShipSize;
 using Content.Shared.Database;
 using Robust.Shared.Map.Components;
@@ -89,14 +90,21 @@ public sealed partial class ShipyardSystem
             return;
         }
 
+        // A vessel issued on a voucher, or one its faction has blacklisted from saving, can never
+        // be stored, so it brings no berth with it. Faction crews are not drydock customers.
+        if (TryComp<ShuttleDeedComponent>(ev.Shuttle, out var deed) && deed.PurchasedWithVoucher
+            || HasComp<ShipSavingBlacklistComponent>(ev.Shuttle))
+        {
+            return;
+        }
+
         var owner = ownership.OwnerUserId.UserId;
         var sizeClass = _drydockSizes.GetSizeClass((ev.Shuttle, map));
         var price = DrydockBerthPrice(sizeClass);
-        var voucher = TryComp<ShuttleDeedComponent>(ev.Shuttle, out var deed) && deed.PurchasedWithVoucher;
 
         var paid = 0;
         var kind = DrydockBerthKind.Granted;
-        if (!voucher && price > 0)
+        if (price > 0)
         {
             if (_bank.TryBankWithdraw(ev.Purchaser, price, new MarketRecord { Kind = MarketTransactionKind.DrydockBerth }))
             {
@@ -442,8 +450,27 @@ public sealed partial class ShipyardSystem
             component.CachedCaptains.Add(new DrydockCaptainInfo(id, SessionDisplayName(session), freeClasses.GetValueOrDefault(id) ?? new List<string>()));
         }
 
-        component.CachedDeedShip = BuildDeedShip(targetId, rows, slots);
+        component.CachedDeedShip = BuildDeedShip(uid, targetId, rows, slots);
         RefreshDrydockUi(uid, component, player, uiKey);
+    }
+
+    /// <summary>
+    /// Whether the ship is docked to one of the station's grids. A store is a hand-over at a berth,
+    /// not a remote command: the hull has to be alongside the station whose console is filing it.
+    /// Any dock on the ship whose partner sits on a grid the station owns counts.
+    /// </summary>
+    private bool IsDockedToStation(EntityUid shuttle, EntityUid station)
+    {
+        foreach (var dock in _docking.GetDocks(shuttle))
+        {
+            if (dock.Comp.DockedWith is not { } partner || !Exists(partner))
+                continue;
+
+            if (Transform(partner).GridUid is { } grid && _station.GetOwningStation(grid) == station)
+                return true;
+        }
+
+        return false;
     }
 
     private static int SecondsLeft(DateTime expiresAt, DateTime now)
@@ -474,10 +501,10 @@ public sealed partial class ShipyardSystem
 
     /// <summary>
     /// The card at the top of the tab: the ship on the inserted deed, how long it has been out,
-    /// and which of the operator's free berths it fits. Read from the live grid, never from the
-    /// cached class text, for the same reason the store itself does.
+    /// whether it is docked here, and which of the operator's free berths it fits. Read from the
+    /// live grid, never from the cached class text, for the same reason the store itself does.
     /// </summary>
-    private DrydockDeedShipInfo? BuildDeedShip(EntityUid targetId, List<DrydockShip> rows, List<DrydockBerthSlot> slots)
+    private DrydockDeedShipInfo? BuildDeedShip(EntityUid console, EntityUid targetId, List<DrydockShip> rows, List<DrydockBerthSlot> slots)
     {
         if (!TryComp<ShuttleDeedComponent>(targetId, out var deed)
             || deed.ShuttleUid is not { Valid: true } shuttle
@@ -510,7 +537,9 @@ public sealed partial class ShipyardSystem
         if (fitting.Count == 0)
             preferred = null;
 
-        return new DrydockDeedShipInfo(GetFullName(deed), hullClass, minutesOut, preferred, fitting);
+        var docked = _station.GetOwningStation(console) is { Valid: true } station && IsDockedToStation(shuttle, station);
+
+        return new DrydockDeedShipInfo(GetFullName(deed), hullClass, minutesOut, preferred, fitting, docked);
     }
 
     /// <summary>
@@ -623,6 +652,19 @@ public sealed partial class ShipyardSystem
     }
 
     /// <summary>
+    /// Whether the operator is barred from the drydock the way they are barred from ship saving.
+    /// Faction crews (TDF, TFA, the station roles) are issued their vessels on voucher and the
+    /// drydock is the civilian garage, so the same signals decide both: the blacklist component the
+    /// job stamps on the character, and the console's own save blacklist, which reads that
+    /// component too. The direct check is here so a console whose blacklist a mapper forgot still
+    /// refuses.
+    /// </summary>
+    private bool DrydockBarsOperator(EntityUid player, ShipyardConsoleComponent component)
+    {
+        return HasComp<ShipSavingBlacklistComponent>(player) || !IsShipSaveWhitelistValid(player, component);
+    }
+
+    /// <summary>
     /// Refuses a message whose sender does not own what it names, and writes the refusal to the
     /// timeline. The console never offers such a click, so a row here means a modified client or a
     /// forged message, which is exactly what an admin wants to see beside a stolen-card report.
@@ -719,6 +761,13 @@ public sealed partial class ShipyardSystem
             return null;
         }
 
+        if (DrydockBarsOperator(player, component))
+        {
+            ConsolePopup(player, Loc.GetString("shipyard-console-drydock-faction"));
+            PlayDenySound(player, uid, component);
+            return null;
+        }
+
         if (!TryGetOperatorAccount(player, out var operatorAccount))
             return null;
 
@@ -732,6 +781,38 @@ public sealed partial class ShipyardSystem
                 : null;
 
             RefuseAccess(uid, component, player, operatorAccount, knownId, Name(shuttleUid), ownership?.OwnerUserId.UserId, null, "store");
+            return null;
+        }
+
+        // The hull itself: a faction vessel carries the blacklist on its grid, and a deed bought on
+        // a voucher says so. Both are what the ship-save path refuses, for the same reason.
+        if (HasComp<ShipSavingBlacklistComponent>(shuttleUid))
+        {
+            ConsolePopup(player, Loc.GetString("shipyard-console-store-faction-ship"));
+            PlayDenySound(player, uid, component);
+            return null;
+        }
+
+        if (deed.PurchasedWithVoucher)
+        {
+            ConsolePopup(player, Loc.GetString("shipyard-console-store-voucher-ship"));
+            PlayDenySound(player, uid, component);
+            return null;
+        }
+
+        // A store is a hand-over at a berth. The ship has to be docked to the station this console
+        // belongs to, not parked somewhere in the sector while its captain files it remotely.
+        if (_station.GetOwningStation(uid) is not { Valid: true } station)
+        {
+            ConsolePopup(player, Loc.GetString("shipyard-console-invalid-station"));
+            PlayDenySound(player, uid, component);
+            return null;
+        }
+
+        if (!IsDockedToStation(shuttleUid, station))
+        {
+            ConsolePopup(player, Loc.GetString("shipyard-console-store-not-docked"));
+            PlayDenySound(player, uid, component);
             return null;
         }
 
@@ -784,6 +865,22 @@ public sealed partial class ShipyardSystem
         if (HasComp<ShuttleDeedComponent>(targetId))
         {
             ConsolePopup(player, Loc.GetString("shipyard-console-already-deeded"));
+            PlayDenySound(player, uid, component);
+            return null;
+        }
+
+        if (DrydockBarsOperator(player, component))
+        {
+            ConsolePopup(player, Loc.GetString("shipyard-console-drydock-faction"));
+            PlayDenySound(player, uid, component);
+            return null;
+        }
+
+        // A voucher is a claim on a new hull from the faction's list, not a card a stored ship can
+        // be called in on. The ship-load path refuses it for the same reason.
+        if (HasComp<ShipyardVoucherComponent>(targetId))
+        {
+            ConsolePopup(player, Loc.GetString("shipyard-console-retrieve-voucher-card"));
             PlayDenySound(player, uid, component);
             return null;
         }

@@ -6,20 +6,24 @@ using System.Numerics;
 using System.Threading;
 using System.Threading.Tasks;
 using Content.IntegrationTests.Pair;
+using Content.Server._NF.Shipyard.Components;
 using Content.Server._NF.Shipyard.Systems;
 using Content.Server._Triad.Drydock;
 using Content.Server.Database;
 using Content.Server.Station.Components;
 using Content.Server.Station.Systems;
 using Content.Server.Shuttles.Components;
+using Content.Server.Shuttles.Systems;
 using Content.Shared._NF.Shipyard;
 using Content.Shared._NF.Shipyard.Components;
 using Content.Shared._Triad.CCVar;
+using Content.Shared._Triad.Shipyard.Save;
 using Content.Shared._Triad.ShipSize;
 using Content.Shared.Containers.ItemSlots;
 using Robust.Server.Player;
 using Robust.Shared.Configuration;
 using Robust.Shared.GameObjects;
+using Robust.Shared.Log;
 using Robust.Shared.Map;
 using Robust.Shared.Maths;
 
@@ -54,6 +58,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
         public async Task AnOwnerCanStoreAndRetrieveFromTheConsole()
         {
             await using var pair = await PoolManager.GetServerClient(new PoolSettings { Connected = true });
+            using var _ = ExpectDockJointLog(pair);
             var server = pair.Server;
             var entMan = server.EntMan;
 
@@ -162,6 +167,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
         public async Task ACheckedOutShipCannotBeRetrievedTwice()
         {
             await using var pair = await PoolManager.GetServerClient(new PoolSettings { Connected = true });
+            using var _ = ExpectDockJointLog(pair);
             var server = pair.Server;
             var entMan = server.EntMan;
 
@@ -523,6 +529,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
         public async Task AStoredShipCanBeRenamedMovedAndSold()
         {
             await using var pair = await PoolManager.GetServerClient(new PoolSettings { Connected = true });
+            using var _ = ExpectDockJointLog(pair);
             var server = pair.Server;
             var entMan = server.EntMan;
 
@@ -640,8 +647,206 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             await pair.CleanReturnAsync();
         }
 
+        /// <summary>
+        /// Faction crews are issued their vessels on voucher and are not drydock customers, the
+        /// same way they are not ship-save customers. Three signals bar a store, each proven alone
+        /// against a control that succeeds once it is cleared: the blacklist the job stamps on the
+        /// character, the blacklist a faction vessel carries on its grid, and the voucher flag on a
+        /// deed. On the way back, the barred character and a voucher in the slot are both refused.
+        /// </summary>
+        [Test]
+        public async Task FactionCrewsAndVoucherShipsAreRefusedTheDrydock()
+        {
+            await using var pair = await PoolManager.GetServerClient(new PoolSettings { Connected = true });
+            using var _ = ExpectDockJointLog(pair);
+            var server = pair.Server;
+            var entMan = server.EntMan;
+
+            var playerMan = server.ResolveDependency<IPlayerManager>();
+            var store = server.ResolveDependency<DrydockStore>();
+            var shipyard = server.System<ShipyardSystem>();
+
+            var session = playerMan.Sessions.First();
+            var (station, stationGrid, ship, console, consoleComp, card, operatorEnt) = await BuildConsoleAndShip(pair, session.UserId);
+
+            // The character: the same component the job stamps on TDF and TFA crews.
+            await server.WaitPost(() => entMan.EnsureComponent<ShipSavingBlacklistComponent>(operatorEnt));
+            var barredOperator = await RunOnServer(pair,
+                () => shipyard.TryDrydockStore(console, consoleComp, operatorEnt, ShipyardConsoleUiKey.Shipyard));
+            Assert.That(barredOperator, Is.Null, "A character the job has blacklisted from ship saving cannot store either.");
+            await server.WaitPost(() => entMan.RemoveComponent<ShipSavingBlacklistComponent>(operatorEnt));
+
+            // The vessel: a faction hull carries the blacklist on its grid.
+            await server.WaitPost(() => entMan.EnsureComponent<ShipSavingBlacklistComponent>(ship));
+            var barredShip = await RunOnServer(pair,
+                () => shipyard.TryDrydockStore(console, consoleComp, operatorEnt, ShipyardConsoleUiKey.Shipyard));
+            Assert.That(barredShip, Is.Null, "A faction vessel cannot be stored, whoever is at the console.");
+            await server.WaitPost(() => entMan.RemoveComponent<ShipSavingBlacklistComponent>(ship));
+
+            // The deed: bought on a voucher. The flag is the shipyard's to write, so the test
+            // reaches past the access check the way the buckle tests do.
+#pragma warning disable RA0002
+            await server.WaitPost(() => entMan.GetComponent<ShuttleDeedComponent>(card).PurchasedWithVoucher = true);
+#pragma warning restore RA0002
+            var voucherShip = await RunOnServer(pair,
+                () => shipyard.TryDrydockStore(console, consoleComp, operatorEnt, ShipyardConsoleUiKey.Shipyard));
+            Assert.That(voucherShip, Is.Null, "A ship issued on a voucher cannot be stored.");
+#pragma warning disable RA0002
+            await server.WaitPost(() => entMan.GetComponent<ShuttleDeedComponent>(card).PurchasedWithVoucher = false);
+#pragma warning restore RA0002
+
+            await server.WaitAssertion(() =>
+            {
+                Assert.That(entMan.Deleted(ship), Is.False, "Every refusal above left the ship flying.");
+                Assert.That(entMan.HasComponent<ShuttleDeedComponent>(card), Is.True, "And left the deed on the card.");
+            });
+
+            // Control: with all three cleared the same store goes through.
+            var stored = await RunOnServer(pair,
+                () => shipyard.TryDrydockStore(console, consoleComp, operatorEnt, ShipyardConsoleUiKey.Shipyard));
+            Assert.That(stored?.Result, Is.EqualTo(DrydockStoreResult.Success), "Control: nothing else about the fixture was refusing.");
+            var shipId = stored!.Value.ShipId!.Value;
+            await pair.RunTicksSync(5);
+
+            // The way back: the barred character first, then a voucher where the ID card goes.
+            await server.WaitPost(() => entMan.EnsureComponent<ShipSavingBlacklistComponent>(operatorEnt));
+            var barredRetrieve = await RunOnServer(pair,
+                () => shipyard.TryDrydockRetrieve(console, consoleComp, operatorEnt, shipId, ShipyardConsoleUiKey.Shipyard));
+            Assert.That(barredRetrieve, Is.Null, "A blacklisted character cannot call a ship in either.");
+            await server.WaitPost(() => entMan.RemoveComponent<ShipSavingBlacklistComponent>(operatorEnt));
+
+            await server.WaitPost(() => entMan.EnsureComponent<ShipyardVoucherComponent>(card));
+            var voucherRetrieve = await RunOnServer(pair,
+                () => shipyard.TryDrydockRetrieve(console, consoleComp, operatorEnt, shipId, ShipyardConsoleUiKey.Shipyard));
+            Assert.That(voucherRetrieve, Is.Null, "A voucher is not a card a stored ship can be called in on.");
+            await server.WaitPost(() => entMan.RemoveComponent<ShipyardVoucherComponent>(card));
+
+            Assert.That((await store.GetShipHeader(shipId))!.State, Is.EqualTo(DrydockShipState.Stored),
+                "Every refused retrieve left the row stored; none of them reached the claim.");
+
+            var retrieved = await RunOnServer(pair,
+                () => shipyard.TryDrydockRetrieve(console, consoleComp, operatorEnt, shipId, ShipyardConsoleUiKey.Shipyard));
+            Assert.That(retrieved, Is.Not.Null, "Control: the same retrieve succeeds once the gates are clear.");
+            await pair.RunTicksSync(5);
+
+            await pair.CleanReturnAsync();
+        }
+
+        /// <summary>
+        /// A store is a hand-over at a berth: the ship has to be docked to the station whose
+        /// console is filing it, not parked somewhere in the sector. The tab says so before the
+        /// press, the server refuses regardless, and docking the same ship to the same station
+        /// turns the same request into a success.
+        /// </summary>
+        [Test]
+        public async Task AStoreNeedsTheShipDockedAtThisStation()
+        {
+            await using var pair = await PoolManager.GetServerClient(new PoolSettings { Connected = true });
+            var server = pair.Server;
+            var entMan = server.EntMan;
+
+            var playerMan = server.ResolveDependency<IPlayerManager>();
+            var shipyard = server.System<ShipyardSystem>();
+
+            var session = playerMan.Sessions.First();
+            var (station, stationGrid, ship, console, consoleComp, card, operatorEnt) = await BuildConsoleAndShip(pair, session.UserId, docked: false);
+
+            await RunOnServer(pair, async () =>
+            {
+                await shipyard.RefreshDrydockState(console, consoleComp, operatorEnt, ShipyardConsoleUiKey.Shipyard);
+                return true;
+            });
+            await server.WaitAssertion(() =>
+            {
+                Assert.That(consoleComp.CachedDeedShip, Is.Not.Null);
+                Assert.That(consoleComp.CachedDeedShip!.Docked, Is.False, "The card at the top of the tab says the ship is not docked here, which is what greys Store.");
+            });
+
+            var loose = await RunOnServer(pair,
+                () => shipyard.TryDrydockStore(console, consoleComp, operatorEnt, ShipyardConsoleUiKey.Shipyard));
+            Assert.That(loose, Is.Null, "A ship out in space is refused before the pipeline is entered.");
+            await server.WaitAssertion(() =>
+            {
+                Assert.That(entMan.Deleted(ship), Is.False, "A refused store leaves the ship flying.");
+                Assert.That(entMan.HasComponent<ShuttleDeedComponent>(card), Is.True, "And the deed on the card.");
+            });
+
+            // Bring it alongside and dock it, then the same request goes through.
+            await server.WaitPost(() =>
+            {
+                server.System<SharedTransformSystem>().SetWorldPosition(ship, new Vector2(1f, -1f));
+                DockToStation(entMan, server.System<SharedTransformSystem>(), server.System<DockingSystem>(), stationGrid, ship);
+            });
+            await pair.RunTicksSync(5);
+
+            await RunOnServer(pair, async () =>
+            {
+                await shipyard.RefreshDrydockState(console, consoleComp, operatorEnt, ShipyardConsoleUiKey.Shipyard);
+                return true;
+            });
+            await server.WaitAssertion(() =>
+            {
+                Assert.That(consoleComp.CachedDeedShip!.Docked, Is.True, "Docked now, so the tab offers the store.");
+            });
+
+            var stored = await RunOnServer(pair,
+                () => shipyard.TryDrydockStore(console, consoleComp, operatorEnt, ShipyardConsoleUiKey.Shipyard));
+            Assert.That(stored?.Result, Is.EqualTo(DrydockStoreResult.Success), "Control: docked, the same store succeeds.");
+            await pair.RunTicksSync(5);
+
+            await pair.CleanReturnAsync();
+        }
+
+        private const string ShuttleAirlockProtoId = "AirlockShuttle";
+
+        /// <summary>
+        /// The engine logs a client-side error ("the joint already existed for the connected
+        /// entity") when a grid arrives already welded to a grid whose joint component is new in
+        /// the same state, which is exactly what the instant dock at retrieve produces, as a ship
+        /// purchase does. It is benign in play and recorded as such; here it would fail the pool.
+        /// The pool's per-message judge needs a type this project does not reference, so a test
+        /// that retrieves raises the client's failure level for its duration instead, the way the
+        /// abort test does for the server, and puts it back when it is done. The server side keeps
+        /// its full sensitivity throughout.
+        /// </summary>
+        private static IDisposable ExpectDockJointLog(TestPair pair)
+        {
+            var level = pair.ClientLogHandler.FailureLevel;
+            pair.ClientLogHandler.FailureLevel = LogLevel.Fatal;
+            return new RestoreScope(() => pair.ClientLogHandler.FailureLevel = level);
+        }
+
+        private sealed class RestoreScope(Action restore) : IDisposable
+        {
+            public void Dispose() => restore();
+        }
+
+        /// <summary>
+        /// Docks the ship to the station grid the way two airlocks meeting does: a shuttle airlock
+        /// on the station's tile facing east, one on the ship's west edge facing back, and the
+        /// docking system's own weld between them. The ship has to already be alongside, its west
+        /// edge against the station tile, or the weld has nothing consistent to hold.
+        /// </summary>
+        private static void DockToStation(IEntityManager entMan, SharedTransformSystem transform, DockingSystem docking, EntityUid stationGrid, EntityUid ship)
+        {
+            var stationDock = entMan.SpawnEntity(ShuttleAirlockProtoId, new EntityCoordinates(stationGrid, new Vector2(0.5f, 0.5f)));
+            transform.SetLocalRotation(stationDock, Direction.East.ToAngle());
+
+            var shipDock = entMan.SpawnEntity(ShuttleAirlockProtoId, new EntityCoordinates(ship, new Vector2(0.5f, 1.5f)));
+            transform.SetLocalRotation(shipDock, Direction.West.ToAngle());
+
+            docking.Dock(
+                (stationDock, entMan.GetComponent<DockingComponent>(stationDock)),
+                (shipDock, entMan.GetComponent<DockingComponent>(shipDock)));
+        }
+
+        /// <summary>
+        /// Builds a station, a ship stamped to <paramref name="shipOwner"/>, and a console holding a
+        /// deed card for it, with the operator standing clear of the grid. The ship is docked to the
+        /// station unless <paramref name="docked"/> says otherwise, since a store needs it to be.
+        /// </summary>
         private static async Task<(EntityUid Station, EntityUid StationGrid, EntityUid Ship, EntityUid Console, ShipyardConsoleComponent Comp, EntityUid Card, EntityUid Operator)>
-            BuildConsoleAndShip(TestPair pair, Robust.Shared.Network.NetUserId shipOwner)
+            BuildConsoleAndShip(TestPair pair, Robust.Shared.Network.NetUserId shipOwner, bool docked = true)
         {
             var server = pair.Server;
             var entMan = server.EntMan;
@@ -654,6 +859,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             var itemSlots = server.System<ItemSlotsSystem>();
             var metaData = server.System<MetaDataSystem>();
             var transform = server.System<SharedTransformSystem>();
+            var docking = server.System<DockingSystem>();
 
             var map = await pair.CreateTestMap();
             var session = playerMan.Sessions.First();
@@ -690,12 +896,14 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                     }
                 }
 
-                // Clear of the station's grid, and it has to be done by moving the ship rather than
-                // by placing the console carefully. Both grids are created at the origin, and grid
-                // traversal reparents an entity to whichever grid it is physically over, so a
-                // console placed on the station grid inside the ship's footprint silently becomes
-                // part of the ship and is despawned along with it by the very store being tested.
-                transform.SetWorldPosition(ship, new Vector2(100f, 100f));
+                // Clear of the station's tile either way, and it has to be done by moving the ship
+                // rather than by placing the console carefully. Both grids are created at the
+                // origin, and grid traversal reparents an entity to whichever grid it is physically
+                // over, so a console placed on the station grid inside the ship's footprint silently
+                // becomes part of the ship and is despawned along with it by the very store being
+                // tested. Docked, the ship sits with its west edge against the station tile; loose,
+                // it is far out in the map.
+                transform.SetWorldPosition(ship, docked ? new Vector2(1f, -1f) : new Vector2(100f, 100f));
 
                 entMan.EnsureComponent<ShuttleComponent>(ship);
                 metaData.SetEntityName(ship, "Kestrel");
@@ -718,6 +926,17 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             });
 
             await pair.RunTicksSync(5);
+
+            // Docked only after the client has seen both grids. A grid that arrives at the client
+            // already welded to a grid whose joint component is new in the same state logs an
+            // engine-side error the pool counts as a failure; it is benign in play and avoided here
+            // by giving the weld its own tick.
+            if (docked)
+            {
+                await server.WaitPost(() => DockToStation(entMan, transform, docking, map.Grid.Owner, ship));
+                await pair.RunTicksSync(5);
+            }
+
             return (station, map.Grid.Owner, ship, console, comp, card, operatorEnt);
         }
 

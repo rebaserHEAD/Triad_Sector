@@ -126,6 +126,14 @@ shipyard-console-store-failed = The drydock could not store that ship. Try again
 shipyard-console-store-no-berth = Your drydock has no free berth. Buy one, or retrieve and sell a ship.
 shipyard-console-store-berth-too-small = None of your free berths can take a hull this size. Upgrade a berth or buy a larger one.
 shipyard-console-store-in-progress = That ship is already being stored.
+# Faction crews are issued their vessels on voucher; the drydock is the civilian garage. The same
+# blacklist that bars them from ship saving bars them here, on the character and on the hull.
+shipyard-console-drydock-faction = Your posting issues its vessels by voucher. The drydock is not available to you.
+shipyard-console-store-faction-ship = That vessel is faction issue and cannot be stored.
+shipyard-console-store-voucher-ship = A ship issued on a voucher cannot be stored.
+# A store is a hand-over at a berth: the ship has to be docked to the station this console is on.
+shipyard-console-store-not-docked = Dock the ship at this station first. A ship is stored from its berth, not from open space.
+shipyard-console-store-not-docked-note = Not docked at this station.
 # The name is drawn on its own so it can carry the weight the class and the clock do not.
 shipyard-console-deed-ship-out = · {$class} · out {$time}
 shipyard-console-deed-ship-new = · {$class} · never stored
@@ -234,3 +242,4 @@ shipyard-console-retrieve-sold = That ship has been sold.
 shipyard-console-retrieve-not-stored = Another request just claimed that ship. Check the list again.
 shipyard-console-retrieve-no-revision = None of that ship's stored records can be read. Contact an admin.
 shipyard-console-retrieve-station-lost = The station could not receive the ship. Try again.
+shipyard-console-retrieve-voucher-card = A voucher cannot call in a stored ship. Insert your ID card.

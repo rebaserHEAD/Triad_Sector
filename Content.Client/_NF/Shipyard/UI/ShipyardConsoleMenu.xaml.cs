@@ -551,9 +551,13 @@ public sealed partial class ShipyardConsoleMenu : FancyWindow
         }));
 
         // Storing into the berth an offer on the tab would land in takes that berth from the offer.
+        // A ship that is not docked here cannot be stored at all, and that outranks the landing
+        // note: the button says why it is greyed.
         var landing = _lastOffers.Where(o => o.LandsInBerthId != null).Select(o => o.LandsInBerthId!.Value).ToHashSet();
-        StoreButton.Note = free.Any(b => landing.Contains(b.BerthId)) ? Loc.GetString("shipyard-console-store-takes-landing") : null;
-        StoreButton.Disabled = free.Count == 0 || !_validId;
+        StoreButton.Note = !ship.Docked
+            ? Loc.GetString("shipyard-console-store-not-docked-note")
+            : free.Any(b => landing.Contains(b.BerthId)) ? Loc.GetString("shipyard-console-store-takes-landing") : null;
+        StoreButton.Disabled = free.Count == 0 || !_validId || !ship.Docked;
     }
 
     /// <summary>

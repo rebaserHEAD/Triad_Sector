@@ -53,6 +53,16 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                     Assert.That(store.Disabled, Is.False);
                 });
 
+                // The same ship out in space: the card still draws it, but Store is greyed and
+                // says why, since a store is a hand-over at a berth.
+                menu.UpdateState(State(berths: ThreeBerths(), deedShip: Behir(minutesOut: 65, docked: false), deedTitle: "Behir"));
+                Assert.Multiple(() =>
+                {
+                    var store = (DrydockMenuButton)Named(menu, "StoreButton");
+                    Assert.That(store.Disabled, Is.True, "Not docked here, so nothing to hand over.");
+                    Assert.That(store.Note, Is.EqualTo(Loc.GetString("shipyard-console-store-not-docked-note")), "The button carries the reason.");
+                });
+
             });
 
             await pair.CleanReturnAsync();
@@ -304,9 +314,9 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
         private static bool IsFramed(PanelContainer row, string hex)
             => row.PanelOverride is StyleBoxFlat box && box.BorderColor == Color.FromHex(hex);
 
-        /// <summary>The ship out on the card. #31 is the one empty berth in <see cref="ThreeBerths"/>.</summary>
-        private static DrydockDeedShipInfo Behir(int minutesOut)
-            => new("Behir", "Corvette", minutesOut, defaultBerthId: 31, fittingBerthIds: new List<int> { 31 });
+        /// <summary>The ship out on the card, docked here. #31 is the one empty berth in <see cref="ThreeBerths"/>.</summary>
+        private static DrydockDeedShipInfo Behir(int minutesOut, bool docked = true)
+            => new("Behir", "Corvette", minutesOut, defaultBerthId: 31, fittingBerthIds: new List<int> { 31 }, docked: docked);
 
         private static DrydockBerthInfo Berth(int id, string maxClass, (string Name, string Class, string State)? ship = null, string? offeredTo = null, int? secondsLeft = null)
             => new(id, maxClass, sellValue: 1250, upgradePrice: 2500, upgradeClass: "Corvette",

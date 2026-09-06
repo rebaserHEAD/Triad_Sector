@@ -91,13 +91,21 @@ public sealed class DrydockDeedShipInfo
     /// <summary>Every free berth the hull fits, for the dropdown beside Store.</summary>
     public List<int> FittingBerthIds = new();
 
-    public DrydockDeedShipInfo(string name, string? sizeClass, int? minutesOut, int? defaultBerthId, List<int> fittingBerthIds)
+    /// <summary>
+    /// Whether the ship is docked to the station this console belongs to. A store is a hand-over
+    /// at a berth, not a remote command, so this is what disables Store for a ship left out in
+    /// space; the server refuses the store regardless.
+    /// </summary>
+    public bool Docked;
+
+    public DrydockDeedShipInfo(string name, string? sizeClass, int? minutesOut, int? defaultBerthId, List<int> fittingBerthIds, bool docked)
     {
         Name = name;
         SizeClass = sizeClass;
         MinutesOut = minutesOut;
         DefaultBerthId = defaultBerthId;
         FittingBerthIds = fittingBerthIds;
+        Docked = docked;
     }
 }
 
