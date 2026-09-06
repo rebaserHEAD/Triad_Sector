@@ -141,7 +141,12 @@ public sealed partial class SpaceCleanupSystem : BaseCleanupSystem<PhysicsCompon
             var xf = _physics.GetLocalPhysicsTransform(anch, xform);
             var shape = fix.Shape;
 
-            if ((bool?)_testOverlap.Invoke(_manifold, [shape, 0, shapeB, 0, xf, xfB]) ?? false)
+            // Triad: engine 289 gave TestOverlap a seventh parameter (ignoreShapeSkin). A reflection
+            // call passes no defaults, so the six-argument invoke threw TargetParameterCountException
+            // out of Update on every tick, which the system runner caught and logged, 9,000 lines a
+            // round, and space cleanup never ran.
+            // if ((bool?)_testOverlap.Invoke(_manifold, [shape, 0, shapeB, 0, xf, xfB]) ?? false)
+            if ((bool?)_testOverlap.Invoke(_manifold, [shape, 0, shapeB, 0, xf, xfB, false]) ?? false)
                 return true;
         }
 
