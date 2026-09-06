@@ -10,6 +10,7 @@ using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using Content.IntegrationTests.Pair;
+using Content.Server._Mono.FireControl;
 using Content.Server._NF.Shipyard.Systems;
 using Content.Server._Triad.Drydock;
 using Content.Server._NF.Market.Components;
@@ -22,10 +23,13 @@ using Content.Server.Station.Systems;
 using Content.Server.Shuttles.Components;
 using Content.Server.Wires;
 using Content.Shared._Crescent.ShipShields;
+using Content.Shared._Mono.FireControl;
+using Content.Shared._Mono.SpaceArtillery;
 using Content.Shared._NF.Market;
 using Content.Shared._NF.Shipyard.Components;
 using Content.Shared._Triad.CCVar;
 using Content.Shared._Triad.ShipSize;
+using Content.Shared.ActionBlocker;
 using Content.Shared.Atmos;
 using Content.Shared.Damage;
 using Content.Shared.Damage.Prototypes;
@@ -35,6 +39,7 @@ using Content.Shared.Lathe;
 using Content.Shared.NodeContainer;
 using Content.Shared.Research.Components;
 using Content.Shared.Research.Prototypes;
+using Content.Shared.Weapons.Ranged.Components;
 using Microsoft.EntityFrameworkCore;
 using Robust.Shared.Configuration;
 using Robust.Shared.GameObjects;
@@ -43,6 +48,7 @@ using Robust.Shared.Map;
 using Robust.Shared.Maths;
 using Robust.Shared.Network;
 using Robust.Shared.Prototypes;
+using Robust.Shared.Timing;
 using Robust.Shared.Utility;
 
 namespace Content.IntegrationTests.Tests._Triad.Drydock
@@ -76,6 +82,10 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
         private const string AudioProtoId = "Audio";
         private static readonly ProtoId<DamageTypePrototype> BluntDamage = "Blunt";
         private const string ShieldGeneratorProtoId = "ShieldGenerator";
+        private const string GunneryServerProtoId = "GunneryServerUltra";
+        private const string GunneryConsoleProtoId = "ComputerGunneryConsole";
+        private const string TurretProtoId = "WeaponTurretFang";
+        private const string ApcProtoId = "APCBasic";
 
         [Test]
         public async Task AShipStoredComesBackWithItsContentsAndItsWires()
@@ -336,6 +346,182 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             });
 
             await pair.CleanReturnAsync();
+        }
+
+        /// <summary>
+        /// Ship guns fire only while registered with a gunnery server, and the server only links
+        /// its grid, its guns and its console on a power edge. A retrieved ship arrives with the
+        /// receivers unpowered and the net comes up a tick later, so the edge should fire; players
+        /// reported the guns dead after a retrieve all the same (2026-09-06). This spells out every
+        /// link before the store as the control and demands the same links on what comes back.
+        /// </summary>
+        [Test]
+        public async Task AGunneryServerComesBackWithItsGunsRegistered()
+        {
+            await using var pair = await PoolManager.GetServerClient();
+            var server = pair.Server;
+            var entMan = server.EntMan;
+
+            var db = server.ResolveDependency<IServerDbManager>();
+            var drydock = server.System<DrydockSystem>();
+
+            var owner = Guid.NewGuid();
+            await InsertPlayer(db, owner);
+            await server.ResolveDependency<DrydockStore>().AddBerth(owner, ShipSizeClass.SuperCapital, DrydockBerthKind.Granted, 0, null, null);
+
+            var (station, shipGrid, _) = await BuildShipAndStation(pair);
+
+            // Real power, not a forced flag: a basic APC ships a full battery and feeds every
+            // receiver within cable range on its own, so the edge the fire-control system needs
+            // comes from the power net exactly as it does aboard a ship.
+            //
+            // The console and the turret come up BEFORE the server, on purpose. A console registers
+            // only on its own power edge, so with no server yet that edge lands on nothing; the
+            // server connecting afterwards has to pick it up, or a ship whose net comes alive in one
+            // tick (a purchase, a retrieve) is left with a console that says it has no server
+            // whenever the order falls that way. The harness makes the losing order certain.
+            await server.WaitPost(() =>
+            {
+                entMan.SpawnEntity(ApcProtoId, new EntityCoordinates(shipGrid, new Vector2(0.5f, 2.5f)));
+                entMan.SpawnEntity(GunneryConsoleProtoId, new EntityCoordinates(shipGrid, new Vector2(2.5f, 0.5f)));
+                entMan.SpawnEntity(TurretProtoId, new EntityCoordinates(shipGrid, new Vector2(2.5f, 2.5f)));
+            });
+            await pair.RunTicksSync(30);
+
+            await server.WaitAssertion(() =>
+            {
+                var consoleUid = ChildrenWith<FireControlConsoleComponent>(entMan, shipGrid).Single();
+                Assert.That(entMan.GetComponent<ApcPowerReceiverComponent>(consoleUid).Powered, Is.True, "Control: the console is powered before any server exists.");
+                Assert.That(entMan.GetComponent<FireControlConsoleComponent>(consoleUid).ConnectedServer, Is.Null, "Control: with no server yet, the console's power edge registered it against nothing.");
+            });
+
+            await server.WaitPost(() => entMan.SpawnEntity(GunneryServerProtoId, new EntityCoordinates(shipGrid, new Vector2(0.5f, 0.5f))));
+            await pair.RunTicksSync(30);
+
+            await server.WaitAssertion(() => AssertGunneryLinked(entMan, shipGrid, "before the store"));
+            Assert.That(await FireOnceAndCountProjectiles(pair, shipGrid, "Control, before the store"), Is.GreaterThan(0), "Control: a shot through the server spawns a projectile before the store.");
+
+            var (result, shipId) = await RunOnServer(pair, () => drydock.TryStoreShip(shipGrid, owner, null));
+            Assert.That(result, Is.EqualTo(DrydockStoreResult.Success));
+            await pair.RunTicksSync(5);
+
+            var retrieved = await RunOnServer(pair, () => drydock.TryRetrieveShip(shipId!.Value, owner, station, null));
+            Assert.That(retrieved.Result, Is.EqualTo(DrydockRetrieveResult.Success));
+            var grid = retrieved.Grid!.Value;
+
+            // Nothing is touched after the retrieve: the ship has to come back armed by itself.
+            await pair.RunTicksSync(60);
+
+            await server.WaitAssertion(() => AssertGunneryLinked(entMan, grid, "after the retrieve"));
+
+            // Each gate on the per-shot path, named, so a refusal says which one.
+            await server.WaitAssertion(() =>
+            {
+                var fireControl = server.System<FireControlSystem>();
+                var timing = server.ResolveDependency<IGameTiming>();
+                var turret = ChildrenWith<FireControllableComponent>(entMan, grid).Single();
+                var controllable = entMan.GetComponent<FireControllableComponent>(turret);
+                var gun = entMan.GetComponent<GunComponent>(turret);
+                var ammo = entMan.GetComponent<ProjectileBatteryAmmoProviderComponent>(turret);
+                var battery = entMan.GetComponent<BatteryComponent>(turret);
+                var xform = entMan.GetComponent<TransformComponent>(turret);
+                Assert.Multiple(() =>
+                {
+                    Assert.That(fireControl.CanFireWeapons(grid), Is.True, "The grid-level gate (FTL, disabled marker, expedition map).");
+                    Assert.That(xform.Anchored, Is.True, "The turret is anchored.");
+                    Assert.That(xform.GridUid, Is.EqualTo(grid), "The turret is on the retrieved grid.");
+                    Assert.That(controllable.NextFire, Is.LessThanOrEqualTo(timing.CurTime), $"Controllable cooldown {controllable.NextFire} against now {timing.CurTime}.");
+                    Assert.That(gun.NextFire, Is.LessThanOrEqualTo(timing.CurTime), $"Gun cooldown {gun.NextFire} against now {timing.CurTime}.");
+                    Assert.That(battery.CurrentCharge, Is.GreaterThan(0), "The turret battery has charge.");
+                    Assert.That(ammo.Shots, Is.GreaterThan(0), "The battery ammo provider counts shots.");
+                });
+            });
+
+            Assert.That(await FireOnceAndCountProjectiles(pair, grid, "After the retrieve"), Is.GreaterThan(0), "After the retrieve a shot through the server still spawns a projectile.");
+
+            await pair.CleanReturnAsync();
+        }
+
+        /// <summary>
+        /// Fires the grid's one turret through its gunnery server at a point well clear of the hull,
+        /// exactly as the console does, and returns how many new projectiles exist a few ticks later.
+        /// </summary>
+        private static async Task<int> FireOnceAndCountProjectiles(TestPair pair, EntityUid grid, string when)
+        {
+            var server = pair.Server;
+            var entMan = server.EntMan;
+            var fireControl = server.System<FireControlSystem>();
+            var xform = server.System<SharedTransformSystem>();
+
+            var before = 0;
+            var attempted = false;
+            await server.WaitPost(() =>
+            {
+                before = entMan.Count<ShipWeaponProjectileComponent>();
+                var turretUid = ChildrenWith<FireControllableComponent>(entMan, grid).Single();
+                var mapUid = entMan.GetComponent<TransformComponent>(grid).MapUid!.Value;
+                // Aim outward from the hull's corner, in whatever direction the ship happens to
+                // face: the line-of-sight check refuses a shot through the ship's own machines,
+                // and a retrieved ship comes back at the angle proximity placement chose.
+                var turretPos = xform.GetWorldPosition(turretUid);
+                var outward = Vector2.Normalize(turretPos - xform.GetWorldPosition(grid));
+                var target = new EntityCoordinates(mapUid, turretPos + outward * 40f);
+                // The console path minus the console: AttemptFire is what FireWeapons calls per
+                // weapon, and its return says whether the gun itself was reached.
+                attempted = fireControl.AttemptFire(turretUid, turretUid, target);
+            });
+            Assert.That(attempted, Is.True, $"{when}: AttemptFire reached the gun: power, server link, cooldown and line of sight all passed.");
+
+            // The gun itself fires from the auto-shoot loop on the next tick, not inside
+            // AttemptFire, so the state one tick later says what that loop did with it.
+            await pair.RunTicksSync(1);
+            await server.WaitAssertion(() =>
+            {
+                var timing = server.ResolveDependency<IGameTiming>();
+                var turretUid = ChildrenWith<FireControllableComponent>(entMan, grid).Single();
+                var gun = entMan.GetComponent<GunComponent>(turretUid);
+                var auto = entMan.GetComponent<AutoShootGunComponent>(turretUid);
+                var ammo = entMan.GetComponent<ProjectileBatteryAmmoProviderComponent>(turretUid);
+                var battery = entMan.GetComponent<BatteryComponent>(turretUid);
+                var meta = entMan.GetComponent<MetaDataComponent>(turretUid);
+                var blocker = server.System<ActionBlockerSystem>();
+                Assert.Multiple(() =>
+                {
+                    Assert.That(meta.EntityPaused, Is.False, "The turret is not paused; the firing loop skips paused entities.");
+                    Assert.That(entMan.GetComponent<MetaDataComponent>(grid).EntityPaused, Is.False, "The grid is not paused.");
+                    Assert.That(auto.RemainingTime, Is.GreaterThan(TimeSpan.Zero).Or.EqualTo(TimeSpan.Zero), $"Auto-shoot remaining {auto.RemainingTime}, enabled {auto.Enabled}, on {auto.On}, can fire {auto.CanFire}, user {auto.User}.");
+                    Assert.That(blocker.CanAttack(turretUid), Is.True, "The action blocker lets the turret attack.");
+                    Assert.That(gun.ShootCoordinates, Is.Not.Null, "The gun holds its shoot coordinates.");
+                    Assert.That(gun.FireRateModified, Is.GreaterThan(0f), $"Fire rate modified {gun.FireRateModified} against base {gun.FireRate}.");
+                    Assert.That(gun.NextFire, Is.LessThan(timing.CurTime + TimeSpan.FromSeconds(1)), $"Gun NextFire {gun.NextFire} against now {timing.CurTime}: a jump of the burst cooldown means the empty-shot branch ran.");
+                    Assert.That(ammo.Shots, Is.LessThan(800), $"The ammo provider gave up a shot (shots {ammo.Shots}, charge {battery.CurrentCharge}).");
+                    Assert.That(entMan.Count<ShipWeaponProjectileComponent>() - before, Is.GreaterThan(0), "One tick after the shot a projectile exists.");
+                });
+            });
+            await pair.RunTicksSync(4);
+
+            var after = 0;
+            await server.WaitPost(() => after = entMan.Count<ShipWeaponProjectileComponent>());
+            return after - before;
+        }
+
+        private static void AssertGunneryLinked(IEntityManager entMan, EntityUid grid, string when)
+        {
+            var serverUid = ChildrenWith<FireControlServerComponent>(entMan, grid).Single();
+            var consoleUid = ChildrenWith<FireControlConsoleComponent>(entMan, grid).Single();
+            var turretUid = ChildrenWith<FireControllableComponent>(entMan, grid).Single();
+
+            var serverComp = entMan.GetComponent<FireControlServerComponent>(serverUid);
+            Assert.Multiple(() =>
+            {
+                Assert.That(entMan.GetComponent<ApcPowerReceiverComponent>(serverUid).Powered, Is.True, $"Control {when}: the server reads as powered.");
+                Assert.That(serverComp.ConnectedGrid, Is.EqualTo(grid), $"{when}: the server connected to its grid.");
+                Assert.That(entMan.TryGetComponent<FireControlGridComponent>(grid, out var gridComp) && gridComp.ControllingServer == serverUid, Is.True, $"{when}: the grid names the server.");
+                Assert.That(serverComp.Controlled, Does.Contain(turretUid), $"{when}: the server controls the turret.");
+                Assert.That(entMan.GetComponent<FireControllableComponent>(turretUid).ControllingServer, Is.EqualTo(serverUid), $"{when}: the turret knows its server.");
+                Assert.That(entMan.GetComponent<FireControlConsoleComponent>(consoleUid).ConnectedServer, Is.EqualTo(serverUid), $"{when}: the console is linked to the server.");
+                Assert.That(serverComp.Consoles, Does.Contain(consoleUid), $"{when}: the server lists the console.");
+            });
         }
 
         /// <summary>
