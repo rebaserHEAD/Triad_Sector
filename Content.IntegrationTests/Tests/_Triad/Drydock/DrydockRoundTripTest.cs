@@ -114,31 +114,137 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                 "The grid is despawned only after the document is filed, so a live grid here means a half-committed store.");
 
             var retrieved = await RunOnServer(pair, () => drydock.TryRetrieveShip(shipId!.Value, owner, station, null));
-            Assert.That(retrieved, Is.Not.Null, "The ship went in, so it has to come out.");
+            Assert.That(retrieved.Result, Is.EqualTo(DrydockRetrieveResult.Success), "The ship went in, so it has to come out.");
 
             await pair.RunTicksSync(5);
 
             await server.WaitAssertion(() =>
             {
-                Assert.That(entMan.TryGetComponent<DrydockIdentityComponent>(retrieved!.Value, out var identity), Is.True,
+                Assert.That(entMan.TryGetComponent<DrydockIdentityComponent>(retrieved.Grid!.Value, out var identity), Is.True,
                     "Identity is the one piece of state nothing else on the grid can reconstruct.");
                 Assert.That(identity!.ShipId, Is.EqualTo(shipId!.Value),
                     "A retrieve must return the same hull, not a new one that looks similar.");
             });
 
-            var after = await CensusGrid(pair, retrieved!.Value);
+            var after = await CensusGrid(pair, retrieved.Grid!.Value);
             Assert.That(after, Is.EqualTo(before),
                 "Every prototype aboard comes back, exactly once each. A difference is a drop, a duplicate or a substitution.");
 
             // The map-init boundary, made concrete. This is the assertion the whole census on the
             // wiki exists to justify.
-            var retrievedAirlock = await FindChildWithComponent<WiresComponent>(pair, retrieved.Value);
+            var retrievedAirlock = await FindChildWithComponent<WiresComponent>(pair, retrieved.Grid!.Value);
             Assert.That(retrievedAirlock, Is.Not.Null, "The airlock came back, or the census above would have failed.");
 
             var wiresAfter = await ReadWireCount(pair, retrievedAirlock!.Value);
             Assert.That(wiresAfter, Is.EqualTo(wiresBefore),
                 "WiresList is not a data field, so this passes only because Revive rebuilt the layout by hand.");
 
+            await pair.CleanReturnAsync();
+        }
+
+        /// <summary>
+        /// The shipyard builds its staging map on the first purchase of a round and tears it down
+        /// at round end. A retrieve in a fresh round, before anyone had bought a ship, found no map
+        /// and refused with the one sentence every refusal used to share, for a ship that was
+        /// stored and berthed (2026-09-05). The retrieve now asks the shipyard for the map the way a
+        /// purchase does. Deleting the map between the store and the retrieve is the shape the
+        /// round-end cleanup leaves when the map still existed; the null it leaves otherwise goes
+        /// through the same call.
+        /// </summary>
+        [Test]
+        public async Task ARetrieveRestagesTheShipyardAfterARoundRestart()
+        {
+            await using var pair = await PoolManager.GetServerClient();
+            var server = pair.Server;
+
+            var db = server.ResolveDependency<IServerDbManager>();
+            var drydock = server.System<DrydockSystem>();
+            var shipyard = server.System<ShipyardSystem>();
+            var mapSys = server.System<SharedMapSystem>();
+
+            var owner = Guid.NewGuid();
+            await InsertPlayer(db, owner);
+            await server.ResolveDependency<DrydockStore>().AddBerth(owner, ShipSizeClass.SuperCapital, DrydockBerthKind.Granted, 0, null, null);
+
+            var (station, shipGrid, _) = await BuildShipAndStation(pair);
+
+            var (result, shipId) = await RunOnServer(pair, () => drydock.TryStoreShip(shipGrid, owner, null));
+            Assert.That(result, Is.EqualTo(DrydockStoreResult.Success));
+            await pair.RunTicksSync(5);
+
+            var staged = shipyard.ShipyardMap;
+            Assert.That(staged, Is.Not.Null, "The store ran against a staged shipyard, or this test proves nothing.");
+            await server.WaitPost(() => mapSys.DeleteMap(staged!.Value));
+            await pair.RunTicksSync(1);
+            Assert.That(mapSys.MapExists(staged!.Value), Is.False, "Control: the staging map is gone before the retrieve.");
+
+            var retrieved = await RunOnServer(pair, () => drydock.TryRetrieveShip(shipId!.Value, owner, station, null));
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(retrieved.Result, Is.EqualTo(DrydockRetrieveResult.Success), "A retrieve with no staging map brings the map up itself.");
+                Assert.That(shipyard.ShipyardMap, Is.Not.Null);
+                Assert.That(mapSys.MapExists(shipyard.ShipyardMap!.Value), Is.True, "The shipyard was re-staged, not just the ship put somewhere.");
+            });
+
+            await pair.RunTicksSync(5);
+            await pair.CleanReturnAsync();
+        }
+
+        /// <summary>
+        /// A refused retrieve names its reason. The console used to say "it may already be out"
+        /// for every one of eight refusals, including a ship sitting stored in its berth, so each
+        /// state the row can be in gets its own answer here, with a success at the end as the
+        /// control that the fixture itself was never the reason.
+        /// </summary>
+        [Test]
+        public async Task ARefusedRetrieveNamesItsReason()
+        {
+            await using var pair = await PoolManager.GetServerClient();
+            var server = pair.Server;
+
+            var db = server.ResolveDependency<IServerDbManager>();
+            var store = server.ResolveDependency<DrydockStore>();
+            var drydock = server.System<DrydockSystem>();
+
+            var owner = Guid.NewGuid();
+            await InsertPlayer(db, owner);
+            await store.AddBerth(owner, ShipSizeClass.SuperCapital, DrydockBerthKind.Granted, 0, null, null);
+
+            var (station, shipGrid, _) = await BuildShipAndStation(pair);
+
+            var unknown = await RunOnServer(pair, () => drydock.TryRetrieveShip(Guid.NewGuid(), owner, station, null));
+            Assert.That(unknown.Result, Is.EqualTo(DrydockRetrieveResult.NotFound));
+
+            var (result, shipId) = await RunOnServer(pair, () => drydock.TryStoreShip(shipGrid, owner, null));
+            Assert.That(result, Is.EqualTo(DrydockStoreResult.Success));
+            await pair.RunTicksSync(5);
+
+            var retrieved = await RunOnServer(pair, () => drydock.TryRetrieveShip(shipId!.Value, owner, station, null));
+            Assert.That(retrieved.Result, Is.EqualTo(DrydockRetrieveResult.Success));
+            await pair.RunTicksSync(5);
+
+            var again = await RunOnServer(pair, () => drydock.TryRetrieveShip(shipId!.Value, owner, station, null));
+            Assert.That(again.Result, Is.EqualTo(DrydockRetrieveResult.AlreadyOut), "A ship that is out says so.");
+
+            var (back, _) = await RunOnServer(pair, () => drydock.TryStoreShip(retrieved.Grid!.Value, owner, null));
+            Assert.That(back, Is.EqualTo(DrydockStoreResult.Success));
+            await pair.RunTicksSync(5);
+
+            Assert.That(await store.TrySetState(shipId!.Value, DrydockShipState.Stored, DrydockShipState.Held, DrydockAuditAction.Hold, null, null, "test"), Is.True);
+            var held = await RunOnServer(pair, () => drydock.TryRetrieveShip(shipId!.Value, owner, station, null));
+            Assert.That(held.Result, Is.EqualTo(DrydockRetrieveResult.Held));
+
+            Assert.That(await store.TrySetState(shipId!.Value, DrydockShipState.Held, DrydockShipState.Stored, DrydockAuditAction.Release, null, null, "test"), Is.True);
+            Assert.That(await store.SetInvestigating(shipId!.Value, true, null, null, "test"), Is.True);
+            var flagged = await RunOnServer(pair, () => drydock.TryRetrieveShip(shipId!.Value, owner, station, null));
+            Assert.That(flagged.Result, Is.EqualTo(DrydockRetrieveResult.Investigating));
+
+            Assert.That(await store.SetInvestigating(shipId!.Value, false, null, null, "test"), Is.True);
+            var cleared = await RunOnServer(pair, () => drydock.TryRetrieveShip(shipId!.Value, owner, station, null));
+            Assert.That(cleared.Result, Is.EqualTo(DrydockRetrieveResult.Success), "Control: with every reason cleared the same call succeeds.");
+
+            await pair.RunTicksSync(5);
             await pair.CleanReturnAsync();
         }
 
@@ -182,7 +288,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             var refused = await RunOnServer(pair, () => drydock.TryRetrieveShip(shipId.Value, owner, station, null));
             pair.ServerLogHandler.FailureLevel = failureLevel;
 
-            Assert.That(refused, Is.Null, "A document that fails its checksum must not come back as a ship.");
+            Assert.That(refused.Result, Is.EqualTo(DrydockRetrieveResult.NoReadableRevision), "A document that fails its checksum must not come back as a ship.");
 
             var afterRefusal = (await store.LoadCurrent(shipId.Value))!.Ship;
             Assert.Multiple(() =>
@@ -194,7 +300,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             // Mend it and bring it out for real.
             await WriteBlobs(db, shipId.Value, original);
             var retrieved = await RunOnServer(pair, () => drydock.TryRetrieveShip(shipId.Value, owner, station, null));
-            Assert.That(retrieved, Is.Not.Null);
+            Assert.That(retrieved.Result, Is.EqualTo(DrydockRetrieveResult.Success));
             await pair.RunTicksSync(5);
 
             var afterRetrieve = (await store.LoadCurrent(shipId.Value))!.Ship;
@@ -209,7 +315,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             Assert.That(slots.Single(s => s.Berth.BerthId == berth).Occupant, Is.Null);
 
             // And back in, to the same slot.
-            var (again, sameShip) = await RunOnServer(pair, () => drydock.TryStoreShip(retrieved!.Value, owner, null));
+            var (again, sameShip) = await RunOnServer(pair, () => drydock.TryStoreShip(retrieved.Grid!.Value, owner, null));
             Assert.Multiple(() =>
             {
                 Assert.That(again, Is.EqualTo(DrydockStoreResult.Success));
@@ -257,15 +363,15 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
 
             // The previous owner can no longer bring it out; the new one can.
             var refused = await RunOnServer(pair, () => drydock.TryRetrieveShip(shipId.Value, seller, station, null));
-            Assert.That(refused, Is.Null, "A ship that changed hands is not the previous owner's to retrieve.");
+            Assert.That(refused.Result, Is.EqualTo(DrydockRetrieveResult.NotOwned), "A ship that changed hands is not the previous owner's to retrieve.");
 
             var retrieved = await RunOnServer(pair, () => drydock.TryRetrieveShip(shipId.Value, buyer, station, null));
-            Assert.That(retrieved, Is.Not.Null);
+            Assert.That(retrieved.Result, Is.EqualTo(DrydockRetrieveResult.Success));
             await pair.RunTicksSync(5);
 
             await server.WaitAssertion(() =>
             {
-                var ownership = entMan.GetComponent<ShipOwnershipComponent>(retrieved!.Value);
+                var ownership = entMan.GetComponent<ShipOwnershipComponent>(retrieved.Grid!.Value);
                 Assert.That(ownership.OwnerUserId.UserId, Is.EqualTo(buyer),
                     "The grid must carry the row's owner, or the console refuses the buyer's store and the seller's store files it back under them.");
             });
@@ -302,7 +408,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             Assert.That(result, Is.EqualTo(DrydockStoreResult.Success));
 
             var retrieved = await RunOnServer(pair, () => drydock.TryRetrieveShip(shipId!.Value, owner, station, null));
-            Assert.That(retrieved, Is.Not.Null);
+            Assert.That(retrieved.Result, Is.EqualTo(DrydockRetrieveResult.Success));
             await pair.RunTicksSync(5);
 
             await server.WaitAssertion(() =>
@@ -315,7 +421,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             Assert.That((await store.LoadCurrent(shipId!.Value))!.Ship.State, Is.EqualTo(DrydockShipState.CheckedOut));
 
             // Now it really is gone.
-            await server.WaitPost(() => entMan.DeleteEntity(retrieved!.Value));
+            await server.WaitPost(() => entMan.DeleteEntity(retrieved.Grid!.Value));
             await pair.RunTicksSync(5);
 
             await server.WaitAssertion(() =>
@@ -406,11 +512,11 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             await pair.RunTicksSync(5);
 
             var retrieved = await RunOnServer(pair, () => drydock.TryRetrieveShip(shipId!.Value, owner, station, null));
-            Assert.That(retrieved, Is.Not.Null);
+            Assert.That(retrieved.Result, Is.EqualTo(DrydockRetrieveResult.Success));
 
             await pair.RunTicksSync(5);
 
-            var retrievedAirlock = await FindChildWithComponent<WiresComponent>(pair, retrieved!.Value);
+            var retrievedAirlock = await FindChildWithComponent<WiresComponent>(pair, retrieved.Grid!.Value);
             Assert.That(retrievedAirlock, Is.Not.Null);
 
             await server.WaitAssertion(() =>
@@ -465,11 +571,11 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             await pair.RunTicksSync(5);
 
             var retrieved = await RunOnServer(pair, () => drydock.TryRetrieveShip(shipId!.Value, owner, station, null));
-            Assert.That(retrieved, Is.Not.Null);
+            Assert.That(retrieved.Result, Is.EqualTo(DrydockRetrieveResult.Success));
 
             await pair.RunTicksSync(5);
 
-            var retrievedAirlock = await FindChildWithComponent<WiresComponent>(pair, retrieved!.Value);
+            var retrievedAirlock = await FindChildWithComponent<WiresComponent>(pair, retrieved.Grid!.Value);
             Assert.That(retrievedAirlock, Is.Not.Null);
 
             await server.WaitAssertion(() =>
@@ -527,11 +633,11 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             await pair.RunTicksSync(5);
 
             var retrieved = await RunOnServer(pair, () => drydock.TryRetrieveShip(shipId!.Value, owner, station, null));
-            Assert.That(retrieved, Is.Not.Null);
+            Assert.That(retrieved.Result, Is.EqualTo(DrydockRetrieveResult.Success));
 
             await pair.RunTicksSync(5);
 
-            var retrievedLathe = await FindChildWithComponent<ResearchClientComponent>(pair, retrieved!.Value);
+            var retrievedLathe = await FindChildWithComponent<ResearchClientComponent>(pair, retrieved.Grid!.Value);
             Assert.That(retrievedLathe, Is.Not.Null, "The lathe came back with the ship.");
 
             await server.WaitAssertion(() =>
@@ -597,11 +703,11 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             await pair.RunTicksSync(5);
 
             var retrieved = await RunOnServer(pair, () => drydock.TryRetrieveShip(shipId!.Value, owner, station, null));
-            Assert.That(retrieved, Is.Not.Null);
+            Assert.That(retrieved.Result, Is.EqualTo(DrydockRetrieveResult.Success));
 
             await pair.RunTicksSync(5);
 
-            var retrievedLathe = await FindChildWithComponent<LatheComponent>(pair, retrieved!.Value);
+            var retrievedLathe = await FindChildWithComponent<LatheComponent>(pair, retrieved.Grid!.Value);
             Assert.That(retrievedLathe, Is.Not.Null, "The lathe came back with the ship.");
 
             await server.WaitAssertion(() =>
@@ -691,13 +797,13 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             await pair.RunTicksSync(5);
 
             var retrieved = await RunOnServer(pair, () => drydock.TryRetrieveShip(shipId!.Value, owner, station, null));
-            Assert.That(retrieved, Is.Not.Null);
+            Assert.That(retrieved.Result, Is.EqualTo(DrydockRetrieveResult.Success));
 
             // The merge waits for the first node-group rebuild after the load, which is later than
             // everything Revive does synchronously.
             await pair.RunTicksSync(15);
 
-            var molesAfter = await TotalPipeMoles(pair, retrieved!.Value);
+            var molesAfter = await TotalPipeMoles(pair, retrieved.Grid!.Value);
 
             Assert.That(molesAfter, Is.EqualTo(molesBefore).Within(0.01f),
                 "Pipe gas is not on any entity, so this passes only because the sidecar carried each pipe's share and the rebuild merged it back.");
@@ -755,13 +861,13 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             await pair.RunTicksSync(5);
 
             var retrieved = await RunOnServer(pair, () => drydock.TryRetrieveShip(shipId!.Value, owner, station, null));
-            Assert.That(retrieved, Is.Not.Null);
+            Assert.That(retrieved.Result, Is.EqualTo(DrydockRetrieveResult.Success));
 
             await pair.RunTicksSync(5);
 
             await server.WaitAssertion(() =>
             {
-                Assert.That(entMan.TryGetComponent<CargoMarketDataComponent>(retrieved!.Value, out var market), Is.True,
+                Assert.That(entMan.TryGetComponent<CargoMarketDataComponent>(retrieved.Grid!.Value, out var market), Is.True,
                     "The component rides the blob normally; it is the list inside it that needs carrying.");
 
 #pragma warning disable RA0002
@@ -837,13 +943,13 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             await pair.RunTicksSync(5);
 
             var retrieved = await RunOnServer(pair, () => drydock.TryRetrieveShip(shipId!.Value, owner, station, null));
-            Assert.That(retrieved, Is.Not.Null, "Stored with a sound aloft, then would not come back.");
+            Assert.That(retrieved.Result, Is.EqualTo(DrydockRetrieveResult.Success), "Stored with a sound aloft, then would not come back.");
 
             await pair.RunTicksSync(5);
 
             await server.WaitAssertion(() =>
             {
-                var children = entMan.GetComponent<TransformComponent>(retrieved!.Value).ChildEnumerator;
+                var children = entMan.GetComponent<TransformComponent>(retrieved.Grid!.Value).ChildEnumerator;
                 while (children.MoveNext(out var child))
                 {
                     Assert.That(entMan.GetComponent<MetaDataComponent>(child).EntityPrototype?.ID, Is.Not.EqualTo(AudioProtoId),

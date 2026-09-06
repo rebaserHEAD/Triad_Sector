@@ -66,43 +66,64 @@ public sealed partial class DrydockSystem
     /// <para>Every failure after the claim releases it, or the ship would be unretrievable until an
     /// administrator noticed.</para>
     /// </summary>
-    public async Task<EntityUid?> TryRetrieveShip(Guid shipId, Guid ownerUserId, EntityUid stationUid, int? roundId)
+    public async Task<DrydockRetrieve> TryRetrieveShip(Guid shipId, Guid ownerUserId, EntityUid stationUid, int? roundId)
     {
         // Read-only allows retrieve on purpose: it exists to stop a suspect build writing more bad
         // revisions, not to ground the fleet.
         if (!_cfg.GetCVar(TriadCCVars.DrydockEnabled))
-            return null;
+            return DrydockRetrieve.Refused(DrydockRetrieveResult.Disabled);
 
         if (!TryComp<StationDataComponent>(stationUid, out var stationData)
             || _station.GetLargestGrid(stationData) is not { } targetGrid)
         {
             Log.Warning($"Drydock: retrieve of {shipId} refused, {ToPrettyString(stationUid)} is not a valid requesting station.");
-            return null;
+            return DrydockRetrieve.Refused(DrydockRetrieveResult.NoStation);
         }
 
+        // The shipyard builds its staging map on the first purchase of a round and tears it down
+        // at round end, so a retrieve before anyone has bought a ship would find none. Ask for it
+        // the way a purchase does; the check after is for the map failing to come back at all.
+        _shipyard.SetupShipyardIfNeeded();
         if (_shipyard.ShipyardMap is not { } shipyardMap)
         {
-            Log.Error($"Drydock: retrieve of {shipId} refused, there is no shipyard staging map.");
-            return null;
+            Log.Error($"Drydock: retrieve of {shipId} refused, the shipyard could not stage a map.");
+            return DrydockRetrieve.Refused(DrydockRetrieveResult.NoStagingMap);
         }
 
         var current = await _store.LoadCurrent(shipId);
-        if (current == null || current.Ship.OwnerUserId != ownerUserId)
-            return null;
+        if (current == null)
+            return DrydockRetrieve.Refused(DrydockRetrieveResult.NotFound);
+
+        if (current.Ship.OwnerUserId != ownerUserId)
+            return DrydockRetrieve.Refused(DrydockRetrieveResult.NotOwned);
 
         // The console hides a ship under investigation; this is what actually refuses it. An
         // investigation is an admin's decision and a forged retrieve request must not walk past it.
         if (current.Ship.Investigating)
         {
             Log.Info($"Drydock: retrieve of {shipId} refused, the ship is under investigation.");
-            return null;
+            return DrydockRetrieve.Refused(DrydockRetrieveResult.Investigating);
+        }
+
+        // The row's state names the refusal before the claim is tried. The claim below still
+        // decides: this read can be stale by the time the claim lands.
+        switch (current.Ship.State)
+        {
+            case DrydockShipState.CheckedOut:
+                return DrydockRetrieve.Refused(DrydockRetrieveResult.AlreadyOut);
+            case DrydockShipState.Held:
+                return DrydockRetrieve.Refused(DrydockRetrieveResult.Held);
+            case DrydockShipState.InEscrow:
+                return DrydockRetrieve.Refused(DrydockRetrieveResult.InEscrow);
+            case DrydockShipState.Sold:
+                return DrydockRetrieve.Refused(DrydockRetrieveResult.Sold);
         }
 
         // Claim before materializing. A ship that is checked out or held loses here.
         if (!await _store.TrySetState(shipId, DrydockShipState.Stored, DrydockShipState.CheckedOut,
                 DrydockAuditAction.Retrieve, ownerUserId, roundId, null))
         {
-            return null;
+            return DrydockRetrieve.Refused(DrydockRetrieveResult.NotStored);
         }
 
         var claimed = true;
@@ -190,7 +211,7 @@ public sealed partial class DrydockSystem
                 {
                     Del(grid);
                     Log.Warning($"Drydock: {shipId} had its dock target die mid-retrieve; refused.");
-                    return null;
+                    return DrydockRetrieve.Refused(DrydockRetrieveResult.StationLost);
                 }
 
                 try
@@ -218,7 +239,7 @@ public sealed partial class DrydockSystem
             if (presented == null)
             {
                 Log.Error($"Drydock: {shipId} has no revision that verifies; retrieve refused.");
-                return null;
+                return DrydockRetrieve.Refused(DrydockRetrieveResult.NoReadableRevision);
             }
         }
         finally
@@ -244,7 +265,7 @@ public sealed partial class DrydockSystem
             Log.Error($"Drydock: {shipId} is out but its berth could not be vacated: {e.Message}");
         }
 
-        return presented;
+        return new DrydockRetrieve(DrydockRetrieveResult.Success, presented);
     }
 
     /// <summary>

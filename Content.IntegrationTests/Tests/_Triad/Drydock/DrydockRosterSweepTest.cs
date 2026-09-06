@@ -147,9 +147,9 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                     var retrieved = await RunOnServer(pair,
                         () => drydock.TryRetrieveShip(shipId.Value, owner, station, null));
 
-                    if (retrieved == null)
+                    if (!retrieved.Succeeded)
                     {
-                        failures.Add($"{vessel.ID}: stored, then would not come back.");
+                        failures.Add($"{vessel.ID}: stored, then would not come back ({retrieved.Result}).");
                         continue;
                     }
 
@@ -158,7 +158,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                     // that into a failure here rather than somewhere unrelated later.
                     await pair.RunTicksSync(10);
 
-                    var after = await CensusGrid(pair, retrieved.Value);
+                    var after = await CensusGrid(pair, retrieved.Grid!.Value);
 
                     // Reported, deliberately not asserted. Census equality is the wrong bar for a
                     // roster sweep, because a store is not supposed to be lossless: it empties
@@ -170,7 +170,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                     if (!SameCensus(before, after))
                         deltas.Add($"{vessel.ID}: {DescribeDelta(before, after)}");
 
-                    await Cleanup(pair, retrieved);
+                    await Cleanup(pair, retrieved.Grid);
                 }
                 catch (Exception e)
                 {

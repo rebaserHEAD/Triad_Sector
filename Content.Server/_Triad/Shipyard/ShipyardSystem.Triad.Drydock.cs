@@ -145,6 +145,7 @@ public sealed partial class ShipyardSystem
             Log.Error($"Drydock: store from console {ToPrettyString(uid)} by {ToPrettyString(player)} threw: {e}");
             if (!TerminatingOrDeleted(player))
                 ConsolePopup(player, Loc.GetString("shipyard-console-store-failed"));
+            await RefreshAfterRefusal(uid, component, player, (ShipyardConsoleUiKey)args.UiKey);
         }
     }
 
@@ -162,6 +163,7 @@ public sealed partial class ShipyardSystem
             Log.Error($"Drydock: retrieve of {args.ShipId} from console {ToPrettyString(uid)} by {ToPrettyString(player)} threw: {e}");
             if (!TerminatingOrDeleted(player))
                 ConsolePopup(player, Loc.GetString("shipyard-console-retrieve-failed"));
+            await RefreshAfterRefusal(uid, component, player, (ShipyardConsoleUiKey)args.UiKey);
         }
     }
 
@@ -744,6 +746,7 @@ public sealed partial class ShipyardSystem
         {
             ConsolePopup(player, Loc.GetString(StoreRefusalLoc(result.Result)));
             PlayDenySound(player, uid, component);
+            await RefreshAfterRefusal(uid, component, player, uiKey);
             return result;
         }
 
@@ -808,18 +811,21 @@ public sealed partial class ShipyardSystem
             return null;
         }
 
-        var grid = await _drydock.TryRetrieveShip(shipId, operatorAccount, station, DrydockRoundId);
+        var retrieve = await _drydock.TryRetrieveShip(shipId, operatorAccount, station, DrydockRoundId);
 
-        if (grid is null)
+        if (!retrieve.Succeeded)
         {
             if (!TerminatingOrDeleted(player))
             {
-                ConsolePopup(player, Loc.GetString("shipyard-console-retrieve-failed"));
+                ConsolePopup(player, Loc.GetString(RetrieveRefusalLoc(retrieve.Result)));
                 PlayDenySound(player, uid, component);
             }
 
+            await RefreshAfterRefusal(uid, component, player, uiKey);
             return null;
         }
+
+        var grid = retrieve.Grid!.Value;
 
         // The read yielded and the card may be gone. The ship is already docked and its row is
         // checked out, so skipping the mint is recoverable - the owner stores it and retrieves
@@ -827,7 +833,7 @@ public sealed partial class ShipyardSystem
         if (TerminatingOrDeleted(targetId) || TerminatingOrDeleted(player))
             return grid;
 
-        MintCardDeed(targetId, grid.Value, player);
+        MintCardDeed(targetId, grid, player);
         ConsolePopup(player, Loc.GetString("shipyard-console-retrieve-success"));
         PlayConfirmSound(player, uid, component);
 
@@ -1460,6 +1466,48 @@ public sealed partial class ShipyardSystem
             DrydockStoreResult.BerthOccupied => "shipyard-console-berth-occupied",
             _ => "shipyard-console-store-failed",
         };
+    }
+
+    private static string RetrieveRefusalLoc(DrydockRetrieveResult result)
+    {
+        return result switch
+        {
+            DrydockRetrieveResult.Disabled => "shipyard-console-retrieve-disabled",
+            DrydockRetrieveResult.NoStation => "shipyard-console-retrieve-no-station",
+            DrydockRetrieveResult.NoStagingMap => "shipyard-console-retrieve-no-staging",
+            DrydockRetrieveResult.NotFound => "shipyard-console-retrieve-not-found",
+            DrydockRetrieveResult.NotOwned => "shipyard-console-not-owner",
+            DrydockRetrieveResult.Investigating => "shipyard-console-retrieve-investigating",
+            DrydockRetrieveResult.AlreadyOut => "shipyard-console-retrieve-already-out",
+            DrydockRetrieveResult.Held => "shipyard-console-retrieve-held",
+            DrydockRetrieveResult.InEscrow => "shipyard-console-retrieve-in-escrow",
+            DrydockRetrieveResult.Sold => "shipyard-console-retrieve-sold",
+            DrydockRetrieveResult.NotStored => "shipyard-console-retrieve-not-stored",
+            DrydockRetrieveResult.NoReadableRevision => "shipyard-console-retrieve-no-revision",
+            DrydockRetrieveResult.StationLost => "shipyard-console-retrieve-station-lost",
+            _ => "shipyard-console-retrieve-failed",
+        };
+    }
+
+    /// <summary>
+    /// A refusal changes nothing on the server, but the client only takes its store or retrieve
+    /// indicator down when a state arrives, so a refusal has to send one or the button sits on
+    /// "Retrieving" until its timeout. Errors here are logged and swallowed: the refusal itself
+    /// has already been delivered.
+    /// </summary>
+    private async Task RefreshAfterRefusal(EntityUid uid, ShipyardConsoleComponent component, EntityUid player, ShipyardConsoleUiKey uiKey)
+    {
+        if (TerminatingOrDeleted(uid) || TerminatingOrDeleted(player))
+            return;
+
+        try
+        {
+            await RefreshDrydockState(uid, component, player, uiKey);
+        }
+        catch (Exception e)
+        {
+            Log.Error($"Drydock: state refresh after a refusal at {ToPrettyString(uid)} threw: {e.Message}");
+        }
     }
 
     /// <summary>
