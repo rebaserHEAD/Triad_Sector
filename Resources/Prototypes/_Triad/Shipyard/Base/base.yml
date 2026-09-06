@@ -33,3 +33,9 @@
   addComponents:
   - type: IFF
     flags: [IsPlayerShuttle, HideLabel]
+  # Triad: same reason the faction base carries it. Every hull under here is Syndicate, black market
+  # or admin-spawn, and every one is issued full of restricted kit. The save path does not refuse a
+  # ship it cannot gate, it strips it, and the strip runs before the checks that preserve anchored
+  # entities: the fleet sweep found QJ270, QJ340, QJ490, Zephyr and Ledokol coming back without their
+  # thrusters and gyroscopes, and the Syndicate three without their headsets and encryption keys.
+  - type: ShipSavingBlacklist
