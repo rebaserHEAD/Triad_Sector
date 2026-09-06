@@ -193,8 +193,23 @@ public sealed class DrydockReflectiveCapture
                     return arr;
                 }
 
+                // An interface-typed field has no constructor at all, and a concrete type without
+                // an IEnumerable<T> constructor cannot be built this way either. The list just
+                // filled already satisfies every such interface, so hand that back rather than
+                // losing the value: a storage machine's sprite layer list is an IReadOnlyList and
+                // came back missing on 243 entities across the roster before this.
+                if (declaredType.IsAssignableFrom(listType))
+                    return list;
+
                 // HashSet<T>, List<T> and friends all take an IEnumerable<T> constructor argument.
-                return Activator.CreateInstance(declaredType, list) ?? list;
+                try
+                {
+                    return Activator.CreateInstance(declaredType, list) ?? list;
+                }
+                catch (MissingMethodException)
+                {
+                    return list;
+                }
             }
         }
 
