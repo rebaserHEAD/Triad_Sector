@@ -2,8 +2,12 @@
                            xmlns:gfx="clr-namespace:Robust.Client.Graphics;assembly=Robust.Client"
                            xmlns:controls="clr-namespace:Content.Client.UserInterface.Controls"
                            xmlns:ui="clr-namespace:Content.Client._NF.Shipyard.UI"
-                           SetSize="900 540"
+                           SetSize="900 900"
                            MinSize="860 500">
+    <!-- Triad: taller by default. Upstream opened at 700 and we had it at 540, both sized for the
+         purchase list alone. With the drydock as a second tab the window has to hold berth rows and
+         the saved-ship list as well, and at 540 every one of those scrolled from the first frame.
+         MinSize is unchanged, so it still drags down to 500 on a small screen. -->
     <PanelContainer VerticalExpand="True" HorizontalExpand="True" Margin="0 8 0 2">
         <PanelContainer.PanelOverride>
             <gfx:StyleBoxFlat BorderThickness="7" BorderColor="#252525" BackgroundColor="#3d474d"/>
