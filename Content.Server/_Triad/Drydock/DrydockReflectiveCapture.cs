@@ -206,8 +206,11 @@ public sealed class DrydockReflectiveCapture
     /// pin does. So try the qualified name first, and fall back to matching the bare full name
     /// across loaded assemblies, which is what makes a revision written under an older engine
     /// still restorable under a newer one.
+    ///
+    /// <para>Public because the appearance sidecar resolves the same way, for the same reason, and
+    /// two copies of this would drift apart exactly where the first one was proven safe.</para>
     /// </summary>
-    private static Type? ResolveType(string assemblyQualifiedName)
+    public static Type? ResolveType(string assemblyQualifiedName)
     {
         if (Type.GetType(assemblyQualifiedName) is { } direct)
             return direct;

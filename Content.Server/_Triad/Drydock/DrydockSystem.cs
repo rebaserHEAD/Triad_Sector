@@ -112,6 +112,7 @@ public sealed partial class DrydockSystem : EntitySystem
 
         var injectedGas = new List<EntityUid>();
         var injectedDamage = new List<EntityUid>();
+        var injectedAppearance = new List<EntityUid>();
         var stripped = new List<IComponent>();
         DrydockFidelityCapture? fidelity = null;
         EntityUid? deedHolder = null;
@@ -181,6 +182,11 @@ public sealed partial class DrydockSystem : EntitySystem
 
             // Damage is read-only to the serializer, so a damaged ship would come back pristine.
             injectedDamage = InjectDamageSidecars(gridUid);
+
+            // Appearance data is not a data field at all, so no save has ever carried it and the
+            // probe below cannot see it either. Without this a retrieved ship's visuals come back
+            // at prototype defaults wherever the owning system does not re-derive them on startup.
+            injectedAppearance = _fidelity.CaptureAppearance(gridUid);
 
             // The grid does not know its own vessel prototype; its station's latejoin information
             // does. Read it before the strip below cuts station membership off the grid.
@@ -321,6 +327,9 @@ public sealed partial class DrydockSystem : EntitySystem
 
                 foreach (var uid in injectedDamage)
                     RemComp<DrydockDamageSidecarComponent>(uid);
+
+                foreach (var uid in injectedAppearance)
+                    RemComp<DrydockAppearanceComponent>(uid);
 
                 RestoreStrippedComponents(gridUid, stripped);
                 _shipyard.ReattachGridDeedHolder(gridUid, deedHolder);

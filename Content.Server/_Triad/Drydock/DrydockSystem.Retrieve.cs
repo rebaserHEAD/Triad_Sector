@@ -323,6 +323,15 @@ public sealed partial class DrydockSystem
         if (restore.Skipped.Count > 0)
             Log.Warning($"Drydock: {record.ShipGuid} restored with {restore.Skipped.Count} captured field(s) skipped.");
 
+        // Appearance next, and before every step below it. Those steps correct specific machines
+        // against the state the ship actually came back with, and a machine's captured appearance
+        // can disagree with that: a lathe stored mid-production comes back without the marker that
+        // made the animation true. Restoring appearance after them would reinstate exactly the
+        // frozen animations this is here to end.
+        var appearance = _fidelity.RestoreAppearance(grid);
+        if (appearance.Skipped.Count > 0)
+            Log.Warning($"Drydock: {record.ShipGuid} restored with {appearance.Skipped.Count} appearance key(s) skipped.");
+
         // Scrubs for documents written before the store learned to strip these. A stale FTL
         // component leaves the ship stuck mid-jump with the shuttle system erroring every tick, and
         // a stale in-progress marker blocks every container aboard, hands included.
@@ -628,9 +637,14 @@ public sealed partial class DrydockSystem
     /// reboot pass skips any lathe that is producing, so it neither finished nor restarted, forever.
     /// Dropping the marker lets the reboot pass resume the queue, which is the state that actually
     /// persisted. Second, the appearance keys the lathe's map init sets ("appearance requires
-    /// initialization or the layers break", in its own words): appearance data is never saved, so
-    /// a retrieved lathe had neither key and its sprite sat in the running animation for good
-    /// (test server, 2026-09-06: "lathes still are animation bugged" after the marker fix).
+    /// initialization or the layers break", in its own words), set here against the marker the ship
+    /// came back with rather than the one it was stored with.
+    ///
+    /// <para>The appearance carrier restores both keys before this runs, which is not enough on its
+    /// own and is why this half stayed: what it restores is what the lathe looked like at store,
+    /// and a lathe stored mid-print looked like it was running. The marker behind that animation
+    /// does not ride the save, so this is the step that settles the two against each other (test
+    /// server, 2026-09-06: "lathes still are animation bugged" after the marker fix).</para>
     /// </summary>
     private void ScrubStaleLatheProduction(EntityUid grid)
     {

@@ -9,8 +9,10 @@ using Robust.Shared.GameStates;
 using Robust.Shared.Serialization.Manager;
 using Robust.Shared.Serialization.Manager.Attributes;
 using Robust.Shared.Serialization.Markdown;
+using Robust.Shared.Serialization.Markdown.Mapping;
 using Robust.Shared.Serialization.Markdown.Value;
 using Robust.Shared.Serialization.TypeSerializers.Interfaces;
+using Robust.Shared.Timing;
 
 namespace Content.Server._Triad.Drydock;
 
@@ -29,6 +31,18 @@ namespace Content.Server._Triad.Drydock;
 public sealed partial class DrydockFidelitySystem : EntitySystem
 {
     [Dependency] private ISerializationManager _serialization = default!;
+    [Dependency] private SharedAppearanceSystem _appearance = default!;
+
+    /// <summary>
+    /// The two keys the appearance sidecar wraps each value in. Both are part of a persisted
+    /// format, like <c>DrydockReflectiveCapture</c>'s type tag: renaming either invalidates the
+    /// appearance of every revision written before the change, so they move only behind a
+    /// <see cref="DrydockFormat"/> bump.
+    /// </summary>
+    private const string AppearanceValueType = "t";
+
+    /// <inheritdoc cref="AppearanceValueType"/>
+    private const string AppearanceValue = "v";
 
     private DrydockReflectiveCapture _capture = default!;
 
@@ -219,6 +233,157 @@ public sealed partial class DrydockFidelitySystem : EntitySystem
         }
 
         return report;
+    }
+
+    /// <summary>
+    /// Store step for the appearance carrier: copy every entity's live appearance data into a
+    /// <see cref="DrydockAppearanceComponent"/> sidecar, leaving the live data alone.
+    ///
+    /// <para>This is the one carrier the probe above could never have found, because appearance
+    /// data is not a <c>[DataField]</c> at all and the probe only ever asks about declared fields.
+    /// See the sidecar's own summary for what that costs a retrieved ship.</para>
+    ///
+    /// <para>Most of what this captures is redundant, because most systems set their appearance in
+    /// <c>ComponentStartup</c>, which does re-run on load, and those entities re-derive the same
+    /// values a moment later. The capture is for the rest: keys written only on map init or only on
+    /// a state change that will not happen again. Capturing both is deliberate, since nothing at
+    /// store time can tell them apart, and re-applying a value the system was about to derive
+    /// identically costs nothing.</para>
+    /// </summary>
+    /// <remarks>
+    /// A key whose value cannot be captured at all is dropped rather than failing the store: an
+    /// appearance value is a visual, and no visual is worth refusing a ship over.
+    /// </remarks>
+    public List<EntityUid> CaptureAppearance(EntityUid grid)
+    {
+        var injected = new List<EntityUid>();
+
+        foreach (var uid in GridTree(grid))
+        {
+            if (!TryComp<AppearanceComponent>(uid, out var appearance))
+                continue;
+
+            DrydockAppearanceComponent? sidecar = null;
+            foreach (var (key, value) in LiveAppearance(appearance))
+            {
+                if (_capture.TryCapture(value) is not { } node)
+                    continue;
+
+                // The value's own concrete type rides alongside it. An appearance value is declared
+                // as object, so unlike a data field there is no declared type for the restore to
+                // read it back as.
+                var wrapped = new MappingDataNode();
+                wrapped.Add(AppearanceValueType, new ValueDataNode(value.GetType().AssemblyQualifiedName!));
+                wrapped.Add(AppearanceValue, node);
+
+                sidecar ??= EnsureComp<DrydockAppearanceComponent>(uid);
+                sidecar.Data[$"{key.GetType().FullName}|{key}"] =
+                    Convert.ToBase64String(Encoding.UTF8.GetBytes(wrapped.ToString()));
+            }
+
+            if (sidecar != null)
+                injected.Add(uid);
+        }
+
+        return injected;
+    }
+
+    /// <summary>
+    /// Retrieve step for the appearance carrier: put every captured key back through the appearance
+    /// system and drop the sidecars.
+    ///
+    /// <para>Runs early in the rehydration block, before the steps that correct specific machines.
+    /// That order is load-bearing in one direction: a lathe's captured appearance says it was
+    /// mid-production, and the marker that made that true does not ride the save, so the lathe step
+    /// afterwards is what settles the animation against the marker the ship actually came back
+    /// with. Restoring appearance last would reinstate the frozen animation this carrier exists to
+    /// fix.</para>
+    /// </summary>
+    public DrydockFidelityRestore RestoreAppearance(EntityUid grid)
+    {
+        var report = new DrydockFidelityRestore();
+
+        foreach (var uid in GridTree(grid).ToList())
+        {
+            if (!TryComp<DrydockAppearanceComponent>(uid, out var sidecar))
+                continue;
+
+            foreach (var (key, encoded) in sidecar.Data)
+            {
+                try
+                {
+                    var sep = key.IndexOf('|');
+                    if (sep < 0)
+                    {
+                        report.Skip(key, "malformed key");
+                        continue;
+                    }
+
+                    var keyType = DrydockReflectiveCapture.ResolveType(key[..sep]);
+                    if (keyType is not { IsEnum: true })
+                    {
+                        report.Skip(key, "no such appearance key type");
+                        continue;
+                    }
+
+                    if (!Enum.TryParse(keyType, key[(sep + 1)..], out var parsed) || parsed is not Enum enumKey)
+                    {
+                        report.Skip(key, "appearance key type no longer has that member");
+                        continue;
+                    }
+
+                    var yaml = Encoding.UTF8.GetString(Convert.FromBase64String(encoded));
+                    using var reader = new StringReader(yaml);
+                    var node = (MappingDataNode) DataNodeParser.ParseYamlStream(reader).First().Root;
+
+                    var valueType = DrydockReflectiveCapture.ResolveType(
+                        ((ValueDataNode) node[AppearanceValueType]).Value);
+
+                    if (valueType == null)
+                    {
+                        report.Skip(key, "no such appearance value type");
+                        continue;
+                    }
+
+                    if (_capture.Restore(valueType, node[AppearanceValue]) is not { } value)
+                    {
+                        report.Skip(key, "value restored as null");
+                        continue;
+                    }
+
+                    _appearance.SetData(uid, enumKey, value);
+                    report.Applied++;
+                }
+                catch (Exception e)
+                {
+                    report.Skip(key, e.Message);
+                }
+            }
+
+            RemComp<DrydockAppearanceComponent>(uid);
+        }
+
+        if (report.Skipped.Count > 0)
+        {
+            Log.Warning(
+                $"drydock appearance restore skipped {report.Skipped.Count} key(s) on grid {ToPrettyString(grid)}: "
+                + string.Join("; ", report.Skipped.Select(s => $"{s.Key} ({s.Reason})")));
+        }
+
+        return report;
+    }
+
+    /// <summary>
+    /// The live appearance dictionary. It is internal to the engine and its component is
+    /// access-locked to the appearance system, so the component state is the supported read: the
+    /// server's handler hands back the whole live dictionary whatever tick is asked for.
+    /// </summary>
+    private Dictionary<Enum, object> LiveAppearance(AppearanceComponent appearance)
+    {
+        return EntityManager.GetComponentState(EntityManager.EventBus, appearance, null, GameTick.Zero)
+            is AppearanceComponentState state
+            ? state.Data
+            : new Dictionary<Enum, object>();
     }
 
     private bool IsSerializable(Type type, object value)
