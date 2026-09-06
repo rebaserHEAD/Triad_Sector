@@ -5,7 +5,9 @@
      "what happened to this ship", never "list its documents".
 
      Rows, chips and state tags are built in code so their exact fill can change with selection
-     and state; this file is the frame and the named holders. Tooltips live on this surface only,
+     and state; this file is the frame and the named holders. Type is set in code too, from the
+     canvas's four sizes, so no label here carries a size class of its own: the title, heading and
+     hint labels are named and the window assigns their fonts. Tooltips live on this surface only,
      the player tab has none. -->
 <controls:FancyWindow xmlns="https://spacestation14.io"
                       xmlns:gfx="clr-namespace:Robust.Client.Graphics;assembly=Robust.Client"
@@ -94,7 +96,7 @@
                             </PanelContainer.PanelOverride>
                             <BoxContainer Orientation="Vertical" Margin="8" VerticalExpand="True">
                                 <BoxContainer Orientation="Horizontal" VerticalAlignment="Center">
-                                    <Label Name="BerthsTitle" StyleClasses="LabelHeading" HorizontalExpand="True" />
+                                    <Label Name="BerthsTitle" HorizontalExpand="True" />
                                     <ui:DrydockMenuButton Name="GrantBerthButton"
                                                           Text="{Loc 'drydock-admin-grant-berth'}"
                                                           StyleClasses="ButtonSquare"
@@ -102,12 +104,14 @@
                                                           AlignRight="True"
                                                           ToolTip="{Loc 'drydock-admin-grant-berth-tooltip'}" />
                                 </BoxContainer>
-                                <ScrollContainer Name="BerthScroll" HScrollEnabled="False" HorizontalExpand="True" Margin="0 6 0 0">
+                                <!-- The scroll box has to take the vertical slack itself: a scroll container with
+                                     no expand measures to nothing, and a spacer below it was taking the space,
+                                     so the berth rows were drawn into zero height. -->
+                                <ScrollContainer Name="BerthScroll" HScrollEnabled="False" HorizontalExpand="True" VerticalExpand="True" Margin="0 6 0 0">
                                     <BoxContainer Name="BerthContainer" Orientation="Vertical" HorizontalExpand="True" />
                                 </ScrollContainer>
-                                <Label Text="{Loc 'drydock-admin-berths-hint'}" StyleClasses="LabelSubText" Margin="0 4 0 0" />
-                                <Control VerticalExpand="True" />
-                                <Label Text="{Loc 'drydock-admin-notes-title'}" StyleClasses="LabelHeading" Margin="0 6 0 3" />
+                                <Label Name="BerthsHint" Text="{Loc 'drydock-admin-berths-hint'}" StyleClasses="LabelSubText" Margin="0 4 0 0" />
+                                <Label Name="NotesTitle" Text="{Loc 'drydock-admin-notes-title'}" Margin="0 6 0 3" />
                                 <LineEdit Name="NotesInput" HorizontalExpand="True" PlaceHolder="{Loc 'drydock-admin-notes-placeholder'}" />
                             </BoxContainer>
                         </PanelContainer>
@@ -118,11 +122,11 @@
                                 <gfx:StyleBoxFlat BackgroundColor="#1b1b1e" BorderColor="#3a3a3e" BorderThickness="1"/>
                             </PanelContainer.PanelOverride>
                             <BoxContainer Orientation="Vertical" Margin="8" VerticalExpand="True">
-                                <Label Text="{Loc 'drydock-admin-timeline-title'}" StyleClasses="LabelHeading" />
+                                <Label Name="TimelineTitle" Text="{Loc 'drydock-admin-timeline-title'}" />
                                 <ScrollContainer Name="TimelineScroll" HScrollEnabled="False" VerticalExpand="True" HorizontalExpand="True" Margin="0 6 0 0">
                                     <BoxContainer Name="TimelineContainer" Orientation="Vertical" HorizontalExpand="True" />
                                 </ScrollContainer>
-                                <Label Text="{Loc 'drydock-admin-timeline-hint'}" StyleClasses="LabelSubText" Margin="0 4 0 0" />
+                                <Label Name="TimelineHint" Text="{Loc 'drydock-admin-timeline-hint'}" StyleClasses="LabelSubText" Margin="0 4 0 0" />
                             </BoxContainer>
                         </PanelContainer>
                     </BoxContainer>

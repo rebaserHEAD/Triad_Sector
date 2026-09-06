@@ -3,6 +3,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Numerics;
 using System.Threading.Tasks;
 using Content.Client._NF.Shipyard.UI;
 using Content.Client._Triad.Drydock.Admin;
@@ -10,6 +11,7 @@ using Content.Shared._Triad.Drydock.Admin;
 using Robust.Client.UserInterface;
 using Robust.Client.UserInterface.Controls;
 using Robust.Shared.Localization;
+using Robust.Shared.Maths;
 
 namespace Content.IntegrationTests.Tests._Triad.Drydock
 {
@@ -133,6 +135,16 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                         "One line per audit entry; a revision is a row here, not a panel of its own.");
                 });
 
+                // Rows in a box are not rows on screen. Lay the window out at its size and demand
+                // the berth list has height: a scroll box with no vertical expand measures to
+                // nothing and drew every berth into zero pixels (2026-09-06, on the test server).
+                window.Measure(new Vector2(1400, 800));
+                window.Arrange(new UIBox2(0, 0, 1400, 800));
+                Assert.Multiple(() =>
+                {
+                    Assert.That(Named(window, "TimelineScroll").Height, Is.GreaterThan(40f), "Control: the timeline scroll box, which always expanded.");
+                    Assert.That(Named(window, "BerthScroll").Height, Is.GreaterThan(40f), "The berth scroll box has room to draw its rows.");
+                });
             });
 
             await pair.CleanReturnAsync();
