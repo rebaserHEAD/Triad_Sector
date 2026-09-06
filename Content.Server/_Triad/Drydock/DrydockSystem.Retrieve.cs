@@ -5,14 +5,17 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Threading.Tasks;
 using Content.Server._NF.Station.Components;
+using Content.Server.Chemistry.Components;
 using Content.Server.Database;
 using Content.Server.DeviceNetwork.Systems;
 using Content.Server.Gravity;
+using Content.Server.Lathe.Components;
 using Content.Server.NPC;
 using Content.Server.NPC.HTN;
 using Content.Server.NPC.Systems;
 using Content.Server.Maps;
 using Content.Server.Power.EntitySystems;
+using Content.Server.Power.Generator;
 using Content.Server.Research.Systems;
 using Content.Server.Station.Components;
 using Content.Server.Shuttles.Components;
@@ -20,14 +23,26 @@ using Content.Server.Shuttles.Systems;
 using Content.Server.Wires;
 using Content.Shared._Mono.ShipRepair;
 using Content.Shared._NF.Shipyard.Components;
+using Content.Shared._Shitmed.Autodoc.Components;
 using Content.Shared._Triad.CCVar;
+using Content.Shared.Cabinet;
+using Content.Shared.Chemistry;
+using Content.Shared.Containers.ItemSlots;
 using Content.Shared.Damage;
 using Content.Shared.DeviceNetwork.Components;
 using Content.Shared.FixedPoint;
+using Content.Shared.Hands.Components;
+using Content.Shared.Hands.EntitySystems;
+using Content.Shared.Lathe;
 using Content.Shared.Mind.Components;
+using Content.Shared.Nutrition.EntitySystems;
+using Content.Shared.Power.Generator;
 using Content.Shared.Research.Components;
 using Content.Shared.Shuttles.Components;
+using Content.Shared.SmartFridge;
 using Content.Shared.Station.Components;
+using Content.Shared.Xenoarchaeology.Equipment;
+using Content.Shared.Xenoarchaeology.Equipment.Components;
 using Robust.Server.Player;
 using Robust.Shared.Map;
 using Robust.Shared.Network;
@@ -53,6 +68,13 @@ public sealed partial class DrydockSystem
     [Dependency] private WiresSystem _wires = default!;
     [Dependency] private DeviceNetworkSystem _deviceNetwork = default!;
     [Dependency] private ResearchSystem _research = default!;
+    [Dependency] private ShuttleConsoleLockSystem _consoleLock = default!;
+    [Dependency] private GeneratorSystem _generator = default!;
+    [Dependency] private SharedSmartFridgeSystem _smartFridge = default!;
+    [Dependency] private SharedArtifactAnalyzerSystem _artifactAnalyzer = default!;
+    [Dependency] private SharedHandsSystem _hands = default!;
+    [Dependency] private ItemSlotsSystem _itemSlots = default!;
+    [Dependency] private OpenableSystem _openable = default!;
 
     /// <summary>
     /// Retrieves a stored ship and presents it at <paramref name="stationUid"/>.
@@ -276,10 +298,11 @@ public sealed partial class DrydockSystem
     /// necessary, since re-firing it would re-run every one-shot spawner aboard. The cost is that
     /// anything a system only ever does on map init has to be done again here, by name.</para>
     ///
-    /// <para>Six of them, and the last three are ours rather than the reference's: a census of every
-    /// map-init subscriber turned them up. Each one is a system whose entire runtime registration
-    /// lives behind that event, so without this a retrieved ship comes back with dead machines that
-    /// look perfectly fine.</para>
+    /// <para>Most of them are ours rather than the reference's: a census of every map-init
+    /// subscriber turned them up, and the test server turned up the console locks. Each one is a
+    /// system whose entire runtime registration lives behind that event or the purchase path, so
+    /// without this a retrieved ship comes back with dead machines that look perfectly fine, or a
+    /// helm its own captain cannot unlock.</para>
     /// </summary>
     private void Revive(EntityUid grid, DrydockShip record)
     {
@@ -303,6 +326,14 @@ public sealed partial class DrydockSystem
         ReviveWires(grid);
         ReviveDeviceNetwork(grid);
         ReviveResearchClients(grid);
+        ReviveConsoleLocks(grid);
+        ReviveGenerators(grid);
+        ReviveSmartFridges(grid);
+        ReviveArtifactAnalyzers(grid);
+        ReviveFilledHands(grid);
+        ReviveDispenserSlots(grid);
+        ReviveCabinetLocks(grid);
+        ScrubStaleLatheProduction(grid);
 
         RehydrateDamage(grid);
 
@@ -433,6 +464,171 @@ public sealed partial class DrydockSystem
     }
 
     /// <summary>
+    /// A console lock and the grid lock beside it hold the ship's uid as a string, which is the
+    /// one uid on the whole ship the loader cannot remap, so every locked console comes back keyed
+    /// to a grid that no longer exists. The deed minted onto the card names the new grid, and the
+    /// unlock compares the two as strings, so the captain's own deed would not open the helm
+    /// (test server, 2026-09-06: "I cant unlock the ship with my deed"). The purchase and ship-load
+    /// paths both stamp every console with the live uid; this is that stamp, and it re-locks the
+    /// consoles the way both of them do.
+    /// </summary>
+    private void ReviveConsoleLocks(EntityUid grid)
+    {
+        var shuttleId = grid.ToString();
+        var query = AllEntityQuery<ShuttleConsoleLockComponent, TransformComponent>();
+        while (query.MoveNext(out var uid, out var lockComp, out var xform))
+        {
+            if (xform.GridUid != grid)
+                continue;
+
+            _consoleLock.SetShuttleId(uid, shuttleId, lockComp);
+        }
+    }
+
+    /// <summary>
+    /// A fuel generator's on flag persists, and the generator loop honours it, so a ship stored with
+    /// its generators running comes back producing power. What does not persist is everything the
+    /// flag drives: the running sprite, the ambient hum, the radiation source. A retrieved reactor
+    /// therefore looked stopped while it ran, its captain pressed start, and start refused because
+    /// it was already on (test server, 2026-09-06: "generators do not start", "z-pinches did not
+    /// carry over their on state"; a signal toggle, which switches it off and on again, "worked").
+    /// Re-applying the flag through the generator system re-derives all of it.
+    /// </summary>
+    private void ReviveGenerators(EntityUid grid)
+    {
+        var query = AllEntityQuery<FuelGeneratorComponent, TransformComponent>();
+        while (query.MoveNext(out var uid, out var generator, out var xform))
+        {
+            if (xform.GridUid != grid || !generator.On)
+                continue;
+
+            _generator.SetFuelGeneratorOn(uid, true, generator);
+        }
+    }
+
+    /// <summary>
+    /// A smart fridge's stock listing is an index over its container, rebuilt on map init because
+    /// its key type cannot be a YAML mapping key. No map init here, so rebuild it by hand, or a
+    /// stocked fridge reports itself empty and its contents are unreachable.
+    /// </summary>
+    private void ReviveSmartFridges(EntityUid grid)
+    {
+        var query = AllEntityQuery<SmartFridgeComponent, TransformComponent>();
+        while (query.MoveNext(out var uid, out var fridge, out var xform))
+        {
+            if (xform.GridUid != grid)
+                continue;
+
+            _smartFridge.RebuildEntries((uid, fridge));
+        }
+    }
+
+    /// <summary>
+    /// An analysis console holds its analyzer as a NetEntity, which no loader remaps, and the only
+    /// thing that re-resolves it from the device-link wire is the analyzer's map init. Without this
+    /// the pair comes back linked on the wire and dead on the console.
+    /// </summary>
+    private void ReviveArtifactAnalyzers(EntityUid grid)
+    {
+        var query = AllEntityQuery<ArtifactAnalyzerComponent, TransformComponent>();
+        while (query.MoveNext(out var uid, out var analyzer, out var xform))
+        {
+            if (xform.GridUid != grid)
+                continue;
+
+            _artifactAnalyzer.RelinkConsole((uid, analyzer));
+        }
+    }
+
+    /// <summary>
+    /// A machine's hands are not data fields; the hand-fill component declares them and map init
+    /// creates them. A retrieved robotic arm therefore had no hand to hold its tool in (test server,
+    /// 2026-09-06: "interactors lose their handslot"). Re-create every declared hand that is missing.
+    /// The fill items are not spawned again: whatever was in the hand persisted as a container
+    /// child and is picked back up by the hand's container, and an empty hand was emptied on
+    /// purpose.
+    /// </summary>
+    private void ReviveFilledHands(EntityUid grid)
+    {
+        var query = AllEntityQuery<HandsFillComponent, HandsComponent, TransformComponent>();
+        while (query.MoveNext(out var uid, out var fill, out var hands, out var xform))
+        {
+            if (xform.GridUid != grid)
+                continue;
+
+            foreach (var name in fill.Hands.Keys)
+            {
+                if (!_hands.TryGetHand(uid, name, out _, hands))
+                    _hands.AddHand(uid, name, HandLocation.Middle, hands);
+            }
+        }
+    }
+
+    /// <summary>
+    /// The item-slot registry is a read-only data field, so a slot added at runtime is never saved:
+    /// only the prototype's own slots come back. A reagent dispenser registers its beaker slot on
+    /// map init and its storage slots from its parts, so a retrieved one had jugs in containers no
+    /// slot knew about and nowhere to put a new one (test server, 2026-09-06: "chemical dispensers
+    /// break and lose all their contents"). The slot definitions themselves persist on the
+    /// dispenser; this re-registers them, which finds the jugs already in their containers.
+    /// </summary>
+    private void ReviveDispenserSlots(EntityUid grid)
+    {
+        var query = AllEntityQuery<ReagentDispenserComponent, ItemSlotsComponent, TransformComponent>();
+        while (query.MoveNext(out var uid, out var dispenser, out var itemSlots, out var xform))
+        {
+            if (xform.GridUid != grid)
+                continue;
+
+            if (!_itemSlots.TryGetSlot(uid, SharedReagentDispenser.OutputSlotName, out _, itemSlots))
+                _itemSlots.AddItemSlot(uid, SharedReagentDispenser.OutputSlotName, dispenser.BeakerSlot, itemSlots);
+
+            var count = Math.Min(dispenser.StorageSlotIds.Count, dispenser.StorageSlots.Count);
+            for (var i = 0; i < count; i++)
+            {
+                if (!_itemSlots.TryGetSlot(uid, dispenser.StorageSlotIds[i], out _, itemSlots))
+                    _itemSlots.AddItemSlot(uid, dispenser.StorageSlotIds[i], dispenser.StorageSlots[i], itemSlots);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Same read-only registry: a slot's lock state is not saved either, and a cabinet locks its
+    /// slot to its door on map init. A retrieved closed cabinet therefore handed out its contents
+    /// through the closed door ("cabinets that require them to be opened no longer do").
+    /// </summary>
+    private void ReviveCabinetLocks(EntityUid grid)
+    {
+        var query = AllEntityQuery<ItemCabinetComponent, ItemSlotsComponent, TransformComponent>();
+        while (query.MoveNext(out var uid, out var cabinet, out var itemSlots, out var xform))
+        {
+            if (xform.GridUid != grid)
+                continue;
+
+            _itemSlots.SetLock(uid, cabinet.Slot, !_openable.IsOpen(uid), itemSlots);
+        }
+    }
+
+    /// <summary>
+    /// Scrub for documents written before the producing marker opted out of saving. A lathe stored
+    /// mid-print reloaded carrying the marker with no recipe behind it: the lathe loop skips a
+    /// producing lathe with no recipe and the reboot pass skips any lathe that is producing, so it
+    /// neither finished nor restarted, forever. Dropping the marker lets the reboot pass resume the
+    /// queue, which is the state that actually persisted.
+    /// </summary>
+    private void ScrubStaleLatheProduction(EntityUid grid)
+    {
+        var query = AllEntityQuery<LatheProducingComponent, LatheComponent, TransformComponent>();
+        while (query.MoveNext(out var uid, out _, out var lathe, out var xform))
+        {
+            if (xform.GridUid != grid || lathe.CurrentRecipe != null)
+                continue;
+
+            RemCompDeferred<LatheProducingComponent>(uid);
+        }
+    }
+
+    /// <summary>
     /// Applies each damage sidecar back onto its holder and removes it.
     ///
     /// <para>Run from this explicit pass rather than a startup hook on purpose. Applying damage at
@@ -482,6 +678,13 @@ public sealed partial class DrydockSystem
     /// </summary>
     private void RecreateStation(EntityUid grid, DrydockShip record)
     {
+        // The roundstart variation passes run on every new station and read this marker off the
+        // station, which is recreated below, so a retrieved ship was re-varied on every retrieve:
+        // fresh trash and spills each time, some of it inside the hull. The marker on the grid is
+        // what the rule now honours, and it rides the document, so a ship is varied once at most.
+        // Stamped before the vessel check: a stationless retrieve must not be varied later either.
+        EnsureComp<StationVariationHasRunComponent>(grid);
+
         if (string.IsNullOrEmpty(record.VesselProto)
             || !_protoMan.TryIndex<GameMapPrototype>(record.VesselProto, out var stationProto)
             || !stationProto.Stations.TryGetValue(record.VesselProto, out var stationConfig))

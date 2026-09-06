@@ -16,6 +16,7 @@ using Content.Server._Triad.Drydock;
 using Content.Server._NF.Market.Components;
 using Content.Server.Database;
 using Content.Server.DeviceNetwork.Systems;
+using Content.Server.Lathe.Components;
 using Content.Server.NodeContainer.Nodes;
 using Content.Server.Power.Components;
 using Content.Server.Station.Components;
@@ -23,6 +24,7 @@ using Content.Server.Station.Systems;
 using Content.Server.Shuttles.Components;
 using Content.Server.Wires;
 using Content.Shared._Crescent.ShipShields;
+using Content.Shared._Goobstation.Factory;
 using Content.Shared._Mono.FireControl;
 using Content.Shared._Mono.SpaceArtillery;
 using Content.Shared._NF.Market;
@@ -35,13 +37,17 @@ using Content.Shared.Damage;
 using Content.Shared.Damage.Prototypes;
 using Content.Shared.DeviceNetwork.Components;
 using Content.Shared.FixedPoint;
+using Content.Shared.Hands.Components;
 using Content.Shared.Lathe;
 using Content.Shared.NodeContainer;
 using Content.Shared.Research.Components;
 using Content.Shared.Research.Prototypes;
+using Content.Shared.SmartFridge;
 using Content.Shared.Weapons.Ranged.Components;
+using Content.Shared.Xenoarchaeology.Artifact.Components;
 using Microsoft.EntityFrameworkCore;
 using Robust.Shared.Configuration;
+using Robust.Shared.Containers;
 using Robust.Shared.GameObjects;
 using Robust.Shared.Log;
 using Robust.Shared.Map;
@@ -79,6 +85,9 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
         private const string LatheRecipeId = "SheetSteel";
         private const string PipeProtoId = "GasPipeStraight";
         private const string MarketItemProtoId = "SheetSteel1";
+        private const string SmartFridgeProtoId = "SmartFridge";
+        private const string InteractorProtoId = "Interactor";
+        private const string ArtifactProtoId = "ComplexXenoArtifactItem";
         private const string AudioProtoId = "Audio";
         private static readonly ProtoId<DamageTypePrototype> BluntDamage = "Blunt";
         private const string ShieldGeneratorProtoId = "ShieldGenerator";
@@ -987,6 +996,12 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
 
                 entMan.GetComponent<LatheComponent>(lathe).Queue.Add(
                     new LatheRecipeBatch(recipe, itemsPrinted: 1, itemsRequested: 5, actor: null));
+
+                // Mid-print. The marker has no data fields, so saved it reloaded empty, and a lathe
+                // marked producing with no recipe is one the lathe loop never finishes and the
+                // reboot pass never restarts (test server, 2026-09-06: lathes stuck in their running
+                // animation for good). It opts out of saving now; this is the check that it stays out.
+                entMan.EnsureComponent<LatheProducingComponent>(lathe);
             });
 
             await pair.RunTicksSync(5);
@@ -1019,9 +1034,173 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                     Assert.That(queue[0].ItemsPrinted, Is.EqualTo(1),
                         "Progress through a batch is part of what a player would notice losing.");
                 });
+
+                // Either it is not producing, or it is producing something. Never the marker alone,
+                // which is the stuck state.
+                var producing = entMan.HasComponent<LatheProducingComponent>(retrievedLathe.Value);
+                var recipe = entMan.GetComponent<LatheComponent>(retrievedLathe.Value).CurrentRecipe;
+                Assert.That(!producing || recipe != null, Is.True,
+                    "A lathe must never come back marked producing with no recipe behind it: that lathe never finishes and never restarts.");
             });
 
             await pair.CleanReturnAsync();
+        }
+
+        /// <summary>
+        /// Three things the first public play test (2026-09-06) found that only map init ever set up,
+        /// in one round trip: a smart fridge's stock index, a robotic arm's declared hand, and the
+        /// marker that stops the roundstart variation passes re-littering a ship on every retrieve.
+        /// Each is a Revive step; each one missing is a machine that looks fine and does nothing.
+        /// </summary>
+        [Test]
+        public async Task MapInitDerivedMachineStateComesBack()
+        {
+            await using var pair = await PoolManager.GetServerClient();
+            var server = pair.Server;
+            var entMan = server.EntMan;
+
+            var db = server.ResolveDependency<IServerDbManager>();
+            var drydock = server.System<DrydockSystem>();
+            var containers = server.System<SharedContainerSystem>();
+
+            var owner = Guid.NewGuid();
+            await InsertPlayer(db, owner);
+            await server.ResolveDependency<DrydockStore>().AddBerth(owner, ShipSizeClass.SuperCapital, DrydockBerthKind.Granted, 0, null, null);
+
+            var (station, shipGrid, _) = await BuildShipAndStation(pair);
+
+            await server.WaitPost(() =>
+            {
+                var fridge = entMan.SpawnEntity(SmartFridgeProtoId, new EntityCoordinates(shipGrid, new Vector2(2f, 2f)));
+                var stock = entMan.SpawnEntity(MarketItemProtoId, new EntityCoordinates(shipGrid, new Vector2(2f, 2f)));
+                var inventory = containers.GetContainer(fridge, entMan.GetComponent<SmartFridgeComponent>(fridge).Container);
+                Assert.That(containers.Insert(stock, inventory), Is.True, "The control: the fridge has to hold something before the store.");
+
+                entMan.SpawnEntity(InteractorProtoId, new EntityCoordinates(shipGrid, new Vector2(1f, 2f)));
+            });
+
+            await pair.RunTicksSync(5);
+
+            await server.WaitAssertion(() =>
+            {
+                var arm = FindChildWithComponentSync<InteractorComponent>(entMan, shipGrid);
+                Assert.That(arm, Is.Not.Null);
+                Assert.That(entMan.GetComponent<HandsComponent>(arm!.Value).Hands, Is.Not.Empty,
+                    "The control: hand-fill gives the arm its hand on map init, so a fresh arm has one.");
+            });
+
+            var (result, shipId) = await RunOnServer(pair, () => drydock.TryStoreShip(shipGrid, owner, null));
+            Assert.That(result, Is.EqualTo(DrydockStoreResult.Success));
+
+            await pair.RunTicksSync(5);
+
+            var retrieved = await RunOnServer(pair, () => drydock.TryRetrieveShip(shipId!.Value, owner, station, null));
+            Assert.That(retrieved.Result, Is.EqualTo(DrydockRetrieveResult.Success));
+
+            await pair.RunTicksSync(5);
+
+            var grid = retrieved.Grid!.Value;
+            var retrievedFridge = await FindChildWithComponent<SmartFridgeComponent>(pair, grid);
+            var retrievedArm = await FindChildWithComponent<InteractorComponent>(pair, grid);
+
+            await server.WaitAssertion(() =>
+            {
+                Assert.Multiple(() =>
+                {
+                    Assert.That(retrievedFridge, Is.Not.Null, "The fridge came back with the ship.");
+                    var entries = entMan.GetComponent<SmartFridgeComponent>(retrievedFridge!.Value).ContainedEntries;
+                    Assert.That(entries.Values.Sum(v => v.Count), Is.EqualTo(1),
+                        "The stock index is rebuilt only on map init, which a retrieve never fires; without the Revive step the fridge reports itself empty over a full container.");
+
+                    Assert.That(retrievedArm, Is.Not.Null, "The arm came back with the ship.");
+                    Assert.That(entMan.GetComponent<HandsComponent>(retrievedArm!.Value).Hands, Is.Not.Empty,
+                        "Hands are not data fields and hand-fill only runs on map init; without the Revive step the arm has nothing to hold a tool with.");
+
+                    Assert.That(entMan.HasComponent<StationVariationHasRunComponent>(grid), Is.True,
+                        "The variation marker has to ride the grid, or the recreated station is varied again on every retrieve.");
+                });
+            });
+
+            await pair.CleanReturnAsync();
+        }
+
+        /// <summary>
+        /// A xenoartifact is the one entity aboard whose whole structure is a NetEntity graph. The
+        /// fidelity probe had no NetEntity writer, so it judged every such field unserializable and
+        /// blanked it before the save: the vertex array went to null and the serializer refused the
+        /// entire ship (test server, 2026-09-06: "Damascus cannot store"). The map serializer remaps
+        /// NetEntity like EntityUid, so the probe must leave those fields alone; this proves the
+        /// store goes through and the graph comes back pointing at real nodes.
+        /// </summary>
+        [Test]
+        public async Task AnArtifactSurvivesTheRoundTrip()
+        {
+            await using var pair = await PoolManager.GetServerClient();
+            var server = pair.Server;
+            var entMan = server.EntMan;
+
+            var db = server.ResolveDependency<IServerDbManager>();
+            var drydock = server.System<DrydockSystem>();
+
+            var owner = Guid.NewGuid();
+            await InsertPlayer(db, owner);
+            await server.ResolveDependency<DrydockStore>().AddBerth(owner, ShipSizeClass.SuperCapital, DrydockBerthKind.Granted, 0, null, null);
+
+            var (station, shipGrid, _) = await BuildShipAndStation(pair);
+
+            await server.WaitPost(() =>
+            {
+                entMan.SpawnEntity(ArtifactProtoId, new EntityCoordinates(shipGrid, new Vector2(2f, 2f)));
+            });
+
+            await pair.RunTicksSync(5);
+
+            var nodesBefore = 0;
+            await server.WaitAssertion(() =>
+            {
+                var artifact = FindChildWithComponentSync<XenoArtifactComponent>(entMan, shipGrid);
+                Assert.That(artifact, Is.Not.Null);
+                nodesBefore = entMan.GetComponent<XenoArtifactComponent>(artifact!.Value).NodeVertices.Count(v => v != null);
+                Assert.That(nodesBefore, Is.GreaterThan(0), "The control: generation on map init has to have produced a graph to lose.");
+            });
+
+            var (result, shipId) = await RunOnServer(pair, () => drydock.TryStoreShip(shipGrid, owner, null));
+            Assert.That(result, Is.EqualTo(DrydockStoreResult.Success),
+                "A ship carrying an artifact must store. SerializeFailed here means the probe blanked a NetEntity field and the writer refused the null.");
+
+            await pair.RunTicksSync(5);
+
+            var retrieved = await RunOnServer(pair, () => drydock.TryRetrieveShip(shipId!.Value, owner, station, null));
+            Assert.That(retrieved.Result, Is.EqualTo(DrydockRetrieveResult.Success));
+
+            await pair.RunTicksSync(5);
+
+            var retrievedArtifact = await FindChildWithComponent<XenoArtifactComponent>(pair, retrieved.Grid!.Value);
+
+            await server.WaitAssertion(() =>
+            {
+                Assert.That(retrievedArtifact, Is.Not.Null, "The artifact came back with the ship.");
+                var comp = entMan.GetComponent<XenoArtifactComponent>(retrievedArtifact!.Value);
+
+                Assert.That(comp.NodeVertices, Is.Not.Null);
+                var resolved = comp.NodeVertices.Count(v => v != null && entMan.TryGetEntity(v.Value, out var node) && entMan.HasComponent<XenoArtifactNodeComponent>(node.Value));
+                Assert.That(resolved, Is.EqualTo(nodesBefore),
+                    "Every vertex has to be remapped to the reborn node entity; a stripped graph comes back empty and a stale one points at nothing.");
+            });
+
+            await pair.CleanReturnAsync();
+        }
+
+        private static EntityUid? FindChildWithComponentSync<T>(IEntityManager entMan, EntityUid grid) where T : IComponent
+        {
+            var query = entMan.AllEntityQueryEnumerator<T, TransformComponent>();
+            while (query.MoveNext(out var uid, out _, out var xform))
+            {
+                if (xform.GridUid == grid)
+                    return uid;
+            }
+
+            return null;
         }
 
         /// <summary>

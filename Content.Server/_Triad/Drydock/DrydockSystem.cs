@@ -4,6 +4,7 @@ using System.Linq;
 using System.Security.Cryptography;
 using System.Text;
 using System.Threading.Tasks;
+using Content.Server._Mono.Shuttles.Components;
 using Content.Server._NF.Shipyard.Systems;
 using Content.Server._NF.Station.Components;
 using Content.Server.NodeContainer;
@@ -66,6 +67,10 @@ public sealed partial class DrydockSystem : EntitySystem
     {
         typeof(ShipRepairDataComponent),
         typeof(StationMemberComponent),
+        // A powered-down helm parks its job slots here with the station they belonged to, and the
+        // station is round-scoped like the membership above: serialized, it reloads as an invalid
+        // reference and logs on every load. The recreated station gets its vessel's slots anyway.
+        typeof(ShuttleConsoleJobSlotsComponent),
     };
 
     /// <summary>
@@ -106,6 +111,7 @@ public sealed partial class DrydockSystem : EntitySystem
         var injectedDamage = new List<EntityUid>();
         var stripped = new List<IComponent>();
         DrydockFidelityCapture? fidelity = null;
+        EntityUid? deedHolder = null;
         var committed = false;
 
         // The try opens HERE, before the first await and before the first mutation that has to be
@@ -173,6 +179,11 @@ public sealed partial class DrydockSystem : EntitySystem
             }
 
             stripped = StripListedComponents(gridUid);
+
+            // The grid's own deed names the card holding it, which is outside the document. Written
+            // as-is it reloads as an invalid reference and the deserializer logs an error on every
+            // scratch load and every retrieve; retrieve sets the holder afresh anyway.
+            deedHolder = _shipyard.DetachGridDeedHolder(gridUid);
 
             // The general net, after the two specific sidecars and the strip list so it sees the
             // final live component set. For every unserializable populated field it either captures
@@ -292,6 +303,7 @@ public sealed partial class DrydockSystem : EntitySystem
                     RemComp<DrydockDamageSidecarComponent>(uid);
 
                 RestoreStrippedComponents(gridUid, stripped);
+                _shipyard.ReattachGridDeedHolder(gridUid, deedHolder);
 
                 // Stripping station membership fired the station system's shutdown handler, which
                 // removed this grid from its station's set. Restoring the component brings the

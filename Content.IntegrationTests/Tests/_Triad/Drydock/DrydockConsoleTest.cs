@@ -20,6 +20,7 @@ using Content.Shared._Triad.CCVar;
 using Content.Shared._Triad.Shipyard.Save;
 using Content.Shared._Triad.ShipSize;
 using Content.Shared.Containers.ItemSlots;
+using Content.Shared.Shuttles.Components;
 using Robust.Server.Player;
 using Robust.Shared.Configuration;
 using Robust.Shared.GameObjects;
@@ -75,12 +76,25 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
 
             var (station, stationGrid, ship, console, consoleComp, card, operatorEnt) = await BuildConsoleAndShip(pair, session.UserId);
 
+            // A helm locked to the ship, the way a purchase leaves every console aboard. Its lock
+            // holds the ship's uid as a string, which is the one reference the loader cannot remap.
+            var consoleLock = server.System<ShuttleConsoleLockSystem>();
+            EntityUid helm = default;
+            await server.WaitPost(() =>
+            {
+                helm = entMan.SpawnEntity(null, new EntityCoordinates(ship, new Vector2(1.5f, 1.5f)));
+                var lockComp = entMan.EnsureComponent<ShuttleConsoleLockComponent>(helm);
+                consoleLock.SetShuttleId(helm, ship.ToString(), lockComp);
+            });
+
             // The control for the store assertion below: the card has to be carrying a deed before
-            // the store, or "the deed came off" proves nothing.
+            // the store, or "the deed came off" proves nothing. Same for the helm: it has to be
+            // keyed to the hull that is about to be stored, or "it came back re-keyed" proves nothing.
             await server.WaitAssertion(() =>
             {
                 Assert.That(entMan.HasComponent<ShuttleDeedComponent>(card), Is.True,
                     "The console store resolves its ship from this deed; without it the test never reaches the pipeline.");
+                Assert.That(entMan.GetComponent<ShuttleConsoleLockComponent>(helm).ShuttleId, Is.EqualTo(ship.ToString()));
             });
 
             var stored = await RunOnServer(pair,
@@ -144,6 +158,21 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                 var deed = entMan.GetComponent<ShuttleDeedComponent>(card);
                 Assert.That(deed.ShuttleUid, Is.EqualTo(retrieved!.Value),
                     "The minted deed has to point at the ship that actually came back.");
+
+                // The helm came back with the ship; the lock on it has to name the ship that came
+                // back, because the unlock compares the deed's uid with the lock's as strings and a
+                // lock still naming the stored hull refuses the captain's own deed.
+                ShuttleConsoleLockComponent? retrievedLock = null;
+                var locks = entMan.AllEntityQueryEnumerator<ShuttleConsoleLockComponent, TransformComponent>();
+                while (locks.MoveNext(out var lockUid, out var lockComp, out var xform))
+                {
+                    if (xform.GridUid == retrieved.Value)
+                        retrievedLock = lockComp;
+                }
+
+                Assert.That(retrievedLock, Is.Not.Null, "The locked helm has to come back with the ship.");
+                Assert.That(retrievedLock!.ShuttleId, Is.EqualTo(retrieved.Value.ToString()),
+                    "A console lock holds the ship's uid as a string; retrieve has to re-key it to the reborn grid or the deed never opens it.");
             });
 
             await pair.CleanReturnAsync();
