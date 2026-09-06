@@ -75,9 +75,19 @@ public sealed partial class DrydockFidelitySystem
             var (uid, parentPath) = queue.Dequeue();
             var path = PathFor(uid, parentPath, grid);
 
-            if (!byPath.TryGetValue(path, out var sharing))
-                byPath[path] = sharing = new List<EntityUid>();
-            sharing.Add(uid);
+            // The serializer's own exclusion, the same one the roster sweep's census applies. A
+            // save: false prototype is never written into a store, so an entity of one aboard at the
+            // snapshot is legitimately absent afterwards and comparing it measures timing. Sounds are
+            // the case that bites: one playing at grid coordinates is a real grid child until its
+            // despawn timer fires. Skipped here rather than filtered downstream, because a whole
+            // entity is now reported as a single line with no component name in it for a filter to
+            // match on.
+            if (MetaData(uid).EntityPrototype?.MapSavable != false)
+            {
+                if (!byPath.TryGetValue(path, out var sharing))
+                    byPath[path] = sharing = new List<EntityUid>();
+                sharing.Add(uid);
+            }
 
             var children = Transform(uid).ChildEnumerator;
             while (children.MoveNext(out var child))
@@ -108,10 +118,16 @@ public sealed partial class DrydockFidelitySystem
         // A direct child of the grid gets its tile, which is what separates two of the same machine.
         // Deeper entities inherit their container's identity instead, since their own local position
         // is an offset inside that container and carries no information.
+        //
+        // The tile rather than the position, and this matters more than it looks. An anchored
+        // machine sits on a tile centre and would survive either, but a loose item lies wherever it
+        // was dropped and settles a fraction of a tile differently after a reload. Keyed by position
+        // that reads as the item vanishing and a stranger appearing, and the first fleet-wide run
+        // reported exactly that: a thousand phantom losses that were one mask lying still.
         if (parentPath == "grid")
         {
             var local = Transform(uid).LocalPosition;
-            return $"{proto}@{MathF.Round(local.X, 2)},{MathF.Round(local.Y, 2)}";
+            return $"{proto}@{(int) MathF.Floor(local.X)},{(int) MathF.Floor(local.Y)}";
         }
 
         return $"{parentPath}/{proto}";
@@ -250,8 +266,21 @@ public sealed class DrydockStateSnapshot
     {
         var lines = new List<string>();
 
+        // An entity that is not on the other side at all is ONE finding, reported once, rather than
+        // one per field of every component it carried. The difference is not cosmetic: twenty action
+        // entities emptied out of AI cores by design produced 480 rows on the first fleet-wide run,
+        // because InstantActionComponent alone declares 24 fields, and 501 of the 669 "kinds" that
+        // run reported were that same shape. Counting fields makes a handful of missing entities read
+        // as a catastrophe and buries the field-level findings, which are the ones worth reading.
+        var beforeEntities = PathsOf(before);
+        var afterEntities = PathsOf(after);
+
         foreach (var (key, was) in before.Values)
         {
+            var path = PathOf(key);
+            if (!afterEntities.Contains(path))
+                continue; // Reported once below, as a whole entity.
+
             if (!after.Values.TryGetValue(key, out var now))
             {
                 lines.Add($"GONE     {key} (was {Trim(was)})");
@@ -262,14 +291,62 @@ public sealed class DrydockStateSnapshot
                 lines.Add($"CHANGED  {key}: {Trim(was)} -> {Trim(now)}");
         }
 
-        foreach (var key in after.Values.Keys)
+        foreach (var (key, now) in after.Values)
         {
+            var path = PathOf(key);
+            if (!beforeEntities.Contains(path))
+                continue;
+
             if (!before.Values.ContainsKey(key))
-                lines.Add($"APPEARED {key} (now {Trim(after.Values[key])})");
+                lines.Add($"APPEARED {key} (now {Trim(now)})");
+        }
+
+        // The whole-entity lines. Shaped with the pipe the field lines use so the sweep's own
+        // grouping keys them by prototype, giving one row per kind of entity that went missing
+        // rather than one per entity or one per field.
+        foreach (var path in beforeEntities)
+        {
+            if (!afterEntities.Contains(path))
+                lines.Add($"GONE     {path}|<entity:{ProtoOf(path)}> (with all its state)");
+        }
+
+        foreach (var path in afterEntities)
+        {
+            if (!beforeEntities.Contains(path))
+                lines.Add($"APPEARED {path}|<entity:{ProtoOf(path)}> (with all its state)");
         }
 
         lines.Sort();
         return lines;
+    }
+
+    /// <summary>The entity half of a <c>path|Component.Field</c> key.</summary>
+    private static string PathOf(string key)
+    {
+        var pipe = key.IndexOf('|');
+        return pipe < 0 ? key : key[..pipe];
+    }
+
+    private static HashSet<string> PathsOf(DrydockStateSnapshot snapshot)
+    {
+        var paths = new HashSet<string>();
+        foreach (var key in snapshot.Values.Keys)
+            paths.Add(PathOf(key));
+
+        return paths;
+    }
+
+    /// <summary>
+    /// The prototype a path names, which is the last segment for a contained entity and the part
+    /// before the tile for a direct child of the grid.
+    /// </summary>
+    private static string ProtoOf(string path)
+    {
+        var slash = path.LastIndexOf('/');
+        var leaf = slash < 0 ? path : path[(slash + 1)..];
+
+        var at = leaf.IndexOf('@');
+        return at < 0 ? leaf : leaf[..at];
     }
 
     private static string Trim(string value)

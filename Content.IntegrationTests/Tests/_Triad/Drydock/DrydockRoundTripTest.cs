@@ -1722,52 +1722,12 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                     $"The ship came back. Ambiguous paths: {before.Ambiguous} before, {after.Ambiguous} after.");
             });
 
-            var diff = DrydockStateSnapshot.Diff(before, after).Where(IsNotExpectedDifference).ToList();
+            var diff = DrydockStateSnapshot.Diff(before, after).Where(DrydockRoundTripExpectations.IsUnexpected).ToList();
 
             Assert.That(diff, Is.Empty,
                 "The round trip changed state nothing intends it to change:\n  " + string.Join("\n  ", diff));
 
             await pair.CleanReturnAsync();
-        }
-
-        /// <summary>
-        /// Differences that are not the round trip losing something. Every entry names why, and an
-        /// entry without a reason is a bug somebody gave up on rather than a difference by design.
-        /// </summary>
-        private static bool IsNotExpectedDifference(string line)
-        {
-            string[] byDesign =
-            {
-                // Minted fresh for whoever retrieved the ship, which is the point of a retrieve.
-                "ShuttleDeedComponent.",
-                "ShipOwnershipComponent.",
-
-                // Station membership is stripped at store and a fresh station is built at retrieve.
-                "StationMemberComponent.",
-
-                // The repair baseline is derived state, regenerated on arrival by design.
-                "ShipRepair",
-
-                // Stamped on the grid at retrieve so roundstart variation does not re-litter a ship
-                // every time it comes back.
-                "StationVariationHasRunComponent.",
-
-                // The loader puts this on any grid it reads. It is load bookkeeping, not ship state.
-                "MapSaveTileMapComponent.",
-            };
-
-            // These advance with the clock rather than with the round trip, so the two snapshots
-            // differ by however many ticks passed between them however well the drydock behaves.
-            // Whether a battery comes back at roughly the charge it left with is a question for a
-            // test that can assert a tolerance; this one only compares what should be identical.
-            string[] withTheClock =
-            {
-                "BatteryComponent.CurrentCharge",
-                "PowerNetworkBatteryComponent.SupplyRampPosition",
-                "SpreaderGridComponent.UpdateAccumulator",
-            };
-
-            return !byDesign.Any(line.Contains) && !withTheClock.Any(line.Contains);
         }
 
         private static EntityUid? FindChildWithComponentSync<T>(IEntityManager entMan, EntityUid grid) where T : IComponent

@@ -69,6 +69,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             var db = server.ResolveDependency<IServerDbManager>();
             var protoMan = server.ResolveDependency<IPrototypeManager>();
             var drydock = server.System<DrydockSystem>();
+            var fidelity = server.System<DrydockFidelitySystem>();
             var shipyard = server.System<ShipyardSystem>();
             var stationSys = server.System<StationSystem>();
             var mapLoader = server.System<MapLoaderSystem>();
@@ -99,15 +100,44 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
 
             await pair.RunTicksSync(5);
 
-            var vessels = protoMan.EnumeratePrototypes<VesselPrototype>()
+            var roster = protoMan.EnumeratePrototypes<VesselPrototype>()
                 .Where(v => !v.Abstract)
                 .OrderBy(v => v.ID)
                 .ToList();
 
+            // Faction hulls are refused by the console before any of this runs, and they are refused
+            // because they are issued full of restricted loadout the save path is supposed to strip.
+            // Sweeping one measures a path no player can reach, and it does not measure it quietly:
+            // the strip takes anchored ship machinery too, so a TDF hull reports its whole propulsion
+            // as lost state and buries the findings that are about ships somebody can actually store.
+            // Skipped by the same component the console gates on, so this list cannot drift from it.
+            //
+            // The sweep calls TryStoreShip directly rather than going through the console, and it
+            // loads hulls straight from ShuttlePath, where a vessel's addComponents have not been
+            // applied yet. So the gate has to be read off the prototype here; asking the grid would
+            // silently answer "not blacklisted" for every ship in the fleet.
+            var refused = roster
+                .Where(v => v.AddComponents.ContainsKey("ShipSavingBlacklist"))
+                .ToList();
+
+            var vessels = roster.Except(refused).ToList();
+
             Assert.That(vessels, Is.Not.Empty, "The control: an empty roster would make this sweep vacuous.");
+            Assert.That(refused, Is.Not.Empty,
+                "The control on the skip: the fork has faction vessels, so filtering them out and "
+                + "getting nothing back means the gate stopped matching rather than that they are gone.");
 
             var failures = new List<string>();
             var deltas = new List<string>();
+
+            // Field-level differences across the whole fleet, aggregated by what changed rather
+            // than by which ship it changed on, because the same gap shows up on every vessel
+            // carrying the machine and a per-ship list would bury that under its own length.
+            var drift = new Dictionary<string, (int Occurrences, string Example)>();
+            var snapshotCost = System.Diagnostics.Stopwatch.StartNew();
+            snapshotCost.Stop();
+            var covered = 0;
+            var ambiguous = 0;
             var swept = 0;
 
             foreach (var vessel in vessels)
@@ -129,6 +159,14 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                 }
 
                 var before = await CensusGrid(pair, loaded.Value);
+
+                DrydockStateSnapshot beforeState = default!;
+                await server.WaitPost(() =>
+                {
+                    snapshotCost.Start();
+                    beforeState = fidelity.SnapshotGrid(loaded!.Value);
+                    snapshotCost.Stop();
+                });
 
                 try
                 {
@@ -153,12 +191,40 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                         continue;
                     }
 
+                    // The same settling time the loaded ship got before its snapshot. A power net
+                    // rebuilds over several ticks and its devices toggle while it does, so comparing
+                    // three ticks of settling against ten reports the simulation settling rather than
+                    // the round trip losing anything: the first fleet-wide run spent thousands of
+                    // lines saying so. Equalised on this side rather than by ticking the loaded ship
+                    // longer, because the extra ticks gave the firelock update seven more chances per
+                    // vessel to ask a torn-down map for its atmosphere, which is a known flake here.
+                    await pair.RunTicksSync(3);
+
+                    DrydockStateSnapshot afterState = default!;
+                    await server.WaitPost(() =>
+                    {
+                        snapshotCost.Start();
+                        afterState = fidelity.SnapshotGrid(retrieved.Grid!.Value);
+                        snapshotCost.Stop();
+                    });
+
                     // Ticking is the physics assertion. A grid whose broadphase or contact list came
                     // back inconsistent throws on the tick, not on the load, and the harness turns
                     // that into a failure here rather than somewhere unrelated later.
-                    await pair.RunTicksSync(10);
+                    await pair.RunTicksSync(7);
 
                     var after = await CensusGrid(pair, retrieved.Grid!.Value);
+
+                    covered += beforeState.Entities;
+                    ambiguous += beforeState.Ambiguous;
+
+                    foreach (var line in DrydockStateSnapshot.Diff(beforeState, afterState)
+                                 .Where(DrydockRoundTripExpectations.IsUnexpected))
+                    {
+                        var kind = DiffKind(line);
+                        var seen = drift.GetValueOrDefault(kind, (Occurrences: 0, Example: line));
+                        drift[kind] = (seen.Occurrences + 1, seen.Example);
+                    }
 
                     // Reported, deliberately not asserted. Census equality is the wrong bar for a
                     // roster sweep, because a store is not supposed to be lossless: it empties
@@ -180,6 +246,28 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                 swept++;
             }
 
+            await TestContext.Out.WriteLineAsync(
+                $"[roster-sweep] snapshot walked {covered} entities ({ambiguous} dropped as ambiguous) "
+                + $"in {snapshotCost.Elapsed.TotalSeconds:F1}s of the run.");
+
+            // What the sweep did not look at, named rather than merely absent, so a hull that goes
+            // missing from the report because someone blacklisted it is visible here instead of
+            // reading as a ship that passed.
+            await TestContext.Out.WriteLineAsync(
+                $"[roster-sweep] {vessels.Count} of {roster.Count} vessel(s) swept; {refused.Count} "
+                + $"skipped as save-blacklisted: {string.Join(", ", refused.Select(v => v.ID))}");
+
+            if (drift.Count > 0)
+            {
+                await TestContext.Out.WriteLineAsync(
+                    $"[roster-sweep] {drift.Count} kind(s) of state changed across the round trip:"
+                    + Environment.NewLine
+                    + string.Join(Environment.NewLine, drift
+                        .OrderByDescending(d => d.Value.Occurrences)
+                        .Select(d => $"  {d.Value.Occurrences,5} on entities  {d.Key}"
+                                     + Environment.NewLine + $"       e.g. {d.Value.Example}")));
+            }
+
             if (deltas.Count > 0)
             {
                 await TestContext.Out.WriteLineAsync(
@@ -193,6 +281,32 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                 + string.Join(Environment.NewLine, failures));
 
             await pair.CleanReturnAsync();
+        }
+
+        /// <summary>
+        /// The part of a diff line that says what changed, with the ship and the entity it happened
+        /// on stripped off. One gap on one machine type produces a line per vessel that carries it,
+        /// and grouping by this is what turns a hundred lines back into one finding.
+        /// </summary>
+        private static string DiffKind(string line)
+        {
+            var verb = line.IndexOf(' ');
+            if (verb < 0)
+                return line;
+
+            // The verb stays in the key. Without it a field that vanished on one entity and appeared
+            // on another collapse into one row, which is exactly the pair that says an entity moved
+            // rather than went missing, and the first fleet-wide run could not tell those apart.
+            var kind = line[..verb];
+            var body = line[verb..].TrimStart();
+
+            var pipe = body.IndexOf('|');
+            if (pipe < 0)
+                return $"{kind} {body}";
+
+            var field = body[(pipe + 1)..];
+            var space = field.IndexOf(' ');
+            return $"{kind} {(space < 0 ? field : field[..space])}";
         }
 
         private static async Task Cleanup(TestPair pair, EntityUid? grid)
