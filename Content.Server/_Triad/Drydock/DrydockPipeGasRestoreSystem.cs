@@ -31,14 +31,19 @@ public sealed partial class DrydockPipeGasRestoreSystem : EntitySystem
             return;
         }
 
-        foreach (var node in nodeContainer.Nodes.Values)
+        // Each share goes back into the net of the node it was taken from, by name, so a pump's
+        // inlet share never lands in its outlet's net. Merge rather than overwrite, so a net whose
+        // members each carry a share sums back to what it held instead of the last one clobbering
+        // the rest.
+        foreach (var (name, share) in ent.Comp.Shares)
         {
-            if (node is not PipeNode { NodeGroup: not null } pipe)
+            if (!nodeContainer.Nodes.TryGetValue(name, out var node)
+                || node is not PipeNode { NodeGroup: not null } pipe)
+            {
                 continue;
+            }
 
-            // Merge rather than overwrite, so a net whose members each carry a share sums back to
-            // what it held instead of the last one clobbering the rest.
-            _atmosphere.Merge(pipe.Air, ent.Comp.GasMixture);
+            _atmosphere.Merge(pipe.Air, share);
         }
 
         RemComp<DrydockPipeGasComponent>(ent);

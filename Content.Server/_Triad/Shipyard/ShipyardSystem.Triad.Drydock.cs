@@ -27,6 +27,7 @@ using Content.Shared.Database;
 using Content.Shared.Forensics.Components;
 using Content.Shared.Preferences;
 using Content.Shared.StationRecords;
+using Content.Server.StationEvents.Components;
 using Content.Server.StationRecords;
 using Robust.Shared.Map.Components;
 using Robust.Shared.Network;
@@ -938,13 +939,24 @@ public sealed partial class ShipyardSystem
             return grid;
 
         MintCardDeed(targetId, grid, player);
+        AddNewShuttleDeedAccessLevels(targetId, component);
+        AddCompanyInformation(targetId, grid);
         AddRetrievedShuttleRecord(component, grid, player);
 
-        // The rest of what a purchase does for its captain: a station record on the ship's own
-        // station, and the shipyard channel hearing about it (test server, 2026-09-06: "station
-        // records do NOT work", "no shortband message for ships being loaded").
+        // The rest of what a purchase and a ship load do for their captain, in their order (the
+        // list is the ship-load path's, walked with its author on 2026-09-06): a station record on
+        // the ship's own station, ship access on every door and locker, the grid-split lifecycle
+        // marker, the permit items re-stamped to whoever is retrieving, the direction message,
+        // and the shipyard channel hearing about it. Ownership is the drydock's own step, since
+        // the row, not the card, says who owns a retrieved ship. Console locks are the drydock's
+        // too, because they hold the grid uid, which only the retrieve knows.
         if (_station.GetOwningStation(grid) is { Valid: true } shipStation)
             EnsureCaptainStationRecord(shipStation, targetId, player);
+
+        AddShipAccessToEntities(grid);
+        EnsureComp<LinkedLifecycleGridParentComponent>(grid);
+        _contrabandPermit.InitializePermitItemsOnGrid(grid, player);
+        _shipyardDirection.SendShipDirectionMessage(player, grid);
 
         var gridName = Name(grid);
         SendPurchaseMessage(uid, player, gridName, component.ShipyardChannel, secret: false);

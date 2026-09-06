@@ -16,6 +16,8 @@ using Content.Server.Station.Components;
 using Content.Server.Station.Systems;
 using Content.Shared._Mono.ShipRepair.Components;
 using Content.Shared._Triad.CCVar;
+using Content.Shared._Triad.ContrabandPermit;
+using Content.Shared._Triad.Shipyard.Save.Contraband;
 using Content.Shared._Triad.ShipSize;
 using Content.Shared.Damage;
 using Content.Shared.Explosion.Components;
@@ -26,6 +28,7 @@ using Content.Shared.Nuke;
 using Content.Shared.Shuttles.Components;
 using Content.Shared.Singularity.Components;
 using Content.Shared.Station.Components;
+using Content.Shared.Store.Components;
 using Robust.Shared.Configuration;
 using Robust.Shared.EntitySerialization;
 using Robust.Shared.EntitySerialization.Systems;
@@ -112,6 +115,7 @@ public sealed partial class DrydockSystem : EntitySystem
         var stripped = new List<IComponent>();
         DrydockFidelityCapture? fidelity = null;
         EntityUid? deedHolder = null;
+        var storeMaps = new List<(EntityUid Store, EntityUid? Map)>();
         var committed = false;
 
         // The try opens HERE, before the first await and before the first mutation that has to be
@@ -156,6 +160,16 @@ public sealed partial class DrydockSystem : EntitySystem
 
             var shipName = Comp<MetaDataComponent>(gridUid).EntityName;
 
+            // The saving-contraband purge, by the same component rule the ship-save path applies:
+            // anything marked as saving contraband goes unless it carries a contraband permit. It
+            // sits after every refusal above, so a refused store deletes nothing, and before the
+            // appraisal, so the quote is for what is actually filed. Not undoable, which is also
+            // true of the reference path; the first play test found ID cards and modular grenades
+            // riding a store that kept everything (2026-09-06).
+            var purged = PurgeSavingContraband(gridUid);
+            if (purged > 0)
+                Log.Info($"Drydock: {shipId} store purged {purged} saving-contraband entities without a permit.");
+
             // The sale quote, taken while the hull is whole and before any sidecar or strip
             // touches it, so what a scrap pays is what the shipyard would have paid at this moment.
             var appraisal = _shipyard.AppraiseHull(gridUid);
@@ -184,6 +198,12 @@ public sealed partial class DrydockSystem : EntitySystem
             // as-is it reloads as an invalid reference and the deserializer logs an error on every
             // scratch load and every retrieve; retrieve sets the holder afresh anyway.
             deedHolder = _shipyard.DetachGridDeedHolder(gridUid);
+
+            // A PDA's store remembers the map it was set up on, which is likewise outside the
+            // document and reloads as an invalid reference that logs on every load. Purchased
+            // ships already leave that map behind when they dock, so a retrieved store is no
+            // worse off for coming back with the field blank.
+            storeMaps = DetachStoreMaps(gridUid);
 
             // The general net, after the two specific sidecars and the strip list so it sees the
             // final live component set. For every unserializable populated field it either captures
@@ -304,6 +324,7 @@ public sealed partial class DrydockSystem : EntitySystem
 
                 RestoreStrippedComponents(gridUid, stripped);
                 _shipyard.ReattachGridDeedHolder(gridUid, deedHolder);
+                ReattachStoreMaps(storeMaps);
 
                 // Stripping station membership fired the station system's shutdown handler, which
                 // removed this grid from its station's set. Restoring the component brings the
@@ -517,8 +538,10 @@ public sealed partial class DrydockSystem : EntitySystem
         var injected = new List<EntityUid>();
 
         // Nets are de-duplicated by node-group identity: a net has many member pipes and its gas
-        // must be distributed exactly once.
-        var nets = new Dictionary<object, List<(EntityUid Owner, PipeNode Pipe)>>();
+        // must be distributed exactly once. Members are (entity, node name, node), because a
+        // two-port device sits in two nets and each node's share has to be filed under its own
+        // name, or the last net written wins and the restore leaks it into the other.
+        var nets = new Dictionary<object, List<(EntityUid Owner, string Name, PipeNode Pipe)>>();
 
         var query = AllEntityQuery<NodeContainerComponent, TransformComponent>();
         while (query.MoveNext(out var uid, out var nodeContainer, out var xform))
@@ -526,22 +549,22 @@ public sealed partial class DrydockSystem : EntitySystem
             if (xform.GridUid != gridUid)
                 continue;
 
-            foreach (var node in nodeContainer.Nodes.Values)
+            foreach (var (name, node) in nodeContainer.Nodes)
             {
                 if (node is not PipeNode { NodeGroup: { } group } pipe)
                     continue;
 
                 if (!nets.TryGetValue(group, out var members))
-                    nets[group] = members = new List<(EntityUid, PipeNode)>();
+                    nets[group] = members = new List<(EntityUid, string, PipeNode)>();
 
-                members.Add((uid, pipe));
+                members.Add((uid, name, pipe));
             }
         }
 
         foreach (var members in nets.Values)
         {
             var totalVolume = 0f;
-            foreach (var (_, pipe) in members)
+            foreach (var (_, _, pipe) in members)
                 totalVolume += pipe.Volume;
 
             if (totalVolume <= 0f)
@@ -549,13 +572,15 @@ public sealed partial class DrydockSystem : EntitySystem
 
             var netAir = members[0].Pipe.Air;
 
-            foreach (var (owner, pipe) in members)
+            foreach (var (owner, name, pipe) in members)
             {
                 var share = new Content.Shared.Atmos.GasMixture(netAir) { Volume = pipe.Volume };
                 share.Multiply(pipe.Volume / totalVolume);
 
-                EnsureComp<DrydockPipeGasComponent>(owner).GasMixture = share;
-                injected.Add(owner);
+                var sidecar = EnsureComp<DrydockPipeGasComponent>(owner);
+                sidecar.Shares[name] = share;
+                if (sidecar.Shares.Count == 1)
+                    injected.Add(owner);
             }
         }
 
@@ -610,6 +635,68 @@ public sealed partial class DrydockSystem : EntitySystem
             comp.Owner = gridUid;
 #pragma warning restore CS0618
             AddComp(gridUid, comp, true);
+        }
+    }
+
+    /// <summary>
+    /// Deletes every entity aboard marked as saving contraband that does not carry a contraband
+    /// permit, containers and their contents included, and returns how many went. This is the
+    /// ship-save path's rule (<c>IsInvalidEntity</c>), applied by component rather than by a list,
+    /// which is the user's call from the play test: the component is what the content marks.
+    /// Immediate deletes, because the serializer walks the tree later in this same tick.
+    /// </summary>
+    private int PurgeSavingContraband(EntityUid gridUid)
+    {
+        var doomed = new List<EntityUid>();
+        var query = AllEntityQuery<SavingContrabandComponent, TransformComponent>();
+        while (query.MoveNext(out var uid, out _, out var xform))
+        {
+            if (xform.GridUid != gridUid || HasComp<ContrabandPermitItemComponent>(uid))
+                continue;
+
+            doomed.Add(uid);
+        }
+
+        var count = 0;
+        foreach (var uid in doomed)
+        {
+            // A container purged earlier in the list takes its contents with it.
+            if (TerminatingOrDeleted(uid))
+                continue;
+
+            Del(uid);
+            count++;
+        }
+
+        return count;
+    }
+
+    /// <summary>
+    /// Blanks the starting-map reference on every store aboard (a PDA's uplink store, mostly) and
+    /// returns what was there, so an aborted store can put it back.
+    /// </summary>
+    private List<(EntityUid Store, EntityUid? Map)> DetachStoreMaps(EntityUid gridUid)
+    {
+        var detached = new List<(EntityUid, EntityUid?)>();
+        var query = AllEntityQuery<StoreComponent, TransformComponent>();
+        while (query.MoveNext(out var uid, out var store, out var xform))
+        {
+            if (xform.GridUid != gridUid || store.StartingMap == null)
+                continue;
+
+            detached.Add((uid, store.StartingMap));
+            store.StartingMap = null;
+        }
+
+        return detached;
+    }
+
+    private void ReattachStoreMaps(List<(EntityUid Store, EntityUid? Map)> detached)
+    {
+        foreach (var (uid, map) in detached)
+        {
+            if (TryComp<StoreComponent>(uid, out var store))
+                store.StartingMap = map;
         }
     }
 

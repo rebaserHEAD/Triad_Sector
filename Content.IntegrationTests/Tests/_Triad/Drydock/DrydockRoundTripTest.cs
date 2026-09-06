@@ -10,11 +10,15 @@ using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using Content.IntegrationTests.Pair;
+using Content.Server._Funkystation.Atmos.Components;
 using Content.Server._Mono.FireControl;
 using Content.Server._NF.Shipyard.Systems;
 using Content.Server._Triad.Drydock;
 using Content.Server._NF.Market.Components;
+using Content.Server.Atmos.Piping.Binary.Components;
+using Content.Server.Atmos.Piping.Trinary.Components;
 using Content.Server.Database;
+using Content.Server.DeviceLinking.Systems;
 using Content.Server.DeviceNetwork.Systems;
 using Content.Server.Lathe.Components;
 using Content.Server.NodeContainer.Nodes;
@@ -30,9 +34,12 @@ using Content.Shared._Mono.SpaceArtillery;
 using Content.Shared._NF.Market;
 using Content.Shared._NF.Shipyard.Components;
 using Content.Shared._Triad.CCVar;
+using Content.Shared._Triad.ContrabandPermit;
+using Content.Shared._Triad.Shipyard.Save.Contraband;
 using Content.Shared._Triad.ShipSize;
 using Content.Shared.ActionBlocker;
 using Content.Shared.Atmos;
+using Content.Shared.Atmos.Components;
 using Content.Shared.Damage;
 using Content.Shared.Damage.Prototypes;
 using Content.Shared.DeviceNetwork.Components;
@@ -43,8 +50,10 @@ using Content.Shared.NodeContainer;
 using Content.Shared.Research.Components;
 using Content.Shared.Research.Prototypes;
 using Content.Shared.SmartFridge;
+using Content.Shared.Timing;
 using Content.Shared.Weapons.Ranged.Components;
 using Content.Shared.Xenoarchaeology.Artifact.Components;
+using Content.Shared.Xenoarchaeology.Equipment.Components;
 using Microsoft.EntityFrameworkCore;
 using Robust.Shared.Configuration;
 using Robust.Shared.Containers;
@@ -95,6 +104,13 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
         private const string GunneryConsoleProtoId = "ComputerGunneryConsole";
         private const string TurretProtoId = "WeaponTurretFang";
         private const string ApcProtoId = "APCBasic";
+        private const string PressurePumpProtoId = "GasPressurePump";
+        private const string VolumePumpProtoId = "GasVolumePump";
+        private const string FilterProtoId = "GasFilter";
+        private const string MixerProtoId = "GasMixer";
+        private const string AnalysisConsoleProtoId = "ComputerAnalysisConsole";
+        private const string ArtifactAnalyzerProtoId = "MachineArtifactAnalyzer";
+        private const string CrystallizerProtoId = "Crystallizer";
 
         [Test]
         public async Task AShipStoredComesBackWithItsContentsAndItsWires()
@@ -1191,6 +1207,343 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             await pair.CleanReturnAsync();
         }
 
+        /// <summary>
+        /// Every pump, filter and mixer switches itself off when it leaves an atmosphere, and the
+        /// engine raises a parent-changed message on every entity at startup that made the atmos
+        /// device leave and rejoin the grid it had already joined on init. A loaded ship therefore
+        /// came back with its distro off (test server, 2026-09-06: "turned on pump became off",
+        /// "filters and pumps turn off"). The atmos device system now skips the rejoin for a device
+        /// already in the atmosphere it sits in; this is the round trip that proves the switches
+        /// hold, and it failed on all four before that change.
+        /// </summary>
+        [Test]
+        public async Task AtmosSwitchesStayOnThroughTheRoundTrip()
+        {
+            await using var pair = await PoolManager.GetServerClient();
+            var server = pair.Server;
+            var entMan = server.EntMan;
+
+            var db = server.ResolveDependency<IServerDbManager>();
+            var drydock = server.System<DrydockSystem>();
+
+            var owner = Guid.NewGuid();
+            await InsertPlayer(db, owner);
+            await server.ResolveDependency<DrydockStore>().AddBerth(owner, ShipSizeClass.SuperCapital, DrydockBerthKind.Granted, 0, null, null);
+
+            var (station, shipGrid, _) = await BuildShipAndStation(pair);
+
+            await server.WaitPost(() =>
+            {
+                var pump = entMan.SpawnEntity(PressurePumpProtoId, new EntityCoordinates(shipGrid, new Vector2(0.5f, 0.5f)));
+                var volumePump = entMan.SpawnEntity(VolumePumpProtoId, new EntityCoordinates(shipGrid, new Vector2(1.5f, 0.5f)));
+                var filter = entMan.SpawnEntity(FilterProtoId, new EntityCoordinates(shipGrid, new Vector2(2.5f, 0.5f)));
+                var mixer = entMan.SpawnEntity(MixerProtoId, new EntityCoordinates(shipGrid, new Vector2(0.5f, 2.5f)));
+
+                // The switches are access-locked to their systems, whose only setters are UI
+                // message handlers; the test throws them by hand.
+#pragma warning disable RA0002
+                entMan.GetComponent<GasPressurePumpComponent>(pump).Enabled = true;
+                entMan.GetComponent<GasVolumePumpComponent>(volumePump).Enabled = true;
+                entMan.GetComponent<GasFilterComponent>(filter).Enabled = true;
+                entMan.GetComponent<GasMixerComponent>(mixer).Enabled = true;
+#pragma warning restore RA0002
+            });
+
+            await pair.RunTicksSync(10);
+
+            await server.WaitAssertion(() => AssertAtmosSwitches(entMan, shipGrid, "Control, before the store"));
+
+            var (result, shipId) = await RunOnServer(pair, () => drydock.TryStoreShip(shipGrid, owner, null));
+            Assert.That(result, Is.EqualTo(DrydockStoreResult.Success));
+            await pair.RunTicksSync(5);
+
+            var retrieved = await RunOnServer(pair, () => drydock.TryRetrieveShip(shipId!.Value, owner, station, null));
+            Assert.That(retrieved.Result, Is.EqualTo(DrydockRetrieveResult.Success));
+            await pair.RunTicksSync(10);
+
+            await server.WaitAssertion(() => AssertAtmosSwitches(entMan, retrieved.Grid!.Value, "After the retrieve"));
+
+            await pair.CleanReturnAsync();
+        }
+
+        private static void AssertAtmosSwitches(IEntityManager entMan, EntityUid grid, string when)
+        {
+            var pump = FindChildWithComponentSync<GasPressurePumpComponent>(entMan, grid);
+            var volumePump = FindChildWithComponentSync<GasVolumePumpComponent>(entMan, grid);
+            var filter = FindChildWithComponentSync<GasFilterComponent>(entMan, grid);
+            var mixer = FindChildWithComponentSync<GasMixerComponent>(entMan, grid);
+            Assert.Multiple(() =>
+            {
+                Assert.That(pump, Is.Not.Null, $"{when}: the pressure pump is aboard.");
+                Assert.That(volumePump, Is.Not.Null, $"{when}: the volume pump is aboard.");
+                Assert.That(filter, Is.Not.Null, $"{when}: the filter is aboard.");
+                Assert.That(mixer, Is.Not.Null, $"{when}: the mixer is aboard.");
+            });
+            Assert.Multiple(() =>
+            {
+                Assert.That(entMan.GetComponent<GasPressurePumpComponent>(pump!.Value).Enabled, Is.True, $"{when}: the pressure pump is on.");
+                Assert.That(entMan.GetComponent<GasVolumePumpComponent>(volumePump!.Value).Enabled, Is.True, $"{when}: the volume pump is on.");
+                Assert.That(entMan.GetComponent<GasFilterComponent>(filter!.Value).Enabled, Is.True, $"{when}: the filter is on.");
+                Assert.That(entMan.GetComponent<GasMixerComponent>(mixer!.Value).Enabled, Is.True, $"{when}: the mixer is on.");
+            });
+        }
+
+        /// <summary>
+        /// The analysis console holds its analyzer as a NetEntity and the analyzer holds its console
+        /// as a view-variables field, so the pair is re-resolved from the device-link wire on the
+        /// analyzer's map init and nowhere else. A retrieved pair came back linked on the wire and
+        /// dead on the console (test server, 2026-09-06: "linked, but not working"; "analyzer still
+        /// borked" on the next build). Both ends are asserted after the round trip.
+        /// </summary>
+        [Test]
+        public async Task AnAnalysisConsoleStaysLinkedToItsAnalyzer()
+        {
+            await using var pair = await PoolManager.GetServerClient();
+            var server = pair.Server;
+            var entMan = server.EntMan;
+
+            var db = server.ResolveDependency<IServerDbManager>();
+            var drydock = server.System<DrydockSystem>();
+            var deviceLink = server.System<DeviceLinkSystem>();
+
+            var owner = Guid.NewGuid();
+            await InsertPlayer(db, owner);
+            await server.ResolveDependency<DrydockStore>().AddBerth(owner, ShipSizeClass.SuperCapital, DrydockBerthKind.Granted, 0, null, null);
+
+            var (station, shipGrid, _) = await BuildShipAndStation(pair);
+
+            await server.WaitPost(() =>
+            {
+                var console = entMan.SpawnEntity(AnalysisConsoleProtoId, new EntityCoordinates(shipGrid, new Vector2(0.5f, 0.5f)));
+                var analyzer = entMan.SpawnEntity(ArtifactAnalyzerProtoId, new EntityCoordinates(shipGrid, new Vector2(1.5f, 0.5f)));
+                deviceLink.LinkDefaults(null, console, analyzer);
+            });
+
+            await pair.RunTicksSync(5);
+
+            await server.WaitAssertion(() => AssertAnalyzerLinked(entMan, shipGrid, "Control, before the store"));
+
+            var (result, shipId) = await RunOnServer(pair, () => drydock.TryStoreShip(shipGrid, owner, null));
+            Assert.That(result, Is.EqualTo(DrydockStoreResult.Success));
+            await pair.RunTicksSync(5);
+
+            var retrieved = await RunOnServer(pair, () => drydock.TryRetrieveShip(shipId!.Value, owner, station, null));
+            Assert.That(retrieved.Result, Is.EqualTo(DrydockRetrieveResult.Success));
+            await pair.RunTicksSync(5);
+
+            await server.WaitAssertion(() => AssertAnalyzerLinked(entMan, retrieved.Grid!.Value, "After the retrieve"));
+
+            await pair.CleanReturnAsync();
+        }
+
+        private static void AssertAnalyzerLinked(IEntityManager entMan, EntityUid grid, string when)
+        {
+            var console = FindChildWithComponentSync<AnalysisConsoleComponent>(entMan, grid);
+            var analyzer = FindChildWithComponentSync<ArtifactAnalyzerComponent>(entMan, grid);
+            Assert.That(console, Is.Not.Null, $"{when}: the console is aboard.");
+            Assert.That(analyzer, Is.Not.Null, $"{when}: the analyzer is aboard.");
+
+            var consoleComp = entMan.GetComponent<AnalysisConsoleComponent>(console!.Value);
+            var analyzerComp = entMan.GetComponent<ArtifactAnalyzerComponent>(analyzer!.Value);
+            Assert.Multiple(() =>
+            {
+                Assert.That(entMan.GetEntity(consoleComp.AnalyzerEntity), Is.EqualTo(analyzer.Value), $"{when}: the console names the analyzer.");
+                Assert.That(analyzerComp.Console, Is.EqualTo(console.Value), $"{when}: the analyzer names the console.");
+            });
+        }
+
+        /// <summary>
+        /// A use delay's end is an absolute game time. Written in one round and read in the next,
+        /// where the clock started over, a half-second delay reads as hours (test server,
+        /// 2026-09-06: "I cannot press E to open inventories" on anything that was aboard). The
+        /// ship-load path re-arms every delay on load; retrieve does the same. A far-future end
+        /// stands in for the previous round's larger clock.
+        /// </summary>
+        [Test]
+        public async Task AStaleUseDelayIsRearmedOnRetrieve()
+        {
+            await using var pair = await PoolManager.GetServerClient();
+            var server = pair.Server;
+            var entMan = server.EntMan;
+
+            var db = server.ResolveDependency<IServerDbManager>();
+            var drydock = server.System<DrydockSystem>();
+            var useDelay = server.System<UseDelaySystem>();
+            var timing = server.ResolveDependency<IGameTiming>();
+
+            var owner = Guid.NewGuid();
+            await InsertPlayer(db, owner);
+            await server.ResolveDependency<DrydockStore>().AddBerth(owner, ShipSizeClass.SuperCapital, DrydockBerthKind.Granted, 0, null, null);
+
+            var (station, shipGrid, _) = await BuildShipAndStation(pair);
+
+            var length = TimeSpan.FromSeconds(1);
+            await server.WaitPost(() =>
+            {
+                var item = entMan.SpawnEntity(MarketItemProtoId, new EntityCoordinates(shipGrid, new Vector2(1.5f, 1.5f)));
+                useDelay.SetLength(item, length);
+                var comp = entMan.GetComponent<UseDelayComponent>(item);
+                // The component is access-locked to its system; the stale end has to be planted by hand.
+#pragma warning disable RA0002
+                var entry = comp.Delays.Values.Single();
+                entry.StartTime = timing.CurTime;
+                entry.EndTime = timing.CurTime + TimeSpan.FromHours(100);
+#pragma warning restore RA0002
+            });
+
+            await pair.RunTicksSync(5);
+
+            await server.WaitAssertion(() =>
+            {
+                var item = FindChildWithComponentSync<UseDelayComponent>(entMan, shipGrid);
+                Assert.That(item, Is.Not.Null);
+                Assert.That(useDelay.IsDelayed(item!.Value), Is.True, "The control: the planted end reads as an active delay.");
+            });
+
+            var (result, shipId) = await RunOnServer(pair, () => drydock.TryStoreShip(shipGrid, owner, null));
+            Assert.That(result, Is.EqualTo(DrydockStoreResult.Success));
+            await pair.RunTicksSync(5);
+
+            var retrieved = await RunOnServer(pair, () => drydock.TryRetrieveShip(shipId!.Value, owner, station, null));
+            Assert.That(retrieved.Result, Is.EqualTo(DrydockRetrieveResult.Success));
+            await pair.RunTicksSync(5);
+
+            await server.WaitAssertion(() =>
+            {
+                var item = FindChildWithComponentSync<UseDelayComponent>(entMan, retrieved.Grid!.Value);
+                Assert.That(item, Is.Not.Null, "The item came back with the ship.");
+#pragma warning disable RA0002
+                var entry = entMan.GetComponent<UseDelayComponent>(item!.Value).Delays.Values.Single();
+#pragma warning restore RA0002
+                Assert.That(entry.EndTime, Is.LessThanOrEqualTo(timing.CurTime + length),
+                    "A retrieved delay ends no later than one full length from now; the stale end from the store would still be hours out.");
+            });
+
+            await pair.CleanReturnAsync();
+        }
+
+        /// <summary>
+        /// The ship-save path deletes anything marked as saving contraband unless it carries a
+        /// contraband permit. The drydock kept everything, so ID cards and modular grenades rode
+        /// along (test server, 2026-09-06: "ID CARDs save!! That is probably bad"). The store now
+        /// purges by the same component rule; the permit exception and an ordinary item are the
+        /// controls that the purge takes only what it should.
+        /// </summary>
+        [Test]
+        public async Task SavingContrabandIsPurgedAtStoreUnlessPermitted()
+        {
+            await using var pair = await PoolManager.GetServerClient();
+            var server = pair.Server;
+            var entMan = server.EntMan;
+
+            var db = server.ResolveDependency<IServerDbManager>();
+            var drydock = server.System<DrydockSystem>();
+
+            var owner = Guid.NewGuid();
+            await InsertPlayer(db, owner);
+            await server.ResolveDependency<DrydockStore>().AddBerth(owner, ShipSizeClass.SuperCapital, DrydockBerthKind.Granted, 0, null, null);
+
+            var (station, shipGrid, _) = await BuildShipAndStation(pair);
+
+            await server.WaitPost(() =>
+            {
+                var contraband = entMan.SpawnEntity(MarketItemProtoId, new EntityCoordinates(shipGrid, new Vector2(0.5f, 0.5f)));
+                entMan.EnsureComponent<SavingContrabandComponent>(contraband);
+
+                var permitted = entMan.SpawnEntity(MarketItemProtoId, new EntityCoordinates(shipGrid, new Vector2(1.5f, 0.5f)));
+                entMan.EnsureComponent<SavingContrabandComponent>(permitted);
+                entMan.EnsureComponent<ContrabandPermitItemComponent>(permitted);
+
+                entMan.SpawnEntity(MarketItemProtoId, new EntityCoordinates(shipGrid, new Vector2(2.5f, 0.5f)));
+            });
+
+            await pair.RunTicksSync(5);
+
+            var before = await CensusGrid(pair, shipGrid);
+            Assert.That(before[MarketItemProtoId], Is.EqualTo(3), "The control: three sheets aboard before the store.");
+
+            var (result, shipId) = await RunOnServer(pair, () => drydock.TryStoreShip(shipGrid, owner, null));
+            Assert.That(result, Is.EqualTo(DrydockStoreResult.Success));
+            await pair.RunTicksSync(5);
+
+            var retrieved = await RunOnServer(pair, () => drydock.TryRetrieveShip(shipId!.Value, owner, station, null));
+            Assert.That(retrieved.Result, Is.EqualTo(DrydockRetrieveResult.Success));
+            await pair.RunTicksSync(5);
+
+            var after = await CensusGrid(pair, retrieved.Grid!.Value);
+            Assert.That(after.GetValueOrDefault(MarketItemProtoId), Is.EqualTo(2), "The unpermitted contraband is gone; the permitted one and the plain sheet are not.");
+
+            await server.WaitAssertion(() =>
+            {
+                var query = entMan.AllEntityQueryEnumerator<SavingContrabandComponent, TransformComponent>();
+                while (query.MoveNext(out var uid, out _, out var xform))
+                {
+                    if (xform.GridUid != retrieved.Grid!.Value)
+                        continue;
+
+                    Assert.That(entMan.HasComponent<ContrabandPermitItemComponent>(uid), Is.True,
+                        "Every piece of saving contraband that came back carries a permit.");
+                }
+            });
+
+            await pair.CleanReturnAsync();
+        }
+
+        /// <summary>
+        /// A crystallizer's recipe and gas input were view-variables fields, so a retrieved one came
+        /// back with no recipe and no input, and the regulator loop then ran against a reset machine
+        /// (test server, 2026-09-06: "crystallizers reset their settings and superheat their inlet").
+        /// Both are data fields now.
+        /// </summary>
+        [Test]
+        public async Task ACrystallizerKeepsItsSettings()
+        {
+            await using var pair = await PoolManager.GetServerClient();
+            var server = pair.Server;
+            var entMan = server.EntMan;
+
+            var db = server.ResolveDependency<IServerDbManager>();
+            var drydock = server.System<DrydockSystem>();
+
+            var owner = Guid.NewGuid();
+            await InsertPlayer(db, owner);
+            await server.ResolveDependency<DrydockStore>().AddBerth(owner, ShipSizeClass.SuperCapital, DrydockBerthKind.Granted, 0, null, null);
+
+            var (station, shipGrid, _) = await BuildShipAndStation(pair);
+
+            await server.WaitPost(() =>
+            {
+                var crystallizer = entMan.SpawnEntity(CrystallizerProtoId, new EntityCoordinates(shipGrid, new Vector2(0.5f, 0.5f)));
+                var comp = entMan.GetComponent<CrystallizerComponent>(crystallizer);
+                comp.SelectedRecipeId = "roundtrip-recipe";
+                comp.GasInput = 12.5f;
+            });
+
+            await pair.RunTicksSync(5);
+
+            var (result, shipId) = await RunOnServer(pair, () => drydock.TryStoreShip(shipGrid, owner, null));
+            Assert.That(result, Is.EqualTo(DrydockStoreResult.Success));
+            await pair.RunTicksSync(5);
+
+            var retrieved = await RunOnServer(pair, () => drydock.TryRetrieveShip(shipId!.Value, owner, station, null));
+            Assert.That(retrieved.Result, Is.EqualTo(DrydockRetrieveResult.Success));
+            await pair.RunTicksSync(5);
+
+            await server.WaitAssertion(() =>
+            {
+                var crystallizer = FindChildWithComponentSync<CrystallizerComponent>(entMan, retrieved.Grid!.Value);
+                Assert.That(crystallizer, Is.Not.Null, "The crystallizer came back with the ship.");
+                var comp = entMan.GetComponent<CrystallizerComponent>(crystallizer!.Value);
+                Assert.Multiple(() =>
+                {
+                    Assert.That(comp.SelectedRecipeId, Is.EqualTo("roundtrip-recipe"));
+                    Assert.That(comp.GasInput, Is.EqualTo(12.5f));
+                });
+            });
+
+            await pair.CleanReturnAsync();
+        }
+
         private static EntityUid? FindChildWithComponentSync<T>(IEntityManager entMan, EntityUid grid) where T : IComponent
         {
             var query = entMan.AllEntityQueryEnumerator<T, TransformComponent>();
@@ -1290,6 +1643,77 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             });
 
             await pair.CleanReturnAsync();
+        }
+
+        /// <summary>
+        /// A pump has an inlet node in one net and an outlet node in another. The first sidecar held
+        /// one mixture per entity, so whichever net was written last won and the restore merged it
+        /// into both nodes: gas crossed the pump, a mixer's two feeds leaked into each other, and a
+        /// crystallizer's inlet dumped into its regulator loop (test server, 2026-09-06). A lone
+        /// pump is the smallest device with two nets; its two nodes must come back holding exactly
+        /// what each held, and nothing of the other.
+        /// </summary>
+        [Test]
+        public async Task ATwoPortDeviceKeepsEachNetsGasSeparate()
+        {
+            await using var pair = await PoolManager.GetServerClient();
+            var server = pair.Server;
+            var entMan = server.EntMan;
+
+            var db = server.ResolveDependency<IServerDbManager>();
+            var drydock = server.System<DrydockSystem>();
+
+            var owner = Guid.NewGuid();
+            await InsertPlayer(db, owner);
+            await server.ResolveDependency<DrydockStore>().AddBerth(owner, ShipSizeClass.SuperCapital, DrydockBerthKind.Granted, 0, null, null);
+
+            var (station, shipGrid, _) = await BuildShipAndStation(pair);
+
+            await server.WaitPost(() => entMan.SpawnEntity(PressurePumpProtoId, new EntityCoordinates(shipGrid, new Vector2(1.5f, 1.5f))));
+            await pair.RunTicksSync(10);
+
+            await server.WaitPost(() =>
+            {
+                var (inlet, outlet) = PumpNodes(entMan, shipGrid);
+                inlet.Air.AdjustMoles(Gas.Oxygen, 30f);
+                outlet.Air.AdjustMoles(Gas.Nitrogen, 20f);
+            });
+            await pair.RunTicksSync(5);
+
+            await server.WaitAssertion(() => AssertPumpGases(entMan, shipGrid, "Control, before the store"));
+
+            var (result, shipId) = await RunOnServer(pair, () => drydock.TryStoreShip(shipGrid, owner, null));
+            Assert.That(result, Is.EqualTo(DrydockStoreResult.Success));
+            await pair.RunTicksSync(5);
+
+            var retrieved = await RunOnServer(pair, () => drydock.TryRetrieveShip(shipId!.Value, owner, station, null));
+            Assert.That(retrieved.Result, Is.EqualTo(DrydockRetrieveResult.Success));
+            await pair.RunTicksSync(15);
+
+            await server.WaitAssertion(() => AssertPumpGases(entMan, retrieved.Grid!.Value, "After the retrieve"));
+
+            await pair.CleanReturnAsync();
+        }
+
+        private static (PipeNode Inlet, PipeNode Outlet) PumpNodes(IEntityManager entMan, EntityUid grid)
+        {
+            var pump = FindChildWithComponentSync<GasPressurePumpComponent>(entMan, grid);
+            Assert.That(pump, Is.Not.Null, "The pump is aboard.");
+            var comp = entMan.GetComponent<GasPressurePumpComponent>(pump!.Value);
+            var nodes = entMan.GetComponent<NodeContainerComponent>(pump.Value).Nodes;
+            return ((PipeNode)nodes[comp.InletName], (PipeNode)nodes[comp.OutletName]);
+        }
+
+        private static void AssertPumpGases(IEntityManager entMan, EntityUid grid, string when)
+        {
+            var (inlet, outlet) = PumpNodes(entMan, grid);
+            Assert.Multiple(() =>
+            {
+                Assert.That(inlet.Air.GetMoles(Gas.Oxygen), Is.EqualTo(30f).Within(0.01f), $"{when}: the inlet holds its oxygen.");
+                Assert.That(inlet.Air.GetMoles(Gas.Nitrogen), Is.EqualTo(0f).Within(0.01f), $"{when}: none of the outlet's nitrogen crossed into the inlet.");
+                Assert.That(outlet.Air.GetMoles(Gas.Nitrogen), Is.EqualTo(20f).Within(0.01f), $"{when}: the outlet holds its nitrogen.");
+                Assert.That(outlet.Air.GetMoles(Gas.Oxygen), Is.EqualTo(0f).Within(0.01f), $"{when}: none of the inlet's oxygen crossed into the outlet.");
+            });
         }
 
         /// <summary>

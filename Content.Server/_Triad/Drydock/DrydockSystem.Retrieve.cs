@@ -23,6 +23,7 @@ using Content.Server.Shuttles.Systems;
 using Content.Server.Wires;
 using Content.Shared._Mono.ShipRepair;
 using Content.Shared._NF.Shipyard.Components;
+using Content.Shared._NF.Shipyard.Prototypes;
 using Content.Shared._Shitmed.Autodoc.Components;
 using Content.Shared._Triad.CCVar;
 using Content.Shared.Cabinet;
@@ -41,6 +42,7 @@ using Content.Shared.Research.Components;
 using Content.Shared.Shuttles.Components;
 using Content.Shared.SmartFridge;
 using Content.Shared.Station.Components;
+using Content.Shared.Timing;
 using Content.Shared.Xenoarchaeology.Equipment;
 using Content.Shared.Xenoarchaeology.Equipment.Components;
 using Robust.Server.Player;
@@ -75,6 +77,8 @@ public sealed partial class DrydockSystem
     [Dependency] private SharedHandsSystem _hands = default!;
     [Dependency] private ItemSlotsSystem _itemSlots = default!;
     [Dependency] private OpenableSystem _openable = default!;
+    [Dependency] private UseDelaySystem _useDelay = default!;
+    [Dependency] private SharedAppearanceSystem _appearance = default!;
 
     /// <summary>
     /// Retrieves a stored ship and presents it at <paramref name="stationUid"/>.
@@ -240,7 +244,14 @@ public sealed partial class DrydockSystem
                 {
                     Revive(grid, stored.Ship);
 
-                    if (!_shuttle.TryFTLDock(grid, shuttle, targetGrid))
+                    // The dock a purchase of this hull would pick: the vessel's priority tag steers
+                    // the choice toward the shipyard's own docks. Without it a retrieve took whatever
+                    // dock was free first ("my ship spawned on the other side of Venmar").
+                    string? dockTag = null;
+                    if (stored.Ship.VesselProto is { } vesselId && _protoMan.TryIndex<VesselPrototype>(vesselId, out var vesselProto))
+                        dockTag = vesselProto.PriorityDockTag;
+
+                    if (!_shuttle.TryFTLDock(grid, shuttle, targetGrid, priorityTag: dockTag))
                         Log.Warning($"Drydock: {shipId} found no docking config at {ToPrettyString(stationUid)}; presented by proximity.");
 
                     claimed = false; // The claim is now correct: the ship really is out.
@@ -334,6 +345,7 @@ public sealed partial class DrydockSystem
         ReviveDispenserSlots(grid);
         ReviveCabinetLocks(grid);
         ScrubStaleLatheProduction(grid);
+        ReviveUseDelays(grid);
 
         RehydrateDamage(grid);
 
@@ -610,21 +622,53 @@ public sealed partial class DrydockSystem
     }
 
     /// <summary>
-    /// Scrub for documents written before the producing marker opted out of saving. A lathe stored
-    /// mid-print reloaded carrying the marker with no recipe behind it: the lathe loop skips a
-    /// producing lathe with no recipe and the reboot pass skips any lathe that is producing, so it
-    /// neither finished nor restarted, forever. Dropping the marker lets the reboot pass resume the
-    /// queue, which is the state that actually persisted.
+    /// Two things for every lathe aboard. First, a scrub for documents written before the
+    /// producing marker opted out of saving: a lathe stored mid-print reloaded carrying the marker
+    /// with no recipe behind it, the lathe loop skips a producing lathe with no recipe and the
+    /// reboot pass skips any lathe that is producing, so it neither finished nor restarted, forever.
+    /// Dropping the marker lets the reboot pass resume the queue, which is the state that actually
+    /// persisted. Second, the appearance keys the lathe's map init sets ("appearance requires
+    /// initialization or the layers break", in its own words): appearance data is never saved, so
+    /// a retrieved lathe had neither key and its sprite sat in the running animation for good
+    /// (test server, 2026-09-06: "lathes still are animation bugged" after the marker fix).
     /// </summary>
     private void ScrubStaleLatheProduction(EntityUid grid)
     {
-        var query = AllEntityQuery<LatheProducingComponent, LatheComponent, TransformComponent>();
-        while (query.MoveNext(out var uid, out _, out var lathe, out var xform))
+        var query = AllEntityQuery<LatheComponent, TransformComponent>();
+        while (query.MoveNext(out var uid, out var lathe, out var xform))
         {
-            if (xform.GridUid != grid || lathe.CurrentRecipe != null)
+            if (xform.GridUid != grid)
                 continue;
 
-            RemCompDeferred<LatheProducingComponent>(uid);
+            var producing = HasComp<LatheProducingComponent>(uid);
+            if (producing && lathe.CurrentRecipe == null)
+            {
+                RemCompDeferred<LatheProducingComponent>(uid);
+                producing = false;
+            }
+
+            _appearance.SetData(uid, LatheVisuals.IsInserting, false);
+            _appearance.SetData(uid, LatheVisuals.IsRunning, producing);
+        }
+    }
+
+    /// <summary>
+    /// A use delay's end is an absolute game time, and the clock starts over every round. Written
+    /// in one round and read in the next, the half-second on a bag or a belt reads as hours, and
+    /// nothing aboard opens on a press (test server, 2026-09-06: "I cannot press E to open
+    /// inventories", only what was on the ship). The ship-load path re-arms every delay on load;
+    /// this is the same pass. Re-arming rather than clearing is what that path does, and a delay
+    /// is at most a few seconds, so a retrieved item is usable by the time anyone reaches it.
+    /// </summary>
+    private void ReviveUseDelays(EntityUid grid)
+    {
+        var query = AllEntityQuery<UseDelayComponent, TransformComponent>();
+        while (query.MoveNext(out var uid, out var delay, out var xform))
+        {
+            if (xform.GridUid != grid)
+                continue;
+
+            _useDelay.ResetAllDelays((uid, delay));
         }
     }
 
