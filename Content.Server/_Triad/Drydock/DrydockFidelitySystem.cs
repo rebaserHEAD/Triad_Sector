@@ -33,12 +33,13 @@ public sealed partial class DrydockFidelitySystem : EntitySystem
     private DrydockReflectiveCapture _capture = default!;
 
     /// <summary>
-    /// The probe's context, which gives the base serialization manager the one extra capability the
-    /// map serializer has over it: writing <see cref="EntityUid"/> references. Without it every
-    /// field that reaches an entity reference (transform parents, container graphs, action lists,
-    /// deed uids) reads as unserializable to the probe, which is a false negative, since the map
-    /// serializer round-trips all of them through exactly this kind of context. Probing with it
-    /// leaves those alone and flags only genuine gaps.
+    /// The probe's context, which gives the base serialization manager the extra capability the
+    /// map serializer has over it: writing <see cref="EntityUid"/> and <see cref="NetEntity"/>
+    /// references. Without it every field that reaches an entity reference (transform parents,
+    /// container graphs, action lists, deed uids, artifact node graphs) reads as unserializable to
+    /// the probe, which is a false negative, since the map serializer round-trips all of them
+    /// through exactly this kind of context. Probing with it leaves those alone and flags only
+    /// genuine gaps.
     /// </summary>
     private DrydockEntityRefProbe _probe = default!;
 
@@ -318,6 +319,8 @@ public sealed partial class DrydockFidelitySystem : EntitySystem
         object? cleared;
         if (type.IsValueType)
             cleared = Activator.CreateInstance(type);
+        else if (type.IsArray)
+            cleared = Array.CreateInstance(type.GetElementType()!, 0); // An empty array: a null one is refused by the serializer on any non-nullable field.
         else if (typeof(IEnumerable).IsAssignableFrom(type) && !type.IsAbstract && type.GetConstructor(Type.EmptyTypes) != null)
             cleared = Activator.CreateInstance(type); // An empty collection rather than null: no NRE, and it writes fine.
         else
@@ -409,7 +412,7 @@ public sealed class DrydockFidelityRestore
 /// This registers a no-op writer that returns a stub node, with no logging and no uid mapping, so
 /// the probe succeeds on exactly what the map serializer succeeds on.
 /// </summary>
-internal sealed class DrydockEntityRefProbe : ISerializationContext, ITypeWriter<EntityUid>
+internal sealed class DrydockEntityRefProbe : ISerializationContext, ITypeWriter<EntityUid>, ITypeWriter<NetEntity>
 {
     private static readonly ValueDataNode Stub = new("0");
 
@@ -432,4 +435,16 @@ internal sealed class DrydockEntityRefProbe : ISerializationContext, ITypeWriter
         bool alwaysWrite = false,
         ISerializationContext? context = null) => Stub;
 
+    // The map serializer writes a NetEntity exactly the way it writes an EntityUid, remapped to a
+    // document id, and the base manager has no writer for it either. Without this stub every
+    // NetEntity-bearing field read as a gap and was blanked before the save: an artifact's node
+    // graph came out with its vertex array set to null, which the serializer then refused, so a
+    // ship carrying an artifact could not be stored at all (test server, 2026-09-06, Damascus),
+    // and an analysis console lost the analyzer it was linked to.
+    public DataNode Write(
+        ISerializationManager serializationManager,
+        NetEntity value,
+        IDependencyCollection dependencies,
+        bool alwaysWrite = false,
+        ISerializationContext? context = null) => Stub;
 }
