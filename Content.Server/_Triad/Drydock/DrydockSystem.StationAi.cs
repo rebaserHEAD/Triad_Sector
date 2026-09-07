@@ -5,10 +5,9 @@ using Robust.Shared.Containers;
 namespace Content.Server._Triad.Drydock;
 
 /// <summary>
-/// The one content-specific hook in the whole store path, kept in its own file so it lifts out
-/// cleanly in a fork that has no station AI. Everything else the drydock does adapts to whatever
-/// content exists; this knows about exactly one thing, and only because that thing deliberately
-/// lives off the grid.
+/// The one content-specific hook in the store path, in its own file so it lifts out cleanly in a
+/// fork with no station AI. Everything else here adapts to whatever content exists; this knows about
+/// one thing, because that thing deliberately lives off the grid.
 /// </summary>
 public sealed partial class DrydockSystem
 {
@@ -17,21 +16,15 @@ public sealed partial class DrydockSystem
     /// <summary>
     /// Empties any vacant station AI core aboard, before the grid is serialized.
     ///
-    /// <para>A station AI's runtime apparatus hangs off the grid: the core points at an invisible
-    /// eye entity in null space, and the brain in the core's slot references that same eye. The
-    /// serializer therefore logs dangling references for any ship carrying an active AI, which the
-    /// round-trip check then rejects. Rather than trying to store the AI, the vacant brain and the
-    /// eye are deleted and the reference cleared, so the physical core survives empty and takes a
-    /// fresh intellicard on the far side. Minds and their apparatus do not ride through storage, the
-    /// same rule the organics gate enforces.</para>
+    /// <para>The core points at an eye entity in null space and the brain references the same eye,
+    /// so a ship carrying an AI serializes with dangling references and the round-trip check rejects
+    /// it. The vacant brain and eye are deleted and the reference cleared: the physical core survives
+    /// empty and takes a fresh intellicard. Minds do not ride through storage, the same rule the
+    /// organics gate enforces.</para>
     ///
-    /// <para>An occupied core is left strictly alone. Deleting a live AI's brain would ghost the
-    /// player, and refusing to store a ship with an AI aboard is the organics gate's call, not this
-    /// step's.</para>
-    ///
-    /// <para>Unlike the rest of preparation this is not undoable, which is why it runs after
-    /// everything that is. That costs nothing: an empty core is the intended end state, so an abort
-    /// after this point has simply reached it early on a hull that is still flying.</para>
+    /// <para>An occupied core is left alone - deleting a live AI's brain would ghost the player, and
+    /// refusing that ship is the organics gate's call. Not undoable, which is why it runs after
+    /// everything that is; an empty core is the intended end state anyway.</para>
     /// </summary>
     private void SanitizeStationAiCores(EntityUid gridUid)
     {

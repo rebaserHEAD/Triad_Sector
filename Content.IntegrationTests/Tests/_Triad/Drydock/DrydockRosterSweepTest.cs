@@ -41,13 +41,11 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
     /// seconds against a round trip's few, so a pair per vessel would make this an hour instead of
     /// minutes. About three minutes for the whole roster.</para>
     ///
-    /// <para><b>What the first two runs found.</b> Vessels were being refused by the store's own
-    /// round-trip validation, and <em>which</em> ones was not stable: two identical runs on
-    /// 2026-08-26, with nothing changed between them, refused Behir and Horizon, then Medicus. The
-    /// mechanism was sound effects: a sound played at grid coordinates is a real grid child until
-    /// its despawn timer fires, but its prototype declares <c>save: false</c>, so the serializer
-    /// never writes it. The validation counted it live, never saw it reload, and refused whichever
-    /// ship had a sound in the air at that instant. The validation now counts through the
+    /// <para><b>Refusals here are real defects, and were not always.</b> A sound played at grid
+    /// coordinates is a real grid child until its despawn timer fires, but its prototype declares
+    /// <c>save: false</c>, so the serializer never writes it: the validation counted it live, never
+    /// saw it reload, and refused whichever ship had a sound in the air at that instant, which made
+    /// the whole sweep non-deterministic. The validation now counts through the
     /// serializer's own exclusion, and
     /// <see cref="DrydockRoundTripTest.ALiveSoundEffectDoesNotBlockTheStore"/> plants a sound
     /// deliberately to hold that fix down. With the timing removed, a refusal here is a real

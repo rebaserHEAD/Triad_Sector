@@ -1,10 +1,9 @@
 namespace Content.Server._Triad.Drydock;
 
 /// <summary>
-/// The outcome of a retrieve attempt. A refusal names its reason so the console can tell the
-/// player what is actually the matter, instead of the one sentence every refusal used to share.
-/// Every value other than <see cref="Success"/> leaves the ship exactly where it was: stored,
-/// berthed, and retrievable once the reason clears.
+/// The outcome of a retrieve attempt. A refusal names its reason, so the console can say what is
+/// the matter. Every value other than <see cref="Success"/> leaves the ship stored, berthed and
+/// retrievable once the reason clears.
 /// </summary>
 public enum DrydockRetrieveResult : byte
 {
@@ -18,16 +17,15 @@ public enum DrydockRetrieveResult : byte
     NoStation,
 
     /// <summary>
-    /// The shipyard's staging map could not be brought up. The retrieve asks the shipyard to
-    /// build it the way a purchase does, so this is the map failing to come back at all, not the
-    /// fresh-round case where nobody has bought a ship yet.
+    /// The shipyard's staging map could not be brought up. Retrieve builds it the way a purchase
+    /// does, so this is the map failing outright, not a round where nobody has bought a ship yet.
     /// </summary>
     NoStagingMap,
 
     /// <summary>No record carries this id, or its current revision is gone.</summary>
     NotFound,
 
-    /// <summary>The record belongs to another account. The console refuses this earlier and audits it; here it is the race with a transfer.</summary>
+    /// <summary>Another account owns it. The console refuses earlier; here it is a race with a transfer.</summary>
     NotOwned,
 
     /// <summary>An admin has flagged the ship. Nothing moves it until the investigation closes.</summary>
@@ -45,10 +43,7 @@ public enum DrydockRetrieveResult : byte
     /// <summary>The ship was sold. Only an admin restore brings it back.</summary>
     Sold,
 
-    /// <summary>
-    /// The row read as stored, then the claim lost. Another retrieve of the same ship landed in
-    /// between, which is exactly the race the claim exists for.
-    /// </summary>
+    /// <summary>The row read as stored, then the claim lost to another retrieve of the same ship.</summary>
     NotStored,
 
     /// <summary>Every kept revision failed to decompress, verify, or load. An admin can look at the timeline.</summary>

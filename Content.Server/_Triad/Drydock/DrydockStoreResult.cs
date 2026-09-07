@@ -1,9 +1,8 @@
 namespace Content.Server._Triad.Drydock;
 
 /// <summary>
-/// The outcome of a store attempt. A refusal names its reason so the console can tell the player
-/// what to fix, and so a refusal is visibly a refusal rather than a silent no-op. Every value other
-/// than <see cref="Success"/> leaves the live grid exactly as usable as it was.
+/// The outcome of a store attempt. A refusal names its reason, so the console can say what to fix.
+/// Every value other than <see cref="Success"/> leaves the live grid as usable as it was.
 /// </summary>
 public enum DrydockStoreResult : byte
 {
@@ -20,30 +19,24 @@ public enum DrydockStoreResult : byte
     HazardAboard,
 
     /// <summary>
-    /// The round-trip check found the freshly written document disagreeing with the live grid. The
-    /// store aborts before any revision is filed, so a serializer regression cannot half-commit a
-    /// ship or quietly drop part of one.
+    /// The written document disagrees with the live grid. Aborts before any revision is filed, so a
+    /// serializer regression cannot half-commit a ship.
     /// </summary>
     ValidationFailed,
 
     /// <summary>
-    /// The drydock is off, or in read-only mode. Read-only exists so a build suspected of writing
-    /// bad revisions can be stopped from writing any more without grounding the fleet.
+    /// Off, or read-only. Read-only stops a suspect build writing more revisions without grounding
+    /// the fleet.
     /// </summary>
     Disabled,
 
     /// <summary>
-    /// The owner has no free berth. Checked before the first mutation so a full garage refuses
-    /// cheaply, and again inside the filing transaction, where the unique index on the berth column
-    /// makes the answer final. A store that loses that race reports this too: nothing was filed,
-    /// and the fix is the same.
+    /// The owner has no free berth. Checked before the first mutation and again inside the filing
+    /// transaction, where the unique index on the berth column settles the race.
     /// </summary>
     NoBerth,
 
-    /// <summary>
-    /// Free berths exist and none accepts a hull of this class. Blocking on purpose: unlike drift,
-    /// the player grew the hull and can upgrade or buy a berth at the same terminal.
-    /// </summary>
+    /// <summary>Free berths exist, none fits this hull class. The player can upgrade or buy one here.</summary>
     BerthTooSmall,
 
     /// <summary>A store of this grid is already in flight. The second request does nothing.</summary>

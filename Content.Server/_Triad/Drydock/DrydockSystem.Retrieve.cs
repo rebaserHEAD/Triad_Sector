@@ -309,11 +309,9 @@ public sealed partial class DrydockSystem
     /// necessary, since re-firing it would re-run every one-shot spawner aboard. The cost is that
     /// anything a system only ever does on map init has to be done again here, by name.</para>
     ///
-    /// <para>Most of them are ours rather than the reference's: a census of every map-init
-    /// subscriber turned them up, and the test server turned up the console locks. Each one is a
-    /// system whose entire runtime registration lives behind that event or the purchase path, so
-    /// without this a retrieved ship comes back with dead machines that look perfectly fine, or a
-    /// helm its own captain cannot unlock.</para>
+    /// <para>Each step below is a system whose runtime registration lives entirely behind that
+    /// event or the purchase path. Without them a retrieved ship comes back with dead machines that
+    /// look perfectly fine, or a helm its own captain cannot unlock.</para>
     /// </summary>
     private void Revive(EntityUid grid, DrydockShip record)
     {
@@ -485,13 +483,11 @@ public sealed partial class DrydockSystem
     }
 
     /// <summary>
-    /// A console lock and the grid lock beside it hold the ship's uid as a string, which is the
-    /// one uid on the whole ship the loader cannot remap, so every locked console comes back keyed
-    /// to a grid that no longer exists. The deed minted onto the card names the new grid, and the
-    /// unlock compares the two as strings, so the captain's own deed would not open the helm
-    /// (reported: "I cant unlock the ship with my deed"). The purchase and ship-load
-    /// paths both stamp every console with the live uid; this is that stamp, and it re-locks the
-    /// consoles the way both of them do.
+    /// A console lock and the grid lock beside it hold the ship's uid as a STRING, the one uid on
+    /// the ship the loader cannot remap, so every locked console comes back keyed to a dead grid.
+    /// The deed names the new grid and the unlock compares the two as strings, so the captain's own
+    /// deed will not open the helm. Stamps every console with the live uid, as purchase and ship
+    /// load both do.
     /// </summary>
     private void ReviveConsoleLocks(EntityUid grid)
     {
@@ -515,8 +511,7 @@ public sealed partial class DrydockSystem
     /// handler is fixed at the source (GeneratorSystem.OnAnchorStateChanged); this step stays for
     /// what the flag drives and the save does not carry: the running sprite, the ambient hum, the
     /// radiation source and its glow. Re-applying the flag through the generator system re-derives
-    /// all of it. (Reported: "generators do not start", "z-pinches did not carry
-    /// over their on state"; a signal toggle, which switches it off and on again, "worked".)
+    /// all of it.
     /// </summary>
     private void ReviveGenerators(EntityUid grid)
     {
@@ -566,10 +561,9 @@ public sealed partial class DrydockSystem
 
     /// <summary>
     /// A machine's hands are not data fields; the hand-fill component declares them and map init
-    /// creates them. A retrieved robotic arm therefore had no hand to hold its tool in (test server,
-    /// 2026-09-06: "interactors lose their handslot"). Re-create every declared hand that is missing.
-    /// The fill items are not spawned again: whatever was in the hand persisted as a container
-    /// child and is picked back up by the hand's container, and an empty hand was emptied on
+    /// creates them, so a retrieved robotic arm has no hand to hold its tool in. Re-creates every
+    /// declared hand that is missing. Fill items are NOT spawned again: what was in the hand
+    /// persisted as a container child and is picked back up, and an empty hand was emptied on
     /// purpose.
     /// </summary>
     private void ReviveFilledHands(EntityUid grid)
@@ -589,12 +583,11 @@ public sealed partial class DrydockSystem
     }
 
     /// <summary>
-    /// The item-slot registry is a read-only data field, so a slot added at runtime is never saved:
-    /// only the prototype's own slots come back. A reagent dispenser registers its beaker slot on
-    /// map init and its storage slots from its parts, so a retrieved one had jugs in containers no
-    /// slot knew about and nowhere to put a new one (reported: "chemical dispensers
-    /// break and lose all their contents"). The slot definitions themselves persist on the
-    /// dispenser; this re-registers them, which finds the jugs already in their containers.
+    /// The item-slot registry is a read-only data field, so a slot added at runtime is never saved
+    /// and only the prototype's own slots come back. A reagent dispenser registers its beaker slot on
+    /// map init and its storage slots from its parts, so a retrieved one has jugs in containers no
+    /// slot knows about and nowhere to put a new one. The slot definitions persist on the dispenser;
+    /// re-registering them finds the jugs already in their containers.
     /// </summary>
     private void ReviveDispenserSlots(EntityUid grid)
     {
@@ -643,11 +636,10 @@ public sealed partial class DrydockSystem
     /// initialization or the layers break", in its own words), set here against the marker the ship
     /// came back with rather than the one it was stored with.
     ///
-    /// <para>The appearance carrier restores both keys before this runs, which is not enough on its
-    /// own and is why this half stayed: what it restores is what the lathe looked like at store,
-    /// and a lathe stored mid-print looked like it was running. The marker behind that animation
-    /// does not ride the save, so this is the step that settles the two against each other (test
-    /// server, 2026-09-06: "lathes still are animation bugged" after the marker fix).</para>
+    /// <para>The appearance carrier restores both keys before this runs, and that is not enough on
+    /// its own: what it restores is what the lathe looked like at store, and a lathe stored mid-print
+    /// looked like it was running. The marker behind that animation does not ride the save, so this
+    /// is the step that settles the two against each other.</para>
     /// </summary>
     private void ScrubStaleLatheProduction(EntityUid grid)
     {
@@ -670,12 +662,10 @@ public sealed partial class DrydockSystem
     }
 
     /// <summary>
-    /// A use delay's end is an absolute game time, and the clock starts over every round. Written
-    /// in one round and read in the next, the half-second on a bag or a belt reads as hours, and
-    /// nothing aboard opens on a press (reported: "I cannot press E to open
-    /// inventories", only what was on the ship). The ship-load path re-arms every delay on load;
-    /// this is the same pass. Re-arming rather than clearing is what that path does, and a delay
-    /// is at most a few seconds, so a retrieved item is usable by the time anyone reaches it.
+    /// A use delay's end is an absolute game time and the clock starts over every round, so a
+    /// half-second on a bag written in one round reads as hours in the next and nothing aboard opens
+    /// on a press. The same pass the ship-load path runs. Re-arming rather than clearing matches that
+    /// path, and a delay is a few seconds, so the item is usable by the time anyone reaches it.
     /// </summary>
     private void ReviveUseDelays(EntityUid grid)
     {

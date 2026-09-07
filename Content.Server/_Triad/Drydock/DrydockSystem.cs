@@ -150,10 +150,9 @@ public sealed partial class DrydockSystem : EntitySystem
             if (HasHazardAboard(gridUid))
                 return (DrydockStoreResult.HazardAboard, null);
 
-            // A mind must never be serialized, and a living mob does not round-trip cleanly. The
-            // implementation this is ported from relocates loose occupants onto the docked station
-            // instead of refusing; that is not ported yet, so this gate is stricter than it will
-            // finally be. Refusing is the safe direction to be stricter in.
+            // A mind must never be serialized, and a living mob does not round-trip cleanly.
+            // Relocating loose occupants onto the docked station is the eventual behaviour; until
+            // that exists this refuses, which is the safe direction to be stricter in.
             if (_shipyard.FoundOrganics(gridUid, mobQuery, xformQuery) is not null)
                 return (DrydockStoreResult.OrganicsAboard, null);
 
@@ -162,11 +161,9 @@ public sealed partial class DrydockSystem : EntitySystem
             var shipName = Comp<MetaDataComponent>(gridUid).EntityName;
 
             // The saving-contraband purge, by the same component rule the ship-save path applies:
-            // anything marked as saving contraband goes unless it carries a contraband permit. It
-            // sits after every refusal above, so a refused store deletes nothing, and before the
-            // appraisal, so the quote is for what is actually filed. Not undoable, which is also
-            // true of the reference path; the first play test found ID cards and modular grenades
-            // riding a store that kept everything.
+            // marked entities go unless they carry a permit. After every refusal above, so a refused
+            // store deletes nothing, and before the appraisal, so the quote is for what is filed.
+            // Not undoable.
             var purged = PurgeSavingContraband(gridUid);
             if (purged > 0)
                 Log.Info($"Drydock: {shipId} store purged {purged} saving-contraband entities without a permit.");
@@ -287,11 +284,10 @@ public sealed partial class DrydockSystem : EntitySystem
                 return (BerthRefusal(filed.Outcome), null);
 
             // The write above yielded, and the in-progress marker blocks insertion, not walking
-            // aboard. Refuse rather than despawning somebody with the ship. The revision already
-            // filed is a truthful snapshot of a real past state and cannot be retrieved into a
-            // duplicate, because the row is not marked stored until the grid is gone, below. That
-            // two-step is deliberate: the first draft had the filing write mark the row stored,
-            // and this refusal then left a retrievable row behind a ship still flying.
+            // aboard. Refuse rather than despawning somebody with the ship. The filed revision is a
+            // truthful snapshot and cannot be retrieved into a duplicate, because the row is not
+            // marked stored until the grid is gone, below. Marking it stored at filing time instead
+            // would leave a retrievable row behind a ship still flying.
             if (_shipyard.FoundOrganics(gridUid, mobQuery, xformQuery) is not null)
                 return (DrydockStoreResult.OrganicsAboard, null);
 
@@ -648,11 +644,10 @@ public sealed partial class DrydockSystem : EntitySystem
     }
 
     /// <summary>
-    /// Deletes every entity aboard marked as saving contraband that does not carry a contraband
-    /// permit, containers and their contents included, and returns how many went. This is the
-    /// ship-save path's rule (<c>IsInvalidEntity</c>), applied by component rather than by a list,
-    /// which is the user's call from the play test: the component is what the content marks.
-    /// Immediate deletes, because the serializer walks the tree later in this same tick.
+    /// Deletes every entity aboard marked as saving contraband without a permit, containers and
+    /// contents included, and returns how many went. The ship-save path's rule
+    /// (<c>IsInvalidEntity</c>), applied by component rather than by a list: the component is what
+    /// the content marks. Immediate deletes, because the serializer walks the tree later this tick.
     /// </summary>
     private int PurgeSavingContraband(EntityUid gridUid)
     {

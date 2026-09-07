@@ -48,7 +48,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
 
             // Both hold the grid's own NetEntity, written as a string. The retrieved hull is a new
             // entity, so these have to differ or the locks would be pointing at the ship that was
-            // stored. Re-stamping them on arrival is the fix the play test asked for, not a fault.
+            // stored. Re-stamping them on arrival is the fix, not a fault.
             "ShipGridLockComponent.ShuttleId",
             "ShuttleConsoleLockComponent.ShuttleId",
 

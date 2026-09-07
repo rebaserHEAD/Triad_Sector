@@ -188,13 +188,10 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
         }
 
         /// <summary>
-        /// The shipyard builds its staging map on the first purchase of a round and tears it down
-        /// at round end. A retrieve in a fresh round, before anyone had bought a ship, found no map
-        /// and refused with the one sentence every refusal used to share, for a ship that was
-        /// stored and berthed. The retrieve now asks the shipyard for the map the way a
-        /// purchase does. Deleting the map between the store and the retrieve is the shape the
-        /// round-end cleanup leaves when the map still existed; the null it leaves otherwise goes
-        /// through the same call.
+        /// The shipyard builds its staging map on the first purchase of a round and tears it down at
+        /// round end, so a retrieve in a fresh round finds no map. Retrieve asks the shipyard for it
+        /// the way a purchase does. Deleting the map between store and retrieve is the shape
+        /// round-end cleanup leaves; the null it leaves otherwise goes through the same call.
         /// </summary>
         [Test]
         public async Task ARetrieveRestagesTheShipyardAfterARoundRestart()
@@ -237,10 +234,8 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
         }
 
         /// <summary>
-        /// A refused retrieve names its reason. The console used to say "it may already be out"
-        /// for every one of eight refusals, including a ship sitting stored in its berth, so each
-        /// state the row can be in gets its own answer here, with a success at the end as the
-        /// control that the fixture itself was never the reason.
+        /// A refused retrieve names its reason, so each state the row can be in gets its own answer
+        /// here. The success at the end is the control that the fixture was never the reason.
         /// </summary>
         [Test]
         public async Task ARefusedRetrieveNamesItsReason()
@@ -294,14 +289,11 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
         }
 
         /// <summary>
-        /// A ship shield is derived state: the emitter raises it whenever it has power, and the
-        /// grid carries a marker pointing at it. Neither may ride the document. Before this, the
-        /// marker was written without its fields and reloaded pointing at nothing, the emitter's
-        /// "already shielded" check then refused to raise a shield for the rest of the ship's
-        /// life, and the old shield reloaded as a ghost with a hard bullet fixture and no emitter
-        /// behind it (2026-09-05, first ship stored on the test server). The shield prototype now
-        /// opts out of saving and both linkage components are unsaved, so this is proven on the
-        /// document and on what comes back.
+        /// A ship shield is derived state: the emitter raises it whenever it has power and the grid
+        /// carries a marker pointing at it, so neither may ride the document. A marker written
+        /// without its fields reloads pointing at nothing, the emitter's "already shielded" check
+        /// then never raises another, and the old shield reloads as a ghost with a hard bullet
+        /// fixture and no emitter. Proven on the document and on what comes back.
         /// </summary>
         [Test]
         public async Task AShieldedShipComesBackWithAFreshShield()
@@ -1019,8 +1011,8 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
 
                 // Mid-print. The marker has no data fields, so saved it reloaded empty, and a lathe
                 // marked producing with no recipe is one the lathe loop never finishes and the
-                // reboot pass never restarts (reported: lathes stuck in their running
-                // animation for good). It opts out of saving now; this is the check that it stays out.
+                // reboot pass never restarts, so it sticks in its running animation for good. It
+                // opts out of saving now; this is the check that it stays out.
                 entMan.EnsureComponent<LatheProducingComponent>(lathe);
             });
 
@@ -1067,10 +1059,10 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
         }
 
         /// <summary>
-        /// Three things the first public play test found that only map init ever set up,
-        /// in one round trip: a smart fridge's stock index, a robotic arm's declared hand, and the
-        /// marker that stops the roundstart variation passes re-littering a ship on every retrieve.
-        /// Each is a Revive step; each one missing is a machine that looks fine and does nothing.
+        /// Three things only map init ever sets up, in one round trip: a smart fridge's stock index,
+        /// a robotic arm's declared hand, and the marker that stops the roundstart variation passes
+        /// re-littering a ship on every retrieve. Each is a Revive step, and each one missing is a
+        /// machine that looks fine and does nothing.
         /// </summary>
         [Test]
         public async Task MapInitDerivedMachineStateComesBack()
@@ -1148,9 +1140,9 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
         /// A xenoartifact is the one entity aboard whose whole structure is a NetEntity graph. The
         /// fidelity probe had no NetEntity writer, so it judged every such field unserializable and
         /// blanked it before the save: the vertex array went to null and the serializer refused the
-        /// entire ship (reported: "Damascus cannot store"). The map serializer remaps
-        /// NetEntity like EntityUid, so the probe must leave those fields alone; this proves the
-        /// store goes through and the graph comes back pointing at real nodes.
+        /// entire ship. The map serializer remaps NetEntity like EntityUid, so the probe must leave
+        /// those fields alone; this proves the store goes through and the graph comes back pointing
+        /// at real nodes.
         /// </summary>
         [Test]
         public async Task AnArtifactSurvivesTheRoundTrip()
@@ -1214,11 +1206,10 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
         /// <summary>
         /// Every pump, filter and mixer switches itself off when it leaves an atmosphere, and the
         /// engine raises a parent-changed message on every entity at startup that made the atmos
-        /// device leave and rejoin the grid it had already joined on init. A loaded ship therefore
-        /// came back with its distro off (reported: "turned on pump became off",
-        /// "filters and pumps turn off"). The atmos device system now skips the rejoin for a device
-        /// already in the atmosphere it sits in; this is the round trip that proves the switches
-        /// hold, and it failed on all four before that change.
+        /// device leave and rejoin the grid it had already joined on init, so a loaded ship came back
+        /// with its whole distro off. The atmos device system now skips the rejoin for a device
+        /// already in the atmosphere it sits in; this proves the switches hold, and it failed on all
+        /// four before that change.
         /// </summary>
         [Test]
         public async Task AtmosSwitchesStayOnThroughTheRoundTrip()
@@ -1295,9 +1286,8 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
         /// <summary>
         /// The analysis console holds its analyzer as a NetEntity and the analyzer holds its console
         /// as a view-variables field, so the pair is re-resolved from the device-link wire on the
-        /// analyzer's map init and nowhere else. A retrieved pair came back linked on the wire and
-        /// dead on the console (reported: "linked, but not working"; "analyzer still
-        /// borked" on the next build). Both ends are asserted after the round trip.
+        /// analyzer's map init and nowhere else, so a retrieved pair comes back linked on the wire
+        /// and dead on the console. Both ends are asserted after the round trip.
         /// </summary>
         [Test]
         public async Task AnAnalysisConsoleStaysLinkedToItsAnalyzer()
@@ -1357,11 +1347,10 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
         }
 
         /// <summary>
-        /// A use delay's end is an absolute game time. Written in one round and read in the next,
-        /// where the clock started over, a half-second delay reads as hours (test server,
-        /// 2026-09-06: "I cannot press E to open inventories" on anything that was aboard). The
-        /// ship-load path re-arms every delay on load; retrieve does the same. A far-future end
-        /// stands in for the previous round's larger clock.
+        /// A use delay's end is an absolute game time, so written in one round and read in the next,
+        /// where the clock started over, a half-second reads as hours and nothing aboard opens on a
+        /// press. Retrieve re-arms every delay, as the ship-load path does. A far-future end stands
+        /// in for the previous round's larger clock.
         /// </summary>
         [Test]
         public async Task AStaleUseDelayIsRearmedOnRetrieve()
@@ -1428,10 +1417,9 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
 
         /// <summary>
         /// The ship-save path deletes anything marked as saving contraband unless it carries a
-        /// contraband permit. The drydock kept everything, so ID cards and modular grenades rode
-        /// along (reported: "ID CARDs save!! That is probably bad"). The store now
-        /// purges by the same component rule; the permit exception and an ordinary item are the
-        /// controls that the purge takes only what it should.
+        /// contraband permit; the drydock kept everything, so ID cards and grenades rode along. The
+        /// store purges by the same component rule now. The permit exception and an ordinary item are
+        /// the controls that the purge takes only what it should.
         /// </summary>
         [Test]
         public async Task SavingContrabandIsPurgedAtStoreUnlessPermitted()
@@ -1495,9 +1483,8 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
 
         /// <summary>
         /// A crystallizer's recipe and gas input were view-variables fields, so a retrieved one came
-        /// back with no recipe and no input, and the regulator loop then ran against a reset machine
-        /// (reported: "crystallizers reset their settings and superheat their inlet").
-        /// Both are data fields now.
+        /// back reset and the regulator loop then ran against it, superheating the inlet. Both are
+        /// data fields now.
         /// </summary>
         [Test]
         public async Task ACrystallizerKeepsItsSettings()
@@ -1646,16 +1633,14 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
 
             var (station, shipGrid, _) = await BuildShipAndStation(pair);
 
-            // A spread wide enough that the machine classes every play test complained about are all
-            // aboard: atmos devices that switch, a lathe, a fridge, a research server, a turret and
-            // a crystallizer.
+            // A spread wide enough to cover every machine class that loses state: atmos devices that
+            // switch, a lathe, a fridge, a research server, a turret and a crystallizer.
             await server.WaitPost(() =>
             {
-                // The shared builder lays a three-by-three hull, which is not enough floor for that
-                // spread. It has to be floor rather than open space: an entity spawned off the tiles
-                // is re-parented to the map instead of the ship, so it would never be stored and the
-                // walk below would never see it. The first draft of this test lost eight of eleven
-                // machines that way and reported six entities.
+                // The shared builder lays a three-by-three hull, not enough floor for that spread.
+                // It has to be FLOOR rather than open space: an entity spawned off the tiles is
+                // re-parented to the map instead of the ship, so it is never stored and the walk
+                // below never sees it.
                 var mapSys = server.System<SharedMapSystem>();
                 var gridComp = entMan.GetComponent<MapGridComponent>(shipGrid);
                 for (var x = 0; x < 6; x++)
@@ -2055,12 +2040,10 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
         }
 
         /// <summary>
-        /// The roster sweep's non-determinism, reproduced on demand. Two identical sweeps on
-        /// 2026-08-26 refused different vessels, and the mechanism turned out to be sound effects:
-        /// a sound played at grid coordinates is a real grid child until its despawn timer fires,
-        /// but its prototype declares <c>save: false</c>, so the serializer never writes it. The
-        /// validation counted it on the live side, never saw it on the scratch side, and refused
-        /// the store - for whichever ship happened to have a sound in the air at that instant.
+        /// The roster sweep's non-determinism, reproduced on demand. A sound played at grid
+        /// coordinates is a real grid child until its despawn timer fires, but its prototype declares
+        /// <c>save: false</c>, so the serializer never writes it: the validation counted it live,
+        /// never saw it reload, and refused whichever ship had a sound in the air at that instant.
         ///
         /// <para>The sweep could only show the symptom, because whether a sound is aloft when the
         /// store runs is timing. This test plants one deliberately, which makes the refusal a

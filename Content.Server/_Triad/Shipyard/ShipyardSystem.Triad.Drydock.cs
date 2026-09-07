@@ -348,15 +348,12 @@ public sealed partial class ShipyardSystem
     /// </summary>
     internal async Task RefreshDrydockState(EntityUid uid, ShipyardConsoleComponent component, EntityUid player, ShipyardConsoleUiKey uiKey)
     {
-        // Triad: the caches are NOT cleared here, and that is the point. They used to be emptied at
-        // the top and refilled after five awaited database reads, which left a window of several
-        // ticks where the console's cached lists were empty while its tab was showing them. Anything
-        // that published in that window - an unrelated upstream RefreshState, a card going in or out,
-        // a second refresh racing this one - sent the operator a state with no berths and no ships,
-        // and the tab went blank until the whole interface was closed and reopened, because a reopen
-        // is what runs a fresh read. Every list is built into a local now and assigned at the end, so
-        // the cached state is only ever replaced by a complete one, and an early return below leaves
-        // the last good lists in place rather than a blank set.
+        // Triad: the caches are NOT cleared here, deliberately. Clearing at the top and refilling
+        // after five awaited reads leaves several ticks where the cached lists are empty while the
+        // tab shows them, so anything publishing in that window - an upstream RefreshState, a card
+        // going in or out, a second refresh - sends a state with no berths and no ships. Lists are
+        // built into locals and swapped in at the end, so the cache is only ever replaced by a
+        // complete set and an early return leaves the last good one standing.
         //
         // No card, no account to list against: the drydock tab is per-operator, and an empty list
         // is the honest answer rather than everything the console has ever seen.
@@ -573,13 +570,11 @@ public sealed partial class ShipyardSystem
     /// Fills the tab without waiting: the upstream console handlers are synchronous and the drydock
     /// lists come from the database. Called from one marked line in each.
     ///
-    /// <para>Every handler that publishes a console state has to call this, not just the ones that
-    /// obviously touch the drydock. <c>RefreshState</c> builds the drydock half of that state out of
-    /// the caches this fills, so a handler that publishes without kicking a read sends whatever the
-    /// tab last knew: buying a ship left the deed card showing nothing, because a purchase mints the
-    /// deed the card is read from and nothing re-read it. Only opening the console and changing the
-    /// card did, which is why closing and reopening the whole interface was the cure (play test,
-    /// 2026-09-07: "When a ship is purchased, I have the same issue").</para>
+    /// <para>Every handler that publishes a console state has to call this, not only the ones that
+    /// obviously touch the drydock. <c>RefreshState</c> builds the drydock half out of the caches
+    /// this fills, so publishing without kicking a read sends whatever the tab last knew - buying a
+    /// ship leaves the deed card blank, because the purchase mints the deed and nothing re-reads
+    /// it.</para>
     /// </summary>
     internal void KickDrydockRefresh(EntityUid uid, ShipyardConsoleComponent component, EntityUid player, ShipyardConsoleUiKey uiKey)
     {
@@ -1689,10 +1684,9 @@ public sealed partial class ShipyardSystem
 
     /// <summary>
     /// Files the sector shuttle record the purchase and ship-load paths file, so a retrieved ship
-    /// shows on the shuttle records console (reported: "loaded ships don't appear on
-    /// the shuttle records console"). Records are round-scoped and keyed by the live grid, so every
-    /// retrieve files a fresh one. Same gate as those paths: a console that cannot transfer deeds
-    /// keeps no records.
+    /// shows on the shuttle records console. Records are round-scoped and keyed by the live grid, so
+    /// every retrieve files a fresh one. Same gate as those paths: a console that cannot transfer
+    /// deeds keeps no records.
     /// </summary>
     private void AddRetrievedShuttleRecord(ShipyardConsoleComponent component, EntityUid grid, EntityUid player)
     {

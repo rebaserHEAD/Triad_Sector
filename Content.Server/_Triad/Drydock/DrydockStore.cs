@@ -76,10 +76,9 @@ public sealed partial class DrydockStore
 
     /// <summary>
     /// Whether a failed write was the berth unique index and nothing else. The retry above must
-    /// only ever swallow that one fault: the abort test found the first draft catching every
-    /// update exception while a berth was picked, which turned a round foreign-key failure into a
-    /// polite "no free berth" and hid the real fault from everyone. Provider-typed on purpose;
-    /// the constraint name is the one EF generates for the index on the berth column.
+    /// swallow that one fault only: catching every update exception turns an unrelated failure into
+    /// a polite "no free berth" and hides it. Provider-typed on purpose; the constraint name is the
+    /// one EF generates for the index on the berth column.
     /// </summary>
     internal static bool IsBerthUniqueViolation(DbUpdateException e)
     {
@@ -131,12 +130,10 @@ public sealed partial class DrydockStore
     }
 
     /// <summary>
-    /// Lifts an administrative hold and returns the ship to the state it was in before the hold:
-    /// checked out if the hull was out flying when it was held (the row still carries the round
-    /// it left in), stored otherwise. The first draft released every hold to stored, and a ship
-    /// held while out then read as stored with its hull still in the world, which is the
-    /// duplicate every other state transition in here exists to prevent (test server audit,
-    /// 2026-09-06: hold, release, store, and the store's "did not move to stored" warning).
+    /// Lifts an administrative hold and returns the ship to the state it was in before it: checked
+    /// out if the hull was out flying when held (the row still carries the round it left in), stored
+    /// otherwise. Releasing every hold to stored reads as stored with the hull still in the world,
+    /// which is the duplicate every state transition here exists to prevent.
     /// </summary>
     /// <returns>The state the ship was released to, or null when it was not held.</returns>
     public Task<DrydockShipState?> TryReleaseHold(Guid shipGuid, Guid? actorUserId, int? roundId, string? reason, CancellationToken ct = default)

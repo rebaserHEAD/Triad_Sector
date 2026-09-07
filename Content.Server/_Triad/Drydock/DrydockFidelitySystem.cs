@@ -585,8 +585,7 @@ internal sealed class DrydockEntityRefProbe : ISerializationContext, ITypeWriter
 
     public bool WritingReadingPrototypes => false;
 
-    // The provider takes the manager as of engine 287; the reference this was ported from was
-    // written against a version where it did not. Nothing about the probe's behaviour changes.
+    // The provider takes the manager as of engine 287.
     public DrydockEntityRefProbe(ISerializationManager serialization)
     {
         SerializerProvider = new SerializationManager.SerializerProvider(serialization);

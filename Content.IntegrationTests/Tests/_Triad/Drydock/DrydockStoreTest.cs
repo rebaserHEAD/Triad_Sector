@@ -175,9 +175,8 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
         /// A hold is an adjudication, not a location. Releasing one has to put the ship back where
         /// the hold found it: a ship held while out flying is still out, and a release that called it
         /// stored would make the same hull retrievable twice, once from the world and once from the
-        /// garage. That is what happened on the test server, and this pins the fix from
-        /// both sides: held-while-out releases to checked out, and a hull that is stored while held
-        /// releases to stored.
+        /// garage. Pinned from both sides: held-while-out releases to checked out, and a hull stored
+        /// while held releases to stored.
         /// </summary>
         [Test]
         public async Task AReleasedHoldReturnsTheShipToWhereTheHoldFoundIt()
