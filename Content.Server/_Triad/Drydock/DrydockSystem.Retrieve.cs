@@ -507,13 +507,16 @@ public sealed partial class DrydockSystem
     }
 
     /// <summary>
-    /// A fuel generator's on flag persists, and the generator loop honours it, so a ship stored with
-    /// its generators running comes back producing power. What does not persist is everything the
-    /// flag drives: the running sprite, the ambient hum, the radiation source. A retrieved reactor
-    /// therefore looked stopped while it ran, its captain pressed start, and start refused because
-    /// it was already on (test server, 2026-09-06: "generators do not start", "z-pinches did not
-    /// carry over their on state"; a signal toggle, which switches it off and on again, "worked").
-    /// Re-applying the flag through the generator system re-derives all of it.
+    /// A fuel generator's on flag is written into the save, but until 2026-09-07 it did not survive
+    /// the load: the transform system raises AnchorStateChangedEvent on every entity that starts up
+    /// anchored, and the generator's handler switched off on any anchor change rather than only on
+    /// coming unanchored. So the flag arrived true and was false by the time this ran, this step
+    /// skipped every generator, and the fleet sweep showed On: True -> False on 73 of them. The
+    /// handler is fixed at the source (GeneratorSystem.OnAnchorStateChanged); this step stays for
+    /// what the flag drives and the save does not carry: the running sprite, the ambient hum, the
+    /// radiation source and its glow. Re-applying the flag through the generator system re-derives
+    /// all of it. (Test server, 2026-09-06: "generators do not start", "z-pinches did not carry
+    /// over their on state"; a signal toggle, which switches it off and on again, "worked".)
     /// </summary>
     private void ReviveGenerators(EntityUid grid)
     {

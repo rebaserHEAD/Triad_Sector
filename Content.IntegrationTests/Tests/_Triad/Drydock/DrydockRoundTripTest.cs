@@ -47,6 +47,7 @@ using Content.Shared.FixedPoint;
 using Content.Shared.Hands.Components;
 using Content.Shared.Lathe;
 using Content.Shared.NodeContainer;
+using Content.Shared.Power.Generator;
 using Content.Shared.Research.Components;
 using Content.Shared.Research.Prototypes;
 using Content.Shared.SmartFridge;
@@ -108,6 +109,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
         private const string ApcProtoId = "APCBasic";
         private const string PressurePumpProtoId = "GasPressurePump";
         private const string VolumePumpProtoId = "GasVolumePump";
+        private const string ShuttleGeneratorProtoId = "PortableGeneratorSuperPacmanShuttle";
         private const string FilterProtoId = "GasFilter";
         private const string MixerProtoId = "GasMixer";
         private const string AnalysisConsoleProtoId = "ComputerAnalysisConsole";
@@ -1726,6 +1728,86 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
 
             Assert.That(diff, Is.Empty,
                 "The round trip changed state nothing intends it to change:\n  " + string.Join("\n  ", diff));
+
+            await pair.CleanReturnAsync();
+        }
+
+        /// <summary>
+        /// A generator stored running comes back running. The on flag is a data field and was always
+        /// in the document; what lost it was the load. The transform system raises
+        /// AnchorStateChangedEvent on every entity that starts up anchored, and the generator's
+        /// handler switched off on any anchor change rather than only on coming unanchored, so the
+        /// flag arrived true and was false one event later. The revive step then saw a generator
+        /// that was off and left it alone. Seventy-three of them across the roster, and a hull that
+        /// docks with every light out.
+        ///
+        /// <para>The shuttle variant starts itself on map init, which is the control here: if it is
+        /// not running before the store, the test is asking the wrong question. Ticks after the
+        /// retrieve are what let the generator loop and the anchor event do their worst.</para>
+        /// </summary>
+        [Test]
+        public async Task ARunningGeneratorComesBackRunning()
+        {
+            await using var pair = await PoolManager.GetServerClient();
+            var server = pair.Server;
+            var entMan = server.EntMan;
+
+            var db = server.ResolveDependency<IServerDbManager>();
+            var drydock = server.System<DrydockSystem>();
+
+            var owner = Guid.NewGuid();
+            await InsertPlayer(db, owner);
+            await server.ResolveDependency<DrydockStore>().AddBerth(owner, ShipSizeClass.SuperCapital, DrydockBerthKind.Granted, 0, null, null);
+
+            var (station, shipGrid, _) = await BuildShipAndStation(pair);
+
+            EntityUid generator = default;
+            await server.WaitPost(() =>
+            {
+                generator = entMan.SpawnEntity(ShuttleGeneratorProtoId, new EntityCoordinates(shipGrid, new Vector2(1.5f, 1.5f)));
+            });
+            await pair.RunTicksSync(5);
+
+            await server.WaitAssertion(() =>
+            {
+                var xform = entMan.GetComponent<TransformComponent>(generator);
+                Assert.Multiple(() =>
+                {
+                    Assert.That(xform.GridUid, Is.EqualTo(shipGrid), "Control: it landed on the hull rather than the map.");
+                    Assert.That(xform.Anchored, Is.True, "Control: anchored, which is what a generator needs to start at all.");
+                    Assert.That(entMan.GetComponent<FuelGeneratorComponent>(generator).On, Is.True,
+                        "Control: the shuttle variant starts itself on map init, so it is running before the store.");
+                    Assert.That(entMan.GetComponent<PowerSupplierComponent>(generator).Enabled, Is.True,
+                        "Control: the generator loop has run and enabled the supplier.");
+                });
+            });
+
+            var (result, shipId) = await RunOnServer(pair, () => drydock.TryStoreShip(shipGrid, owner, null));
+            Assert.That(result, Is.EqualTo(DrydockStoreResult.Success));
+            await pair.RunTicksSync(5);
+
+            var retrieved = await RunOnServer(pair, () => drydock.TryRetrieveShip(shipId!.Value, owner, station, null));
+            Assert.That(retrieved.Result, Is.EqualTo(DrydockRetrieveResult.Success));
+            var grid = retrieved.Grid!.Value;
+
+            // Enough for the anchor event at startup and a good many generator-loop passes, which are
+            // the two things that could switch it off again.
+            await pair.RunTicksSync(30);
+
+            await server.WaitAssertion(() =>
+            {
+                var back = ChildrenWith<FuelGeneratorComponent>(entMan, grid).ToList();
+                Assert.That(back, Has.Count.EqualTo(1), "The generator came back, once.");
+
+                Assert.Multiple(() =>
+                {
+                    Assert.That(entMan.GetComponent<TransformComponent>(back[0]).Anchored, Is.True, "It came back anchored.");
+                    Assert.That(entMan.GetComponent<FuelGeneratorComponent>(back[0]).On, Is.True,
+                        "The generator is still switched on after the load, so its own anchoring did not switch it off.");
+                    Assert.That(entMan.GetComponent<PowerSupplierComponent>(back[0]).Enabled, Is.True,
+                        "And it is supplying, so the ship did not come back dark.");
+                });
+            });
 
             await pair.CleanReturnAsync();
         }
