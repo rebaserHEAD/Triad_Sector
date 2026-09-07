@@ -110,6 +110,10 @@ public sealed partial class ShipyardConsoleBoundUserInterface : BoundUserInterfa
                 // The server only retires a file the client vouched for, the same gate the old load
                 // path used.
                 ShipFileManagementSystem.MarkShipPathAsDeletable(fileId);
+
+                // Lock the rows here rather than on the press: up to this point the prompt could
+                // still be cancelled, and nothing had been sent to lock the console for.
+                _menu?.BeginImportFeedback(fileId);
                 SendMessage(new ShipyardConsoleImportMessage(fileId, yaml));
             });
 

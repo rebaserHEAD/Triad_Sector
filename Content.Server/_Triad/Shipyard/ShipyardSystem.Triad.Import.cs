@@ -122,6 +122,15 @@ public sealed partial class ShipyardSystem
         if (args.Actor is not { Valid: true } player)
             return;
 
+        // Taken before the first await and given back however this ends, so a second press while the
+        // database is being read is refused rather than run alongside the first.
+        if (component.ImportInProgress)
+        {
+            Refuse(uid, component, player, "shipyard-console-import-in-progress");
+            return;
+        }
+
+        component.ImportInProgress = true;
         try
         {
             await TryImportLegacyShip(uid, component, player, args.FileId, args.YamlData, (ShipyardConsoleUiKey)args.UiKey);
@@ -129,6 +138,12 @@ public sealed partial class ShipyardSystem
         catch (Exception e)
         {
             _sawmill.Error($"Legacy import threw {e.GetType().Name}: {e.Message}");
+        }
+        finally
+        {
+            // Unconditional: a console left marked busy by a throw would refuse every later import
+            // with no way back short of a restart.
+            component.ImportInProgress = false;
         }
     }
 

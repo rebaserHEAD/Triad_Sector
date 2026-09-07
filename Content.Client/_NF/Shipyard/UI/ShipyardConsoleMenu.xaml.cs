@@ -75,6 +75,10 @@ public sealed partial class ShipyardConsoleMenu : FancyWindow
     // word. Same indicator, on the row that was pressed, with every other Retrieve greyed.
     private float _retrievingFor = -1f;
     private DrydockBerthRow? _retrievingRow;
+
+    // Triad: legacy import, the same pair for the import rows.
+    private float _importingFor = -1f;
+    private DrydockImportRow? _importingRow;
     private bool _lastCanRetrieve;
     private readonly List<(Label Label, int Seconds)> _offerClocks = new();
     private readonly List<(DrydockBerthRow Row, int Seconds)> _escrowRows = new();
@@ -165,6 +169,26 @@ public sealed partial class ShipyardConsoleMenu : FancyWindow
             {
                 var dots = new string('.', (int)(_retrievingFor * 2) % 4);
                 _retrievingRow.RetrieveButton.Text = Loc.GetString("shipyard-console-retrieving-button") + dots;
+            }
+        }
+
+        // Triad: legacy import. An import stages the hull, measures it, grants a berth and files it,
+        // so it is the longest of the three waits and the one that most needs to look alive.
+        if (_importingFor >= 0f)
+        {
+            _importingFor += args.DeltaSeconds;
+            if (_importingFor >= StoreFeedbackTimeout)
+            {
+                // The server never answered; redraw the rows as the last state had them.
+                _importingFor = -1f;
+                _importingRow = null;
+                _escrowRows.Clear();
+                PopulateBerths(_lastBerths, _lastCanRetrieve);
+            }
+            else if (_importingRow != null)
+            {
+                var dots = new string('.', (int)(_importingFor * 2) % 4);
+                _importingRow.ImportButton.Text = Loc.GetString("shipyard-console-importing-button") + dots;
             }
         }
 
@@ -612,14 +636,35 @@ public sealed partial class ShipyardConsoleMenu : FancyWindow
         }
     }
 
+    /// <summary>
+    /// The import counterpart of <see cref="BeginRetrieveFeedback"/>, called by the interface once the
+    /// operator has confirmed and the payload is actually on its way - not when the button is first
+    /// pressed, since the prompt in between is still cancellable. Every Import on the list is taken
+    /// away, because the console takes one at a time and the server refuses the second regardless.
+    /// </summary>
+    public void BeginImportFeedback(string fileId)
+    {
+        _importingFor = 0f;
+        _importingRow = null;
+
+        foreach (var other in Berths.Children.OfType<DrydockImportRow>())
+        {
+            other.ImportButton.Disabled = true;
+            if (other.FileId == fileId)
+                _importingRow = other;
+        }
+    }
+
     private void PopulateBerths(List<DrydockBerthInfo> berths, bool canRetrieve)
     {
         Berths.RemoveAllChildren();
         PopulateImports(_lastImportable);
 
-        // Fresh rows are the server answering, so any retrieve in flight is over.
+        // Fresh rows are the server answering, so any retrieve or import in flight is over.
         _retrievingFor = -1f;
         _retrievingRow = null;
+        _importingFor = -1f;
+        _importingRow = null;
         _lastCanRetrieve = canRetrieve;
 
         var incoming = new Dictionary<int, string>();

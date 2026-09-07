@@ -123,4 +123,14 @@ public sealed partial class ShipyardConsoleComponent : Component
     /// a list built for one captain must not be spendable by the next one to walk up to it.
     /// </summary>
     public Guid? ImportOfferAccount;
+
+    /// <summary>
+    /// Triad: one import at a time on this console, the counterpart of the in-progress marker a store
+    /// puts on the grid it is saving.
+    ///
+    /// <para>An import awaits the database several times before it files anything, and the ledger
+    /// that would catch a duplicate is only consulted under enforce, so on a notifying server nothing
+    /// else stands between a double press and one save becoming two ships in two berths.</para>
+    /// </summary>
+    public bool ImportInProgress;
 }
