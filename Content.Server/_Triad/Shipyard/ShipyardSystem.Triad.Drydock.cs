@@ -635,15 +635,15 @@ public sealed partial class ShipyardSystem
     /// The drydock half of the console state, read from the caches. Called by the upstream state
     /// builder so it carries one line of ours rather than a block.
     /// </summary>
-    internal (List<StoredShipInfo> Ships, List<DrydockBerthInfo> Berths, Dictionary<string, int> Prices, List<DrydockTransferOfferInfo> Offers, List<DrydockCaptainInfo> Captains, Guid? DeedOwner, DrydockDeedShipInfo? DeedShip, int OfferMinutes) BuildDrydockState(EntityUid uid)
+    internal (List<StoredShipInfo> Ships, List<DrydockBerthInfo> Berths, Dictionary<string, int> Prices, List<DrydockTransferOfferInfo> Offers, List<DrydockCaptainInfo> Captains, Guid? DeedOwner, DrydockDeedShipInfo? DeedShip, int OfferMinutes, List<DrydockImportShipInfo> Importables) BuildDrydockState(EntityUid uid)
     {
         // The same floor the offer itself applies, so the prompt never promises less than an offer gets.
         var offerMinutes = (int)Math.Ceiling(Math.Max(60, _configManager.GetCVar(TriadCCVars.DrydockTransferOfferSeconds)) / 60.0);
 
         if (!TryComp<ShipyardConsoleComponent>(uid, out var console))
-            return (new(), new(), DrydockBerthPrices(), new(), new(), null, null, offerMinutes);
+            return (new(), new(), DrydockBerthPrices(), new(), new(), null, null, offerMinutes, new());
 
-        return (console.CachedStoredShips, console.CachedBerths, DrydockBerthPrices(), console.CachedOffers, console.CachedCaptains, DeedOwnerAccount(console), console.CachedDeedShip, offerMinutes);
+        return (console.CachedStoredShips, console.CachedBerths, DrydockBerthPrices(), console.CachedOffers, console.CachedCaptains, DeedOwnerAccount(console), console.CachedDeedShip, offerMinutes, console.CachedImportables);
     }
 
     /// <summary>

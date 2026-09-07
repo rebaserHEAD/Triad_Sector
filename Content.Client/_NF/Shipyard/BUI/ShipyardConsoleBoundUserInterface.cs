@@ -75,6 +75,12 @@ public sealed partial class ShipyardConsoleBoundUserInterface : BoundUserInterfa
         _menu.LocalUserId = _player.LocalSession?.UserId.UserId;
         _menu.OnStore += berthId => SendMessage(new ShipyardConsoleStoreMessage(berthId));
         _menu.OnRetrieve += shipId => SendMessage(new ShipyardConsoleRetrieveMessage(shipId));
+        _menu.OnImport += ImportLegacyShip; // Triad: legacy import
+
+        // Triad: legacy import. Offer what this machine holds as soon as the console opens; the
+        // server answers by putting the acceptable ones in the tab's state. Only the manifest goes
+        // now - names, appraisals and the keys the files claim - never the ships themselves.
+        SendMessage(new ShipyardConsoleImportManifestMessage(_shipFileManagementSystem.BuildImportManifest()));
         _menu.OnBuyBerth += sizeClass => SendMessage(new ShipyardConsoleBuyBerthMessage(sizeClass));
         _menu.OnSellBerth += berthId => SendMessage(new ShipyardConsoleSellBerthMessage(berthId));
         _menu.OnUpgradeBerth += berthId => SendMessage(new ShipyardConsoleUpgradeBerthMessage(berthId));
@@ -129,6 +135,35 @@ public sealed partial class ShipyardConsoleBoundUserInterface : BoundUserInterfa
     }
 
     // Removed duplicate direct save path to prevent sending an incorrect deed UID.
+
+    /// <summary>
+    /// Triad: legacy import. Confirms, then sends the one file's payload. The prompt is the last
+    /// point at which this is reversible on an enforcing server, so it asks before the bytes move
+    /// rather than after.
+    /// </summary>
+    private void ImportLegacyShip(string fileId, string shipName)
+    {
+        var prompt = new DrydockConfirmPrompt(
+            Loc.GetString("shipyard-console-import-prompt-title", ("ship", shipName)),
+            Loc.GetString("shipyard-console-import-prompt-body", ("ship", shipName)),
+            Loc.GetString("shipyard-console-import-button"),
+            async void () =>
+            {
+                var yaml = await _shipFileManagementSystem.GetShipYamlData(fileId);
+                if (yaml == null)
+                {
+                    _sawmill.Error($"Could not read '{fileId}' to import it.");
+                    return;
+                }
+
+                // The server only retires a file the client vouched for, the same gate the old load
+                // path used.
+                ShipFileManagementSystem.MarkShipPathAsDeletable(fileId);
+                SendMessage(new ShipyardConsoleImportMessage(fileId, yaml));
+            });
+
+        prompt.OpenCentered();
+    }
 
     private async void OnLoadShipButtonPressed(BaseButton.ButtonEventArgs args)
     {

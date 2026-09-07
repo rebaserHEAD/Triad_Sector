@@ -320,6 +320,43 @@ public sealed partial class TriadTamperPolicyService : EntitySystem
         return new LoadDecision(false, TriadShipyardEventType.LoadRejectedForeignKey, "shipyard-tamper-blocked-untrusted-key");
     }
 
+    /// <summary>
+    /// Whether the tamper check is enforcing. This is what decides whether an import has
+    /// consequences: only an enforcing server burns the save's hash, spends the account's import
+    /// budget and retires the local file. Off and notify run the same import and leave the player's
+    /// disk alone, so a test box can rehearse without eating a save that has to work elsewhere.
+    /// </summary>
+    public bool IsEnforcing() => ResolveMode() == TamperMode.Enforce;
+
+    /// <summary>
+    /// Whether a legacy save should be offered for import, judged from the envelope's public key
+    /// alone. The client cannot hash its own files - System.Security.Cryptography is not on the
+    /// engine's sandbox whitelist - so a manifest carries the key and signature it claims and the
+    /// server hashes the key here.
+    ///
+    /// <para>This decides listing, never authority. A forged envelope carrying one of our public
+    /// keys is listed and then fails <see cref="EvaluateLoad"/> at import, when the payload is
+    /// actually present to verify against. Deciding the other way would mean shipping every save on
+    /// disk up the wire on tab open.</para>
+    /// </summary>
+    public bool ShouldOfferForImport(byte[]? publicKey, NetUserId player)
+    {
+        var mode = ResolveMode();
+
+        // Off and notify permit every load, so they permit every import: a server that is not
+        // enforcing is rehearsing, and a list filtered tighter than the load path would make the
+        // test box disagree with the live one about which ships exist.
+        if (mode != TamperMode.Enforce)
+            return true;
+
+        if (publicKey != null && _keyStore.IsOwnKey(SHA256.HashData(publicKey)))
+            return true;
+
+        // The permit is the same straggler bypass the load path honours; those ships re-sign on
+        // the way in.
+        return _permitStore.HasPermitFor(player.UserId);
+    }
+
     public Task RecordSaveAsync(
         AuthenticatedShipFile envelope,
         NetUserId player,

@@ -2142,6 +2142,52 @@ namespace Content.Server.Database.Migrations.Sqlite
                     b.ToTable("triad_shipyard_audit_events", (string)null);
                 });
 
+            modelBuilder.Entity("Content.Server.Database.TriadShipyardConsumedShip", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("triad_shipyard_consumed_ships_id");
+
+                    b.Property<DateTime>("ImportedAt")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("imported_at");
+
+                    b.Property<int?>("ImportedRoundId")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("imported_round_id");
+
+                    b.Property<Guid>("PlayerUserId")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("player_user_id");
+
+                    b.Property<Guid?>("ShipGuid")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("ship_guid");
+
+                    b.Property<byte[]>("ShipHash")
+                        .IsRequired()
+                        .HasColumnType("BLOB")
+                        .HasColumnName("ship_hash");
+
+                    b.Property<string>("ShipName")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("ship_name");
+
+                    b.HasKey("Id")
+                        .HasName("PK_triad_shipyard_consumed_ships");
+
+                    b.HasIndex("ImportedRoundId")
+                        .HasDatabaseName("IX_triad_shipyard_consumed_ships_imported_round_id");
+
+                    b.HasIndex("PlayerUserId");
+
+                    b.HasIndex("ShipHash")
+                        .IsUnique();
+
+                    b.ToTable("triad_shipyard_consumed_ships", (string)null);
+                });
+
             modelBuilder.Entity("Content.Server.Database.TriadShipyardMigrationPermit", b =>
                 {
                     b.Property<int>("Id")
@@ -3046,6 +3092,16 @@ namespace Content.Server.Database.Migrations.Sqlite
                         .HasConstraintName("FK_trait_profile_profile_id");
 
                     b.Navigation("Profile");
+                });
+
+            modelBuilder.Entity("Content.Server.Database.TriadShipyardConsumedShip", b =>
+                {
+                    b.HasOne("Content.Server.Database.Round", "ImportedRound")
+                        .WithMany()
+                        .HasForeignKey("ImportedRoundId")
+                        .HasConstraintName("FK_triad_shipyard_consumed_ships_round_imported_round_id");
+
+                    b.Navigation("ImportedRound");
                 });
 
             modelBuilder.Entity("Content.Server.Database.Unban", b =>

@@ -49,6 +49,14 @@ public sealed class ShipyardConsoleInterfaceState : BoundUserInterfaceState
     public readonly DrydockDeedShipInfo? DeedShip;
 
     /// <summary>
+    /// Triad: legacy saves on this client's disk that the server will accept. Set after construction
+    /// rather than passed in, because it is answered by a message from the client and so is not known
+    /// at the moment the rest of the state is built; empty until that manifest arrives, and empty for
+    /// good when legacy import is switched off.
+    /// </summary>
+    public List<DrydockImportShipInfo> ImportableShips = new();
+
+    /// <summary>
     /// Triad: how long a transfer offer stands, in whole minutes, for the sentence in the transfer
     /// prompt. The cvar behind it is server-only, so the client has to be told.
     /// </summary>

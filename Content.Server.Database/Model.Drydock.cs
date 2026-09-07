@@ -575,4 +575,11 @@ public enum DrydockAuditAction
 
     /// <summary>An admin undid a sale; the reason says whether the money came back.</summary>
     SaleReversed = 24,
+
+    /// <summary>
+    /// A ship came in from the old save system. Written whatever the tamper mode, because the tamper
+    /// audit stops writing entirely when the check is off and an import must still leave a trace; the
+    /// reason says so when the save was not actually spent.
+    /// </summary>
+    Imported = 25,
 }

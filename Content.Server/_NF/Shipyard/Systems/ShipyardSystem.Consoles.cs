@@ -926,6 +926,10 @@ public sealed partial class ShipyardSystem : SharedShipyardSystem
             drydock.DeedShip, // Triad: drydock tab
             drydock.OfferMinutes); // Triad: drydock tab
 
+        // Triad: legacy import. Set after construction because it is answered by a manifest the
+        // client sends, not read from the database with the rest of the drydock state.
+        newState.ImportableShips = drydock.Importables;
+
         _ui.SetUiState(uid, uiKey, newState);
     }
 

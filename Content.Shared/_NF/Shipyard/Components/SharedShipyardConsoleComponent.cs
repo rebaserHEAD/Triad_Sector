@@ -104,4 +104,23 @@ public sealed partial class ShipyardConsoleComponent : Component
 
     /// <summary>Triad: the captains online at the last refresh with their free berth classes, for the transfer picker.</summary>
     public List<BUI.DrydockCaptainInfo> CachedCaptains = new();
+
+    /// <summary>Triad: legacy saves this operator may import, cached for the same reason as the ship list.</summary>
+    public List<BUI.DrydockImportShipInfo> CachedImportables = new();
+
+    /// <summary>
+    /// Triad: the candidates behind <see cref="CachedImportables"/>, keyed by the client's file id.
+    ///
+    /// <para>This is what makes an import message safe to act on: it may only name a file the server
+    /// itself just offered, and the hash recorded here is compared with the one re-derived from the
+    /// payload, so a modified client cannot send one file's id with another file's bytes. Cleared
+    /// and rebuilt on every manifest.</para>
+    /// </summary>
+    public Dictionary<string, Events.DrydockImportCandidate> OfferedImports = new();
+
+    /// <summary>
+    /// Triad: the account the offered imports were judged for. A console is not single-occupancy, and
+    /// a list built for one captain must not be spendable by the next one to walk up to it.
+    /// </summary>
+    public Guid? ImportOfferAccount;
 }

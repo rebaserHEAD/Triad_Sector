@@ -134,6 +134,7 @@ drydock-admin-action-TransferExpired = Transfer expired
 drydock-admin-action-ShipSold = Sold
 drydock-admin-action-Renamed = Renamed
 drydock-admin-action-SaleReversed = Sale reversed
+drydock-admin-action-Imported = Imported
 
 # The Toolshed loc test requires a description key for every command, whatever the command's own
 # CommandDescription attribute says, so this is the one the test reads.

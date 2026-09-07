@@ -17,6 +17,9 @@ public sealed partial class ShipyardSystem : SharedShipyardSystem
 {
     [Dependency] private ShipyardGridSaveSystem _shipyardGridSave = default!;
     [Dependency] private UseDelaySystem _useDelay = default!;
+    // Triad: legacy import. ShipSizeSystem is already injected on the drydock partial as
+    // _drydockSizes and RA0032 forbids a second [Dependency] of one type across a partial class.
+    [Dependency] private Content.Server._Triad.Shipyard.Persistence.ITriadShipyardConsumedStore _consumedStore = default!;
 
     /// <summary>
     /// Writes YAML data to a temporary file and attempts the same initial strict load path as purchase-from-file.

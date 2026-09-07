@@ -102,6 +102,7 @@ namespace Content.Server.IoC
             IoCManager.Register<ITriadShipyardKeyStore,    TriadShipyardKeyStore>();
             IoCManager.Register<ITriadShipyardAuditLog,    TriadShipyardAuditLogStore>();
             IoCManager.Register<ITriadShipyardPermitStore, TriadShipyardPermitStore>();
+            IoCManager.Register<ITriadShipyardConsumedStore, TriadShipyardConsumedStore>();
             // Tracks open tamper admin panels so a single audit-write signal updates every one,
             // letting multiple admins watch the live feed without re-opening it.
             IoCManager.Register<TriadTamperAdminEuiRegistry>();

@@ -100,6 +100,24 @@ public sealed class TriadCCVars
     /// </summary>
     public static readonly CVarDef<int> DrydockTransferOfferSeconds =
         CVarDef.Create("triad.drydock.transfer_offer_seconds", 1800, CVar.SERVERONLY);
+
+    /// <summary>
+    /// Whether the drydock offers to import ships saved under the old shipyard save system. This is
+    /// onboarding, not a feature: it exists to drain the legacy pool and is meant to be switched off
+    /// once it has.
+    /// </summary>
+    public static readonly CVarDef<bool> DrydockImportEnabled =
+        CVarDef.Create("triad.drydock.import_enabled", false, CVar.SERVERONLY);
+
+    /// <summary>
+    /// How many legacy ships one account may import, ever. A save file identifies a file and not a
+    /// hull - the envelope carries no ship identity - so someone holding three saves of the same
+    /// ship holds three legally loadable files. Burning the hash stops a file being imported twice;
+    /// this is what stops the other two becoming ships. Counted against imports that were actually
+    /// spent, so the rehearsal imports a non-enforcing server allows do not use anyone's budget up.
+    /// </summary>
+    public static readonly CVarDef<int> DrydockImportBudget =
+        CVarDef.Create("triad.drydock.import_budget", 1, CVar.SERVERONLY);
     // End Triad
     // Triad: market data
     // The queue knobs mirror the admin log ones, which solve the same problem at production volume

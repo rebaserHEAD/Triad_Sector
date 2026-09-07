@@ -1,8 +1,10 @@
+using Content.Shared._NF.Shipyard.Events; // Triad: legacy import
 using Content.Shared._Triad.Shipyard.Save;
 using System.Threading.Tasks;
 using System.Linq;
 using Robust.Shared.ContentPack;
 using Robust.Shared.Utility;
+using YamlDotNet.RepresentationModel; // Triad: legacy import
 
 namespace Content.Client._Triad.Shipyard.Save;
 
@@ -144,6 +146,71 @@ public sealed partial class ShipFileManagementSystem : EntitySystem
 
         await Task.CompletedTask;
         return yamlData;
+    }
+
+    /// <summary>
+    /// Triad: legacy import. Describes every local save to the server so it can say which it will
+    /// take: the envelope's name, its unsigned appraisal, and the signature and public key it claims.
+    ///
+    /// <para>No hashing here, deliberately. A signature covers a SHA-256 of the ship data and
+    /// <c>System.Security.Cryptography</c> is not on the engine's sandbox whitelist, so the client
+    /// cannot compute one in a packaged build. It sends the key instead and the server hashes that
+    /// itself; the payload, and the real verification, follow only for the ship actually imported.</para>
+    /// </summary>
+    public List<DrydockImportCandidate> BuildImportManifest()
+    {
+        var manifest = new List<DrydockImportCandidate>();
+
+        foreach (var path in GetSavedShipFiles())
+        {
+            try
+            {
+                using var reader = _resourceManager.UserData.OpenText(new ResPath(path));
+                var node = new YamlStream();
+                node.Load(reader);
+
+                if (node.Documents.Count == 0 || node.Documents[0].RootNode is not YamlMappingNode root)
+                    continue;
+
+                manifest.Add(new DrydockImportCandidate(
+                    path,
+                    ExtractFileNameWithoutExtension(path),
+                    int.TryParse(Scalar(root, "appraisal"), out var appraisal) ? appraisal : null,
+                    B64(root, "signature"),
+                    B64(root, "signaturePublicKey")));
+            }
+            catch (Exception ex)
+            {
+                // A file that will not parse is one the server could not load either. Skipping it
+                // keeps a corrupt save out of the list instead of out of the whole manifest.
+                _sawmill.Warning($"Skipping '{path}' while building the import manifest: {ex.Message}");
+            }
+        }
+
+        return manifest;
+    }
+
+    private static string? Scalar(YamlMappingNode root, string key)
+    {
+        return root.Children.TryGetValue(new YamlScalarNode(key), out var node) && node is YamlScalarNode scalar
+            ? scalar.Value
+            : null;
+    }
+
+    private static byte[] B64(YamlMappingNode root, string key)
+    {
+        var raw = Scalar(root, key);
+        if (string.IsNullOrWhiteSpace(raw))
+            return Array.Empty<byte>();
+
+        try
+        {
+            return Convert.FromBase64String(raw);
+        }
+        catch (FormatException)
+        {
+            return Array.Empty<byte>();
+        }
     }
 
     // Triad start

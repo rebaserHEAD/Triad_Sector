@@ -243,3 +243,18 @@ shipyard-console-retrieve-not-stored = Another request just claimed that ship. C
 shipyard-console-retrieve-no-revision = None of that ship's stored records can be read. Contact an admin.
 shipyard-console-retrieve-station-lost = The station could not receive the ship. Try again.
 shipyard-console-retrieve-voucher-card = A voucher cannot call in a stored ship. Insert your ID card.
+
+# Triad: legacy import. Draining the old ship-save system into the drydock.
+shipyard-console-import-success = { $ship } imported. It is in the drydock, in a berth sized to its hull.
+shipyard-console-import-disabled = This console is not taking old ship files.
+shipyard-console-import-not-offered = That file is not one this console offered. Reopen the drydock and try again.
+shipyard-console-import-already-imported = That ship has already been imported. A save can only be filed once.
+shipyard-console-import-budget-spent = You have used every import on this account.
+shipyard-console-import-load-failed = The file would not load. It may have been written by a much older build.
+shipyard-console-import-failed = The import could not be completed.
+shipyard-console-import-button = Import
+shipyard-console-import-row-marker = new
+shipyard-console-import-row-note = · old save
+shipyard-console-import-summary = { " " }· { $count } to import
+shipyard-console-import-prompt-title = Import { $ship }
+shipyard-console-import-prompt-body = [color=#e0e0e0]{ $ship }[/color] files into a [bold]new berth[/bold], sized to its hull and granted with the import.

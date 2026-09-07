@@ -184,6 +184,12 @@ public sealed partial class ShipyardConsoleMenu : FancyWindow
     private List<StoredShipInfo> _lastShips = new();
     private List<DrydockBerthInfo> _lastBerths = new();
 
+    /// <summary>Triad: legacy import. The saves the server last agreed to take.</summary>
+    private List<DrydockImportShipInfo> _lastImportable = new();
+
+    /// <summary>Triad: legacy import. Raised with the file id and the ship's name, for the prompt.</summary>
+    public event Action<string, string>? OnImport;
+
     private bool WouldLeaveAShipWithoutABerth(int consumes)
     {
         var free = _lastBerths.Count(b => b.OccupantShipId == null);
@@ -487,6 +493,7 @@ public sealed partial class ShipyardConsoleMenu : FancyWindow
 
         _lastShips = state.StoredShips;
         _lastBerths = state.Berths;
+        _lastImportable = state.ImportableShips; // Triad: legacy import
         _lastCaptains = state.Captains;
         // Never an alert for one's own offer; the escrow row already says it.
         _lastOffers = state.TransferOffers.Where(o => LocalUserId == null || o.OfferedByUserId != LocalUserId).ToList();
@@ -501,7 +508,12 @@ public sealed partial class ShipyardConsoleMenu : FancyWindow
         PopulateBuyMenu(state.BerthPrices);
 
         var free = state.Berths.Count(b => b.OccupantShipId == null);
-        BerthSummaryLabel.Text = Loc.GetString("shipyard-console-berths-free", ("free", free), ("total", state.Berths.Count));
+        BerthSummaryLabel.Text = Loc.GetString("shipyard-console-berths-free", ("free", free), ("total", state.Berths.Count))
+            // Triad: legacy import. Only said while there is something to import, so the line stays
+            // as short as it is on a console with nothing waiting.
+            + (state.ImportableShips.Count > 0
+                ? Loc.GetString("shipyard-console-import-summary", ("count", state.ImportableShips.Count))
+                : string.Empty);
     }
 
     /// <summary>
@@ -591,9 +603,26 @@ public sealed partial class ShipyardConsoleMenu : FancyWindow
     /// with a disabled entry saying why. The berth an offer on the tab would land in says what is
     /// coming in place of "empty".
     /// </summary>
+    /// <summary>
+    /// Triad: legacy import. Old saves sit above the berths, because they are not in one yet: the
+    /// import grants the berth. Drawn only when the server has agreed to take them, so an empty list
+    /// is the whole of the feature being off, out of budget, or nothing importable on this machine.
+    /// </summary>
+    private void PopulateImports(List<DrydockImportShipInfo> importable)
+    {
+        foreach (var ship in importable)
+        {
+            var row = new DrydockImportRow(ship);
+            row.ImportButton.Disabled = !_validId;
+            row.ImportButton.OnPressed += _ => OnImport?.Invoke(row.FileId, ship.Name);
+            Berths.AddChild(row);
+        }
+    }
+
     private void PopulateBerths(List<DrydockBerthInfo> berths, bool canRetrieve)
     {
         Berths.RemoveAllChildren();
+        PopulateImports(_lastImportable);
 
         // Fresh rows are the server answering, so any retrieve in flight is over.
         _retrievingFor = -1f;

@@ -55,6 +55,7 @@ namespace Content.Server.Database
         public DbSet<TriadShipyardSigningKey>       TriadShipyardSigningKeys        { get; set; } = default!;
         public DbSet<TriadShipyardAuditEvent>       TriadShipyardAuditEvents        { get; set; } = default!;
         public DbSet<TriadShipyardMigrationPermit>  TriadShipyardMigrationPermits   { get; set; } = default!;
+        public DbSet<TriadShipyardConsumedShip>     TriadShipyardConsumedShips      { get; set; } = default!;
         // End Triad
         // Triad: drydock (see Model.Drydock.cs)
         public DbSet<DrydockShip>     DrydockShip     { get; set; } = default!;
@@ -364,6 +365,17 @@ namespace Content.Server.Database
             modelBuilder.Entity<TriadShipyardMigrationPermit>()
                 .HasIndex(p => p.PlayerUserId)
                 .IsUnique();
+
+            // Unique on the hash: the constraint, not the read-then-write, is what makes two
+            // simultaneous imports of one file resolve to a single ship. The insert races and one
+            // of them loses.
+            modelBuilder.Entity<TriadShipyardConsumedShip>()
+                .HasIndex(c => c.ShipHash)
+                .IsUnique();
+
+            // The import budget counts this player's spent imports.
+            modelBuilder.Entity<TriadShipyardConsumedShip>()
+                .HasIndex(c => c.PlayerUserId);
             // End Triad
             // Triad: drydock
             ModelDrydock.OnModelCreating(modelBuilder);
@@ -1236,6 +1248,42 @@ namespace Content.Server.Database
         public Guid GrantedByAdminId { get; set; }
         public DateTime GrantedAt { get; set; }
         public string? Notes { get; set; }
+    }
+
+    /// <summary>
+    /// A legacy save file that has been imported into the drydock and must never be honoured again.
+    /// Keyed by the hash the signature covers, which is what makes it forgery-proof: editing the
+    /// file to change its hash invalidates the signature, so a player cannot mint a fresh identity
+    /// for a save they have already spent.
+    ///
+    /// <para>Only an enforcing server writes here. A server running the tamper check off or in
+    /// notify is a rehearsal: the import runs end to end and this table is neither read nor written,
+    /// so a test box cannot eat a save that still has to work somewhere else.</para>
+    /// </summary>
+    public class TriadShipyardConsumedShip
+    {
+        public int Id { get; set; }
+
+        /// <summary>SHA-256 of the signed ship data, as <c>AuthenticatedShipFile.GetHash</c> computes it.</summary>
+        public byte[] ShipHash { get; set; } = default!;
+
+        /// <summary>Who spent it. The import budget is counted over this column.</summary>
+        public Guid PlayerUserId { get; set; }
+
+        public DateTime ImportedAt { get; set; }
+
+        public int? ImportedRoundId { get; set; }
+
+        public Round? ImportedRound { get; set; }
+
+        /// <summary>
+        /// The drydock ship this became. Loose by intention, like the audit log's key reference: the
+        /// ship can later be sold or deleted and the hash must stay spent regardless.
+        /// </summary>
+        public Guid? ShipGuid { get; set; }
+
+        /// <summary>The name it carried at import, for the admin feed. Display only.</summary>
+        public string? ShipName { get; set; }
     }
 
     public enum TriadShipyardEventType
