@@ -348,17 +348,26 @@ public sealed partial class ShipyardSystem
     /// </summary>
     internal async Task RefreshDrydockState(EntityUid uid, ShipyardConsoleComponent component, EntityUid player, ShipyardConsoleUiKey uiKey)
     {
-        component.CachedStoredShips = new();
-        component.CachedBerths = new();
-        component.CachedDeedShip = null;
-        component.CachedOffers = new();
-        component.CachedCaptains = new();
-
+        // Triad: the caches are NOT cleared here, and that is the point. They used to be emptied at
+        // the top and refilled after five awaited database reads, which left a window of several
+        // ticks where the console's cached lists were empty while its tab was showing them. Anything
+        // that published in that window - an unrelated upstream RefreshState, a card going in or out,
+        // a second refresh racing this one - sent the operator a state with no berths and no ships,
+        // and the tab went blank until the whole interface was closed and reopened, because a reopen
+        // is what runs a fresh read. Every list is built into a local now and assigned at the end, so
+        // the cached state is only ever replaced by a complete one, and an early return below leaves
+        // the last good lists in place rather than a blank set.
+        //
         // No card, no account to list against: the drydock tab is per-operator, and an empty list
         // is the honest answer rather than everything the console has ever seen.
         if (component.TargetIdSlot.ContainerSlot?.ContainedEntity is not { Valid: true } targetId
             || !TryComp<ActorComponent>(player, out var actor))
         {
+            component.CachedStoredShips = new();
+            component.CachedBerths = new();
+            component.CachedDeedShip = null;
+            component.CachedOffers = new();
+            component.CachedCaptains = new();
             RefreshDrydockUi(uid, component, player, uiKey);
             return;
         }
@@ -383,10 +392,14 @@ public sealed partial class ShipyardSystem
         // Every hull the account has, including the ones that are out: the tab warns when an
         // action would leave a ship with nowhere to dock. A ship under investigation is hidden,
         // and retrieve refuses it regardless.
-        component.CachedStoredShips = rows
+        var storedShips = rows
             .Where(r => !r.Investigating)
             .Select(r => new StoredShipInfo(r.ShipGuid, r.ShipName, r.SizeClass, r.State.ToString(), r.BerthId))
             .ToList();
+
+        var berthInfos = new List<DrydockBerthInfo>();
+        var offerInfos = new List<DrydockTransferOfferInfo>();
+        var captainInfos = new List<DrydockCaptainInfo>();
 
         var now = DateTime.UtcNow;
         var refund = _configManager.GetCVar(TriadCCVars.DrydockBerthRefund);
@@ -413,7 +426,7 @@ public sealed partial class ShipyardSystem
                 }
             }
 
-            component.CachedBerths.Add(new DrydockBerthInfo(
+            berthInfos.Add(new DrydockBerthInfo(
                 slot.Berth.BerthId,
                 slot.Berth.MaxSizeClass,
                 (int)(slot.Berth.PricePaid * refund),
@@ -441,7 +454,7 @@ public sealed partial class ShipyardSystem
                 .Select(s => (int?)s.Berth.BerthId)
                 .FirstOrDefault();
 
-            component.CachedOffers.Add(new DrydockTransferOfferInfo(
+            offerInfos.Add(new DrydockTransferOfferInfo(
                 transfer.Id,
                 ship.ShipGuid,
                 ship.ShipName,
@@ -455,9 +468,15 @@ public sealed partial class ShipyardSystem
         foreach (var session in online)
         {
             var id = session.UserId.UserId;
-            component.CachedCaptains.Add(new DrydockCaptainInfo(id, SessionDisplayName(session), freeClasses.GetValueOrDefault(id) ?? new List<string>()));
+            captainInfos.Add(new DrydockCaptainInfo(id, SessionDisplayName(session), freeClasses.GetValueOrDefault(id) ?? new List<string>()));
         }
 
+        // Everything is read; swap the whole set in at once. Nothing above this line has touched
+        // what the console is currently showing.
+        component.CachedStoredShips = storedShips;
+        component.CachedBerths = berthInfos;
+        component.CachedOffers = offerInfos;
+        component.CachedCaptains = captainInfos;
         component.CachedDeedShip = BuildDeedShip(uid, targetId, rows, slots);
         RefreshDrydockUi(uid, component, player, uiKey);
     }
