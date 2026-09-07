@@ -178,7 +178,12 @@ public sealed partial class ShipyardSystem
         var envelope = AuthenticatedShipFile.FromShipFile(yamlData);
         var hash = envelope.GetHash();
 
-        var shipName = envelope.ShipYamlString() is { } yaml ? ExtractShipNameFromYaml(yaml) : null;
+        // The grid document, unwrapped. The loader takes this and not the file: the envelope wraps
+        // it alongside the signature and the appraisal, so handing over the whole file makes the
+        // loader look for `meta` at the root and throw. This is what the old load path passed too.
+        var shipYaml = envelope.ShipYamlString();
+
+        var shipName = shipYaml is { } yaml ? ExtractShipNameFromYaml(yaml) : null;
         if (string.IsNullOrWhiteSpace(shipName))
             shipName = candidate.Name;
         if (string.IsNullOrWhiteSpace(shipName))
@@ -224,8 +229,12 @@ public sealed partial class ShipyardSystem
 
         // Stage it the way a purchase does. This is the only way to learn the hull's size: a class is
         // its built tile count, and nothing in the envelope carries one.
-        if (!TryPurchaseShuttleFromYamlData(uid, yamlData, out var shuttleUid) || shuttleUid is not { } grid)
+        if (string.IsNullOrWhiteSpace(shipYaml)
+            || !TryPurchaseShuttleFromYamlData(uid, shipYaml, out var shuttleUid)
+            || shuttleUid is not { } grid)
+        {
             return Refuse(uid, component, player, "shipyard-console-import-load-failed");
+        }
 
         if (!TryComp<MapGridComponent>(grid, out var mapGrid))
         {
