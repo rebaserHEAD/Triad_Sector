@@ -166,7 +166,7 @@ public sealed partial class DrydockSystem : EntitySystem
             // sits after every refusal above, so a refused store deletes nothing, and before the
             // appraisal, so the quote is for what is actually filed. Not undoable, which is also
             // true of the reference path; the first play test found ID cards and modular grenades
-            // riding a store that kept everything (2026-09-06).
+            // riding a store that kept everything.
             var purged = PurgeSavingContraband(gridUid);
             if (purged > 0)
                 Log.Info($"Drydock: {shipId} store purged {purged} saving-contraband entities without a permit.");
@@ -401,7 +401,7 @@ public sealed partial class DrydockSystem : EntitySystem
     /// a sound played at grid coordinates is a real grid child until its despawn timer fires.
     /// Before this filter, a ship that happened to have a sound in the air at the moment of the
     /// store counted it on the live side, never saw it on the scratch side, and was refused - which
-    /// vessel that hit depended on the instant the store ran. The 2026-08-26 roster sweep caught it
+    /// vessel that hit depended on the instant the store ran. The roster sweep caught it
     /// refusing different vessels on identical back-to-back runs.</para>
     /// </summary>
     /// <returns>True on mismatch, meaning the store must abort.</returns>

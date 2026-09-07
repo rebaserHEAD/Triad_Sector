@@ -118,7 +118,7 @@ namespace Content.Server.Atmos.Piping.EntitySystems
             // Leaving raises the disabled event, and every pump, filter, mixer and valve answers
             // that by switching itself off, so any loaded grid came up with its distro dead: a
             // stored ship on retrieve, a saved ship on load, a mapped pump without startOnMapInit
-            // (test server, 2026-09-06: "turned on pump became off", "filters and pumps turn off").
+            // (reported: "turned on pump became off", "filters and pumps turn off").
             // A device already in the atmosphere of the grid it sits on has nothing to rejoin, and
             // one that is in no atmosphere at all has nothing to leave. A real move between grids
             // still goes through the full leave-and-join below.

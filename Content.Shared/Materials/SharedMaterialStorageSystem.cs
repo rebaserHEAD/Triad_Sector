@@ -72,7 +72,7 @@ public abstract partial class SharedMaterialStorageSystem : EntitySystem
     /// visible and the insert animation looped forever, on every restored ship, on the ship-save
     /// path as well as the drydock. Inserting material by hand was the only cure, because a real
     /// insert ends by setting the key to false and that finally delivered the change the client
-    /// needed. Reported from a play test on 2026-09-07.</para>
+    /// needed. Reported from a play test.</para>
     ///
     /// <para>Deliberately unconditional. An insert genuinely in flight across a store still carries
     /// <see cref="InsertingMaterialStorageComponent"/> with a re-based EndTime, and

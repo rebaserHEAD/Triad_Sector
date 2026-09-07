@@ -191,7 +191,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
         /// The shipyard builds its staging map on the first purchase of a round and tears it down
         /// at round end. A retrieve in a fresh round, before anyone had bought a ship, found no map
         /// and refused with the one sentence every refusal used to share, for a ship that was
-        /// stored and berthed (2026-09-05). The retrieve now asks the shipyard for the map the way a
+        /// stored and berthed. The retrieve now asks the shipyard for the map the way a
         /// purchase does. Deleting the map between the store and the retrieve is the shape the
         /// round-end cleanup leaves when the map still existed; the null it leaves otherwise goes
         /// through the same call.
@@ -381,7 +381,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
         /// Ship guns fire only while registered with a gunnery server, and the server only links
         /// its grid, its guns and its console on a power edge. A retrieved ship arrives with the
         /// receivers unpowered and the net comes up a tick later, so the edge should fire; players
-        /// reported the guns dead after a retrieve all the same (2026-09-06). This spells out every
+        /// reported the guns dead after a retrieve all the same. This spells out every
         /// link before the store as the control and demands the same links on what comes back.
         /// </summary>
         [Test]
@@ -1019,7 +1019,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
 
                 // Mid-print. The marker has no data fields, so saved it reloaded empty, and a lathe
                 // marked producing with no recipe is one the lathe loop never finishes and the
-                // reboot pass never restarts (test server, 2026-09-06: lathes stuck in their running
+                // reboot pass never restarts (reported: lathes stuck in their running
                 // animation for good). It opts out of saving now; this is the check that it stays out.
                 entMan.EnsureComponent<LatheProducingComponent>(lathe);
             });
@@ -1067,7 +1067,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
         }
 
         /// <summary>
-        /// Three things the first public play test (2026-09-06) found that only map init ever set up,
+        /// Three things the first public play test found that only map init ever set up,
         /// in one round trip: a smart fridge's stock index, a robotic arm's declared hand, and the
         /// marker that stops the roundstart variation passes re-littering a ship on every retrieve.
         /// Each is a Revive step; each one missing is a machine that looks fine and does nothing.
@@ -1148,7 +1148,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
         /// A xenoartifact is the one entity aboard whose whole structure is a NetEntity graph. The
         /// fidelity probe had no NetEntity writer, so it judged every such field unserializable and
         /// blanked it before the save: the vertex array went to null and the serializer refused the
-        /// entire ship (test server, 2026-09-06: "Damascus cannot store"). The map serializer remaps
+        /// entire ship (reported: "Damascus cannot store"). The map serializer remaps
         /// NetEntity like EntityUid, so the probe must leave those fields alone; this proves the
         /// store goes through and the graph comes back pointing at real nodes.
         /// </summary>
@@ -1215,7 +1215,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
         /// Every pump, filter and mixer switches itself off when it leaves an atmosphere, and the
         /// engine raises a parent-changed message on every entity at startup that made the atmos
         /// device leave and rejoin the grid it had already joined on init. A loaded ship therefore
-        /// came back with its distro off (test server, 2026-09-06: "turned on pump became off",
+        /// came back with its distro off (reported: "turned on pump became off",
         /// "filters and pumps turn off"). The atmos device system now skips the rejoin for a device
         /// already in the atmosphere it sits in; this is the round trip that proves the switches
         /// hold, and it failed on all four before that change.
@@ -1296,7 +1296,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
         /// The analysis console holds its analyzer as a NetEntity and the analyzer holds its console
         /// as a view-variables field, so the pair is re-resolved from the device-link wire on the
         /// analyzer's map init and nowhere else. A retrieved pair came back linked on the wire and
-        /// dead on the console (test server, 2026-09-06: "linked, but not working"; "analyzer still
+        /// dead on the console (reported: "linked, but not working"; "analyzer still
         /// borked" on the next build). Both ends are asserted after the round trip.
         /// </summary>
         [Test]
@@ -1429,7 +1429,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
         /// <summary>
         /// The ship-save path deletes anything marked as saving contraband unless it carries a
         /// contraband permit. The drydock kept everything, so ID cards and modular grenades rode
-        /// along (test server, 2026-09-06: "ID CARDs save!! That is probably bad"). The store now
+        /// along (reported: "ID CARDs save!! That is probably bad"). The store now
         /// purges by the same component rule; the permit exception and an ordinary item are the
         /// controls that the purge takes only what it should.
         /// </summary>
@@ -1496,7 +1496,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
         /// <summary>
         /// A crystallizer's recipe and gas input were view-variables fields, so a retrieved one came
         /// back with no recipe and no input, and the regulator loop then ran against a reset machine
-        /// (test server, 2026-09-06: "crystallizers reset their settings and superheat their inlet").
+        /// (reported: "crystallizers reset their settings and superheat their inlet").
         /// Both are data fields now.
         /// </summary>
         [Test]
@@ -1917,7 +1917,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
         /// A pump has an inlet node in one net and an outlet node in another. The first sidecar held
         /// one mixture per entity, so whichever net was written last won and the restore merged it
         /// into both nodes: gas crossed the pump, a mixer's two feeds leaked into each other, and a
-        /// crystallizer's inlet dumped into its regulator loop (test server, 2026-09-06). A lone
+        /// crystallizer's inlet dumped into its regulator loop. A lone
         /// pump is the smallest device with two nets; its two nodes must come back holding exactly
         /// what each held, and nothing of the other.
         /// </summary>

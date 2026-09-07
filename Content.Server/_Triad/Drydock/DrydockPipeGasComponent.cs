@@ -14,7 +14,7 @@ namespace Content.Server._Triad.Drydock;
 /// as many different nets. The first draft held one mixture per entity, so the last net written
 /// won and the restore merged it into every node: gas crossed from a pump's inlet to its outlet,
 /// a mixer's two feeds leaked into each other, and a crystallizer's inlet dumped into its hot
-/// regulator loop (test server, 2026-09-06: "pumps will backpressure their contents on ship
+/// regulator loop (reported: "pumps will backpressure their contents on ship
 /// save", "the N2 leaked into the O2").</para>
 /// </summary>
 [RegisterComponent]

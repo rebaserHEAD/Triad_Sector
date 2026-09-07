@@ -604,7 +604,7 @@ internal sealed class DrydockEntityRefProbe : ISerializationContext, ITypeWriter
     // document id, and the base manager has no writer for it either. Without this stub every
     // NetEntity-bearing field read as a gap and was blanked before the save: an artifact's node
     // graph came out with its vertex array set to null, which the serializer then refused, so a
-    // ship carrying an artifact could not be stored at all (test server, 2026-09-06, Damascus),
+    // ship carrying an artifact could not be stored at all (reported on Damascus),
     // and an analysis console lost the analyzer it was linked to.
     public DataNode Write(
         ISerializationManager serializationManager,

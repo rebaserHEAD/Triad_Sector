@@ -489,7 +489,7 @@ public sealed partial class DrydockSystem
     /// one uid on the whole ship the loader cannot remap, so every locked console comes back keyed
     /// to a grid that no longer exists. The deed minted onto the card names the new grid, and the
     /// unlock compares the two as strings, so the captain's own deed would not open the helm
-    /// (test server, 2026-09-06: "I cant unlock the ship with my deed"). The purchase and ship-load
+    /// (reported: "I cant unlock the ship with my deed"). The purchase and ship-load
     /// paths both stamp every console with the live uid; this is that stamp, and it re-locks the
     /// consoles the way both of them do.
     /// </summary>
@@ -507,7 +507,7 @@ public sealed partial class DrydockSystem
     }
 
     /// <summary>
-    /// A fuel generator's on flag is written into the save, but until 2026-09-07 it did not survive
+    /// A fuel generator's on flag is written into the save, but it did not survive
     /// the load: the transform system raises AnchorStateChangedEvent on every entity that starts up
     /// anchored, and the generator's handler switched off on any anchor change rather than only on
     /// coming unanchored. So the flag arrived true and was false by the time this ran, this step
@@ -515,7 +515,7 @@ public sealed partial class DrydockSystem
     /// handler is fixed at the source (GeneratorSystem.OnAnchorStateChanged); this step stays for
     /// what the flag drives and the save does not carry: the running sprite, the ambient hum, the
     /// radiation source and its glow. Re-applying the flag through the generator system re-derives
-    /// all of it. (Test server, 2026-09-06: "generators do not start", "z-pinches did not carry
+    /// all of it. (Reported: "generators do not start", "z-pinches did not carry
     /// over their on state"; a signal toggle, which switches it off and on again, "worked".)
     /// </summary>
     private void ReviveGenerators(EntityUid grid)
@@ -592,7 +592,7 @@ public sealed partial class DrydockSystem
     /// The item-slot registry is a read-only data field, so a slot added at runtime is never saved:
     /// only the prototype's own slots come back. A reagent dispenser registers its beaker slot on
     /// map init and its storage slots from its parts, so a retrieved one had jugs in containers no
-    /// slot knew about and nowhere to put a new one (test server, 2026-09-06: "chemical dispensers
+    /// slot knew about and nowhere to put a new one (reported: "chemical dispensers
     /// break and lose all their contents"). The slot definitions themselves persist on the
     /// dispenser; this re-registers them, which finds the jugs already in their containers.
     /// </summary>
@@ -672,7 +672,7 @@ public sealed partial class DrydockSystem
     /// <summary>
     /// A use delay's end is an absolute game time, and the clock starts over every round. Written
     /// in one round and read in the next, the half-second on a bag or a belt reads as hours, and
-    /// nothing aboard opens on a press (test server, 2026-09-06: "I cannot press E to open
+    /// nothing aboard opens on a press (reported: "I cannot press E to open
     /// inventories", only what was on the ship). The ship-load path re-arms every delay on load;
     /// this is the same pass. Re-arming rather than clearing is what that path does, and a delay
     /// is at most a few seconds, so a retrieved item is usable by the time anyone reaches it.

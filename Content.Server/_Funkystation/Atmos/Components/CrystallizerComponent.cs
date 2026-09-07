@@ -10,7 +10,7 @@ namespace Content.Server._Funkystation.Atmos.Components
     {
         // Triad: data fields. Neither was saved, so a stored crystallizer came back with no recipe
         // and no gas input, and its regulator loop then ran against a machine that had been reset
-        // under it (test server, 2026-09-06: "crystallizers reset their settings").
+        // under it (reported: "crystallizers reset their settings").
         // [ViewVariables(VVAccess.ReadWrite)]
         [DataField, ViewVariables(VVAccess.ReadWrite)]
         public string? SelectedRecipeId { get; set; }

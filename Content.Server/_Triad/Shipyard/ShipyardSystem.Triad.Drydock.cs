@@ -971,7 +971,7 @@ public sealed partial class ShipyardSystem
         AddRetrievedShuttleRecord(component, grid, player);
 
         // The rest of what a purchase and a ship load do for their captain, in their order (the
-        // list is the ship-load path's, walked with its author on 2026-09-06): a station record on
+        // list is the ship-load path's, walked with its author): a station record on
         // the ship's own station, ship access on every door and locker, the grid-split lifecycle
         // marker, the permit items re-stamped to whoever is retrieving, the direction message,
         // and the shipyard channel hearing about it. Ownership is the drydock's own step, since
@@ -1689,7 +1689,7 @@ public sealed partial class ShipyardSystem
 
     /// <summary>
     /// Files the sector shuttle record the purchase and ship-load paths file, so a retrieved ship
-    /// shows on the shuttle records console (test server, 2026-09-06: "loaded ships don't appear on
+    /// shows on the shuttle records console (reported: "loaded ships don't appear on
     /// the shuttle records console"). Records are round-scoped and keyed by the live grid, so every
     /// retrieve files a fresh one. Same gate as those paths: a console that cannot transfer deeds
     /// keeps no records.

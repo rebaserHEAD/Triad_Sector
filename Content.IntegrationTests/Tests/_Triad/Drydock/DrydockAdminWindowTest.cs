@@ -137,7 +137,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
 
                 // Rows in a box are not rows on screen. Lay the window out at its size and demand
                 // the berth list has height: a scroll box with no vertical expand measures to
-                // nothing and drew every berth into zero pixels (2026-09-06, on the test server).
+                // nothing and drew every berth into zero pixels.
                 window.Measure(new Vector2(1400, 800));
                 window.Arrange(new UIBox2(0, 0, 1400, 800));
                 Assert.Multiple(() =>
