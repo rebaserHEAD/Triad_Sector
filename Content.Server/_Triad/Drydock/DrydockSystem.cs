@@ -648,6 +648,11 @@ public sealed partial class DrydockSystem : EntitySystem
     /// contents included, and returns how many went. The ship-save path's rule
     /// (<c>IsInvalidEntity</c>), applied by component rather than by a list: the component is what
     /// the content marks. Immediate deletes, because the serializer walks the tree later this tick.
+    ///
+    /// <para>Deliberately absolute, with no exemption for anchored entities. Anchoring is a state a
+    /// player can create with a wrench, so exempting it would let anyone bolt restricted kit to a
+    /// deck and carry it between rounds. A hull fixture that must survive a store is one that should
+    /// not have carried the contraband marker in the first place, which is where that gets fixed.</para>
     /// </summary>
     private int PurgeSavingContraband(EntityUid gridUid)
     {
