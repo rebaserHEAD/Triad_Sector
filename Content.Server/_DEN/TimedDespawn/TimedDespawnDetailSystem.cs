@@ -17,19 +17,35 @@ public sealed partial class TimedDespawnDetailedSystem : EntitySystem
 
     private readonly HashSet<EntityUid> _timedDespawns = new();
 
+    // Triad: reused each tick so Update can walk the set without enumerating it while TryDelete
+    // removes from it.
+    private readonly List<EntityUid> _despawnScratch = new();
+
     /// <inheritdoc/>
     public override void Initialize()
     {
         SubscribeLocalEvent<TimedDespawnDetailedComponent, MapInitEvent>(OnMapInit);
+        SubscribeLocalEvent<TimedDespawnDetailedComponent, ComponentStartup>(OnStartup); // Triad
         SubscribeLocalEvent<TimedDespawnDetailedComponent, ExaminedEvent>(OnExamine);
     }
 
     public override void Update(float frameTime)
     {
-        foreach (var entity in _timedDespawns)
+        if (_timedDespawns.Count == 0)
+            return;
+
+        // Triad: walk a copy. TryDelete calls StopTimer, which removes from this set, and mutating
+        // it inside the foreach throws on the very tick anything expires.
+        _despawnScratch.Clear();
+        _despawnScratch.AddRange(_timedDespawns);
+
+        foreach (var entity in _despawnScratch)
         {
             if (!Exists(entity) || !TryComp<TimedDespawnDetailedComponent>(entity, out var timedDespawn))
+            {
+                _timedDespawns.Remove(entity);
                 continue;
+            }
 
             TryDelete((entity, timedDespawn));
         }
@@ -91,6 +107,30 @@ public sealed partial class TimedDespawnDetailedSystem : EntitySystem
 
         StopTimer(ent);
         EntityManager.QueueDeleteEntity(ent);
+    }
+
+    /// <summary>
+    /// Triad: re-registers a timer that arrived from a save.
+    /// </summary>
+    /// <remarks>
+    /// The despawn set is plain memory and only <see cref="OnMapInit"/> ever filled it, but
+    /// MapInitEvent does not re-fire for an entity that was already map-initialised. Anything
+    /// loaded from a ship save, a map, or an admin paste was therefore never in the set, and
+    /// <see cref="GetTimeRemaining"/> answers null for what it does not hold, so
+    /// <see cref="TryDelete"/> returned early forever: holofans and force fields stored while lit
+    /// came back permanent. ComponentStartup runs on every load, which is where this belongs.
+    ///
+    /// <para>A zero StartTime means the timer has not been started yet - a fresh spawn reaches
+    /// startup before map init - so it is left for OnMapInit to start. A non-zero one is a running
+    /// timer being restored, and it keeps its original deadline rather than getting a fresh
+    /// lifetime, which the offset serializer on StartTime rebases onto this round's clock.</para>
+    /// </remarks>
+    private void OnStartup(Entity<TimedDespawnDetailedComponent> ent, ref ComponentStartup args)
+    {
+        if (ent.Comp.StartTime == TimeSpan.Zero)
+            return;
+
+        _timedDespawns.Add(ent);
     }
 
     private void OnMapInit(Entity<TimedDespawnDetailedComponent> ent, ref MapInitEvent args)
