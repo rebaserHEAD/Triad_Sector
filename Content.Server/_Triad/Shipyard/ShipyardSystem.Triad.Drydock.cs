@@ -570,8 +570,16 @@ public sealed partial class ShipyardSystem
     }
 
     /// <summary>
-    /// Fills the tab without waiting: the upstream open and card-slot handlers are synchronous and
-    /// the drydock lists come from the database. Called from one marked line in each.
+    /// Fills the tab without waiting: the upstream console handlers are synchronous and the drydock
+    /// lists come from the database. Called from one marked line in each.
+    ///
+    /// <para>Every handler that publishes a console state has to call this, not just the ones that
+    /// obviously touch the drydock. <c>RefreshState</c> builds the drydock half of that state out of
+    /// the caches this fills, so a handler that publishes without kicking a read sends whatever the
+    /// tab last knew: buying a ship left the deed card showing nothing, because a purchase mints the
+    /// deed the card is read from and nothing re-read it. Only opening the console and changing the
+    /// card did, which is why closing and reopening the whole interface was the cure (play test,
+    /// 2026-09-07: "When a ship is purchased, I have the same issue").</para>
     /// </summary>
     internal void KickDrydockRefresh(EntityUid uid, ShipyardConsoleComponent component, EntityUid player, ShipyardConsoleUiKey uiKey)
     {

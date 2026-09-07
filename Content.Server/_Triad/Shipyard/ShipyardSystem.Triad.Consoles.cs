@@ -159,6 +159,7 @@ public sealed partial class ShipyardSystem : SharedShipyardSystem
             balance = bankAcc.Balance;
 
         RefreshState(uid, balance, true, null, 0, targetId, (ShipyardConsoleUiKey)args.UiKey, voucherUsed);
+        KickDrydockRefresh(uid, component, player, (ShipyardConsoleUiKey)args.UiKey); // Triad: drydock tab
     }
 
     public void OnLoadMessage(EntityUid uid, ShipyardConsoleComponent component, ShipyardConsoleLoadMessage args)
@@ -559,6 +560,7 @@ public sealed partial class ShipyardSystem : SharedShipyardSystem
         var loadEv = new ShipyardShuttleLoadEvent(shuttleUid, player);
         RaiseLocalEvent(loadEv);
         RefreshState(uid, balance, true, name, 0, targetId, (ShipyardConsoleUiKey)args.UiKey, false);
+        KickDrydockRefresh(uid, component, player, (ShipyardConsoleUiKey)args.UiKey); // Triad: drydock tab
 
         _adminLogger.Add(LogType.ShipYardUsage, LogImpact.Low, $"{ToPrettyString(player):actor} loaded shuttle {ToPrettyString(shuttleUid)} from {(args.SourceFilePath ?? "YAML data")} via {ToPrettyString(uid)}");
 

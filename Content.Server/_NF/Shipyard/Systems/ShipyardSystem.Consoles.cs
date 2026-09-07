@@ -402,6 +402,7 @@ public sealed partial class ShipyardSystem : SharedShipyardSystem
         var purchaseEv = new ShipyardShuttlePurchaseEvent(shuttleUid, player); // Mono: half of this shit could be an event.
         RaiseLocalEvent(purchaseEv);
         RefreshState(shipyardConsoleUid, bank.Balance, true, name, sellValue, targetId, (ShipyardConsoleUiKey)args.UiKey, voucherUsed);
+        KickDrydockRefresh(shipyardConsoleUid, component, player, (ShipyardConsoleUiKey)args.UiKey); // Triad: drydock tab
     }
 
     public void OnSellMessage(EntityUid uid, ShipyardConsoleComponent component, ShipyardConsoleSellMessage args)
@@ -549,6 +550,7 @@ public sealed partial class ShipyardSystem : SharedShipyardSystem
         }
 
         RefreshState(uid, bank.Balance, true, null, 0, refreshId, (ShipyardConsoleUiKey)args.UiKey, voucherUsed);
+        KickDrydockRefresh(uid, component, player, (ShipyardConsoleUiKey)args.UiKey); // Triad: drydock tab
     }
 
     private void TryParseShuttleName(ShuttleDeedComponent deed, string name)
@@ -1068,6 +1070,7 @@ public sealed partial class ShipyardSystem : SharedShipyardSystem
             // Update the UI with the new ship name, preserving the original sell value
             var fullName = GetFullName(deed);
             RefreshState(uid, balance, true, fullName, originalSellValue, targetId, (ShipyardConsoleUiKey)args.UiKey, false);
+            KickDrydockRefresh(uid, component, player, (ShipyardConsoleUiKey)args.UiKey); // Triad: drydock tab
 
             _adminLogger.Add(LogType.ShipYardUsage, LogImpact.Low,
                 $"{ToPrettyString(player):actor} renamed ship from '{oldName}' to '{GetFullName(deed)}' via {ToPrettyString(uid)}");
@@ -1150,6 +1153,7 @@ public sealed partial class ShipyardSystem : SharedShipyardSystem
 
         // Update the UI
         RefreshState(uid, balance, true, null, 0, targetId, (ShipyardConsoleUiKey)args.UiKey, false);
+        KickDrydockRefresh(uid, component, player, (ShipyardConsoleUiKey)args.UiKey); // Triad: drydock tab
 
         _adminLogger.Add(LogType.ShipYardUsage, LogImpact.Low,
             $"{ToPrettyString(player):actor} unassigned deed for ship '{shipName}' from {ToPrettyString(targetId)} via {ToPrettyString(uid)}");
