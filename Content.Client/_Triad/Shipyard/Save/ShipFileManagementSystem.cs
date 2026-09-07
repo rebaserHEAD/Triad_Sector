@@ -190,27 +190,35 @@ public sealed partial class ShipFileManagementSystem : EntitySystem
         return manifest;
     }
 
+    /// <summary>
+    ///     Reads one scalar through the engine's helper rather than <c>YamlMappingNode.Children</c>.
+    ///     A packaged client runs sandboxed, and that sandbox whitelists the engine wholesale and
+    ///     YamlDotNet's dictionary surface not at all, so reaching for Children here fails the
+    ///     assembly type check and the client aborts before it loads any content at all.
+    /// </summary>
     private static string? Scalar(YamlMappingNode root, string key)
     {
-        return root.Children.TryGetValue(new YamlScalarNode(key), out var node) && node is YamlScalarNode scalar
-            ? scalar.Value
-            : null;
+        return root.TryGetNode<YamlScalarNode>(key, out var scalar) ? scalar.Value : null;
     }
 
+    /// <summary>
+    ///     Decodes without letting a malformed string throw, because <c>FormatException</c> is not a
+    ///     type the sandbox lets content name: the catch that would be the obvious way to write this
+    ///     is the same startup-killing violation as the one above.
+    /// </summary>
     private static byte[] B64(YamlMappingNode root, string key)
     {
         var raw = Scalar(root, key);
         if (string.IsNullOrWhiteSpace(raw))
             return Array.Empty<byte>();
 
-        try
-        {
-            return Convert.FromBase64String(raw);
-        }
-        catch (FormatException)
-        {
+        // Base64 carries three bytes in every four characters and never decodes to more than that.
+        var decoded = new byte[raw.Length / 4 * 3 + 3];
+        if (!Convert.TryFromBase64String(raw, decoded, out var written))
             return Array.Empty<byte>();
-        }
+
+        Array.Resize(ref decoded, written);
+        return decoded;
     }
 
     // Triad start
