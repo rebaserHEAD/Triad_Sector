@@ -105,13 +105,19 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             "PowerNetworkBatteryComponent.CurrentSupply",
             "PowerNetworkBatteryComponent.CurrentReceiving",
             "PowerNetworkBatteryComponent.LoadingNetworkDemand",
-            "PowerSupplierComponent.",
+            "PowerSupplierComponent.CurrentSupply",
+            "PowerSupplierComponent.SupplyRampPosition",
+            "PowerSupplierComponent.MaxSupply",
             "ApcPowerReceiverComponent.Load",
             "AirlockComponent.Powered",
             "DoorBoltComponent.Powered",
             "FirelockComponent.Powered",
-            "FuelGeneratorComponent.On",
             "DamageOnInteractComponent.IsDamageActive",
+
+            // NOT in this list, on purpose: FuelGeneratorComponent.On and PowerSupplierComponent.Enabled.
+            // Both sat here for one run and hid a real defect: True -> False on 73 generators, which is
+            // a hull coming back dark, not a rebuild settling. Whether a generator is switched on is
+            // state the round trip must preserve exactly; only what it produces advances with the clock.
             "Appearance.PowerDeviceVisuals.",
             "Appearance.PoweredLightVisuals.",
             "Appearance.PowerChargeVisuals.",
