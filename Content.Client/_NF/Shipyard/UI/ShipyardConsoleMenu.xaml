@@ -194,7 +194,10 @@
          player sees, not what stops them. -->
     <PanelContainer Name="LockoutPanel" Visible="False" MouseFilter="Stop" VerticalExpand="True" HorizontalExpand="True">
         <PanelContainer.PanelOverride>
-            <gfx:StyleBoxFlat BackgroundColor="#14000090"/>
+            <!-- Opaque on purpose. This panel is shown because the card belongs to someone else, so
+                 the fleet under it is not this operator's to read: at #90 alpha their ship names,
+                 classes and berth numbers stayed legible straight through the denial. -->
+            <gfx:StyleBoxFlat BackgroundColor="#140000"/>
         </PanelContainer.PanelOverride>
         <TextureRect TexturePath="/Textures/_Triad/Interface/drydock_lockout_stripes.png" Stretch="Tile" VerticalExpand="True" HorizontalExpand="True" />
         <!-- The two big lines take their fonts in code; Nano has no 44 pt face to name here. -->
