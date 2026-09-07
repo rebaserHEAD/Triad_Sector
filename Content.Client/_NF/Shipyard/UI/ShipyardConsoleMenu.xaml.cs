@@ -27,7 +27,6 @@ public sealed partial class ShipyardConsoleMenu : FancyWindow
     [Dependency] private IResourceCache _resourceCache = default!; // Triad: drydock tab, the lockout's fonts
 
     public event Action<ButtonEventArgs>? OnSellShip;
-    public event Action<ButtonEventArgs>? OnSaveShip;
     public event Action<ButtonEventArgs>? OnOrderApproved;
     public event Action<ButtonEventArgs>? OnUnassignDeed;
     public event Action<string>? OnRenameShip;
@@ -120,7 +119,6 @@ public sealed partial class ShipyardConsoleMenu : FancyWindow
         var regular = _resourceCache.GetResource<FontResource>("/Fonts/NotoSans/NotoSans-Regular.ttf");
         LockoutTitle.FontOverride = new VectorFont(bold, 44);
         LockoutSubtitle.FontOverride = new VectorFont(regular, 14);
-        SaveShipButton.OnPressed += (args) => { OnSaveShip?.Invoke(args); };
     }
 
     /// <summary>
@@ -463,11 +461,6 @@ public sealed partial class ShipyardConsoleMenu : FancyWindow
         RenameLineEdit.Editable = hasShipDeed;
         RenameButton.Disabled = !hasShipDeed;
 
-        SaveShipButton.Disabled = !state.IsTargetIdPresent;
-        LoadShipButton.Disabled = !state.IsTargetIdPresent;
-        LoadShipButton.ToolTip = state.IsTargetIdPresent
-            ? null
-            : Loc.GetString("shipyard-console-load-ship-no-id");
         TargetIdButton.Text = state.IsTargetIdPresent
             ? Loc.GetString("id-card-console-window-eject-button")
             : Loc.GetString("id-card-console-window-insert-button");

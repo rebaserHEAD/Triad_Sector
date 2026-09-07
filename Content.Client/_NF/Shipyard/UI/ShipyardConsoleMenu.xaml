@@ -6,7 +6,7 @@
                            MinSize="860 500">
     <!-- Triad: taller by default. Upstream opened at 700 and we had it at 540, both sized for the
          purchase list alone. With the drydock as a second tab the window has to hold berth rows and
-         the saved-ship list as well, and at 540 every one of those scrolled from the first frame.
+         the import rows above them, and at 540 every one of those scrolled from the first frame.
          MinSize is unchanged, so it still drags down to 500 on a small screen. -->
     <PanelContainer VerticalExpand="True" HorizontalExpand="True" Margin="0 8 0 2">
         <PanelContainer.PanelOverride>
@@ -116,13 +116,6 @@
                 StyleClasses="ButtonSquare ButtonCaution"
                 Disabled="True" />
 
-            <Button Name="SaveShipButton"
-                Text="Save Ship"
-                Disabled="True"
-                StyleClasses="ButtonCaution" />
-            <Button Name="LoadShipButton"
-                Text="Load Ship"
-                Disabled="True" />
             <BoxContainer Orientation="Vertical">
                 <Label Text="{Loc 'shipyard-console-deed-label'}" />
                 <Label Name="DeedTitle"
@@ -141,29 +134,6 @@
                     Disabled="True" />
         </BoxContainer>
 
-        <BoxContainer Name="SavedShipsContainer" Orientation="Vertical" HorizontalExpand="True" Margin="0 8 0 2">
-            <Label Text="Saved Ships:" />
-            <ItemList Name="SavedShipsList"
-                      MinSize="0 100"
-                      HorizontalExpand="True" />
-        <PanelContainer VerticalExpand="True" HorizontalExpand="True" Margin="0 5 0 5">
-            <PanelContainer.PanelOverride>
-                <gfx:StyleBoxFlat BorderThickness="2" BorderColor="#333333" BackgroundColor="#141414"/>
-            </PanelContainer.PanelOverride>
-            <BoxContainer Orientation="Vertical" Margin="5 0 0 0">
-                <BoxContainer Orientation="Horizontal">
-                    <Label Text="{Loc 'shipyard-console-tax-rate-label'}" StyleClasses="LabelKeyText" />
-                    <Label Name="TaxRateLabel" Text="???" />
-                </BoxContainer>
-                <BoxContainer Orientation="Horizontal">
-                    <Label Text="{Loc 'shipyard-console-save-appraisal-label'}"
-                        StyleClasses="LabelKeyText" />
-                    <Label Name="SelectedShipPriceLabel"
-                        Text="{Loc 'shipyard-console-save-appraisal-no-ship-selected-text'}" />
-                </BoxContainer>
-            </BoxContainer>
-        </PanelContainer>
-        </BoxContainer>
         <!-- Footer -->
         <BoxContainer Orientation="Vertical" Margin="0 5 0 0" >
             <PanelContainer StyleClasses="LowDivider" Margin="0 5 0 0" />
