@@ -32,6 +32,8 @@ public abstract partial class SharedCryoPodSystem: EntitySystem
         base.Initialize();
 
         SubscribeLocalEvent<CryoPodComponent, CanDropTargetEvent>(OnCryoPodCanDropOn);
+        // Triad: seed on load (DrydockAppearanceComponent); container-derived.
+        SubscribeLocalEvent<CryoPodComponent, ComponentStartup>((uid, comp, _) => UpdateAppearance(uid, comp));
         InitializeInsideCryoPod();
     }
 

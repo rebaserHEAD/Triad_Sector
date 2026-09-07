@@ -37,6 +37,9 @@ namespace Content.Server.Bed
             SubscribeLocalEvent<StasisBedComponent, StrappedEvent>(OnStasisStrapped);
             SubscribeLocalEvent<StasisBedComponent, UnstrappedEvent>(OnStasisUnstrapped);
             SubscribeLocalEvent<StasisBedComponent, PowerChangedEvent>(OnPowerChanged);
+            // Triad: seed on load (DrydockAppearanceComponent).
+            SubscribeLocalEvent<StasisBedComponent, ComponentStartup>((uid, _, _) =>
+                UpdateAppearance(uid, this.IsPowered(uid, EntityManager)));
             SubscribeLocalEvent<StasisBedComponent, GotEmaggedEvent>(OnEmagged);
             SubscribeLocalEvent<StasisBedComponent, GotUnEmaggedEvent>(OnUnemagged); // Frontier
             SubscribeLocalEvent<StasisBedComponent, RefreshPartsEvent>(OnRefreshParts); // Frontier

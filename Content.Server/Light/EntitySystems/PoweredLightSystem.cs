@@ -54,6 +54,7 @@ namespace Content.Server.Light.EntitySystems
             base.Initialize();
             SubscribeLocalEvent<PoweredLightComponent, ComponentInit>(OnInit);
             SubscribeLocalEvent<PoweredLightComponent, MapInitEvent>(OnMapInit);
+            SubscribeLocalEvent<PoweredLightComponent, ComponentStartup>(OnStartup); // Triad - see OnStartup
             SubscribeLocalEvent<PoweredLightComponent, InteractUsingEvent>(OnInteractUsing);
             SubscribeLocalEvent<PoweredLightComponent, InteractHandEvent>(OnInteractHand);
 
@@ -73,6 +74,12 @@ namespace Content.Server.Light.EntitySystems
         {
             light.LightBulbContainer = _containerSystem.EnsureContainer<ContainerSlot>(uid, LightBulbContainer);
             _signalSystem.EnsureSinkPorts(uid, light.OnPort, light.OffPort, light.TogglePort);
+        }
+
+        // Triad: seed on load (DrydockAppearanceComponent). Startup, not init: the bulb is a contained entity.
+        private void OnStartup(EntityUid uid, PoweredLightComponent light, ComponentStartup args)
+        {
+            UpdateLight(uid, light);
         }
 
         private void OnMapInit(EntityUid uid, PoweredLightComponent light, MapInitEvent args)
@@ -326,7 +333,7 @@ namespace Content.Server.Light.EntitySystems
             light.LastGhostBlink = time;
 
             ToggleBlinkingLight(uid, light, true);
-            // Triad: engine v275 removed the SpawnTimer extension; static Timer + deletion guard keeps the old semantics
+            // Triad: seed on load (DrydockAppearanceComponent). Startup, not init: the bulb is a contained entity.
             Timer.Spawn(light.GhostBlinkingTime, () =>
             {
                 if (Deleted(uid))

@@ -10,11 +10,17 @@ namespace Content.Server._Triad.Drydock;
 /// afterwards through <c>SharedAppearanceSystem.SetData</c> lives in an internal dictionary that no
 /// save has ever contained.</para>
 ///
-/// <para>So every visual a player changed comes back at its prototype default, and the entity's
-/// real state is fine underneath: a lathe frozen mid-animation, a hydroponics tray showing no dead
-/// plant while still holding one, a light that reads off while powered (test server, 2026-09-06).
-/// Each of those was previously a hand-written revive step per machine. This carries the whole
-/// class instead.</para>
+/// <para>So every visual a player changed comes back at its prototype default while the entity's
+/// real state is fine underneath: a lathe frozen mid-animation, a tray showing no dead plant while
+/// holding one, a light that reads off while powered. Each was a hand-written revive step per
+/// machine; this carries the whole class instead.</para>
+///
+/// <para>The floor under it is a seed at the source, marked <c>// Triad</c> in each owning system:
+/// a visual derived from persisted state is re-derived on <c>ComponentStartup</c> too, since
+/// <see cref="MapInitEvent"/> does not re-fire for an already map-initialized entity. Seed only,
+/// because those handlers also roll randomness and spawn contents. Container-derived visuals are
+/// always in this class: the engine raises <c>EntInsertedIntoContainerMessage</c> from
+/// <c>SharedContainerSystem.Insert</c> alone, so a restored container announces nothing.</para>
 ///
 /// <para>Copied at store and left live, since the serializer ignores appearance rather than choking
 /// on it. Applied and removed by an explicit pass at retrieve. The component's own presence is the
