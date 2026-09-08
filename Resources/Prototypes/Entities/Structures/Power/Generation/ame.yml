@@ -126,8 +126,6 @@
       respectZoom: true
       rotate: true
       bounds: "-1.5,-1.5,1.5,1.5"
-  - type: SpawnOnShipLoad # Triad
-    spawn: AmeControllerFilledAndActive
 
 - type: entity
   categories: [ HideSpawnMenu ]
