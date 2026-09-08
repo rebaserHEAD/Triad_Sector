@@ -154,6 +154,12 @@ public sealed partial class DrydockSystem
 
         var claimed = true;
         EntityUid? presented = null;
+
+        // Started after the claim, so it measures materialising the ship and not the gates above.
+        // A fallback retrieve accumulates the failed attempts into these phases, which is truthful
+        // for the total and only muddles the split on an error path that should be rare.
+        var timer = new DrydockPhaseTimer();
+        var entities = 0;
         try
         {
             var keepBlobs = _cfg.GetCVar(TriadCCVars.DrydockKeepBlobs);
@@ -184,6 +190,8 @@ public sealed partial class DrydockSystem
                     Log.Error($"Drydock: {shipId} revision {revision} failed its checksum, falling back.");
                     continue;
                 }
+
+                timer.Mark("fetch");
 
                 // A fallback is a retrieve of an older state than the one the player last put
                 // away, and the newer state is still on disk for now. It goes on the timeline so
@@ -220,6 +228,12 @@ public sealed partial class DrydockSystem
                 }
 
                 var grid = loaded!.Value.Owner;
+                timer.Mark("load");
+
+                // One tree walk against a phase that just spent hundreds of milliseconds spawning
+                // the same entities, so the count is worth its cost: without it the timings cannot
+                // be compared between a shuttle and a capital.
+                entities = CountChildPrototypes(grid).Values.Sum();
 
                 // A document with no shuttle component describes something that cannot dock or fly.
                 // Treat it as an unusable revision and try the one before it.
@@ -242,7 +256,7 @@ public sealed partial class DrydockSystem
 
                 try
                 {
-                    Revive(grid, stored.Ship);
+                    Revive(grid, stored.Ship, timer);
 
                     // The dock a purchase of this hull would pick: the vessel's priority tag steers
                     // the choice toward the shipyard's own docks. Without it a retrieve took whatever
@@ -253,6 +267,8 @@ public sealed partial class DrydockSystem
 
                     if (!_shuttle.TryFTLDock(grid, shuttle, targetGrid, priorityTag: dockTag))
                         Log.Warning($"Drydock: {shipId} found no docking config at {ToPrettyString(stationUid)}; presented by proximity.");
+
+                    timer.Mark("dock");
 
                     claimed = false; // The claim is now correct: the ship really is out.
                     presented = grid;
@@ -298,6 +314,9 @@ public sealed partial class DrydockSystem
             Log.Error($"Drydock: {shipId} is out but its berth could not be vacated: {e.Message}");
         }
 
+        timer.Mark("release");
+        Log.Info(timer.Format("retrieve", shipId, entities));
+
         return new DrydockRetrieve(DrydockRetrieveResult.Success, presented);
     }
 
@@ -313,7 +332,11 @@ public sealed partial class DrydockSystem
     /// event or the purchase path. Without them a retrieved ship comes back with dead machines that
     /// look perfectly fine, or a helm its own captain cannot unlock.</para>
     /// </summary>
-    private void Revive(EntityUid grid, DrydockShip record)
+    /// <param name="timer">
+    /// Split into its own phases when given, because "revive" as one number cannot say whether the
+    /// cost is the fidelity restore or the per-system sweeps below it, and those have opposite fixes.
+    /// </param>
+    private void Revive(EntityUid grid, DrydockShip record, DrydockPhaseTimer? timer = null)
     {
         // The general fidelity net first: everything captured into a sidecar goes back before
         // anything else reads component state.
@@ -339,6 +362,8 @@ public sealed partial class DrydockSystem
         if (HasComp<DrydockInProgressComponent>(grid))
             RemComp<DrydockInProgressComponent>(grid);
 
+        timer?.Mark("fidelity");
+
         ReviveGravity(grid);
         ReviveNpcs(grid);
         ReviveWires(grid);
@@ -354,11 +379,15 @@ public sealed partial class DrydockSystem
         ScrubStaleLatheProduction(grid);
         ReviveUseDelays(grid);
 
+        timer?.Mark("sweeps");
+
         RehydrateDamage(grid);
 
         // The repair baseline is derived state, stripped at store. Retrieve fires neither map init
         // nor the purchase event, and the repair system subscribes only to the latter.
         _shipRepair.GenerateRepairData(grid);
+
+        timer?.Mark("damage");
 
         // The row is authoritative for the name too: a rename made while the ship was stored is a
         // row update, and this is where the hull and its deed learn it. Before the station, which
@@ -366,6 +395,8 @@ public sealed partial class DrydockSystem
         _shipyard.StampStoredName(grid, record.ShipName);
         RefreshShipOwnership(grid, record);
         RecreateStation(grid, record);
+
+        timer?.Mark("station");
     }
 
     /// <summary>

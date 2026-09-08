@@ -123,6 +123,7 @@ public sealed partial class DrydockSystem : EntitySystem
         EntityUid? deedHolder = null;
         var storeMaps = new List<(EntityUid Store, EntityUid? Map)>();
         var committed = false;
+        var timer = new DrydockPhaseTimer();
 
         // The try opens HERE, before the first await and before the first mutation that has to be
         // undone, rather than after the whole preparation as the reference implementation had it.
@@ -162,6 +163,7 @@ public sealed partial class DrydockSystem : EntitySystem
                 return (DrydockStoreResult.OrganicsAboard, null);
 
             EnsureComp<DrydockIdentityComponent>(gridUid).ShipId = shipId;
+            timer.Mark("gate");
 
             var shipName = Comp<MetaDataComponent>(gridUid).EntityName;
 
@@ -240,6 +242,7 @@ public sealed partial class DrydockSystem : EntitySystem
             // turns those references into invalid ones, which retrieve rebinds. Transform parenting
             // is exempt, so grid children are unaffected.
             var saveOptions = new SerializationOptions { MissingEntityBehaviour = MissingEntityBehaviour.Ignore };
+            timer.Mark("prepare");
 
             string yaml;
             using (var writer = new StringWriter())
@@ -250,8 +253,12 @@ public sealed partial class DrydockSystem : EntitySystem
                 yaml = writer.ToString();
             }
 
-            if (DetectRoundTripMismatch(gridUid, yaml))
+            timer.Mark("serialize");
+
+            if (DetectRoundTripMismatch(gridUid, yaml, out var liveEntities))
                 return (DrydockStoreResult.ValidationFailed, null);
+
+            timer.Mark("validate");
 
             var yamlBytes = Encoding.UTF8.GetBytes(yaml);
 
@@ -280,7 +287,15 @@ public sealed partial class DrydockSystem : EntitySystem
                 Manifest = BuildManifest(gridUid, fidelity).Serialize(),
             };
 
-            var filed = await _store.FileRevision(request, CompressZstd(yamlBytes), _cfg.GetCVar(TriadCCVars.DrydockKeepBlobs));
+            timer.Mark("manifest");
+
+            // Hoisted out of the call below so the compression is timed apart from the write: one is
+            // game-thread work that can hitch, the other is time the server spends ticking normally.
+            var payload = CompressZstd(yamlBytes);
+            timer.Mark("compress");
+
+            var filed = await _store.FileRevision(request, payload, _cfg.GetCVar(TriadCCVars.DrydockKeepBlobs));
+            timer.Mark("commit");
 
             // The garage filled up between the capacity check and the commit, or this store lost
             // the last berth to another committing in the same instant. Nothing was filed; the
@@ -312,6 +327,9 @@ public sealed partial class DrydockSystem : EntitySystem
             {
                 Log.Error($"Drydock: {shipId} filed revision {filed.Revision} but marking it stored failed: {e.Message}. An admin restore recovers it.");
             }
+
+            timer.Mark("despawn");
+            Log.Info(timer.Format("store", shipId, liveEntities));
 
             return (DrydockStoreResult.Success, shipId);
         }
@@ -406,8 +424,13 @@ public sealed partial class DrydockSystem : EntitySystem
     /// refusing different vessels on identical back-to-back runs.</para>
     /// </summary>
     /// <returns>True on mismatch, meaning the store must abort.</returns>
-    private bool DetectRoundTripMismatch(EntityUid gridUid, string yaml)
+    /// <param name="liveEntities">
+    /// How many entities the live grid holds, counted here because this already walks the tree for
+    /// the comparison. Zero when the document would not reload at all.
+    /// </param>
+    private bool DetectRoundTripMismatch(EntityUid gridUid, string yaml, out int liveEntities)
     {
+        liveEntities = 0;
         using var reader = new StringReader(yaml);
         var options = new DeserializationOptions
         {
@@ -428,6 +451,7 @@ public sealed partial class DrydockSystem : EntitySystem
 
             var liveCount = live.Values.Sum();
             var scratchCount = scratch.Values.Sum();
+            liveEntities = liveCount;
             if (liveCount != scratchCount)
             {
                 Log.Warning($"Drydock store validation failed for {ToPrettyString(gridUid)}: entity count mismatch (live={liveCount}, scratch={scratchCount}).");
