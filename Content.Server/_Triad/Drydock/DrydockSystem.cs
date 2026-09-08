@@ -178,6 +178,7 @@ public sealed partial class DrydockSystem : EntitySystem
             // The sale quote, taken while the hull is whole and before any sidecar or strip
             // touches it, so what a scrap pays is what the shipyard would have paid at this moment.
             var appraisal = _shipyard.AppraiseHull(gridUid);
+            timer.Mark("appraise");
 
             // A pipe net's air lives on the node-group graph, which the serializer cannot reach.
             // Distribute each net's gas across its members by volume. The live net is left alone,
@@ -191,6 +192,7 @@ public sealed partial class DrydockSystem : EntitySystem
             // probe below cannot see it either. Without this a retrieved ship's visuals come back
             // at prototype defaults wherever the owning system does not re-derive them on startup.
             injectedAppearance = _fidelity.CaptureAppearance(gridUid);
+            timer.Mark("sidecars");
 
             // The grid does not know its own vessel prototype; its station's latejoin information
             // does. Read it before the strip below cuts station membership off the grid.
@@ -219,6 +221,7 @@ public sealed partial class DrydockSystem : EntitySystem
             // final live component set. For every unserializable populated field it either captures
             // the value or strips it, and clears the live field either way.
             fidelity = _fidelity.CaptureAndStrip(gridUid);
+            timer.Mark("capture");
 
             // The rest of preparation is deliberately not undoable, and runs last for that reason.
             // An empty AI core is the intended end state, an undocked ship is where a stored ship

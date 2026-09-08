@@ -1,5 +1,7 @@
 using System;
 using System.Collections;
+using System.Collections.Concurrent;
+using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Reflection;
@@ -242,28 +244,48 @@ public sealed class DrydockReflectiveCapture
         return null;
     }
 
+    // Type metadata does not change while the process runs, so all three answers below are memoized
+    // per type. These are called once per VALUE, recursing through every field of every captured
+    // object, so on a capital hull the same handful of types is asked about tens of thousands of
+    // times; measured on a 3,508-entity hull the capture was 31% of the whole store. Behaviour is
+    // identical, only the reflection is done once. Concurrent because the maps outlive any one call
+    // and cost nothing to read.
+    private static readonly ConcurrentDictionary<Type, FieldInfo[]> FieldCache = new();
+    private static readonly ConcurrentDictionary<Type, (Type Key, Type Val)?> DictionaryCache = new();
+    private static readonly ConcurrentDictionary<Type, Type?> EnumerableCache = new();
+
     private static FieldInfo[] InstanceFields(Type type)
     {
-        var fields = new List<FieldInfo>();
-        for (var t = type; t != null && t != typeof(object); t = t.BaseType)
+        return FieldCache.GetOrAdd(type, static t =>
         {
-            // Includes readonly fields on purpose: constructor-assigned state is still state, and
-            // reflection can set it back.
-            fields.AddRange(t.GetFields(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic));
-        }
+            var fields = new List<FieldInfo>();
+            for (var cur = t; cur != null && cur != typeof(object); cur = cur.BaseType)
+            {
+                // Includes readonly fields on purpose: constructor-assigned state is still state, and
+                // reflection can set it back.
+                fields.AddRange(cur.GetFields(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic));
+            }
 
-        return fields.ToArray();
+            return fields.ToArray();
+        });
     }
 
     private static bool IsDictionary(Type type, out Type keyType, out Type valType)
     {
-        var iface = new[] { type }.Concat(type.GetInterfaces())
-            .FirstOrDefault(i => i.IsGenericType && i.GetGenericTypeDefinition() == typeof(IDictionary<,>));
-
-        if (iface != null)
+        var found = DictionaryCache.GetOrAdd(type, static t =>
         {
-            keyType = iface.GetGenericArguments()[0];
-            valType = iface.GetGenericArguments()[1];
+            var iface = new[] { t }.Concat(t.GetInterfaces())
+                .FirstOrDefault(i => i.IsGenericType && i.GetGenericTypeDefinition() == typeof(IDictionary<,>));
+
+            return iface == null
+                ? ((Type, Type)?) null
+                : (iface.GetGenericArguments()[0], iface.GetGenericArguments()[1]);
+        });
+
+        if (found is { } pair)
+        {
+            keyType = pair.Key;
+            valType = pair.Val;
             return true;
         }
 
@@ -273,18 +295,19 @@ public sealed class DrydockReflectiveCapture
 
     private static bool IsEnumerable(Type type, out Type elemType)
     {
-        if (type.IsArray)
+        var found = EnumerableCache.GetOrAdd(type, static t =>
         {
-            elemType = type.GetElementType()!;
-            return true;
-        }
+            if (t.IsArray)
+                return t.GetElementType()!;
 
-        var iface = new[] { type }.Concat(type.GetInterfaces())
-            .FirstOrDefault(i => i.IsGenericType && i.GetGenericTypeDefinition() == typeof(IEnumerable<>));
+            return new[] { t }.Concat(t.GetInterfaces())
+                .FirstOrDefault(i => i.IsGenericType && i.GetGenericTypeDefinition() == typeof(IEnumerable<>))
+                ?.GetGenericArguments()[0];
+        });
 
-        if (iface != null)
+        if (found != null)
         {
-            elemType = iface.GetGenericArguments()[0];
+            elemType = found;
             return true;
         }
 
