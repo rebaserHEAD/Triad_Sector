@@ -15,6 +15,7 @@ using Content.Server.Shuttles.Systems;
 using Content.Server.Station.Components;
 using Content.Server.Station.Systems;
 using Content.Shared._Mono.ShipRepair.Components;
+using Content.Shared._Mono.Shipyard; // Triad
 using Content.Shared._Triad.CCVar;
 using Content.Shared._Triad.ContrabandPermit;
 using Content.Shared._Triad.Shipyard.Save.Contraband;
@@ -74,6 +75,10 @@ public sealed partial class DrydockSystem : EntitySystem
         // station is round-scoped like the membership above: serialized, it reloads as an invalid
         // reference and logs on every load. The recreated station gets its vessel's slots anyway.
         typeof(ShuttleConsoleJobSlotsComponent),
+        // Guest access granted at the helm, as raw uids of cards the guests carry away with them:
+        // off-grid references that reload invalid, and a permission that should not outlast the
+        // voyage. Retrieve starts with none.
+        typeof(ShipGuestAccessComponent),
     };
 
     /// <summary>

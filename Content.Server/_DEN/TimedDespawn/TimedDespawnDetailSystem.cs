@@ -110,21 +110,11 @@ public sealed partial class TimedDespawnDetailedSystem : EntitySystem
     }
 
     /// <summary>
-    /// Triad: re-registers a timer that arrived from a save.
+    /// Triad: re-registers a timer that arrived from a save. Only OnMapInit filled the despawn set,
+    /// and MapInitEvent does not re-fire for an already-map-initialised entity, so a loaded holofan
+    /// was never in it and never expired. A zero StartTime is a fresh spawn, which reaches startup
+    /// before map init and is left for OnMapInit to start; a non-zero one keeps its own deadline.
     /// </summary>
-    /// <remarks>
-    /// The despawn set is plain memory and only <see cref="OnMapInit"/> ever filled it, but
-    /// MapInitEvent does not re-fire for an entity that was already map-initialised. Anything
-    /// loaded from a ship save, a map, or an admin paste was therefore never in the set, and
-    /// <see cref="GetTimeRemaining"/> answers null for what it does not hold, so
-    /// <see cref="TryDelete"/> returned early forever: holofans and force fields stored while lit
-    /// came back permanent. ComponentStartup runs on every load, which is where this belongs.
-    ///
-    /// <para>A zero StartTime means the timer has not been started yet - a fresh spawn reaches
-    /// startup before map init - so it is left for OnMapInit to start. A non-zero one is a running
-    /// timer being restored, and it keeps its original deadline rather than getting a fresh
-    /// lifetime, which the offset serializer on StartTime rebases onto this round's clock.</para>
-    /// </remarks>
     private void OnStartup(Entity<TimedDespawnDetailedComponent> ent, ref ComponentStartup args)
     {
         if (ent.Comp.StartTime == TimeSpan.Zero)
