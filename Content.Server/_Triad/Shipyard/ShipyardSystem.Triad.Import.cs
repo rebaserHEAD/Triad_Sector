@@ -229,15 +229,22 @@ public sealed partial class ShipyardSystem
 
         var enforcing = _tamperPolicy.IsEnforcing();
 
-        if (enforcing)
-        {
-            if (await _consumedStore.IsConsumedAsync(hash, default))
-                return await RefuseAsync(uid, component, player, uiKey, "shipyard-console-import-already-imported");
+        // Replay protection is not the tamper policy's business. The gate above is: it decides
+        // whether a document is trusted enough to load at all. These two decide whether a file that
+        // has already bought a ship can buy another, and whether this account has any import
+        // allowance left, and both answers hold whatever mode the signature check is in.
+        //
+        // Gating them behind enforcement is what let a notify-mode server hand out the same hull
+        // over and over: the console drops a spent file from its own cache, but the client re-sends
+        // its whole manifest every time the UI opens, so the file came straight back and imported
+        // again for free. Reported from the 2026-09-07 play test with the same cruiser listed four
+        // times over.
+        if (await _consumedStore.IsConsumedAsync(hash, default))
+            return await RefuseAsync(uid, component, player, uiKey, "shipyard-console-import-already-imported");
 
-            var budget = _configManager.GetCVar(TriadCCVars.DrydockImportBudget);
-            if (await _consumedStore.CountForPlayerAsync(operatorAccount, default) >= budget)
-                return await RefuseAsync(uid, component, player, uiKey, "shipyard-console-import-budget-spent");
-        }
+        var budget = _configManager.GetCVar(TriadCCVars.DrydockImportBudget);
+        if (await _consumedStore.CountForPlayerAsync(operatorAccount, default) >= budget)
+            return await RefuseAsync(uid, component, player, uiKey, "shipyard-console-import-budget-spent");
 
         if (TerminatingOrDeleted(uid) || TerminatingOrDeleted(player))
             return false;
@@ -277,21 +284,20 @@ public sealed partial class ShipyardSystem
             return await RefuseAsync(uid, component, player, uiKey, StoreRefusalLoc(result.Result));
         }
 
-        // Filed. Only now is the save spent, and only on a server that is enforcing.
-        if (enforcing)
+        // Filed, so the save is spent. Unconditionally: the ship this produced is real and
+        // retrievable whatever the tamper mode, so the file that bought it has to be marked gone.
+        if (!await _consumedStore.TryConsumeAsync(hash, operatorAccount, result.ShipId, shipName, DrydockRoundId, default))
         {
-            if (!await _consumedStore.TryConsumeAsync(hash, operatorAccount, result.ShipId, shipName, DrydockRoundId, default))
-            {
-                // Another import of the same file won the race. The ship is already filed under that
-                // one, so this is a log line rather than a rollback: the unique index did its job.
-                _sawmill.Warning($"Import of '{shipName}' lost the consume race; the hash was already spent.");
-            }
-
-            // Retire the local copy the way the old load path did, so the menu stops offering a file
-            // that can no longer be imported.
-            if (!TerminatingOrDeleted(player))
-                RaiseNetworkEvent(new DeleteLocalShipFileMessage(fileId), session);
+            // Another import of the same file won the race. The ship is already filed under that
+            // one, so this is a log line rather than a rollback: the unique index did its job.
+            _sawmill.Warning($"Import of '{shipName}' lost the consume race; the hash was already spent.");
         }
+
+        // Retire the local copy the way the old load path did, so the menu stops offering a file
+        // that can no longer be imported. The ledger above is the authority and refuses a replay on
+        // its own; this only keeps the player from being shown a file that would now be refused.
+        if (!TerminatingOrDeleted(player))
+            RaiseNetworkEvent(new DeleteLocalShipFileMessage(fileId), session);
 
         _ = _tamperPolicy.RecordLoadAsync(
             envelope, mind.UserId.Value, session.Name, shipName, decision.ResolvedEvent,
@@ -310,7 +316,7 @@ public sealed partial class ShipyardSystem
             ActorUserId = operatorAccount,
             BerthId = berthId,
             RoundId = DrydockRoundId,
-            Reason = enforcing ? null : "rehearsal: tamper check not enforcing, save not spent",
+            Reason = enforcing ? null : "tamper check not enforcing",
         });
 
         if (TerminatingOrDeleted(uid) || TerminatingOrDeleted(player))
