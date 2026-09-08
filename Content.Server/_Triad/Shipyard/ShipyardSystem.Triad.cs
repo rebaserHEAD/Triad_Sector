@@ -15,7 +15,7 @@ namespace Content.Server._NF.Shipyard.Systems;
 
 public sealed partial class ShipyardSystem : SharedShipyardSystem
 {
-    [Dependency] private ShipyardGridSaveSystem _shipyardGridSave = default!;
+    [Dependency] private Content.Server._Triad.Shipyard.Load.ShipLoadRespawnSystem _shipLoadRespawn = default!;
     [Dependency] private UseDelaySystem _useDelay = default!;
     // Triad: legacy import. ShipSizeSystem is already injected on the drydock partial as
     // _drydockSizes and RA0032 forbids a second [Dependency] of one type across a partial class.
@@ -137,7 +137,7 @@ public sealed partial class ShipyardSystem : SharedShipyardSystem
         TryResetUseDelays(grid);
 
         // Spawn the entities from entities with SpawnOnShipLoadComponent
-        _shipyardGridSave.CreateSpawnOnShipLoadEntities(grid);
+        _shipLoadRespawn.RespawnMarkedEntities(grid);
 
         // Load-time sanitation: purge any deserialized joints and reset dock joint references
         // to avoid physics processing invalid joint bodies (e.g., Entity 0) from YAML.

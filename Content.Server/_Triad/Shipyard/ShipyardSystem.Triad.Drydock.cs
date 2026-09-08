@@ -975,6 +975,11 @@ public sealed partial class ShipyardSystem
         if (_station.GetOwningStation(grid) is { Valid: true } shipStation)
             EnsureCaptainStationRecord(shipStation, targetId, player);
 
+        // AI cores respawn: a stored core comes back empty and does not re-offer its ghost role.
+        // Called here rather than only from import, which is meant to be switched off once the
+        // legacy pool drains and would have taken this with it.
+        _shipLoadRespawn.RespawnMarkedEntities(grid);
+
         AddShipAccessToEntities(grid);
         EnsureComp<LinkedLifecycleGridParentComponent>(grid);
         _contrabandPermit.InitializePermitItemsOnGrid(grid, player);

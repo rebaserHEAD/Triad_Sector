@@ -332,9 +332,6 @@ public sealed class AuthenticatedShipFile
             output.Add(AppraisalKey, _appraisal.Value.ToString());
         }
 
-        // I lifted the implementation of a small
-        // private function that fenndragon wrote
-        // called ShipyardGridSaveSystem::WriteYamlToString
         var writer = new StringWriter();
         new YamlStream { new YamlDocument(output.ToYaml()) }.Save(new YamlMappingFix(new Emitter(writer)), false);
         return writer.ToString();

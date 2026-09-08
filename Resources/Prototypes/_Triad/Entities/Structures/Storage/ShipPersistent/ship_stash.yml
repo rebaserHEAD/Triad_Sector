@@ -19,8 +19,6 @@
     scale: 1.5
     requireNoGrid: true
     shape: square
-  - type: HLPersistOnShipSave
-    saveContents: true
 
 - type: entity
   abstract: true
@@ -77,8 +75,6 @@
   - type: Construction
     graph: CivilianStorageStashGraph
     node: CivilianStorageStashNode
-  - type: ShipSaveLimit
-    limitId: CivilianStash
 
 - type: entity
   parent: CivilianStorageStash
@@ -94,8 +90,6 @@
   - type: Construction
     graph: MilitaryStorageStashGraph
     node: MilitaryStorageStashNode
-  - type: ShipSaveLimit
-    limitId: MilitaryStash
   - type: LimitedStorage
     limits:
     - popup: triad-storage-limit-too-many-advanced-backpacks
@@ -146,8 +140,6 @@
   - type: Construction
     graph: MedicalSecureStorageGraph
     node: MedicalSecureStorageNode
-  - type: ShipSaveLimit
-    limitId: MedicalStash
 
 - type: entity
   parent: BasePersistentShipStorageStash
@@ -185,8 +177,6 @@
   - type: Construction
     graph: BotanicalStorageUnitGraph
     node: BotanicalStorageUnitNode
-  - type: ShipSaveLimit
-    limitId: HydroponicsStash
 
 - type: entity
   parent: BasePersistentShipStorageStashWallmount
@@ -214,5 +204,3 @@
   - type: Construction
     graph: FuelStorageStashGraph
     node: FuelStorageStashNode
-  - type: ShipSaveLimit
-    limitId: FuelStash
