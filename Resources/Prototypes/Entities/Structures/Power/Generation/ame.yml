@@ -138,26 +138,6 @@
   - type: Physics
     bodyType: Dynamic
 
-# Triad Start
-- type: entity
-  categories: [ HideSpawnMenu ]
-  parent: AmeController
-  id: AmeControllerFilledAndActive
-  suffix: Filled, Active, DO NOT MAP
-  components:
-  - type: AmeController
-    injecting: true
-    fuelSlot:
-      whitelist:
-        components:
-        - AmeFuelContainer
-      whitelistFailPopup: ame-controller-component-fuel-slot-fail-whitelist
-      lockedFailPopup: ame-controller-component-fuel-slot-fail-locked
-      insertSuccessPopup: ame-controller-component-fuel-slot-success-insert
-      startingItem: AmeJar
-      locked: true
-# Triad End
-
 - type: entity
   id: AmeShielding
   name: AME shielding
