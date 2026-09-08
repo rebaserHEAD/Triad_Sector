@@ -17,6 +17,7 @@ using Content.Server.Maps;
 using Content.Server.Power.EntitySystems;
 using Content.Server.Power.Generator;
 using Content.Server.Research.Systems;
+using Content.Server.Station;
 using Content.Server.Station.Components;
 using Content.Server.Shuttles.Components;
 using Content.Server.Shuttles.Systems;
@@ -751,12 +752,32 @@ public sealed partial class DrydockSystem
     }
 
     /// <summary>
-    /// A ship is its own station only when its vessel has a matching map prototype. The ship
-    /// persists and the station is recreated, because a station is round-scoped. The ship's own
-    /// name is passed through so a player's rename survives rather than being replaced by the
-    /// prototype's name generator. A document with no vessel prototype comes back stationless, and
-    /// its serialized membership is removed rather than left dangling and lying to whatever reads
-    /// it.
+    /// The station a hull with no vessel prototype gets. Built here rather than as a gameMap
+    /// prototype because gameMap requires a mapPath, and a fallback has no map to point at; a
+    /// prototype naming a file it never loads would be a lie in the data.
+    ///
+    /// <para><c>StandardFrontierVessel</c> is what every vessel's own station config names, so this
+    /// differs from a purchased ship's station only in carrying no per-vessel job list, name
+    /// template or vessel id. It brings the station records, expedition data and job spawning that
+    /// being stationless takes away.</para>
+    /// </summary>
+    private static readonly StationConfig GenericVesselStation = new()
+    {
+        StationPrototype = "StandardFrontierVessel",
+        StationComponentOverrides = new ComponentRegistry(),
+    };
+
+    /// <summary>
+    /// The station a ship comes back as. It is recreated rather than restored because a station is
+    /// round-scoped, and the ship's own name is passed through so a player's rename survives rather
+    /// than being replaced by the prototype's name generator.
+    ///
+    /// <para>A row whose vessel prototype is missing still gets a station, just a plain one. Coming
+    /// back stationless is not a safe answer: without <c>StationMemberComponent</c> a ship draws
+    /// yellow on radar instead of white and is invisible to station records, expeditions and
+    /// everything else keyed on stations. Legacy imports are the population that hits this, because
+    /// the vessel id lived on the station entity and a save only ever carried the grid, so there is
+    /// nothing in the document to recover it from and no amount of re-saving will conjure one.</para>
     /// </summary>
     private void RecreateStation(EntityUid grid, DrydockShip record)
     {
@@ -767,17 +788,30 @@ public sealed partial class DrydockSystem
         // Stamped before the vessel check: a stationless retrieve must not be varied later either.
         EnsureComp<StationVariationHasRunComponent>(grid);
 
-        if (string.IsNullOrEmpty(record.VesselProto)
-            || !_protoMan.TryIndex<GameMapPrototype>(record.VesselProto, out var stationProto)
-            || !stationProto.Stations.TryGetValue(record.VesselProto, out var stationConfig))
+        StationConfig stationConfig;
+        bool known;
+
+        if (!string.IsNullOrEmpty(record.VesselProto)
+            && _protoMan.TryIndex<GameMapPrototype>(record.VesselProto, out var stationProto)
+            && stationProto.Stations.TryGetValue(record.VesselProto, out var vesselConfig))
         {
-            Log.Info($"Drydock: {record.ShipGuid} retrieved stationless (vessel prototype '{record.VesselProto}').");
-            RemComp<StationMemberComponent>(grid);
-            return;
+            stationConfig = vesselConfig;
+            known = true;
+        }
+        else
+        {
+            Log.Info($"Drydock: {record.ShipGuid} has no vessel prototype ('{record.VesselProto}'); giving it a plain station.");
+            stationConfig = GenericVesselStation;
+            known = false;
         }
 
         var station = _station.InitializeNewStation(stationConfig, new[] { grid }, Name(grid));
-        EnsureComp<ExtraShuttleInformationComponent>(station).Vessel = record.VesselProto;
+
+        // Only a ship that came from a vessel can claim to be one. A generic station keeps the
+        // component the prototype gives it, with no vessel named, rather than being labelled as a
+        // hull it is not.
+        if (known)
+            EnsureComp<ExtraShuttleInformationComponent>(station).Vessel = record.VesselProto;
     }
 
     private int CountStagedGrids(MapId map)
