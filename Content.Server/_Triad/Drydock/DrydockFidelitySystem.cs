@@ -1,5 +1,6 @@
 using System;
 using System.Collections;
+using System.Collections.Concurrent;
 using System.IO;
 using System.Linq;
 using System.Reflection;
@@ -64,6 +65,13 @@ public sealed partial class DrydockFidelitySystem : EntitySystem
     /// element type cannot, and caching that would poison every later probe of the same type.
     /// </summary>
     private readonly Dictionary<Type, bool> _serializable = new();
+
+    /// <inheritdoc cref="_serializable"/>
+    /// <remarks>
+    /// The empty half, kept apart on purpose. Membership means "writes when empty", which is all an
+    /// empty sample can establish; it never satisfies a probe of a populated value of the same type.
+    /// </remarks>
+    private readonly HashSet<Type> _emptyWritable = new();
 
     public override void Initialize()
     {
@@ -391,11 +399,22 @@ public sealed partial class DrydockFidelitySystem : EntitySystem
         if (_serializable.TryGetValue(type, out var cached))
             return cached;
 
+        // An empty collection cannot prove its type serializable, so the success below is not
+        // cached in _serializable. It can still be remembered on its own: a type that writes when
+        // empty writes when empty every time, and the verdict that matters for a populated value is
+        // still taken the first time one turns up. Without this the refusal to cache costs a probe
+        // per occurrence, and empty collections are the most common field state on a ship.
+        var empty = value is ICollection { Count: 0 };
+        if (empty && _emptyWritable.Contains(type))
+            return true;
+
         try
         {
             _serialization.WriteValue(type, value, alwaysWrite: true, context: _probe);
 
-            if (value is not ICollection { Count: 0 })
+            if (empty)
+                _emptyWritable.Add(type);
+            else
                 _serializable[type] = true;
 
             return true;
@@ -451,19 +470,31 @@ public sealed partial class DrydockFidelitySystem : EntitySystem
     /// Fields carrying a custom type serializer are skipped on the assumption that serializer
     /// handles them, which is the same rule the serializability audit applies.
     /// </summary>
-    private static IEnumerable<MemberInfo> DataFields(Type type)
+    /// <summary>
+    /// Which members of a component type the walk has to look at. Memoized because the answer is a
+    /// property of the type and the store asks it once per component per entity: uncached it built
+    /// two reflection arrays and asked <see cref="MemberInfo.GetCustomAttribute{T}"/> per member
+    /// every time, which on a capital ship was most of the store's capture phase.
+    /// </summary>
+    private static readonly ConcurrentDictionary<Type, MemberInfo[]> DataFieldCache = new();
+
+    private static MemberInfo[] DataFields(Type type) => DataFieldCache.GetOrAdd(type, static t =>
     {
         const BindingFlags flags = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.DeclaredOnly;
-        for (var t = type; t != null && t != typeof(object); t = t.BaseType)
+        var members = new List<MemberInfo>();
+
+        for (var cur = t; cur != null && cur != typeof(object); cur = cur.BaseType)
         {
-            foreach (var m in t.GetFields(flags).Cast<MemberInfo>().Concat(t.GetProperties(flags)))
+            foreach (var m in cur.GetFields(flags).Cast<MemberInfo>().Concat(cur.GetProperties(flags)))
             {
                 var attr = m.GetCustomAttribute<DataFieldBaseAttribute>();
                 if (attr != null && attr.CustomTypeSerializer == null)
-                    yield return m;
+                    members.Add(m);
             }
         }
-    }
+
+        return members.ToArray();
+    });
 
     private static Type MemberType(MemberInfo m) =>
         m is FieldInfo fi ? fi.FieldType : ((PropertyInfo) m).PropertyType;
