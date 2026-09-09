@@ -86,6 +86,7 @@ public sealed partial class GasTurbineSystem : EntitySystem
     public override void Initialize()
     {
         base.Initialize();
+        SubscribeLocalEvent<GasTurbineComponent, ComponentStartup>(OnStartup);
         SubscribeLocalEvent<GasTurbineComponent, MapInitEvent>(OnInit);
         SubscribeLocalEvent<GasTurbineComponent, ComponentShutdown>(OnShutdown);
 
@@ -117,7 +118,12 @@ public sealed partial class GasTurbineSystem : EntitySystem
     private const string BladeContainer = "blade_slot";
     private const string StatorContainer = "stator_slot";
 
-    private void OnInit(EntityUid uid, GasTurbineComponent comp, ref MapInitEvent args)
+    /// <summary>
+    /// The parts of a turbine that do not survive a save: the ports, the references into its own
+    /// containers, and the alarm audio entities. Startup, so a turbine restored from a ship save
+    /// gets them too.
+    /// </summary>
+    private void OnStartup(EntityUid uid, GasTurbineComponent comp, ref ComponentStartup args)
     {
         _signal.EnsureSourcePorts(uid, comp.SpeedHighPort, comp.SpeedLowPort, comp.TurbineDataPort);
         _signal.EnsureSinkPorts(uid, comp.StatorLoadIncreasePort, comp.StatorLoadDecreasePort);
@@ -125,12 +131,20 @@ public sealed partial class GasTurbineSystem : EntitySystem
         TryGetPart(uid, BladeContainer, out comp.CurrentBlade);
         TryGetPart(uid, StatorContainer, out comp.CurrentStator);
 
-        UpdatePartValues(comp);
-
         comp.AlarmAudioOvertemp = SpawnAttachedTo("GasTurbineAlarmEntity", new(uid, 0, 0));
         comp.AlarmAudioUnderspeed = SpawnAttachedTo("GasTurbineAlarmEntity", new(uid, 0, 0));
         _ambientSoundSystem.SetSound(comp.AlarmAudioUnderspeed.Value, new SoundPathSpecifier("/Audio/_FarHorizons/Machines/alarm_beep.ogg"));
         _ambientSoundSystem.SetVolume(comp.AlarmAudioUnderspeed.Value, -4);
+    }
+
+    /// <summary>
+    /// Derives the turbine's ratings from its fitted parts. Map init only: it sets BladeHealth to
+    /// full, so running it on load would repair every damaged turbine that came back from storage.
+    /// The values it writes are all data fields and persist on their own.
+    /// </summary>
+    private void OnInit(EntityUid uid, GasTurbineComponent comp, ref MapInitEvent args)
+    {
+        UpdatePartValues(comp);
     }
 
     private bool TryGetPart(EntityUid uid, string slot, [NotNullWhen(true)] out EntityUid? part)
