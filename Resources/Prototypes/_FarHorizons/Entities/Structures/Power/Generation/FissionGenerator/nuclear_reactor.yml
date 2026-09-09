@@ -522,6 +522,7 @@
 - type: entity
   id: ReactorAlarmEntity
   categories: [ HideSpawnMenu ]
+  save: false # Triad: respawned on every load, so a saved copy is an orphan nothing can reach
   components:
   - type: AmbientSound
     volume: -3

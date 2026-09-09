@@ -94,7 +94,8 @@ public sealed partial class NuclearReactorSystem : EntitySystem
         base.Initialize();
 
         // Component events
-        SubscribeLocalEvent<NuclearReactorComponent, MapInitEvent>(OnInit);
+        SubscribeLocalEvent<NuclearReactorComponent, ComponentStartup>(OnStartup);
+        SubscribeLocalEvent<NuclearReactorComponent, MapInitEvent>(OnMapInit);
         SubscribeLocalEvent<NuclearReactorComponent, ComponentRemove>(OnCompRemove);
 
         SubscribeLocalEvent<NuclearReactorComponent, DamageChangedEvent>(OnDamaged);
@@ -124,10 +125,14 @@ public sealed partial class NuclearReactorSystem : EntitySystem
         SubscribeLocalEvent<NuclearReactorComponent, UnanchorAttemptEvent>(OnUnanchorAttempt);
     }
 
-    private void OnInit(EntityUid uid, NuclearReactorComponent comp, ref MapInitEvent args)
+    /// <summary>
+    /// Everything the reactor needs to tick, none of which survives a save. Startup rather than map
+    /// init, because map init never fires again for a reactor restored from one.
+    /// </summary>
+    private void OnStartup(EntityUid uid, NuclearReactorComponent comp, ref ComponentStartup args)
     {
         _signal.EnsureSinkPorts(uid, comp.ControlRodInsertPort, comp.ControlRodRetractPort);
-        
+
         _slotsSystem.AddItemSlot(uid, NuclearReactorComponent.PartSlotId, comp.PartSlot);
         comp.PartStorage = _containerSystem.EnsureContainer<Container>(uid, NuclearReactorComponent.PartStorageId);
 
@@ -139,7 +144,13 @@ public sealed partial class NuclearReactorSystem : EntitySystem
         comp.FluxGridScratch = new List<ReactorNeutron>[gridWidth, gridHeight];
         comp.NeutronGrid = new int[gridWidth, gridHeight];
 
-        ApplyPrefab(uid, comp);
+        // ApplyPrefab is the only other thing that fills these, and a restored reactor skips it.
+        for (var x = 0; x < gridWidth; x++)
+            for (var y = 0; y < gridHeight; y++)
+            {
+                comp.FluxGrid[x, y] = [];
+                comp.FluxGridScratch[x, y] = [];
+            }
 
         // I hate everything about this, but it ensures the audio doesn't just stop if you don't look at it
         comp.AlarmAudioHighThermal = SpawnAttachedTo("ReactorAlarmEntity", new(uid, 0, 0));
@@ -147,6 +158,51 @@ public sealed partial class NuclearReactorSystem : EntitySystem
         _ambientSoundSystem.SetSound(comp.AlarmAudioHighTemp.Value, new SoundPathSpecifier("/Audio/_FarHorizons/Machines/reactor_alarm_2.ogg"));
         comp.AlarmAudioHighRads = SpawnAttachedTo("ReactorAlarmEntity", new(uid, 0, 0));
         _ambientSoundSystem.SetSound(comp.AlarmAudioHighRads.Value, new SoundPathSpecifier("/Audio/_FarHorizons/Machines/reactor_alarm_3.ogg"));
+
+        RestoreGridFromStorage(uid, comp);
+    }
+
+    /// <summary>
+    /// Lays out the starting prefab. Map init only, which is what makes wiping the part storage
+    /// here safe: a restored reactor never reaches it.
+    /// </summary>
+    private void OnMapInit(EntityUid uid, NuclearReactorComponent comp, ref MapInitEvent args)
+    {
+        ApplyPrefab(uid, comp);
+        comp.ApplyPrefab = false;
+    }
+
+    /// <summary>
+    /// Rebuilds the grid by asking each stored part which cell it belongs in, so the layout needs
+    /// no entity references and no uid remapping.
+    /// </summary>
+    private void RestoreGridFromStorage(EntityUid uid, NuclearReactorComponent comp)
+    {
+        foreach (var part in comp.PartStorage.ContainedEntities)
+        {
+            if (!TryComp<ReactorPartComponent>(part, out var partComp))
+                continue;
+
+            var cell = partComp.ReactorCell;
+
+            if (cell.X < 0 || cell.X >= comp.ReactorGridWidth || cell.Y < 0 || cell.Y >= comp.ReactorGridHeight)
+            {
+                Log.Warning($"{ToPrettyString(part)} in {ToPrettyString(uid)} names cell {cell}, outside a {comp.ReactorGridWidth}x{comp.ReactorGridHeight} grid. Leaving it in storage.");
+                continue;
+            }
+
+            // Keep the first claimant and leave the other in storage, where a player can retrieve it.
+            if (comp.ComponentGrid[cell.X, cell.Y] != null)
+            {
+                Log.Warning($"{ToPrettyString(part)} in {ToPrettyString(uid)} claims cell {cell}, already taken. Leaving it in storage.");
+                continue;
+            }
+
+            comp.ComponentGrid[cell.X, cell.Y] = (part, partComp);
+        }
+
+        UpdateGasVolume(comp);
+        UpdateGridVisual(uid, comp);
     }
 
     #region Prefab
@@ -158,7 +214,13 @@ public sealed partial class NuclearReactorSystem : EntitySystem
         for (var x = 0; x < comp.ReactorGridWidth; x++)
             for (var y = 0; y < comp.ReactorGridHeight; y++)
             {
-                comp.ComponentGrid[x, y] = prefab.TryGetValue(new Vector2i(x, y), out var part) ? part : null;
+                var cell = new Vector2i(x, y);
+                var occupant = prefab.TryGetValue(cell, out var part) ? part : null;
+
+                comp.ComponentGrid[x, y] = occupant;
+                if (occupant != null)
+                    occupant.Value.Comp.ReactorCell = cell;
+
                 comp.FluxGrid[x, y] = [];
                 comp.FluxGridScratch[x, y] = [];
             }
@@ -961,6 +1023,7 @@ public sealed partial class NuclearReactorSystem : EntitySystem
             _adminLog.Add(LogType.Action, $"{ToPrettyString(args.Actor):actor} added {ToPrettyString(item):item} to position {pos.Y},{pos.X} in {ToPrettyString(uid):target}");
 
             comp.ComponentGrid[pos.X, pos.Y] = (item.Value, reactorPart);
+            reactorPart.ReactorCell = pos;
         }
 
         UpdateGridVisual(uid, comp);
