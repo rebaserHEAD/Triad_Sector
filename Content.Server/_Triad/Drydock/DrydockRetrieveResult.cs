@@ -17,8 +17,12 @@ public enum DrydockRetrieveResult : byte
     NoStation,
 
     /// <summary>
-    /// The shipyard's staging map could not be brought up. Retrieve builds it the way a purchase
-    /// does, so this is the map failing outright, not a round where nobody has bought a ship yet.
+    /// No longer produced. A retrieve used to borrow the shipyard's shared staging map and had to
+    /// ask for it to be built first; it now loads onto a private paused map of its own, made by the
+    /// loader as part of the load, so there is nothing left that can fail this way.
+    ///
+    /// <para>Kept because the console's refusal switch reads it and it has a live locale string
+    /// behind it, and because renumbering this enum would silently re-map every value after it.</para>
     /// </summary>
     NoStagingMap,
 
@@ -51,6 +55,13 @@ public enum DrydockRetrieveResult : byte
 
     /// <summary>The station's grid died while the ship was being loaded. The claim was released.</summary>
     StationLost,
+
+    /// <summary>
+    /// The pipeline was cancelled before it could hand the ship over: a round restart, a shutdown,
+    /// or the slice watchdog. Whatever had been staged was scrapped and the claim was released, so
+    /// nothing is out and the ship is still stored and still retrievable.
+    /// </summary>
+    Cancelled,
 }
 
 /// <summary>

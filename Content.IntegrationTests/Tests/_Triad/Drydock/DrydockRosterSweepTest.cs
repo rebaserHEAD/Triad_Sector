@@ -89,6 +89,14 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             {
                 cfg.SetCVar(TriadCCVars.DrydockEnabled, true);
                 cfg.SetCVar(TriadCCVars.DrydockReadOnly, false);
+
+                // Slicing off, which for this cvar means no job at all rather than a job with a zero
+                // budget. This sweep runs the whole roster through a pooled pair on a nine hundred
+                // tick pump per operation; a capital hull sliced at the shipping default suspends
+                // thousands of times and would blow that ceiling on breadth alone. What slicing does
+                // to a store is its own fixture's question, and it is a question about one hull.
+                cfg.SetCVar(TriadCCVars.DrydockTickBudgetMs, 0);
+
                 shipyard.SetupShipyardIfNeeded();
 
                 station = entMan.Spawn();
@@ -137,6 +145,11 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             var covered = 0;
             var ambiguous = 0;
             var swept = 0;
+
+            // How many entities the thaw check below actually looked at, across the whole fleet. A
+            // per-vessel walk that quietly stopped reaching anything would otherwise report every
+            // hull as thawed.
+            var thawWalked = 0;
 
             foreach (var vessel in vessels)
             {
@@ -211,6 +224,39 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                     // that into a failure here rather than somewhere unrelated later.
                     await pair.RunTicksSync(7);
 
+                    // The thaw, across the whole fleet. Every document filed since the store learned
+                    // to freeze carries a paused flag per entity, and the retrieve loads onto a
+                    // paused map on purpose, so the walk that clears those flags is the only thing
+                    // standing between a player and a ship that looks perfect and cannot act. The
+                    // hand-built fixture proves the walk works on nine entities; this proves it does
+                    // not run out of patience on nine hundred. Collected as a failure line rather
+                    // than asserted here, so one frozen hull does not end the sweep.
+                    var stillFrozen = 0;
+                    var walked = 0;
+                    await server.WaitPost(() =>
+                    {
+                        var stack = new Stack<EntityUid>();
+                        stack.Push(retrieved.Grid!.Value);
+
+                        while (stack.Count > 0)
+                        {
+                            var current = stack.Pop();
+                            walked++;
+
+                            if (entMan.GetComponent<MetaDataComponent>(current).EntityPaused)
+                                stillFrozen++;
+
+                            var children = entMan.GetComponent<TransformComponent>(current).ChildEnumerator;
+                            while (children.MoveNext(out var child))
+                                stack.Push(child);
+                        }
+                    });
+
+                    thawWalked += walked;
+
+                    if (stillFrozen > 0)
+                        failures.Add($"{vessel.ID}: {stillFrozen} of {walked} entities came back from the drydock still paused.");
+
                     var after = await CensusGrid(pair, retrieved.Grid!.Value);
 
                     covered += beforeState.Entities;
@@ -272,6 +318,10 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                     $"[roster-sweep] {deltas.Count} vessel(s) changed manifest across the round trip:"
                     + Environment.NewLine + string.Join(Environment.NewLine, deltas));
             }
+
+            Assert.That(thawWalked, Is.GreaterThan(swept),
+                "The control on the thaw check: it has to have visited more entities than there were hulls, or "
+                + "it is reporting every ship unpaused because it never reached one.");
 
             Assert.That(failures, Is.Empty,
                 $"{failures.Count} roster vessel(s) failed a drydock round trip outright, out of {vessels.Count} "
@@ -393,6 +443,13 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             return census;
         }
 
+        /// <summary>
+        /// Starts a pipeline on the game thread and pumps until it finishes. The nine hundred tick
+        /// ceiling is sized for an unsliced pipeline waiting on nothing but the database, which the
+        /// fixture guarantees by setting <c>triad.drydock.tick_budget_ms</c> to zero. A sliced store
+        /// suspends at every phase boundary and again whenever it spends its budget mid-walk, so a
+        /// capital hull would want thousands of ticks and fail here.
+        /// </summary>
         private static async Task<T> RunOnServer<T>(TestPair pair, Func<Task<T>> start)
         {
             Task<T>? task = null;

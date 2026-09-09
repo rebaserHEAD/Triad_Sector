@@ -141,10 +141,16 @@ shipyard-console-deed-ship-new = · {$class} · never stored
 shipyard-console-time-minutes = {$minutes} m
 shipyard-console-time-hours = {$hours} h {$minutes} m
 shipyard-console-berths-free = {$free} of {$total} berths free
-# Shown while the server is serializing and compressing the hull. It cannot say how far along it
-# is, so this never carries a number.
+# Shown while the server works. It reports its own progress by message, so the button carries a
+# real percentage; the plain strings cover the gap before the first report arrives.
 shipyard-console-storing-button = Storing
 shipyard-console-retrieving-button = Retrieving
+shipyard-console-storing-percent-button = Storing {$percent}%
+shipyard-console-retrieving-percent-button = Retrieving {$percent}%
+# The work was stopped part-way - a round restart, a shutdown - rather than refused. Nothing was
+# lost either way: a cancelled store hands the ship back, a cancelled retrieve leaves it stored.
+shipyard-console-store-cancelled = The drydock stopped part-way through. Your ship is where it was; try again.
+shipyard-console-retrieve-cancelled = The drydock stopped part-way through. Your ship is still stored; try again.
 shipyard-console-berth-row = #{$berth}
 shipyard-console-berth-row-class = {$class}
 shipyard-console-berth-occupant = {$ship}

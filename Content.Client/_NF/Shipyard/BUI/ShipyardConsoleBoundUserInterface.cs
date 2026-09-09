@@ -146,6 +146,19 @@ public sealed partial class ShipyardConsoleBoundUserInterface : BoundUserInterfa
         _menu.PopulateEngines(availablePrototypes, unavailablePrototypes);
     }
 
+    /// <summary>
+    /// Triad: drydock tab. The one incremental push on this interface. A store or a retrieve now
+    /// runs across many ticks on a budget, and the server reports how far along it is to the
+    /// operator who pressed rather than republishing the whole console state per tick.
+    /// </summary>
+    protected override void ReceiveMessage(BoundUserInterfaceMessage message)
+    {
+        if (message is not ShipyardConsoleDrydockProgressMessage progress)
+            return;
+
+        _menu?.SetDrydockProgress(progress.Kind, progress.Percent);
+    }
+
     protected override void UpdateState(BoundUserInterfaceState state)
     {
         base.UpdateState(state);

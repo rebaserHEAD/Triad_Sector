@@ -6,6 +6,7 @@ using System.Linq;
 using System.Reflection;
 using System.Security.Cryptography;
 using System.Text;
+using System.Threading.Tasks;
 using Robust.Shared.GameStates;
 using Robust.Shared.Serialization.Manager;
 using Robust.Shared.Serialization.Manager.Attributes;
@@ -86,85 +87,134 @@ public sealed partial class DrydockFidelitySystem : EntitySystem
     ///
     /// <para>This mutates live components, and unlike the copying sidecars it must clear the live
     /// field, because the field choking the serializer is the entire reason it is here. So the
-    /// returned ledger holds the original in-memory values of both buckets, and the caller's abort
-    /// path hands it to <see cref="RestoreSnapshot"/> to put them straight back with no
-    /// serialization round trip in the way.</para>
+    /// ledger holds the original in-memory values of both buckets, and the caller's abort path hands
+    /// it to <see cref="RestoreSnapshot"/> to put them straight back with no serialization round trip
+    /// in the way.</para>
     ///
-    /// <para>The caller's protective <c>try</c> must already be open when this is called. Clearing
-    /// happens here, and anything that throws between here and the commit leaves a live ship with
-    /// blanked fields if nothing catches it.</para>
+    /// <para>The ledger belongs to the caller, not to this walk. That is why the sliced form takes it
+    /// as a parameter and why this synchronous form creates it before it starts: clearing happens
+    /// per field, per entity, and the walk it happens in can now be abandoned half-way, so a ledger
+    /// that only became visible on return would leave a ship blanked with no record of what was taken
+    /// off it. Anything that throws between here and the commit leaves a live ship with blanked
+    /// fields unless the caller restores from that ledger.</para>
     /// </summary>
+    /// <remarks>
+    /// The synchronous entry point, kept for callers that are not pipelines. It is the sliced walk
+    /// driven by a slice that never suspends, so its task is always already completed and reading the
+    /// result cannot block.
+    /// </remarks>
     public DrydockFidelityCapture CaptureAndStrip(EntityUid grid)
     {
         var capture = new DrydockFidelityCapture();
-
-        foreach (var uid in GridTree(grid))
-        {
-            DrydockCapturedStateComponent? sidecar = null;
-
-            foreach (var comp in AllComps(uid).ToList())
-            {
-                if (comp is DrydockCapturedStateComponent)
-                    continue;
-
-                var compType = comp.GetType();
-                foreach (var member in DataFields(compType))
-                {
-                    var value = GetMember(comp, member);
-                    if (value == null)
-                        continue;
-
-                    var memberType = MemberType(member);
-                    if (IsSerializable(memberType, value))
-                        continue;
-
-                    if (IsCaptureType(memberType) && _capture.TryCapture(value) is { } node)
-                    {
-                        if (sidecar == null)
-                        {
-                            sidecar = EnsureComp<DrydockCapturedStateComponent>(uid);
-                            capture.Sidecarred.Add(uid);
-                        }
-
-                        var key = $"{compType.Name}|{member.Name}";
-                        sidecar.Fields[key] = Convert.ToBase64String(Encoding.UTF8.GetBytes(node.ToString()));
-                        capture.CapturedKeys.Add(key);
-                    }
-                    else
-                    {
-                        capture.Stripped++;
-                    }
-
-                    // Snapshot the live value before clearing, so an aborted store puts it back
-                    // exactly. Captured or stripped, both were cleared and both restore.
-                    capture.Snapshot.Add((uid, comp, member, value));
-
-                    ClearMember(comp, member, memberType);
-                    DirtyIfNetworked(uid, comp);
-                }
-            }
-        }
-
+        CaptureAndStripSliced(grid, capture, new DrydockSyncSlice(DrydockPhases.Store)).GetAwaiter().GetResult();
         return capture;
     }
 
+    /// <inheritdoc cref="CaptureAndStrip"/>
+    /// <remarks>
+    /// The tick-budgeted form. Every snapshot entry is appended before the field it records is
+    /// cleared, so an abort part-way through still restores every field already blanked, and the
+    /// caller has assigned <paramref name="capture"/> to its own context before calling.
+    ///
+    /// <para>The tree is materialised first. The lazy walk reads each entity's transform after it has
+    /// yielded the previous one, which is fine inside one tick and is not fine across fifty, and each
+    /// entity is re-checked as it is consumed.</para>
+    /// </remarks>
+    public async Task CaptureAndStripSliced(EntityUid grid, DrydockFidelityCapture capture, IDrydockSlice slice)
+    {
+        var tree = GridTreeList(grid);
+        await slice.Begin(DrydockPhase.Capture, tree.Count);
+
+        for (var i = 0; i < tree.Count; i++)
+        {
+            var uid = tree[i];
+            if (!TerminatingOrDeleted(uid))
+                CaptureAndStripEntity(uid, capture);
+
+            await slice.Step(i);
+        }
+    }
+
+    /// <summary>One entity's worth of the capture walk. Never yields, so a component's field set is
+    /// always taken whole.</summary>
+    private void CaptureAndStripEntity(EntityUid uid, DrydockFidelityCapture capture)
+    {
+        DrydockCapturedStateComponent? sidecar = null;
+
+        foreach (var comp in AllComps(uid).ToList())
+        {
+            if (comp is DrydockCapturedStateComponent)
+                continue;
+
+            var compType = comp.GetType();
+            foreach (var member in DataFields(compType))
+            {
+                var value = GetMember(comp, member);
+                if (value == null)
+                    continue;
+
+                var memberType = MemberType(member);
+                if (IsSerializable(memberType, value))
+                    continue;
+
+                if (IsCaptureType(memberType) && _capture.TryCapture(value) is { } node)
+                {
+                    if (sidecar == null)
+                    {
+                        // On the ledger before the component goes on, so an abort between the two
+                        // still knows to take it back off.
+                        capture.Sidecarred.Add(uid);
+                        sidecar = EnsureComp<DrydockCapturedStateComponent>(uid);
+                    }
+
+                    var key = $"{compType.Name}|{member.Name}";
+                    sidecar.Fields[key] = Convert.ToBase64String(Encoding.UTF8.GetBytes(node.ToString()));
+                    capture.CapturedKeys.Add(key);
+                }
+                else
+                {
+                    capture.Stripped++;
+                }
+
+                // Snapshot the live value before clearing, so an aborted store puts it back
+                // exactly. Captured or stripped, both were cleared and both restore.
+                capture.Snapshot.Add((uid, comp, member, value));
+
+                ClearMember(comp, member, memberType);
+                DirtyIfNetworked(uid, comp);
+            }
+        }
+    }
+
     /// <summary>
-    /// Abort path, called from the store's failure branch: put every field
-    /// <see cref="CaptureAndStrip"/> cleared back to its original live value and remove the
-    /// sidecars it added, leaving the still-live ship exactly as usable as it was. This works on
-    /// the same live entities, with no serialization involved, which is what separates it from
-    /// <see cref="RestoreCaptured"/>.
+    /// Abort path, called from the store's unwind: put every field <see cref="CaptureAndStrip"/>
+    /// cleared back to its original live value and remove the sidecars it added, leaving the
+    /// still-live ship exactly as usable as it was. This works on the same live entities, with no
+    /// serialization involved, which is what separates it from <see cref="RestoreCaptured"/>.
     /// </summary>
+    /// <remarks>
+    /// Synchronous, and it has to stay that way: it runs from an unwind, and an unwind that could
+    /// suspend is an unwind a cancelled pipeline could never finish. The per-entry guards are what
+    /// slicing added. The component references in the ledger can now be many ticks old and an entity
+    /// that died in the meantime would throw on the dirty call - inside the unwind, which would
+    /// abandon the ship on its staging map with no return leg.
+    /// </remarks>
     public void RestoreSnapshot(DrydockFidelityCapture capture)
     {
         foreach (var (uid, comp, member, original) in capture.Snapshot)
         {
+            if (comp.Deleted || TerminatingOrDeleted(uid))
+                continue;
+
             SetMember(comp, member, original);
             DirtyIfNetworked(uid, comp);
         }
 
         foreach (var uid in capture.Sidecarred)
-            RemComp<DrydockCapturedStateComponent>(uid);
+        {
+            if (!TerminatingOrDeleted(uid))
+                RemComp<DrydockCapturedStateComponent>(uid);
+        }
     }
 
     /// <summary>
@@ -178,12 +228,29 @@ public sealed partial class DrydockFidelitySystem : EntitySystem
     /// </summary>
     public DrydockFidelityRestore RestoreCaptured(EntityUid grid)
     {
-        var report = new DrydockFidelityRestore();
+        return RestoreCapturedSliced(grid, new DrydockSyncSlice(DrydockPhases.Retrieve)).GetAwaiter().GetResult();
+    }
 
-        foreach (var uid in GridTree(grid).ToList())
+    /// <inheritdoc cref="RestoreCaptured"/>
+    /// <remarks>
+    /// The tick-budgeted form. Snapshot-then-apply over a materialised tree, re-checking each entity
+    /// as it is consumed, and it opens its own phase rather than stepping inside one the caller
+    /// opened: two restores run back to back and neither can know the other's item count.
+    /// </remarks>
+    public async Task<DrydockFidelityRestore> RestoreCapturedSliced(EntityUid grid, IDrydockSlice slice)
+    {
+        var report = new DrydockFidelityRestore();
+        var tree = GridTreeList(grid);
+        await slice.Begin(DrydockPhase.Fidelity, tree.Count);
+
+        for (var i = 0; i < tree.Count; i++)
         {
-            if (!TryComp<DrydockCapturedStateComponent>(uid, out var sidecar))
+            var uid = tree[i];
+            if (TerminatingOrDeleted(uid) || !TryComp<DrydockCapturedStateComponent>(uid, out var sidecar))
+            {
+                await slice.Step(i);
                 continue;
+            }
 
             // Built once per entity rather than scanned per key. Component names are unique in the
             // registry, so the simple type name the key carries identifies one component.
@@ -231,6 +298,7 @@ public sealed partial class DrydockFidelitySystem : EntitySystem
             }
 
             RemComp<DrydockCapturedStateComponent>(uid);
+            await slice.Step(i);
         }
 
         if (report.Skipped.Count > 0)
@@ -265,11 +333,29 @@ public sealed partial class DrydockFidelitySystem : EntitySystem
     public List<EntityUid> CaptureAppearance(EntityUid grid)
     {
         var injected = new List<EntityUid>();
+        CaptureAppearanceSliced(grid, injected, new DrydockSyncSlice(DrydockPhases.Store)).GetAwaiter().GetResult();
+        return injected;
+    }
 
-        foreach (var uid in GridTree(grid))
+    /// <inheritdoc cref="CaptureAppearance"/>
+    /// <remarks>
+    /// The tick-budgeted form. Like the ledgers on the store's context, <paramref name="injected"/>
+    /// belongs to the caller and is appended to before the sidecar it records is added, so an abort
+    /// part-way through the walk still takes back off every sidecar already put on.
+    /// </remarks>
+    public async Task CaptureAppearanceSliced(EntityUid grid, List<EntityUid> injected, IDrydockSlice slice)
+    {
+        var tree = GridTreeList(grid);
+        await slice.Begin(DrydockPhase.Sidecars, tree.Count);
+
+        for (var i = 0; i < tree.Count; i++)
         {
-            if (!TryComp<AppearanceComponent>(uid, out var appearance))
+            var uid = tree[i];
+            if (TerminatingOrDeleted(uid) || !TryComp<AppearanceComponent>(uid, out var appearance))
+            {
+                await slice.Step(i);
                 continue;
+            }
 
             DrydockAppearanceComponent? sidecar = null;
             foreach (var (key, value) in LiveAppearance(appearance))
@@ -284,16 +370,18 @@ public sealed partial class DrydockFidelitySystem : EntitySystem
                 wrapped.Add(AppearanceValueType, new ValueDataNode(value.GetType().AssemblyQualifiedName!));
                 wrapped.Add(AppearanceValue, node);
 
-                sidecar ??= EnsureComp<DrydockAppearanceComponent>(uid);
+                if (sidecar == null)
+                {
+                    injected.Add(uid);
+                    sidecar = EnsureComp<DrydockAppearanceComponent>(uid);
+                }
+
                 sidecar.Data[$"{key.GetType().FullName}|{key}"] =
                     Convert.ToBase64String(Encoding.UTF8.GetBytes(wrapped.ToString()));
             }
 
-            if (sidecar != null)
-                injected.Add(uid);
+            await slice.Step(i);
         }
-
-        return injected;
     }
 
     /// <summary>
@@ -309,12 +397,26 @@ public sealed partial class DrydockFidelitySystem : EntitySystem
     /// </summary>
     public DrydockFidelityRestore RestoreAppearance(EntityUid grid)
     {
-        var report = new DrydockFidelityRestore();
+        return RestoreAppearanceSliced(grid, new DrydockSyncSlice(DrydockPhases.Retrieve)).GetAwaiter().GetResult();
+    }
 
-        foreach (var uid in GridTree(grid).ToList())
+    /// <inheritdoc cref="RestoreAppearance"/>
+    /// <remarks>Same shape as <see cref="RestoreCapturedSliced"/>: materialised tree, re-checked per
+    /// entity, its own phase.</remarks>
+    public async Task<DrydockFidelityRestore> RestoreAppearanceSliced(EntityUid grid, IDrydockSlice slice)
+    {
+        var report = new DrydockFidelityRestore();
+        var tree = GridTreeList(grid);
+        await slice.Begin(DrydockPhase.Fidelity, tree.Count);
+
+        for (var i = 0; i < tree.Count; i++)
         {
-            if (!TryComp<DrydockAppearanceComponent>(uid, out var sidecar))
+            var uid = tree[i];
+            if (TerminatingOrDeleted(uid) || !TryComp<DrydockAppearanceComponent>(uid, out var sidecar))
+            {
+                await slice.Step(i);
                 continue;
+            }
 
             foreach (var (key, encoded) in sidecar.Data)
             {
@@ -369,6 +471,7 @@ public sealed partial class DrydockFidelitySystem : EntitySystem
             }
 
             RemComp<DrydockAppearanceComponent>(uid);
+            await slice.Step(i);
         }
 
         if (report.Skipped.Count > 0)
@@ -449,21 +552,28 @@ public sealed partial class DrydockFidelitySystem : EntitySystem
 
     /// <summary>
     /// Every entity on the grid, including entities inside containers, since contained entities are
-    /// transform children of their container's owner.
+    /// transform children of their container's owner. Materialised, never lazy: every walk here is
+    /// now sliced, and a lazy walk reads the next entity's transform after the consumer has already
+    /// parked on the previous one, which is harmless inside one tick and is not harmless across
+    /// fifty.
     /// </summary>
-    private IEnumerable<EntityUid> GridTree(EntityUid grid)
+    private List<EntityUid> GridTreeList(EntityUid grid)
     {
-        var stack = new Stack<EntityUid>();
-        stack.Push(grid);
-        while (stack.Count > 0)
-        {
-            var uid = stack.Pop();
-            yield return uid;
+        var result = new List<EntityUid>();
+        if (TerminatingOrDeleted(grid))
+            return result;
 
-            var children = Transform(uid).ChildEnumerator;
+        // Index-walked rather than stack-popped, so the list is its own frontier and the grid comes
+        // out first.
+        result.Add(grid);
+        for (var i = 0; i < result.Count; i++)
+        {
+            var children = Transform(result[i]).ChildEnumerator;
             while (children.MoveNext(out var child))
-                stack.Push(child);
+                result.Add(child);
         }
+
+        return result;
     }
 
     /// <summary>

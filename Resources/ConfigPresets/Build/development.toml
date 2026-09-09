@@ -1,6 +1,8 @@
 ﻿[game]
 # Straight in-game baby
 lobbyenabled = false
+# Triad: InitializeGamePreset no longer forces "sandbox" when the lobby is off, so dev names one.
+defaultpreset = "TriadStandard"
 map = "NFDev"
 role_timers = false
 current_year_offset = 802

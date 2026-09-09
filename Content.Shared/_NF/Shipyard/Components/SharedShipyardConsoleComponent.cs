@@ -108,6 +108,12 @@ public sealed partial class ShipyardConsoleComponent : Component
     /// <summary>Triad: legacy saves this operator may import, cached for the same reason as the ship list.</summary>
     public List<BUI.DrydockImportShipInfo> CachedImportables = new();
 
+    /// <summary>Triad: how far along the store running at this console is, so a reopened tab draws the indicator; null when none is.</summary>
+    public int? CachedStoreProgress;
+
+    /// <summary>Triad: the retrieve counterpart, for the same reason.</summary>
+    public int? CachedRetrieveProgress;
+
     /// <summary>
     /// Triad: the candidates behind <see cref="CachedImportables"/>, keyed by the client's file id.
     ///

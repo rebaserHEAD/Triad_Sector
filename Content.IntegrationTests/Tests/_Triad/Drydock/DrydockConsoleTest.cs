@@ -870,6 +870,102 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
         }
 
         /// <summary>
+        /// A store used to be one blocked tick, so a second press landing inside one was a race
+        /// nobody could hit on purpose. Sliced, a store lives for as long as the hull needs, and
+        /// pressing Store again while the bar is still moving is the ordinary thing a player does.
+        /// The refusal and the progress indicator have to read as one story, so this pins the answer
+        /// the console actually gives.
+        ///
+        /// <para>Both presses go out inside a single game tick, which makes the overlap a fact
+        /// rather than a hope. Every console gate ahead of the pipeline is synchronous, and the
+        /// re-entrancy marker is stamped before the store's first await, so by the time the first
+        /// call returns its task the marker is already on the grid and the second call walks
+        /// straight into it.</para>
+        ///
+        /// <para>What is deliberately not asserted: pressing again in the same tick as a
+        /// <em>refusal</em>. The marker comes off with <c>RemCompDeferred</c>, so it stays visible to
+        /// <c>HasComp</c> until the component cull at the end of the tick, and a press inside that
+        /// window answers InProgress for a store that has already given up. That is a harness-level
+        /// artefact of the deferred removal rather than a rule about the console, and asserting it
+        /// would pin an implementation detail. What matters, and what the tail of this test proves,
+        /// is that the sentinel does not leak: once the store is over the same hull stores again.</para>
+        /// </summary>
+        [Test]
+        public async Task ASecondStorePressDuringAStoreIsRefusedAsInProgress()
+        {
+            await using var pair = await PoolManager.GetServerClient(new PoolSettings { Connected = true });
+            using var _ = ExpectDockJointLog(pair);
+            var server = pair.Server;
+            var entMan = server.EntMan;
+
+            var playerMan = server.ResolveDependency<IPlayerManager>();
+            var shipyard = server.System<ShipyardSystem>();
+            var store = server.ResolveDependency<DrydockStore>();
+
+            var session = playerMan.Sessions.First();
+            var (station, stationGrid, ship, console, consoleComp, card, operatorEnt) = await BuildConsoleAndShip(pair, session.UserId);
+
+            Task<(DrydockStoreResult Result, Guid? ShipId)?>? firstPress = null;
+            Task<(DrydockStoreResult Result, Guid? ShipId)?>? secondPress = null;
+
+            await server.WaitPost(() =>
+            {
+                firstPress = shipyard.TryDrydockStore(console, consoleComp, operatorEnt, ShipyardConsoleUiKey.Shipyard);
+                secondPress = shipyard.TryDrydockStore(console, consoleComp, operatorEnt, ShipyardConsoleUiKey.Shipyard);
+            });
+
+            await server.WaitAssertion(() =>
+            {
+                Assert.That(entMan.HasComponent<DrydockInProgressComponent>(ship), Is.True,
+                    "The control on the overlap: the sentinel is stamped before the store's first await, so both presses really were in flight together.");
+            });
+
+            for (var i = 0; i < 600 && !(firstPress!.IsCompleted && secondPress!.IsCompleted); i++)
+            {
+                await pair.RunTicksSync(1);
+            }
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(firstPress!.IsCompleted, Is.True, "The first store never completed.");
+                Assert.That(secondPress!.IsCompleted, Is.True, "The second press never completed.");
+            });
+
+            var first = await firstPress!;
+            var second = await secondPress!;
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(first?.Result, Is.EqualTo(DrydockStoreResult.Success),
+                    "Control: the press that got there first is the one that stores the ship.");
+                Assert.That(second?.Result, Is.EqualTo(DrydockStoreResult.InProgress),
+                    "A press landing on a store already in flight is refused by the pipeline, not swallowed by the console: the player gets told, and nothing is filed twice.");
+                Assert.That(second?.ShipId, Is.Null, "A refusal names no hull.");
+            });
+
+            var shipId = first!.Value.ShipId!.Value;
+            await pair.RunTicksSync(5);
+
+            Assert.That((await store.GetShipHeader(shipId))!.State, Is.EqualTo(DrydockShipState.Stored),
+                "One press, one filing. The second must not have written a revision of its own.");
+
+            // The sentinel did not leak. This is what the marker exists for now that it no longer
+            // blocks container insertion, and it is the assertion that fails if a store forgets to
+            // take it back off: the ship would be storable exactly once, ever.
+            var retrieved = await RunOnServer(pair,
+                () => shipyard.TryDrydockRetrieve(console, consoleComp, operatorEnt, shipId, ShipyardConsoleUiKey.Shipyard));
+            Assert.That(retrieved, Is.Not.Null, "Control: the ship comes back, or there is nothing to store again.");
+            await pair.RunTicksSync(5);
+
+            var again = await RunOnServer(pair,
+                () => shipyard.TryDrydockStore(console, consoleComp, operatorEnt, ShipyardConsoleUiKey.Shipyard));
+            Assert.That(again?.Result, Is.EqualTo(DrydockStoreResult.Success),
+                "The same hull stores again once the first store is over; an InProgress here would mean the sentinel was never removed.");
+
+            await pair.CleanReturnAsync();
+        }
+
+        /// <summary>
         /// Builds a station, a ship stamped to <paramref name="shipOwner"/>, and a console holding a
         /// deed card for it, with the operator standing clear of the grid. The ship is docked to the
         /// station unless <paramref name="docked"/> says otherwise, since a store needs it to be.
@@ -908,6 +1004,15 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             {
                 cfg.SetCVar(TriadCCVars.DrydockEnabled, true);
                 cfg.SetCVar(TriadCCVars.DrydockReadOnly, false);
+
+                // Slicing off, which for this cvar means no job and no queue at all rather than a
+                // job with a zero budget. These tests are about what a person at a console can and
+                // cannot reach, and the six hundred tick pump in RunOnServer is sized for a pipeline
+                // that only ever waits on the database. What slicing costs is a different fixture's
+                // question; the one thing the console cares about, that a second press during a
+                // store is refused, holds at any budget and is asserted below.
+                cfg.SetCVar(TriadCCVars.DrydockTickBudgetMs, 0);
+
                 shipyard.SetupShipyardIfNeeded();
 
                 station = entMan.Spawn();
@@ -969,6 +1074,13 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             return (station, map.Grid.Owner, ship, console, comp, card, operatorEnt);
         }
 
+        /// <summary>
+        /// Starts a console operation on the game thread and pumps until it finishes. The six
+        /// hundred tick ceiling assumes a pipeline that only ever waits on the database, which
+        /// <see cref="BuildConsoleAndShip"/> guarantees by setting
+        /// <c>triad.drydock.tick_budget_ms</c> to zero. A sliced store suspends at every phase
+        /// boundary and again whenever it spends its budget, so it wants far more ticks than this.
+        /// </summary>
         private static async Task<T> RunOnServer<T>(TestPair pair, Func<Task<T>> start)
         {
             Task<T>? task = null;

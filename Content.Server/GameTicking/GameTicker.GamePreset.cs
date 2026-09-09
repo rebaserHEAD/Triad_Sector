@@ -86,7 +86,10 @@ namespace Content.Server.GameTicking
 
         private void InitializeGamePreset()
         {
-            SetGamePreset(LobbyEnabled ? _cfg.GetCVar(CCVars.GameLobbyDefaultPreset) : "sandbox");
+            // Triad: we run the sector lobby-less so the round starts on boot, and sandbox is wrong
+            // for that (maxPlayers 5, no event schedulers). game.defaultpreset wins in both modes.
+            // SetGamePreset(LobbyEnabled ? _cfg.GetCVar(CCVars.GameLobbyDefaultPreset) : "sandbox");
+            SetGamePreset(_cfg.GetCVar(CCVars.GameLobbyDefaultPreset));
         }
 
         public void SetGamePreset(GamePresetPrototype? preset, bool force = false)

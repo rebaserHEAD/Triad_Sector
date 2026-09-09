@@ -475,6 +475,178 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
         }
 
         /// <summary>
+        /// The most catastrophic-if-wrong assertion in the drydock. A store now freezes the ship
+        /// onto a private paused map before it serializes anything, so every document filed from
+        /// that point on carries <c>paused: true</c> on every entity aboard, and a retrieve loads it
+        /// onto a paused map on purpose so it arrives frozen for free. The thaw is therefore load
+        /// bearing in a way it never was before: miss it, or terminate the walk early, and the
+        /// player gets back a ship that looks perfectly intact and does nothing at all. No door
+        /// opens, no gun fires, no atmos moves, and no error is logged anywhere.
+        ///
+        /// <para>Three independent checks, because each one alone can pass while the ship is still
+        /// dead. The per-entity flag catches a walk that stopped short. The map's own pause state
+        /// catches a ship parked correctly but left on the staging map, which would freeze it again
+        /// on the next tick regardless of what the entities say. And the turret catches the case no
+        /// flag can: the firing loop runs on <c>EntityQueryEnumerator</c>, which skips paused
+        /// entities, so a shot that produces a projectile is the only proof that the engine's own
+        /// enumerators agree with the flag we just read.</para>
+        ///
+        /// <para>The document control is what stops this passing vacuously. If someone drops the
+        /// freeze, the filed document carries no paused flags, the retrieved ship is trivially
+        /// unpaused, and every assertion below still passes while testing nothing. Reading the blob
+        /// back and counting the flags is what ties the assertions to the thing they exist to
+        /// guard.</para>
+        /// </summary>
+        [Test]
+        public async Task ARetrievedShipComesBackUnpausedOnAnUnpausedMap()
+        {
+            await using var pair = await PoolManager.GetServerClient();
+            var server = pair.Server;
+            var entMan = server.EntMan;
+
+            var db = server.ResolveDependency<IServerDbManager>();
+            var drydock = server.System<DrydockSystem>();
+            var mapSys = server.System<SharedMapSystem>();
+
+            var owner = Guid.NewGuid();
+            await InsertPlayer(db, owner);
+            await server.ResolveDependency<DrydockStore>().AddBerth(owner, ShipSizeClass.SuperCapital, DrydockBerthKind.Granted, 0, null, null);
+
+            var (station, shipGrid, _) = await BuildShipAndStation(pair);
+
+            // The same rig the gunnery test builds, for the same reason it builds it: a powered
+            // turret registered with a server is the one probe here that reads the engine's
+            // enumerators rather than the flag they are derived from.
+            await server.WaitPost(() =>
+            {
+                entMan.SpawnEntity(ApcProtoId, new EntityCoordinates(shipGrid, new Vector2(0.5f, 2.5f)));
+                entMan.SpawnEntity(GunneryConsoleProtoId, new EntityCoordinates(shipGrid, new Vector2(2.5f, 0.5f)));
+                entMan.SpawnEntity(TurretProtoId, new EntityCoordinates(shipGrid, new Vector2(2.5f, 2.5f)));
+                entMan.SpawnEntity(GunneryServerProtoId, new EntityCoordinates(shipGrid, new Vector2(0.5f, 0.5f)));
+            });
+            await pair.RunTicksSync(60);
+
+            Assert.That(await FireOnceAndCountProjectiles(pair, shipGrid, "Control, before the store"), Is.GreaterThan(0),
+                "Control: the turret fires before the ship goes anywhere, so a silent gun afterwards is the round trip's doing.");
+
+            // Counted after the control shot has settled, so the gunshot audio entity the shot
+            // spawns has despawned and cannot inflate the figure the document is measured against.
+            await pair.RunTicksSync(30);
+            var savableBefore = await CountSavableTree(pair, shipGrid);
+            Assert.That(savableBefore, Is.GreaterThan(4),
+                "The control on the count: the fixture carries an airlock, an APC, a console, a turret and a gunnery server, so anything smaller means the walk is not seeing the ship.");
+
+            var (result, shipId) = await RunOnServer(pair, () => drydock.TryStoreShip(shipGrid, owner, null));
+            Assert.That(result, Is.EqualTo(DrydockStoreResult.Success));
+            await pair.RunTicksSync(5);
+
+            // The document control. A freeze that silently stopped happening would leave every
+            // assertion below passing on a ship that was never frozen in the first place.
+            var document = Encoding.UTF8.GetString(Decompress(await ReadBlobs(db, shipId!.Value)));
+            var pausedLines = document
+                .Split('\n')
+                .Count(line => line.Trim().Equals("paused: true", StringComparison.OrdinalIgnoreCase));
+
+            Assert.That(pausedLines, Is.GreaterThanOrEqualTo(savableBefore),
+                $"The filed document carries {pausedLines} paused flags against {savableBefore} savable entities aboard. "
+                + "The freeze pauses the grid and every descendant before the serializer walks the tree, so a shortfall means the store filed a ship that was never frozen.");
+
+            var retrieved = await RunOnServer(pair, () => drydock.TryRetrieveShip(shipId.Value, owner, station, null));
+            Assert.That(retrieved.Result, Is.EqualTo(DrydockRetrieveResult.Success));
+            var grid = retrieved.Grid!.Value;
+
+            // Nothing is nudged after the retrieve. The ship has to thaw itself.
+            await pair.RunTicksSync(30);
+
+            await server.WaitAssertion(() =>
+            {
+                // Materialised rather than asserted inside the walk, so a failure names every frozen
+                // entity instead of stopping at whichever one the stack happened to reach first.
+                var frozen = new List<string>();
+                var visited = 0;
+                var savableAfter = 0;
+
+                var stack = new Stack<EntityUid>();
+                stack.Push(grid);
+
+                while (stack.Count > 0)
+                {
+                    var current = stack.Pop();
+                    var meta = entMan.GetComponent<MetaDataComponent>(current);
+
+                    visited++;
+                    if (current != grid && meta.EntityPrototype?.MapSavable != false)
+                        savableAfter++;
+
+                    if (meta.EntityPaused)
+                        frozen.Add($"{meta.EntityPrototype?.ID ?? "<no prototype>"} ({current})");
+
+                    var children = entMan.GetComponent<TransformComponent>(current).ChildEnumerator;
+                    while (children.MoveNext(out var child))
+                        stack.Push(child);
+                }
+
+                Assert.Multiple(() =>
+                {
+                    Assert.That(visited, Is.GreaterThan(savableBefore),
+                        "The control on the walk: it has to reach the grid and everything under it, or an empty walk would report every entity unpaused.");
+
+                    Assert.That(savableAfter, Is.EqualTo(savableBefore),
+                        "The ship came back whole; a short walk here would weaken the frozen check above rather than fail on its own.");
+
+                    Assert.That(frozen, Is.Empty,
+                        $"{frozen.Count} entities came back still paused: {string.Join(", ", frozen.Take(10))}. "
+                        + "The thaw is a per-entity walk, so a partial one leaves exactly this: a ship that looks intact and cannot act.");
+
+                    var mapUid = entMan.GetComponent<TransformComponent>(grid).MapUid!.Value;
+
+                    // IsPaused is MapPaused or not-yet-map-initialised, and both of those freeze
+                    // everything on the map regardless of what the entities themselves say. Either
+                    // one here means the ship never left the drydock's private map.
+                    Assert.That(mapSys.IsPaused(mapUid), Is.False,
+                        "The retrieved ship is on a live, map-initialised map. A paused or pre-init map re-freezes the whole ship whatever the per-entity flags read.");
+                });
+            });
+
+            Assert.That(await FireOnceAndCountProjectiles(pair, grid, "After the retrieve"), Is.GreaterThan(0),
+                "The engine's own enumerators agree the ship is awake: the firing loop skips paused entities, so a projectile is proof the flag is not merely clear on paper.");
+
+            await pair.CleanReturnAsync();
+        }
+
+        /// <summary>
+        /// Everything under the grid that a document would carry, counted. Entities whose prototype
+        /// is not map savable are skipped for the same reason the roster sweep skips them: a gunshot
+        /// sound is a real child of the grid and is never written, so counting it would set a floor
+        /// the document can never meet.
+        /// </summary>
+        private static async Task<int> CountSavableTree(TestPair pair, EntityUid grid)
+        {
+            var count = 0;
+            var entMan = pair.Server.EntMan;
+
+            await pair.Server.WaitPost(() =>
+            {
+                var stack = new Stack<EntityUid>();
+                stack.Push(grid);
+
+                while (stack.Count > 0)
+                {
+                    var children = entMan.GetComponent<TransformComponent>(stack.Pop()).ChildEnumerator;
+                    while (children.MoveNext(out var child))
+                    {
+                        if (entMan.GetComponent<MetaDataComponent>(child).EntityPrototype?.MapSavable != false)
+                            count++;
+
+                        stack.Push(child);
+                    }
+                }
+            });
+
+            return count;
+        }
+
+        /// <summary>
         /// Fires the grid's one turret through its gunnery server at a point well clear of the hull,
         /// exactly as the console does, and returns how many new projectiles exist a few ticks later.
         /// </summary>
@@ -1550,13 +1722,25 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
         }
 
         /// <summary>
-        /// A use delay's end is an absolute game time, so written in one round and read in the next,
-        /// where the clock started over, a half-second reads as hours and nothing aboard opens on a
-        /// press. Retrieve re-arms every delay, as the ship-load path does. A far-future end stands
-        /// in for the previous round's larger clock.
+        /// A use delay's end is an absolute game time, and both ends carry
+        /// <c>TimeOffsetSerializer</c>, so the document holds the remaining span rather than the
+        /// clock reading: a delay filed with six minutes to run is read back with six minutes to
+        /// run, whatever the clock did in between. Retrieve used to throw that away and re-arm every
+        /// delay to a full length instead, which handed a player back more cooldown than they had.
+        /// Nothing re-arms now, so the fraction is what this asserts.
+        ///
+        /// <para>Two failures sit on either side of that assertion, and the bounds are shaped to
+        /// name both. A re-arm pushes the end out to a full length from now, which the upper bound
+        /// catches. So does an additive shift: the thaw raises
+        /// <c>EntityUnpausedEvent</c> per entity with the real storage duration, and
+        /// <c>UseDelaySystem.OnUnpaused</c> answers it by adding that duration to every end. On a
+        /// field the serializer has already re-based that correction is applied twice, and the ship
+        /// comes back with its cooldowns pushed out by however long it sat in the drydock. The store
+        /// and retrieve are separated by a real span of game time here precisely so that a double
+        /// correction is larger than the tolerance rather than lost inside it.</para>
         /// </summary>
         [Test]
-        public async Task AStaleUseDelayIsRearmedOnRetrieve()
+        public async Task AUseDelayKeepsItsRemainingTimeAcrossARoundTrip()
         {
             await using var pair = await PoolManager.GetServerClient();
             var server = pair.Server;
@@ -1573,46 +1757,77 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
 
             var (station, shipGrid, _) = await BuildShipAndStation(pair);
 
-            var length = TimeSpan.FromSeconds(1);
+            // A long delay with a known fraction still to run. Long enough that a re-arm to a full
+            // length and a shift by the storage span are both far outside the tolerance below, and
+            // far enough from zero that the delay cannot simply expire while the test runs.
+            var length = TimeSpan.FromMinutes(10);
+            var planted = TimeSpan.FromMinutes(6);
+
             await server.WaitPost(() =>
             {
                 var item = entMan.SpawnEntity(MarketItemProtoId, new EntityCoordinates(shipGrid, new Vector2(1.5f, 1.5f)));
                 useDelay.SetLength(item, length);
                 var comp = entMan.GetComponent<UseDelayComponent>(item);
-                // The component is access-locked to its system; the stale end has to be planted by hand.
+                // The component is access-locked to its system; the fraction has to be planted by hand.
 #pragma warning disable RA0002
                 var entry = comp.Delays.Values.Single();
-                entry.StartTime = timing.CurTime;
-                entry.EndTime = timing.CurTime + TimeSpan.FromHours(100);
+                entry.StartTime = timing.CurTime - (length - planted);
+                entry.EndTime = timing.CurTime + planted;
 #pragma warning restore RA0002
             });
 
             await pair.RunTicksSync(5);
 
+            var beforeStore = TimeSpan.Zero;
             await server.WaitAssertion(() =>
             {
                 var item = FindChildWithComponentSync<UseDelayComponent>(entMan, shipGrid);
                 Assert.That(item, Is.Not.Null);
                 Assert.That(useDelay.IsDelayed(item!.Value), Is.True, "The control: the planted end reads as an active delay.");
+                beforeStore = timing.CurTime;
             });
 
             var (result, shipId) = await RunOnServer(pair, () => drydock.TryStoreShip(shipGrid, owner, null));
             Assert.That(result, Is.EqualTo(DrydockStoreResult.Success));
-            await pair.RunTicksSync(5);
+
+            // A real span in storage. Everything this test is trying to distinguish between agrees
+            // when the ship is filed and called back inside the same second, so the gap is the
+            // measurement rather than a settle.
+            await pair.RunTicksSync(200);
+
+            var stored = TimeSpan.Zero;
+            await server.WaitPost(() => stored = timing.CurTime);
 
             var retrieved = await RunOnServer(pair, () => drydock.TryRetrieveShip(shipId!.Value, owner, station, null));
             Assert.That(retrieved.Result, Is.EqualTo(DrydockRetrieveResult.Success));
             await pair.RunTicksSync(5);
 
+            // Tick granularity, the ticks the retrieve itself burns, and the settle above. Small
+            // against the six-minute fraction and against every failure the bounds are aimed at.
+            var tolerance = TimeSpan.FromSeconds(2);
+
             await server.WaitAssertion(() =>
             {
+                var elapsed = timing.CurTime - beforeStore;
+                Assert.That(stored - beforeStore, Is.GreaterThan(tolerance * 2),
+                    "The control on the gap: with no measurable time in storage a doubled unpause correction would hide inside the tolerance.");
+
                 var item = FindChildWithComponentSync<UseDelayComponent>(entMan, retrieved.Grid!.Value);
                 Assert.That(item, Is.Not.Null, "The item came back with the ship.");
 #pragma warning disable RA0002
                 var entry = entMan.GetComponent<UseDelayComponent>(item!.Value).Delays.Values.Single();
 #pragma warning restore RA0002
-                Assert.That(entry.EndTime, Is.LessThanOrEqualTo(timing.CurTime + length),
-                    "A retrieved delay ends no later than one full length from now; the stale end from the store would still be hours out.");
+                var remaining = entry.EndTime - timing.CurTime;
+
+                Assert.Multiple(() =>
+                {
+                    Assert.That(remaining, Is.LessThanOrEqualTo(planted + tolerance),
+                        $"A retrieved delay must not come back with more time to run than it went in with ({remaining} against {planted}). "
+                        + "More means either a re-arm to a full length, or the storage duration added to an end the serializer had already re-based.");
+
+                    Assert.That(remaining, Is.GreaterThanOrEqualTo(planted - elapsed - tolerance),
+                        $"A retrieved delay must not lose more than the game time that actually passed ({remaining} against {planted} less {elapsed}).");
+                });
             });
 
             await pair.CleanReturnAsync();
@@ -2365,6 +2580,13 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                 cfg.SetCVar(TriadCCVars.DrydockEnabled, true);
                 cfg.SetCVar(TriadCCVars.DrydockReadOnly, false);
 
+                // Slicing off, which for this cvar means no job and no queue at all rather than a
+                // job with a zero budget: the pipeline runs on the caller's own async path, so the
+                // only thing it ever waits for is the database. That is what keeps the tick pump in
+                // RunOnServer honest. Slicing has its own fixture, and a test that is about whether
+                // a ship survives a round trip should not also be measuring the scheduler.
+                cfg.SetCVar(TriadCCVars.DrydockTickBudgetMs, 0);
+
                 // Retrieve refuses without a staging map, and nothing in a test pair creates one.
                 shipyard.SetupShipyardIfNeeded();
 
@@ -2403,6 +2625,13 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
         /// Starts a server-side async operation on the game thread and pumps the pair until it
         /// finishes. Both pipelines await database work, so the continuation has to come back to a
         /// ticking server; awaiting the task from the test thread alone would never let it resume.
+        ///
+        /// <para>The six hundred tick ceiling assumes an unsliced pipeline, and
+        /// <see cref="BuildShipAndStation"/> guarantees one by setting
+        /// <c>triad.drydock.tick_budget_ms</c> to zero. A store sliced at the shipping default
+        /// suspends at every phase boundary and again whenever it runs out of budget mid-walk, so a
+        /// capital hull would want thousands of ticks and this ceiling would fail it. Anything that
+        /// deliberately exercises slicing pumps its own loop rather than borrowing this one.</para>
         /// </summary>
         private static async Task<T> RunOnServer<T>(TestPair pair, Func<Task<T>> start)
         {

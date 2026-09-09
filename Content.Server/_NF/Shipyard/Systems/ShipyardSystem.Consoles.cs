@@ -930,6 +930,16 @@ public sealed partial class ShipyardSystem : SharedShipyardSystem
         // client sends, not read from the database with the rest of the drydock state.
         newState.ImportableShips = drydock.Importables;
 
+        // Triad: drydock tab. The live percentage travels to the operator by message; this copy is
+        // the reopen path alone, because a console opened mid-store only runs UpdateState and would
+        // otherwise draw a live Store button over a store that is still going. It is per-console
+        // state, so a bystander with the tab open sees the number too - deliberately: a percentage
+        // is not sensitive, and the alternative is that bystander being offered a Store button for
+        // a hull that is already halfway into a berth. Store first, retrieve second, because a
+        // console only ever has one of the two in flight.
+        if (TryComp<ShipyardConsoleComponent>(uid, out var progressConsole)) // Triad: drydock tab
+            newState.StoreProgressPercent = progressConsole.CachedStoreProgress ?? progressConsole.CachedRetrieveProgress; // Triad: drydock tab
+
         _ui.SetUiState(uid, uiKey, newState);
     }
 

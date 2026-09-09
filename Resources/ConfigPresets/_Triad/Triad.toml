@@ -1,9 +1,15 @@
 [game]
 hostname = "[EN][MRP][18+]Triad Sector"
 desc = "Triad Sector is a unique twist on the traditional Space Station gameplay. In the Triad Sector, everyone can be the captain of their own ship to venture forth and explore space beyond the station! Salvage, mine, research, trade, or explore your way to riches aboard your own vessel! Includes ships saving!"
-lobbyenabled = true
+# Triad: persistent sector, so the round starts on boot. Depends on the Triad edit in
+# InitializeGamePreset; without it the lobby-less path forces "sandbox" and ignores defaultpreset.
+lobbyenabled = false
 lobbyduration = 180
+defaultpreset = "TriadStandard"
 current_year_offset = 802
+# Triad: GameLoop skips the whole tick body when IGameTiming.Paused, ProcessPendingTasks included,
+# so in-flight work stalls until someone connects. The sector keeps its own time.
+auto_pause_empty = false
 
 [game.panic_bunker]
 enabled = false

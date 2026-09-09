@@ -111,6 +111,45 @@ public sealed class TriadCCVars
     /// </summary>
     public static readonly CVarDef<int> DrydockImportBudget =
         CVarDef.Create("triad.drydock.import_budget", 1, CVar.SERVERONLY);
+
+    /// <summary>
+    /// How many milliseconds of main-thread time one drydock store or retrieve may spend per tick.
+    /// The store is elastic on purpose: making the one captain who pressed the button wait longer is
+    /// free, making sixty other players wait is not. Lower is safer for everyone else and slower for
+    /// the captain, so lower is the safe direction to misconfigure.
+    ///
+    /// <para>Zero or less turns slicing off completely, and it means no job at all rather than a job
+    /// with a zero budget: the whole pipeline runs on the caller's own async path against the
+    /// synchronous slice, exactly as it ran before the slicing change. A zero-budget job queue would
+    /// instead never run anything, because the queue tests its own clock before it dequeues. This is
+    /// the rollback lever on a pipeline whose deploy has no other one, and it is what the
+    /// integration fixtures set.</para>
+    ///
+    /// <para>This does not bound the worst tick on its own. Four engine calls cannot be interrupted
+    /// from content - the grid serialize, the round-trip validation load, the retrieve's grid load,
+    /// and the dock - so the worst tick is this budget plus the longest of those.</para>
+    /// </summary>
+    public static readonly CVarDef<int> DrydockTickBudgetMs =
+        CVarDef.Create("triad.drydock.tick_budget_ms", 2, CVar.SERVERONLY);
+
+    /// <summary>
+    /// How many entities a sliced drydock loop processes between stopwatch reads. Higher spends less
+    /// time reading the clock and overshoots the budget by more; lower is the safe direction to
+    /// misconfigure.
+    /// </summary>
+    public static readonly CVarDef<int> DrydockSliceStride =
+        CVarDef.Create("triad.drydock.slice_stride", 32, CVar.SERVERONLY);
+
+    /// <summary>
+    /// How many real seconds a drydock job may go without advancing before it is cancelled and
+    /// unwound. This is the release-mode net under the one rule a sliced pipeline cannot enforce at
+    /// compile time, that every await goes through the slice: a missed wrapper leaves the job with no
+    /// resume handle, which only asserts in debug and hangs forever in release, stranding a frozen
+    /// ship on a private map. Raise it if a slow database makes it fire spuriously; zero disables it,
+    /// which is the unsafe direction.
+    /// </summary>
+    public static readonly CVarDef<int> DrydockSliceWatchdogSeconds =
+        CVarDef.Create("triad.drydock.slice_watchdog_seconds", 120, CVar.SERVERONLY);
     // End Triad
     // Triad: market data
     // The queue knobs mirror the admin log ones, which solve the same problem at production volume

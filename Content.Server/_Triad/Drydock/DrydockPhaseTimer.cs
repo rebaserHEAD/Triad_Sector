@@ -10,10 +10,16 @@ namespace Content.Server._Triad.Drydock;
 /// than guessed at. <see cref="Mark"/> closes the running phase and opens the next, so the caller
 /// only names boundaries.
 ///
-/// <para>Wall clock, not game-thread time. Phases spanning an <c>await</c> on the database include
-/// time the server spent ticking normally, so they are not stalls; the store's gate and commit are
-/// the two that do. The synchronous phases are the ones that can hitch, and they are the reason
-/// this exists.</para>
+/// <para>Wall clock, not game-thread time, and under slicing that stops being a footnote about two
+/// phases and becomes the whole picture. Every phase now spans ticks the server spent running
+/// normally, so <c>serialize=900ms</c> no longer means anyone waited 900 ms: it means the phase took
+/// 900 ms of clock to get through a few milliseconds at a time. The number that says whether other
+/// players felt anything is the worst single slice, which the five-argument
+/// <see cref="Format(string,Guid,int,double,int)"/> puts on the same line.</para>
+///
+/// <para>The flat <c>phase=Nms</c> line Loki pattern-matches also gained four keys with the slicing
+/// change - <c>freeze</c>, <c>purge</c>, <c>strip</c> and <c>unwind</c> - so anything matching the
+/// old key set exactly will see them.</para>
 ///
 /// <para>Emitted at Info: a store or retrieve is a rare deliberate player action, so one line each
 /// costs nothing and reaches the server log without anyone enabling debug first.</para>
@@ -47,5 +53,19 @@ public sealed class DrydockPhaseTimer
             sb.Append(' ').Append(phase).Append('=').Append(ms).Append("ms");
 
         return sb.Append(" total=").Append(TotalMs).Append("ms").ToString();
+    }
+
+    /// <summary>
+    /// The same line with the two figures that actually answer "did anyone else feel this": the worst
+    /// single span the pipeline held the main thread for, and how many spans it took.
+    /// </summary>
+    /// <remarks>
+    /// The three-argument form is kept rather than replaced. A pipeline running unsliced has no slice
+    /// figures to report, and a zero there would read as a claim rather than as an absence.
+    /// </remarks>
+    public string Format(string operation, Guid shipId, int entities, double worstSliceMs, int slices)
+    {
+        return Format(operation, shipId, entities)
+               + $" slices={slices} worst_slice={worstSliceMs:F1}ms";
     }
 }

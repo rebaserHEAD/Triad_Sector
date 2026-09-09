@@ -1,9 +1,19 @@
 #nullable enable
 
-// LOCAL SCAFFOLDING, NOT FOR COMMIT. Measures how long a store actually takes and how big the
-// document is, across the whole roster. Several decisions are blocked on these two numbers:
-// blob retention depth, the manifest horizon, and whether a real progress bar is worth the work
-// of moving compression off the game thread.
+// LOCAL SCAFFOLDING, NOT FOR COMMIT. Measures what a store costs the server, and how big the
+// document is, across the whole roster.
+//
+// The metric changed when the store learned to slice. Total wall time is no longer the number that
+// matters and is actively misleading as one: a sliced store is meant to take longer in wall clock,
+// because the ticks it spends waiting are ticks every other player got to keep. Reading the old
+// stopwatch would report this design getting worse exactly as it works. So the rig now times each
+// tick of the pump separately and reports the WORST one, which is the figure the whole change is
+// about: what a bystander who never touched the console feels.
+//
+// The worst tick is expected to sit above the budget cvar, and by roughly the length of the longest
+// call the pipeline cannot interrupt. Two of those dominate: serializing the grid, and the
+// round-trip validation load. MeasureTheBlockingSpanAlone below prices the first of them directly,
+// so the two numbers can be read against each other.
 
 using System;
 using System.Collections.Generic;
@@ -31,7 +41,21 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
     [TestFixture]
     public sealed class DrydockStoreTimingLocalTest
     {
-        private sealed record Row(string Vessel, string Class, double Ms, int Uncompressed, int Entities);
+        /// <summary>
+        /// The budget the sweep runs at, stated rather than inherited, so two runs on two machines
+        /// are comparing the same thing. The shipping default, because the interesting question is
+        /// what the setting we actually ship does to the worst tick.
+        /// </summary>
+        private const int MeasuredBudgetMs = 2;
+
+        private sealed record Row(
+            string Vessel,
+            string Class,
+            double WallMs,
+            double WorstTickMs,
+            int Ticks,
+            int Uncompressed,
+            int Entities);
 
         [Test]
         public async Task MeasureStoreCostAcrossTheRoster()
@@ -60,6 +84,13 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             {
                 cfg.SetCVar(TriadCCVars.DrydockEnabled, true);
                 cfg.SetCVar(TriadCCVars.DrydockReadOnly, false);
+
+                // Slicing on, at the shipping default. This rig exists to price the worst tick, and
+                // at a budget of zero there is no job, no suspension and therefore no worst tick to
+                // price: the whole store lands in one of them, which is the state this design was
+                // written to leave behind.
+                cfg.SetCVar(TriadCCVars.DrydockTickBudgetMs, MeasuredBudgetMs);
+
                 shipyard.SetupShipyardIfNeeded();
 
                 var station = entMan.Spawn();
@@ -89,9 +120,8 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                 if (loaded == null)
                     continue;
 
-                var sw = Stopwatch.StartNew();
-                var (result, shipId) = await RunOnServer(pair, () => drydock.TryStoreShip(loaded.Value, owner, null));
-                sw.Stop();
+                var measured = await RunOnServer(pair, () => drydock.TryStoreShip(loaded.Value, owner, null));
+                var (result, shipId) = measured.Result;
 
                 if (result != DrydockStoreResult.Success || shipId == null)
                 {
@@ -104,7 +134,9 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                 rows.Add(new Row(
                     vessel.ID,
                     current!.Ship.SizeClass ?? "?",
-                    sw.Elapsed.TotalMilliseconds,
+                    measured.WallMs,
+                    measured.WorstTickMs,
+                    measured.Ticks,
                     current.Revision.SizeBytes,
                     CountManifestEntities(current.Revision.Manifest)));
 
@@ -119,9 +151,16 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
         }
 
         /// <summary>
-        /// The part that actually blocks. TryStoreShip's wall time includes database awaits that
-        /// yield the thread; serializing the grid and compressing the result do not. This times
-        /// those two alone, which is the number that says whether the server stalls.
+        /// The part that still blocks, after slicing. Everything the store does per entity can be
+        /// spread over ticks; serializing the grid cannot, because it is one call into the engine's
+        /// serializer with no seam a content pipeline can suspend at. So this number is the floor
+        /// under the worst tick the sweep above reports: no budget can make a store's worst tick
+        /// smaller than its longest un-interruptible call.
+        ///
+        /// <para>Compression is timed here too, though it no longer belongs in that floor: it is
+        /// pure byte work touching no entity, so the pipeline hands it to a worker thread. It is
+        /// kept in the report as the control on that decision, since the reason to move it off the
+        /// game thread is exactly how large this column is.</para>
         /// </summary>
         [Test]
         public async Task MeasureTheBlockingSpanAlone()
@@ -201,22 +240,27 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
 
         private static void Report(List<Row> rows)
         {
-            var ms = rows.Select(r => r.Ms).OrderBy(x => x).ToList();
+            var worst = rows.Select(r => r.WorstTickMs).OrderBy(x => x).ToList();
+            var wall = rows.Select(r => r.WallMs).OrderBy(x => x).ToList();
             var bytes = rows.Select(r => r.Uncompressed).OrderBy(x => x).ToList();
 
             TestContext.Out.WriteLine("");
-            TestContext.Out.WriteLine($"=== stored {rows.Count} vessels ===");
-            TestContext.Out.WriteLine($"store ms      min {ms.First():F0}  p50 {Pct(ms, 0.5):F0}  p90 {Pct(ms, 0.9):F0}  max {ms.Last():F0}");
-            TestContext.Out.WriteLine($"document KB   min {bytes.First() / 1024}  p50 {Pct(bytes.Select(b => (double)b).ToList(), 0.5) / 1024:F0}  max {bytes.Last() / 1024}");
+            TestContext.Out.WriteLine($"=== stored {rows.Count} vessels at a {MeasuredBudgetMs} ms tick budget ===");
             TestContext.Out.WriteLine("");
-            TestContext.Out.WriteLine("slowest ten:");
-            foreach (var r in rows.OrderByDescending(r => r.Ms).Take(10))
-                TestContext.Out.WriteLine($"  {r.Ms,7:F0} ms  {r.Uncompressed / 1024,5} KB  {r.Entities,5} ents  {r.Class,-13} {r.Vessel}");
+            TestContext.Out.WriteLine("The metric: worst tick. Anything above the budget is a call the pipeline could not");
+            TestContext.Out.WriteLine("interrupt, and the two that dominate are the grid serialize and the validation load.");
+            TestContext.Out.WriteLine($"worst tick ms  min {worst.First():F1}  p50 {Pct(worst, 0.5):F1}  p90 {Pct(worst, 0.9):F1}  max {worst.Last():F1}");
+            TestContext.Out.WriteLine($"wall ms        min {wall.First():F0}  p50 {Pct(wall, 0.5):F0}  p90 {Pct(wall, 0.9):F0}  max {wall.Last():F0}   (context, not the metric)");
+            TestContext.Out.WriteLine($"document KB    min {bytes.First() / 1024}  p50 {Pct(bytes.Select(b => (double)b).ToList(), 0.5) / 1024:F0}  max {bytes.Last() / 1024}");
+            TestContext.Out.WriteLine("");
+            TestContext.Out.WriteLine("worst ten ticks:");
+            foreach (var r in rows.OrderByDescending(r => r.WorstTickMs).Take(10))
+                TestContext.Out.WriteLine($"  {r.WorstTickMs,7:F1} ms worst  {r.Ticks,5} ticks  {r.WallMs,7:F0} ms wall  {r.Uncompressed / 1024,5} KB  {r.Entities,5} ents  {r.Class,-13} {r.Vessel}");
 
             TestContext.Out.WriteLine("");
             TestContext.Out.WriteLine("by class:");
             foreach (var g in rows.GroupBy(r => r.Class).OrderBy(g => g.Key))
-                TestContext.Out.WriteLine($"  {g.Key,-13} n={g.Count(),3}  median {Pct(g.Select(r => r.Ms).OrderBy(x => x).ToList(), 0.5):F0} ms  median {Pct(g.Select(r => (double)r.Uncompressed).OrderBy(x => x).ToList(), 0.5) / 1024:F0} KB");
+                TestContext.Out.WriteLine($"  {g.Key,-13} n={g.Count(),3}  median worst tick {Pct(g.Select(r => r.WorstTickMs).OrderBy(x => x).ToList(), 0.5):F1} ms  median wall {Pct(g.Select(r => r.WallMs).OrderBy(x => x).ToList(), 0.5):F0} ms  median {Pct(g.Select(r => (double)r.Uncompressed).OrderBy(x => x).ToList(), 0.5) / 1024:F0} KB");
         }
 
         private static double Pct(List<double> sorted, double p)
@@ -233,15 +277,49 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             return idx < 0 ? 0 : manifest.AsSpan(idx).ToString().Count(c => c == '{');
         }
 
-        private static async Task<T> RunOnServer<T>(Pair.TestPair pair, Func<Task<T>> run)
+        /// <summary>
+        /// Runs a pipeline and prices every tick it takes, one at a time.
+        ///
+        /// <para>The worst single tick is the number that matters. A store is allowed to be slow;
+        /// it is not allowed to be felt by anybody who did not ask for it, and one tick is the unit
+        /// of being felt. Timing the pump as a whole, which is what this used to do, answers a
+        /// question nobody has: it counts every idle tick the pair spent waiting on the database as
+        /// though the server had been busy for it.</para>
+        ///
+        /// <para>Wall clock is still reported alongside, because it is what the captain at the
+        /// console experiences and it is what decides whether the progress indicator is worth its
+        /// weight. It is context, not the metric.</para>
+        ///
+        /// <para>This measures the whole tick, not the job's own slice: everything else the server
+        /// does that tick is in the figure. That is deliberate, since a bystander feels the tick and
+        /// not the slice. The job's own worst slice is narrower and is reported by the pipeline's
+        /// timing line in the server log rather than read from here.</para>
+        /// </summary>
+        private static async Task<(T Result, double WallMs, double WorstTickMs, int Ticks)> RunOnServer<T>(
+            Pair.TestPair pair,
+            Func<Task<T>> run)
         {
             Task<T>? task = null;
             await pair.Server.WaitPost(() => { task = run(); });
 
-            while (task == null || !task.IsCompleted)
-                await pair.RunTicksSync(1);
+            var wall = Stopwatch.StartNew();
+            var worstTickMs = 0d;
+            var ticks = 0;
 
-            return await task;
+            while (task == null || !task.IsCompleted)
+            {
+                var tick = Stopwatch.StartNew();
+                await pair.RunTicksSync(1);
+                tick.Stop();
+
+                ticks++;
+                if (tick.Elapsed.TotalMilliseconds > worstTickMs)
+                    worstTickMs = tick.Elapsed.TotalMilliseconds;
+            }
+
+            wall.Stop();
+
+            return (await task, wall.Elapsed.TotalMilliseconds, worstTickMs, ticks);
         }
 
         private static Task InsertPlayer(IServerDbManager db, Guid userId)

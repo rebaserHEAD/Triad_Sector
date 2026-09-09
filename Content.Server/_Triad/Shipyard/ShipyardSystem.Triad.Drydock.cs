@@ -161,6 +161,10 @@ public sealed partial class ShipyardSystem
             Log.Error($"Drydock: store from console {ToPrettyString(uid)} by {ToPrettyString(player)} threw: {e}");
             if (!TerminatingOrDeleted(player))
                 ConsolePopup(player, Loc.GetString("shipyard-console-store-failed"));
+            // Before the refresh, not after: the refresh is what publishes the cached percentage,
+            // and a throw from anywhere the pipeline's own finally does not cover would leave the
+            // console reporting a store that is no longer running.
+            ClearDrydockProgress(uid, component);
             await RefreshAfterRefusal(uid, component, player, (ShipyardConsoleUiKey)args.UiKey);
         }
     }
@@ -179,6 +183,7 @@ public sealed partial class ShipyardSystem
             Log.Error($"Drydock: retrieve of {args.ShipId} from console {ToPrettyString(uid)} by {ToPrettyString(player)} threw: {e}");
             if (!TerminatingOrDeleted(player))
                 ConsolePopup(player, Loc.GetString("shipyard-console-retrieve-failed"));
+            ClearDrydockProgress(uid, component); // Same reason as the store handler's.
             await RefreshAfterRefusal(uid, component, player, (ShipyardConsoleUiKey)args.UiKey);
         }
     }
@@ -846,7 +851,27 @@ public sealed partial class ShipyardSystem
             return null;
         }
 
-        var result = await _drydock.TryStoreShip(shuttleUid, ownership.OwnerUserId.UserId, DrydockRoundId, berthId);
+        // This is the only layer that holds the console, the operator and the interface key at
+        // once, so the pipeline is handed a delegate rather than being told about any of them. The
+        // station goes with it because the store now moves the hull onto a private map before it
+        // does any work, and the unwind needs somewhere to put it back that it cannot re-derive
+        // from a grid sitting on that map.
+        DrydockProgressCallback onProgress = (percent, _) =>
+            PushDrydockProgress(uid, component, player, uiKey, DrydockProgressKind.Store, percent);
+
+        (DrydockStoreResult Result, Guid? ShipId) result;
+        try
+        {
+            result = await _drydock.TryStoreShip(shuttleUid, ownership.OwnerUserId.UserId, DrydockRoundId, berthId, station, onProgress);
+        }
+        finally
+        {
+            // Every path out of here runs a refresh, and a refresh publishes the cached percentage
+            // to whoever opens this console next. A cancellation throws past every one of those
+            // return sites, so the clear is a finally: a stale figure would otherwise sit in the
+            // cache for the rest of the round and draw a busy button at an idle console.
+            ClearDrydockProgress(uid, component);
+        }
 
         // The write yielded. The store itself has already succeeded or refused; everything below is
         // the console epilogue.
@@ -938,7 +963,20 @@ public sealed partial class ShipyardSystem
             return null;
         }
 
-        var retrieve = await _drydock.TryRetrieveShip(shipId, operatorAccount, station, DrydockRoundId);
+        DrydockProgressCallback onProgress = (percent, _) =>
+            PushDrydockProgress(uid, component, player, uiKey, DrydockProgressKind.Retrieve, percent);
+
+        DrydockRetrieve retrieve;
+        try
+        {
+            retrieve = await _drydock.TryRetrieveShip(shipId, operatorAccount, station, DrydockRoundId, onProgress);
+        }
+        finally
+        {
+            // Same reason as the store's: the cached figure outlives a cancellation otherwise, and
+            // every refresh below would publish it to the next person at this console.
+            ClearDrydockProgress(uid, component);
+        }
 
         if (!retrieve.Succeeded)
         {
@@ -1620,6 +1658,10 @@ public sealed partial class ShipyardSystem
             DrydockStoreResult.BerthTooSmall => "shipyard-console-store-berth-too-small",
             DrydockStoreResult.InProgress => "shipyard-console-store-in-progress",
             DrydockStoreResult.BerthOccupied => "shipyard-console-berth-occupied",
+            // Not a fault of the player's and not a fault of the ship's: a round restart, a
+            // shutdown, or the slice watchdog stopped a store that was already under way. The ship
+            // is back where it was, so the honest message is "try again", not "it failed".
+            DrydockStoreResult.Cancelled => "shipyard-console-store-cancelled",
             _ => "shipyard-console-store-failed",
         };
     }
@@ -1641,8 +1683,52 @@ public sealed partial class ShipyardSystem
             DrydockRetrieveResult.NotStored => "shipyard-console-retrieve-not-stored",
             DrydockRetrieveResult.NoReadableRevision => "shipyard-console-retrieve-no-revision",
             DrydockRetrieveResult.StationLost => "shipyard-console-retrieve-station-lost",
+            // The store's counterpart: the pipeline was stopped mid-flight, the claim was released
+            // and nothing is out, so the ship is still stored and still retrievable.
+            DrydockRetrieveResult.Cancelled => "shipyard-console-retrieve-cancelled",
             _ => "shipyard-console-retrieve-failed",
         };
+    }
+
+    /// <summary>
+    /// Hands the operator who pressed the button the pipeline's own percentage, and remembers it on
+    /// the console so a tab opened halfway through draws the indicator instead of a live button.
+    ///
+    /// <para>Aimed at the actor rather than published as state: the whole point of slicing the
+    /// pipeline is to stop it spending main-thread time per tick, and republishing the interface
+    /// state would re-run the shuttle listing and a grid appraisal every time the figure moved. The
+    /// actor overload is the <see cref="EntityUid"/> one; the session overload is client-only and
+    /// returns without sending anything when called from here.</para>
+    ///
+    /// <para>Called synchronously from inside the pipeline's own tick slice, so it does the least
+    /// it can: one cache write and one message.</para>
+    /// </summary>
+    private void PushDrydockProgress(EntityUid uid, ShipyardConsoleComponent component, EntityUid player,
+        ShipyardConsoleUiKey uiKey, DrydockProgressKind kind, int percent)
+    {
+        if (TerminatingOrDeleted(uid) || TerminatingOrDeleted(player))
+            return;
+
+        if (kind == DrydockProgressKind.Retrieve)
+            component.CachedRetrieveProgress = percent;
+        else
+            component.CachedStoreProgress = percent;
+
+        _ui.ServerSendUiMessage(uid, uiKey, new ShipyardConsoleDrydockProgressMessage(kind, percent), player);
+    }
+
+    /// <summary>
+    /// Forgets whatever this console was reporting. Called from the finally around each pipeline
+    /// call and again from the handler catches, because a cached percentage is published by every
+    /// later state this console builds and would otherwise outlive the operation by the round.
+    /// </summary>
+    private void ClearDrydockProgress(EntityUid uid, ShipyardConsoleComponent component)
+    {
+        if (TerminatingOrDeleted(uid))
+            return;
+
+        component.CachedStoreProgress = null;
+        component.CachedRetrieveProgress = null;
     }
 
     /// <summary>

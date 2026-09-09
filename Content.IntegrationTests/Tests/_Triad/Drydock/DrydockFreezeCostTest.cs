@@ -123,10 +123,10 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                     var watch = Stopwatch.StartNew();
                     var drydockMap = mapSys.CreateMap(out _);
 
-                    // Paused while it is still empty, so the engine's own recursive walk has nothing
-                    // to walk. Moving a grid onto a paused map does not propagate the flag, which is
-                    // exactly why the per-entity walk below is ours to own, and therefore ours to
-                    // slice across ticks.
+                    // Paused while it is still empty, so the engine's own recursive walk has one
+                    // entity to walk instead of a whole ship. SharedMapSystem.SetPaused recurses
+                    // into every descendant, and doing that after the grid has arrived is the
+                    // unbudgeted whole-ship walk this design exists to avoid.
                     mapSys.SetPaused(drydockMap, true);
                     createMs = watch.Elapsed.TotalMilliseconds;
 
@@ -134,8 +134,14 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                     xformSys.SetCoordinates(live.Value, new EntityCoordinates(drydockMap, Vector2.Zero));
                     moveMs = watch.Elapsed.TotalMilliseconds;
 
-                    // The grid first, so the grid-level simulations (atmos above all) stop on this
-                    // tick rather than after the walk finishes, then everything below it.
+                    // The walk counts and back-stops; it is not what freezes the ship. The reparent
+                    // above already did that: SharedTransformSystem.ChangeMapId reads the new map's
+                    // pause state and ChangeMapIdRecursive stamps it onto every descendant, so by
+                    // the time this runs nearly every SetEntityPaused call is an early return
+                    // against a flag that already matches. What it is measuring, then, is the price
+                    // of owning the walk anyway, which the production freeze does for the same
+                    // reason: a walk we own is a walk we can slice, and a back-stop that costs this
+                    // little is worth having against an engine change.
                     watch.Restart();
                     paused = SlicePause(entMan, metaSys, live.Value);
                     pauseMs = watch.Elapsed.TotalMilliseconds;
@@ -263,11 +269,17 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
         }
 
         /// <summary>
-        /// The pause walk a sliced store would run, done here in one pass so its total cost is
-        /// measurable. Breadth-first from the grid down, so the grid itself, and with it the
-        /// grid-level simulations, stops first.
+        /// The pause walk a sliced store runs, done here in one pass so its total cost is
+        /// measurable. Breadth-first from the grid down, matching the order the production freeze
+        /// walks in.
+        ///
+        /// <para>It counts and back-stops rather than being the mechanism. Reparenting onto an
+        /// already-paused map pauses the whole subtree inside the engine's own recursion, so by the
+        /// time this runs <c>SetEntityPaused</c> mostly returns early against a flag that already
+        /// matches. The number it reports is therefore the entity count, and the milliseconds beside
+        /// it are the price of keeping a walk we own and can slice.</para>
         /// </summary>
-        /// <returns>How many entities were paused.</returns>
+        /// <returns>How many entities were visited.</returns>
         private static int SlicePause(IEntityManager entMan, MetaDataSystem metaSys, EntityUid grid)
         {
             var count = 0;

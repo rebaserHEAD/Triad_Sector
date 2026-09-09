@@ -57,6 +57,22 @@ public sealed class ShipyardConsoleInterfaceState : BoundUserInterfaceState
     public List<DrydockImportShipInfo> ImportableShips = new();
 
     /// <summary>
+    /// Triad: how far along the store or retrieve running at this console is, or null when nothing
+    /// is running. Set after construction rather than passed in, for the same reason
+    /// <see cref="ImportableShips"/> is: it is a live figure the state builder reads off the
+    /// console's own cache, and widening a nineteen-argument constructor for it would be worse than
+    /// the assignment.
+    ///
+    /// <para>The live figure travels by message, aimed at the operator who pressed. This is the
+    /// reopen path alone: on open only UpdateState runs, so without it a console opened in the
+    /// middle of a store draws a live Store button over a running store. Being state rather than a
+    /// message it is per-console and any bystander with the tab open sees it, which is the intent -
+    /// a percentage is not sensitive, and the alternative is that bystander seeing a live Store
+    /// button for a ship that is already halfway into a berth.</para>
+    /// </summary>
+    public int? StoreProgressPercent; // Triad: drydock tab
+
+    /// <summary>
     /// Triad: how long a transfer offer stands, in whole minutes, for the sentence in the transfer
     /// prompt. The cvar behind it is server-only, so the client has to be told.
     /// </summary>

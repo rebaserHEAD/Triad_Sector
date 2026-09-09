@@ -44,10 +44,12 @@ public sealed partial class DrydockSystem
                     continue;
             }
 
-            // Immediate deletes, not queued. Serialization runs synchronously later in this same
-            // tick, so a merely queued brain would still be a grid child when the serializer walks
-            // the tree, and the dangling reference would come straight back. Clear the eye reference
-            // first so the still-live core never points at a deleted entity.
+            // Immediate deletes, not queued. The serializer's tree walk is now many ticks away, so a
+            // queued deletion would in fact be honoured long before it - but a merely queued brain is
+            // a real grid child until the queue is drained, and every walk between here and the save
+            // would see it. Deleting now is what makes "the AI core is empty" true from this line
+            // onwards rather than at some point after it. Clear the eye reference first so the
+            // still-live core never points at a deleted entity.
             if (core.RemoteEntity is { } eye)
             {
                 core.RemoteEntity = null;
