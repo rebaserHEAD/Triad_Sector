@@ -467,17 +467,18 @@ public sealed partial class DrydockFidelitySystem : EntitySystem
     }
 
     /// <summary>
-    /// Fields carrying a custom type serializer are skipped on the assumption that serializer
-    /// handles them, which is the same rule the serializability audit applies.
-    /// </summary>
-    /// <summary>
-    /// Which members of a component type the walk has to look at. Memoized because the answer is a
-    /// property of the type and the store asks it once per component per entity: uncached it built
-    /// two reflection arrays and asked <see cref="MemberInfo.GetCustomAttribute{T}"/> per member
-    /// every time, which on a capital ship was most of the store's capture phase.
+    /// Memoized because the answer is a property of the type and the store asks it once per
+    /// component per entity: uncached it built two reflection arrays and asked
+    /// <see cref="MemberInfo.GetCustomAttribute{T}"/> per member every time, which on a capital ship
+    /// was most of the store's capture phase.
     /// </summary>
     private static readonly ConcurrentDictionary<Type, MemberInfo[]> DataFieldCache = new();
 
+    /// <summary>
+    /// Which members of a component type the walk has to look at. Fields carrying a custom type
+    /// serializer are skipped on the assumption that serializer handles them, which is the same rule
+    /// the serializability audit applies.
+    /// </summary>
     private static MemberInfo[] DataFields(Type type) => DataFieldCache.GetOrAdd(type, static t =>
     {
         const BindingFlags flags = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.DeclaredOnly;
