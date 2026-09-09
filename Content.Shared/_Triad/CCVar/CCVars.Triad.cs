@@ -9,13 +9,6 @@ namespace Content.Shared._Triad.CCVar;
 [CVarDefs]
 public sealed class TriadCCVars
 {
-    /// <summary>
-    ///     How much loading a saved ship costs, as a fraction of its full appraisal. 0.15f = 15%.
-    ///     Was 0.3f until 2026-08-29.
-    /// </summary>
-    public static readonly CVarDef<float> LoadShipPrice =
-        CVarDef.Create("triad.load_ship_price", 0.15f, CVar.SERVER | CVar.REPLICATED);
-
     // Triad: tamper protection
     /// <summary>
     /// Tamper protection rollout mode. "off" disables all checks and logging; "notify" passively
