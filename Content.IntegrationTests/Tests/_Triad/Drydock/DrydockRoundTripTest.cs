@@ -28,6 +28,7 @@ using Content.Server.Station.Systems;
 using Content.Server.Shuttles.Components;
 using Content.Server.Wires;
 using Content.Shared._Crescent.ShipShields;
+using Content.Shared._FarHorizons.Power.Generation.FissionGenerator;
 using Content.Shared._Goobstation.Factory;
 using Content.Shared._Mono.FireControl;
 using Content.Shared._Mono.SpaceArtillery;
@@ -115,6 +116,16 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
         private const string AnalysisConsoleProtoId = "ComputerAnalysisConsole";
         private const string ArtifactAnalyzerProtoId = "MachineArtifactAnalyzer";
         private const string CrystallizerProtoId = "Crystallizer";
+        private const string ReactorProtoId = "NuclearReactorNormal";
+        private const string TurbineProtoId = "GasTurbineNormal";
+        private const float MarkedRpm = 450f;
+        private const int MarkedBladeHealth = 3;
+
+        // Values no prefab produces, so a reactor that re-laid its prefab is distinguishable from
+        // one that restored its parts rather than merely being miscounted.
+        private const float MarkedPartTemperature = 777f;
+        private const float MarkedReactorTemperature = 911f;
+        private const float MarkedControlRodInsertion = 1.25f;
 
         [Test]
         public async Task AShipStoredComesBackWithItsContentsAndItsWires()
@@ -1134,6 +1145,198 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             });
 
             await pair.CleanReturnAsync();
+        }
+
+        /// <summary>
+        /// The roster sweep can never cover a reactor: no map places one, so every reactor that has
+        /// been stored got there because a player installed it. Its layout, its condition and the
+        /// grids it ticks against are all built on map init, which a retrieve never fires.
+        /// </summary>
+        [Test]
+        public async Task AReactorComesBackWithItsPartsAndItsHeat()
+        {
+            await using var pair = await PoolManager.GetServerClient();
+            var server = pair.Server;
+            var entMan = server.EntMan;
+
+            var db = server.ResolveDependency<IServerDbManager>();
+            var drydock = server.System<DrydockSystem>();
+
+            var owner = Guid.NewGuid();
+            await InsertPlayer(db, owner);
+            await server.ResolveDependency<DrydockStore>().AddBerth(owner, ShipSizeClass.SuperCapital, DrydockBerthKind.Granted, 0, null, null);
+
+            var (station, shipGrid, _) = await BuildShipAndStation(pair);
+
+            await server.WaitPost(() =>
+                entMan.SpawnEntity(ReactorProtoId, new EntityCoordinates(shipGrid, new Vector2(2f, 2f))));
+
+            await pair.RunTicksSync(5);
+
+            var savedCells = new Dictionary<Vector2i, EntityUid>();
+            var markedCell = default(Vector2i);
+
+            await server.WaitAssertion(() =>
+            {
+                var reactor = FindChildWithComponentSync<NuclearReactorComponent>(entMan, shipGrid);
+                Assert.That(reactor, Is.Not.Null, "The control: the reactor has to be aboard before the store.");
+
+                var comp = entMan.GetComponent<NuclearReactorComponent>(reactor!.Value);
+                Assert.That(comp.ComponentGrid, Is.Not.Null,
+                    "The control: a freshly placed reactor allocates its grid.");
+
+                savedCells = OccupiedCells(comp);
+                Assert.That(savedCells, Is.Not.Empty,
+                    "The control: the prefab has to lay parts, or there is no layout for the round trip to lose.");
+
+                markedCell = savedCells.Keys.OrderBy(c => (c.X, c.Y)).First();
+                entMan.GetComponent<ReactorPartComponent>(savedCells[markedCell]).Temperature = MarkedPartTemperature;
+
+                comp.Temperature = MarkedReactorTemperature;
+                comp.ControlRodInsertion = MarkedControlRodInsertion;
+                comp.Melted = true;
+            });
+
+            var (result, shipId) = await RunOnServer(pair, () => drydock.TryStoreShip(shipGrid, owner, null));
+            Assert.That(result, Is.EqualTo(DrydockStoreResult.Success));
+
+            await pair.RunTicksSync(5);
+
+            var retrieved = await RunOnServer(pair, () => drydock.TryRetrieveShip(shipId!.Value, owner, station, null));
+            Assert.That(retrieved.Result, Is.EqualTo(DrydockRetrieveResult.Success));
+
+            await pair.RunTicksSync(5);
+
+            var retrievedReactor = await FindChildWithComponent<NuclearReactorComponent>(pair, retrieved.Grid!.Value);
+
+            await server.WaitAssertion(() =>
+            {
+                Assert.That(retrievedReactor, Is.Not.Null, "The reactor came back with the ship.");
+
+                var comp = entMan.GetComponent<NuclearReactorComponent>(retrievedReactor!.Value);
+
+                Assert.That(comp.ComponentGrid, Is.Not.Null,
+                    "The grid is allocated on ComponentStartup. Null here means the reactor is still building itself on map init, which a retrieve never fires.");
+                Assert.That(comp.ApplyPrefab, Is.False,
+                    "A restored reactor must never be armed to re-lay its prefab: that calls CleanContainer on the storage it just loaded.");
+
+                var loadedCells = OccupiedCells(comp);
+
+                Assert.Multiple(() =>
+                {
+                    Assert.That(comp.PartStorage.ContainedEntities, Has.Count.EqualTo(savedCells.Count),
+                        "Every saved part should be back in the reactor's storage.");
+                    Assert.That(loadedCells.Keys, Is.EquivalentTo(savedCells.Keys),
+                        "Every part should be back in the cell it was saved in.");
+
+                    Assert.That(comp.Temperature, Is.EqualTo(MarkedReactorTemperature),
+                        "Casing temperature should survive; a fresh reactor reads room temperature.");
+                    Assert.That(comp.ControlRodInsertion, Is.EqualTo(MarkedControlRodInsertion),
+                        "The control rod setting should survive rather than snapping back to its default.");
+                    Assert.That(comp.Melted, Is.True,
+                        "A melted reactor must come back melted, not repaired by the round trip.");
+                });
+
+                Assert.That(loadedCells, Does.ContainKey(markedCell));
+                Assert.That(entMan.GetComponent<ReactorPartComponent>(loadedCells[markedCell]).Temperature,
+                    Is.EqualTo(MarkedPartTemperature),
+                    "The part in the marked cell should be the part that was stored. Reading the prototype's temperature means the prefab was re-laid over the restored parts.");
+            });
+
+            await pair.CleanReturnAsync();
+        }
+
+        /// <summary>
+        /// The turbine half of the same fault. Its blade and stator ride item slots and come back on
+        /// their own, but the references to them are rebuilt rather than saved, and the method that
+        /// rebuilt them also set BladeHealth to full: a damaged turbine would have come back repaired.
+        /// </summary>
+        [Test]
+        public async Task ATurbineComesBackSpinningAndStillDamaged()
+        {
+            await using var pair = await PoolManager.GetServerClient();
+            var server = pair.Server;
+            var entMan = server.EntMan;
+
+            var db = server.ResolveDependency<IServerDbManager>();
+            var drydock = server.System<DrydockSystem>();
+
+            var owner = Guid.NewGuid();
+            await InsertPlayer(db, owner);
+            await server.ResolveDependency<DrydockStore>().AddBerth(owner, ShipSizeClass.SuperCapital, DrydockBerthKind.Granted, 0, null, null);
+
+            var (station, shipGrid, _) = await BuildShipAndStation(pair);
+
+            await server.WaitPost(() =>
+                entMan.SpawnEntity(TurbineProtoId, new EntityCoordinates(shipGrid, new Vector2(2f, 2f))));
+
+            await pair.RunTicksSync(5);
+
+            await server.WaitAssertion(() =>
+            {
+                var turbine = FindChildWithComponentSync<GasTurbineComponent>(entMan, shipGrid);
+                Assert.That(turbine, Is.Not.Null, "The control: the turbine has to be aboard before the store.");
+
+                var comp = entMan.GetComponent<GasTurbineComponent>(turbine!.Value);
+
+                Assert.Multiple(() =>
+                {
+                    Assert.That(comp.CurrentBlade, Is.Not.Null,
+                        "The control: the blade slot's starting item fills on map init, so a fresh turbine is fitted.");
+                    Assert.That(comp.CurrentStator, Is.Not.Null, "The control: same for the stator.");
+                });
+
+                comp.RPM = MarkedRpm;
+                comp.BladeHealth = MarkedBladeHealth;
+            });
+
+            var (result, shipId) = await RunOnServer(pair, () => drydock.TryStoreShip(shipGrid, owner, null));
+            Assert.That(result, Is.EqualTo(DrydockStoreResult.Success));
+
+            await pair.RunTicksSync(5);
+
+            var retrieved = await RunOnServer(pair, () => drydock.TryRetrieveShip(shipId!.Value, owner, station, null));
+            Assert.That(retrieved.Result, Is.EqualTo(DrydockRetrieveResult.Success));
+
+            await pair.RunTicksSync(5);
+
+            var retrievedTurbine = await FindChildWithComponent<GasTurbineComponent>(pair, retrieved.Grid!.Value);
+
+            await server.WaitAssertion(() =>
+            {
+                Assert.That(retrievedTurbine, Is.Not.Null, "The turbine came back with the ship.");
+
+                var comp = entMan.GetComponent<GasTurbineComponent>(retrievedTurbine!.Value);
+
+                Assert.Multiple(() =>
+                {
+                    Assert.That(comp.BladeHealth, Is.EqualTo(MarkedBladeHealth),
+                        "Blade damage must survive. Reading BladeHealthMax here means UpdatePartValues ran on the load path and repaired the turbine.");
+                    Assert.That(comp.RPM, Is.GreaterThan(0f),
+                        $"A turbine stored while spinning at {MarkedRpm} must not come back stopped: RPM is integrator state, not something a tick re-derives.");
+
+                    Assert.That(comp.CurrentBlade, Is.Not.Null,
+                        "The blade rides an item slot and comes back on its own, but the reference to it is rebuilt on startup. Null here means that rebuild still hangs off map init.");
+                    Assert.That(comp.CurrentStator, Is.Not.Null, "The stator reference, same rebuild.");
+                });
+
+                Assert.That(entMan.EntityExists(comp.CurrentBlade!.Value), Is.True,
+                    "The blade reference has to point at an entity that came back, not a stale uid.");
+            });
+
+            await pair.CleanReturnAsync();
+        }
+
+        private static Dictionary<Vector2i, EntityUid> OccupiedCells(NuclearReactorComponent comp)
+        {
+            var occupied = new Dictionary<Vector2i, EntityUid>();
+
+            for (var x = 0; x < comp.ReactorGridWidth; x++)
+                for (var y = 0; y < comp.ReactorGridHeight; y++)
+                    if (comp.ComponentGrid[x, y] is { } part)
+                        occupied[new Vector2i(x, y)] = part.Owner;
+
+            return occupied;
         }
 
         /// <summary>
