@@ -155,6 +155,39 @@ public sealed class TriadCCVars
     /// </summary>
     public static readonly CVarDef<int> DrydockSliceWatchdogSeconds =
         CVarDef.Create("triad.drydock.slice_watchdog_seconds", 120, CVar.SERVERONLY);
+
+    /// <summary>
+    /// Whether the store drives the engine's serializer one entity at a time against the tick budget
+    /// instead of calling <c>TrySaveGrid</c>, which serializes the whole ship in a single
+    /// un-interruptible call.
+    ///
+    /// <para>That one call is the store's entire tick spike: it was measured at 807 ms warm and
+    /// 3275 ms on a fresh import of the same hull, and the pipeline's worst slice equals it to a
+    /// tenth of a millisecond. Every piece needed to drive the loop from content is public on
+    /// <c>EntitySerializer</c>, so this costs no engine divergence; what it gives up is the engine's
+    /// own wrapper, and with it the tile-map reuse that only exists to keep map file diffs small.
+    /// A drydock document is an opaque blob in Postgres that nothing ever diffs.</para>
+    ///
+    /// <para>Off is the engine path, which is the rollback if the sliced walk and the batch call
+    /// ever disagree about a document.</para>
+    /// </summary>
+    public static readonly CVarDef<bool> DrydockSlicedSerialize =
+        CVarDef.Create("triad.drydock.sliced_serialize", false, CVar.SERVERONLY);
+
+    /// <summary>
+    /// With <see cref="DrydockSlicedSerialize"/> on, also run the engine's own whole-grid serialize
+    /// over the same ship in the same tick and log every difference between the two documents.
+    ///
+    /// <para>The fidelity guard for the sliced walk. Both documents come from one grid at one
+    /// instant, so a difference is the walk's and cannot be content nondeterminism: two separately
+    /// loaded copies of the same hull disagree by tens of entities all on their own, which is why
+    /// an A/B across two loads cannot answer this question and this can.</para>
+    ///
+    /// <para>Doubles what a store costs while it is on. For a soak on a test server and for the
+    /// roster sweep, never for production.</para>
+    /// </summary>
+    public static readonly CVarDef<bool> DrydockSerializeShadowCompare =
+        CVarDef.Create("triad.drydock.serialize_shadow_compare", false, CVar.SERVERONLY);
     // End Triad
     // Triad: market data
     // The queue knobs mirror the admin log ones, which solve the same problem at production volume

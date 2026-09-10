@@ -60,6 +60,7 @@ namespace Content.Server._Triad.Drydock;
 public sealed partial class DrydockSystem : EntitySystem
 {
     [Dependency] private IConfigurationManager _cfg = default!;
+    [Dependency] private IDependencyCollection _dependency = default!;
     [Dependency] private ISerializationManager _serialization = default!;
     [Dependency] private DrydockStore _store = default!;
     [Dependency] private DrydockFidelitySystem _fidelity = default!;
@@ -458,12 +459,25 @@ public sealed partial class DrydockSystem : EntitySystem
             // re-encodes every chunk's tile ids. This is therefore one of the calls that set the real
             // per-tick ceiling - the honest claim is "the budget plus the longest bulk call", not
             // "the budget" - and the whole phase lands inside one tick.
-            await slice.Begin(DrydockPhase.Serialize, 0);
-            GuardStoreResume(ctx);
-
             string yaml;
-            using (var writer = new StringWriter())
+
+            if (_cfg.GetCVar(TriadCCVars.DrydockSlicedSerialize))
             {
+                // Opens its own phase, because it knows the entity count and the bar wants it.
+                var sliced = await SerializeGridSliced(ctx, slice, saveOptions);
+                GuardStoreResume(ctx);
+
+                if (sliced == null)
+                    return new DrydockStoreOutcome(DrydockStoreResult.SerializeFailed, null);
+
+                yaml = sliced;
+            }
+            else
+            {
+                await slice.Begin(DrydockPhase.Serialize, 0);
+                GuardStoreResume(ctx);
+
+                using var writer = new StringWriter();
                 if (!_mapLoader.TrySaveGrid(gridUid, writer, saveOptions))
                     return new DrydockStoreOutcome(DrydockStoreResult.SerializeFailed, null);
 
