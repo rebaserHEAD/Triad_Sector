@@ -98,7 +98,8 @@ public sealed partial class DrydockStore
     /// Makes a filed ship retrievable. The pipeline calls this after the grid is gone, never
     /// before: filing and marking are two steps because the filing write yields, and an occupant
     /// who boards during it has to refuse the store without leaving a retrievable row behind a
-    /// live ship, which is a duplicate. A held ship stays held; the hold is an admin's decision.
+    /// live ship, which is a duplicate. An impounded ship stays impounded; that is an admin's
+    /// decision, not a consequence of where the hull ended up.
     /// </summary>
     public Task<bool> MarkStored(Guid shipGuid, CancellationToken ct = default)
     {
@@ -116,11 +117,11 @@ public sealed partial class DrydockStore
             if (moved > 0)
                 return true;
 
-            // A held ship stays held, but the hull is now in the garage, so the round it left in
-            // is cleared: that column is what a release reads to decide where the ship goes back
-            // to, and left set it would send this ship back to checked out with no hull behind it.
+            // An impounded ship stays impounded, but the hull is now in the garage, so the round it
+            // left in is cleared: that column is what a release reads to decide where the ship goes
+            // back to, and left set it would send this ship back to checked out with no hull behind it.
             await db.DrydockShip
-                .Where(s => s.ShipGuid == shipGuid && s.State == DrydockShipState.Held)
+                .Where(s => s.ShipGuid == shipGuid && s.State == DrydockShipState.Impounded)
                 .ExecuteUpdateAsync(set => set
                     .SetProperty(s => s.CheckedOutRoundId, (int?)null)
                     .SetProperty(s => s.UpdatedAt, now), token);
@@ -130,20 +131,20 @@ public sealed partial class DrydockStore
     }
 
     /// <summary>
-    /// Lifts an administrative hold and returns the ship to the state it was in before it: checked
-    /// out if the hull was out flying when held (the row still carries the round it left in), stored
-    /// otherwise. Releasing every hold to stored reads as stored with the hull still in the world,
-    /// which is the duplicate every state transition here exists to prevent.
+    /// Lifts an impound and returns the ship to the state it was in before it: checked out if the
+    /// hull was out flying when it was taken (the row still carries the round it left in), stored
+    /// otherwise. Releasing every impound to stored reads as stored with the hull still in the
+    /// world, which is the duplicate every state transition here exists to prevent.
     /// </summary>
-    /// <returns>The state the ship was released to, or null when it was not held.</returns>
-    public Task<DrydockShipState?> TryReleaseHold(Guid shipGuid, Guid? actorUserId, int? roundId, string? reason, CancellationToken ct = default)
+    /// <returns>The state the ship was released to, or null when it was not impounded.</returns>
+    public Task<DrydockShipState?> TryReleaseImpound(Guid shipGuid, Guid? actorUserId, int? roundId, string? reason, CancellationToken ct = default)
     {
         return _db.RunTriadDbCommand<DrydockShipState?>(async (db, token) =>
         {
             await using var tx = await db.Database.BeginTransactionAsync(token);
 
             var ship = await db.DrydockShip.SingleOrDefaultAsync(s => s.ShipGuid == shipGuid, token);
-            if (ship == null || ship.State != DrydockShipState.Held)
+            if (ship == null || ship.State != DrydockShipState.Impounded)
                 return null;
 
             var now = DateTime.UtcNow;
@@ -158,7 +159,7 @@ public sealed partial class DrydockStore
                 ShipGuid = shipGuid,
                 BerthId = ship.BerthId,
                 ShipName = ship.ShipName,
-                Action = DrydockAuditAction.Release,
+                Action = DrydockAuditAction.ImpoundReleased,
                 ActorUserId = actorUserId,
                 Revision = ship.CurrentRevision,
                 RoundId = roundId,
@@ -611,12 +612,12 @@ public sealed partial class DrydockStore
 
             // Only a checkout records a round. Coming back clears it, so "checked out in round N and
             // never came back" stays answerable from the row rather than by reading the timeline.
-            // A hold keeps it: a ship can be held while it is out flying, and the round it left in
-            // is then the only record that the hull is not in the garage. Releasing the hold reads
-            // it to decide whether the ship goes back to stored or back to checked out, and the
-            // store that puts the hull away clears it (see MarkStored).
+            // An impound keeps it: a ship can be impounded while it is out flying, and the round it
+            // left in is then the only record that the hull is not in the garage. Releasing the
+            // impound reads it to decide whether the ship goes back to stored or back to checked
+            // out, and the store that puts the hull away clears it (see MarkStored).
             var checkedOutRound = state == DrydockShipState.CheckedOut ? roundId : null;
-            var keepCheckedOutRound = state == DrydockShipState.Held;
+            var keepCheckedOutRound = state == DrydockShipState.Impounded;
 
             var query = db.DrydockShip.Where(s => s.ShipGuid == shipGuid && s.State != state);
             if (expected is { } required)
@@ -1742,7 +1743,7 @@ public sealed partial class DrydockStore
     }
 
     /// <summary>
-    /// Admin: returns a ship that is out or held to the drydock, into a named berth. Whether the
+    /// Admin: returns a ship that is out or impounded to the drydock, into a named berth. Whether the
     /// ship is really lost is the admin's call. The one thing this cannot know is whether a live
     /// grid still carries the id, and the system checks that before calling.
     /// </summary>

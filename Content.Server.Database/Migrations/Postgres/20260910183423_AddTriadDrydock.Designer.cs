@@ -16,7 +16,7 @@ using NpgsqlTypes;
 namespace Content.Server.Database.Migrations.Postgres
 {
     [DbContext(typeof(PostgresServerDbContext))]
-    [Migration("20260910175927_AddTriadDrydock")]
+    [Migration("20260910183423_AddTriadDrydock")]
     partial class AddTriadDrydock
     {
         /// <inheritdoc />
@@ -1218,6 +1218,18 @@ namespace Content.Server.Database.Migrations.Postgres
                     b.Property<int>("CurrentRevision")
                         .HasColumnType("integer")
                         .HasColumnName("current_revision");
+
+                    b.Property<int>("ImpoundFee")
+                        .HasColumnType("integer")
+                        .HasColumnName("impound_fee");
+
+                    b.Property<string>("ImpoundReason")
+                        .HasColumnType("text")
+                        .HasColumnName("impound_reason");
+
+                    b.Property<bool>("ImpoundRedeemable")
+                        .HasColumnType("boolean")
+                        .HasColumnName("impound_redeemable");
 
                     b.Property<int?>("LastBerthId")
                         .HasColumnType("integer")

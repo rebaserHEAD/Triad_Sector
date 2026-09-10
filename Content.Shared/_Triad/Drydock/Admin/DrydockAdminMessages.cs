@@ -146,10 +146,10 @@ public sealed class DrydockAdminSelectShipMessage : EuiMessageBase
 }
 
 [Serializable, NetSerializable]
-public sealed class DrydockAdminHoldMessage : EuiMessageBase
+public sealed class DrydockAdminImpoundMessage : EuiMessageBase
 {
     public Guid ShipGuid { get; set; }
-    public bool Hold { get; set; }
+    public bool Impound { get; set; }
     public string? Reason { get; set; }
 }
 

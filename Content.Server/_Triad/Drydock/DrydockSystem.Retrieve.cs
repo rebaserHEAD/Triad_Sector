@@ -157,15 +157,19 @@ public sealed partial class DrydockSystem
         {
             case DrydockShipState.CheckedOut:
                 return DrydockRetrieve.Refused(DrydockRetrieveResult.AlreadyOut);
-            case DrydockShipState.Held:
-                return DrydockRetrieve.Refused(DrydockRetrieveResult.Held);
+            case DrydockShipState.Impounded:
+                return DrydockRetrieve.Refused(DrydockRetrieveResult.Impounded);
             case DrydockShipState.InEscrow:
                 return DrydockRetrieve.Refused(DrydockRetrieveResult.InEscrow);
             case DrydockShipState.Sold:
                 return DrydockRetrieve.Refused(DrydockRetrieveResult.Sold);
+            case DrydockShipState.Destroyed:
+                return DrydockRetrieve.Refused(DrydockRetrieveResult.Destroyed);
+            case DrydockShipState.Abandoned:
+                return DrydockRetrieve.Refused(DrydockRetrieveResult.Abandoned);
         }
 
-        // Claim before materializing. A ship that is checked out or held loses here.
+        // Claim before materializing. A ship that is checked out or impounded loses here.
         if (!await _store.TrySetState(shipId, DrydockShipState.Stored, DrydockShipState.CheckedOut,
                 DrydockAuditAction.Retrieve, ownerUserId, roundId, null))
         {
@@ -248,7 +252,7 @@ public sealed partial class DrydockSystem
                 try
                 {
                     await _store.TrySetState(shipId, DrydockShipState.CheckedOut, DrydockShipState.Stored,
-                        DrydockAuditAction.Release, null, roundId, "retrieve failed");
+                        DrydockAuditAction.ClaimReleased, null, roundId, "retrieve failed");
                 }
                 catch (Exception e)
                 {

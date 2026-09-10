@@ -145,14 +145,14 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                 DrydockAuditAction.Retrieve, owner, null, null);
             Assert.That(raced, Is.False, "A second retrieve of a checked-out ship must lose, which is what stops a duplicate.");
 
-            // An administrative hold does not care what state the ship was in.
-            var held = await store.TrySetState(shipId, null, DrydockShipState.Held,
-                DrydockAuditAction.Hold, null, null, "pending a decision");
-            Assert.That(held, Is.True);
+            // An admin impound does not care what state the ship was in.
+            var impounded = await store.TrySetState(shipId, null, DrydockShipState.Impounded,
+                DrydockAuditAction.Impound, null, null, "pending a decision");
+            Assert.That(impounded, Is.True);
 
-            var heldAgain = await store.TrySetState(shipId, null, DrydockShipState.Held,
-                DrydockAuditAction.Hold, null, null, "again");
-            Assert.That(heldAgain, Is.False, "Moving to the state a ship is already in is not a change and must not log one.");
+            var impoundedAgain = await store.TrySetState(shipId, null, DrydockShipState.Impounded,
+                DrydockAuditAction.Impound, null, null, "again");
+            Assert.That(impoundedAgain, Is.False, "Moving to the state a ship is already in is not a change and must not log one.");
 
             var audit = await store.GetAudit(shipId);
             Assert.Multiple(() =>
@@ -161,7 +161,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                 {
                     DrydockAuditAction.Store,
                     DrydockAuditAction.Retrieve,
-                    DrydockAuditAction.Hold,
+                    DrydockAuditAction.Impound,
                 }), "The timeline is ordered and holds one row per accepted change.");
 
                 Assert.That(audit[^1].Reason, Is.EqualTo("pending a decision"),
@@ -172,14 +172,14 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
         }
 
         /// <summary>
-        /// A hold is an adjudication, not a location. Releasing one has to put the ship back where
-        /// the hold found it: a ship held while out flying is still out, and a release that called it
-        /// stored would make the same hull retrievable twice, once from the world and once from the
-        /// garage. Pinned from both sides: held-while-out releases to checked out, and a hull stored
-        /// while held releases to stored.
+        /// An impound is an adjudication, not a location. Lifting one has to put the ship back where
+        /// the impound found it: a ship taken while out flying is still out, and a release that called
+        /// it stored would make the same hull retrievable twice, once from the world and once from the
+        /// garage. Pinned from both sides: taken-while-out releases to checked out, and a hull stored
+        /// while impounded releases to stored.
         /// </summary>
         [Test]
-        public async Task AReleasedHoldReturnsTheShipToWhereTheHoldFoundIt()
+        public async Task AReleasedImpoundReturnsTheShipToWhereItFoundIt()
         {
             await using var pair = await PoolManager.GetServerClient();
             var server = pair.Server;
@@ -196,31 +196,31 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             // round has to exist. In play it always does: a retrieve happens inside a round.
             var round = await db.AddNewRound(await db.AddOrGetServer("drydock-test"));
 
-            // Out flying, then held, then released: still out.
+            // Out flying, then impounded, then released: still out.
             var flying = Guid.NewGuid();
             await store.FileRevision(Request(flying, owner, "Harrier"), Encoding.UTF8.GetBytes("doc"), keepBlobs: 2);
             Assert.That(await store.TrySetState(flying, DrydockShipState.Stored, DrydockShipState.CheckedOut, DrydockAuditAction.Retrieve, owner, round, null), Is.True);
-            Assert.That(await store.TrySetState(flying, null, DrydockShipState.Held, DrydockAuditAction.Hold, null, round, "suspect"), Is.True);
+            Assert.That(await store.TrySetState(flying, null, DrydockShipState.Impounded, DrydockAuditAction.Impound, null, round, "suspect"), Is.True);
 
-            Assert.That(await store.TryReleaseHold(flying, null, round, "cleared"), Is.EqualTo(DrydockShipState.CheckedOut),
-                "The hull was in the world when it was held and nothing has put it away since, so the row must not say stored.");
+            Assert.That(await store.TryReleaseImpound(flying, null, round, "cleared"), Is.EqualTo(DrydockShipState.CheckedOut),
+                "The hull was in the world when it was taken and nothing has put it away since, so the row must not say stored.");
 
-            // A control on the other side: a ship held at rest releases to stored.
+            // A control on the other side: a ship impounded at rest releases to stored.
             var resting = Guid.NewGuid();
             await store.FileRevision(Request(resting, owner, "Kestrel"), Encoding.UTF8.GetBytes("doc"), keepBlobs: 2);
-            Assert.That(await store.TrySetState(resting, null, DrydockShipState.Held, DrydockAuditAction.Hold, null, round, "suspect"), Is.True);
-            Assert.That(await store.TryReleaseHold(resting, null, round, "cleared"), Is.EqualTo(DrydockShipState.Stored));
+            Assert.That(await store.TrySetState(resting, null, DrydockShipState.Impounded, DrydockAuditAction.Impound, null, round, "suspect"), Is.True);
+            Assert.That(await store.TryReleaseImpound(resting, null, round, "cleared"), Is.EqualTo(DrydockShipState.Stored));
 
-            // Held while out, then the owner puts it away through the pipeline's two-step filing.
+            // Impounded while out, then the owner puts it away through the pipeline's two-step filing.
             // The hull is in the garage now, so a release must say stored, not out.
-            Assert.That(await store.TrySetState(flying, DrydockShipState.CheckedOut, DrydockShipState.Held, DrydockAuditAction.Hold, null, round, "suspect again"), Is.True);
+            Assert.That(await store.TrySetState(flying, DrydockShipState.CheckedOut, DrydockShipState.Impounded, DrydockAuditAction.Impound, null, round, "suspect again"), Is.True);
             var filed = await store.FileRevision(Request(flying, owner, "Harrier", markStored: false), Encoding.UTF8.GetBytes("doc2"), keepBlobs: 2);
             Assert.That(filed.Outcome, Is.EqualTo(DrydockBerthResult.Success));
-            Assert.That(await store.MarkStored(flying), Is.False, "A held ship stays held through a store; only the hull's whereabouts changes.");
-            Assert.That(await store.TryReleaseHold(flying, null, round, "cleared"), Is.EqualTo(DrydockShipState.Stored),
-                "The store put the hull in the garage, so the hold now releases to stored.");
+            Assert.That(await store.MarkStored(flying), Is.False, "An impounded ship stays impounded through a store; only the hull's whereabouts changes.");
+            Assert.That(await store.TryReleaseImpound(flying, null, round, "cleared"), Is.EqualTo(DrydockShipState.Stored),
+                "The store put the hull in the garage, so the impound now releases to stored.");
 
-            Assert.That(await store.TryReleaseHold(flying, null, round, "again"), Is.Null, "Nothing to release twice.");
+            Assert.That(await store.TryReleaseImpound(flying, null, round, "again"), Is.Null, "Nothing to release twice.");
 
             var rows = await store.GetShipsByOwner(owner);
             Assert.Multiple(() =>

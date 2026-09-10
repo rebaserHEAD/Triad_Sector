@@ -1216,6 +1216,18 @@ namespace Content.Server.Database.Migrations.Postgres
                         .HasColumnType("integer")
                         .HasColumnName("current_revision");
 
+                    b.Property<int>("ImpoundFee")
+                        .HasColumnType("integer")
+                        .HasColumnName("impound_fee");
+
+                    b.Property<string>("ImpoundReason")
+                        .HasColumnType("text")
+                        .HasColumnName("impound_reason");
+
+                    b.Property<bool>("ImpoundRedeemable")
+                        .HasColumnType("boolean")
+                        .HasColumnName("impound_redeemable");
+
                     b.Property<int?>("LastBerthId")
                         .HasColumnType("integer")
                         .HasColumnName("last_berth_id");

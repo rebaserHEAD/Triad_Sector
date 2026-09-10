@@ -619,7 +619,7 @@ public sealed partial class DrydockSystem : EntitySystem
             try
             {
                 if (!await slice.Await(_store.MarkStored(shipId)))
-                    Log.Warning($"Drydock: {shipId} filed revision {filed.Revision} but its row did not move to stored; it may be held.");
+                    Log.Warning($"Drydock: {shipId} filed revision {filed.Revision} but its row did not move to stored; it may be impounded.");
             }
             catch (OperationCanceledException)
             {

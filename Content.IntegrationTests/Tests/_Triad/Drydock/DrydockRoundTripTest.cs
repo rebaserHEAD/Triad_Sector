@@ -326,11 +326,11 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             Assert.That(back, Is.EqualTo(DrydockStoreResult.Success));
             await pair.RunTicksSync(5);
 
-            Assert.That(await store.TrySetState(shipId!.Value, DrydockShipState.Stored, DrydockShipState.Held, DrydockAuditAction.Hold, null, null, "test"), Is.True);
-            var held = await RunOnServer(pair, () => drydock.TryRetrieveShip(shipId!.Value, owner, station, null));
-            Assert.That(held.Result, Is.EqualTo(DrydockRetrieveResult.Held));
+            Assert.That(await store.TrySetState(shipId!.Value, DrydockShipState.Stored, DrydockShipState.Impounded, DrydockAuditAction.Impound, null, null, "test"), Is.True);
+            var impounded = await RunOnServer(pair, () => drydock.TryRetrieveShip(shipId!.Value, owner, station, null));
+            Assert.That(impounded.Result, Is.EqualTo(DrydockRetrieveResult.Impounded));
 
-            Assert.That(await store.TrySetState(shipId!.Value, DrydockShipState.Held, DrydockShipState.Stored, DrydockAuditAction.Release, null, null, "test"), Is.True);
+            Assert.That(await store.TrySetState(shipId!.Value, DrydockShipState.Impounded, DrydockShipState.Stored, DrydockAuditAction.ImpoundReleased, null, null, "test"), Is.True);
             var cleared = await RunOnServer(pair, () => drydock.TryRetrieveShip(shipId!.Value, owner, station, null));
             Assert.That(cleared.Result, Is.EqualTo(DrydockRetrieveResult.Success), "Control: with every reason cleared the same call succeeds.");
 

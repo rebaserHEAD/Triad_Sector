@@ -114,21 +114,21 @@ public sealed partial class DrydockAdminEui : BaseEui
                 _ = RefreshAsync();
                 break;
 
-            case DrydockAdminHoldMessage hold:
+            case DrydockAdminImpoundMessage impound:
                 _ = Act(async () =>
                 {
-                    if (hold.Hold)
+                    if (impound.Impound)
                     {
-                        var held = await _store.TrySetState(hold.ShipGuid, null, DrydockShipState.Held, DrydockAuditAction.Hold, AdminId, RoundForAudit(), hold.Reason);
-                        return held ? "Ship held." : "Already held, or unknown ship.";
+                        var taken = await _store.TrySetState(impound.ShipGuid, null, DrydockShipState.Impounded, DrydockAuditAction.Impound, AdminId, RoundForAudit(), impound.Reason);
+                        return taken ? "Ship impounded." : "Already impounded, or unknown ship.";
                     }
 
-                    // Back to wherever the hold found it. A ship held while out is still out.
-                    return await _store.TryReleaseHold(hold.ShipGuid, AdminId, RoundForAudit(), hold.Reason) switch
+                    // Back to wherever the impound found it. A ship taken while out is still out.
+                    return await _store.TryReleaseImpound(impound.ShipGuid, AdminId, RoundForAudit(), impound.Reason) switch
                     {
-                        DrydockShipState.CheckedOut => "Hold released; the ship is still out.",
-                        DrydockShipState.Stored => "Hold released; the ship is stored again.",
-                        _ => "Not held, so nothing to release.",
+                        DrydockShipState.CheckedOut => "Impound lifted; the ship is still out.",
+                        DrydockShipState.Stored => "Impound lifted; the ship is stored again.",
+                        _ => "Not impounded, so nothing to lift.",
                     };
                 });
                 break;

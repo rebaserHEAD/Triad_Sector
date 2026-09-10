@@ -1155,6 +1155,18 @@ namespace Content.Server.Database.Migrations.Sqlite
                         .HasColumnType("INTEGER")
                         .HasColumnName("current_revision");
 
+                    b.Property<int>("ImpoundFee")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("impound_fee");
+
+                    b.Property<string>("ImpoundReason")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("impound_reason");
+
+                    b.Property<bool>("ImpoundRedeemable")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("impound_redeemable");
+
                     b.Property<int?>("LastBerthId")
                         .HasColumnType("INTEGER")
                         .HasColumnName("last_berth_id");

@@ -45,7 +45,9 @@ public sealed partial class DrydockAdminWindow : FancyWindow
     private static readonly Color Escrow = Color.FromHex("#d9a441");
     private static readonly Color Out = Color.FromHex("#d9d941");
     private static readonly Color Sold = Color.FromHex("#ff8080");
-    private static readonly Color Held = Color.FromHex("#cf4f4f");
+    private static readonly Color Impounded = Color.FromHex("#cf4f4f");
+    private static readonly Color Destroyed = Color.FromHex("#8b3a3a");
+    private static readonly Color Abandoned = Color.FromHex("#a08c72");
     private static readonly Color Plain = Color.FromHex("#cfcfcf");
 
     private static StyleBoxFlat RowBox(bool selected) => new()
@@ -77,12 +79,14 @@ public sealed partial class DrydockAdminWindow : FancyWindow
     };
 
     /// <summary>
-    /// The chips in the order the canvas draws them. Null is "All"; the last two are flags the
-    /// server reads instead of a state name.
+    /// The chips in the order the canvas draws them. Null is "All" and "Stranded" is derived by the
+    /// server from a round that is over rather than read off a row; every other name is a
+    /// <c>DrydockShipState</c> spelled exactly as <c>ToString</c> gives it, which is also how the
+    /// <c>drydock-admin-chip-</c> key is built.
     /// </summary>
     private static readonly string?[] Chips =
     {
-        null, "Stored", "CheckedOut", "InEscrow", "Sold", "Held", "Stranded",
+        null, "Stored", "CheckedOut", "InEscrow", "Impounded", "Sold", "Abandoned", "Destroyed", "Stranded",
     };
 
     private readonly DrydockAdminEui _eui;
@@ -290,8 +294,13 @@ public sealed partial class DrydockAdminWindow : FancyWindow
             "CheckedOut" => (Loc.GetString("drydock-admin-row-out", ("round", ship.CheckedOutRoundId ?? 0)), Out),
             "InEscrow" => (Loc.GetString("drydock-admin-row-escrow", ("left", TimeLeft(ship.EscrowExpiresAt))), Escrow),
             "Sold" => (Loc.GetString("drydock-admin-chip-Sold"), Sold),
-            "Held" => (Loc.GetString("drydock-admin-chip-Held"), Held),
-            _ => (Loc.GetString("drydock-admin-chip-Stored"), Plain),
+            "Impounded" => (Loc.GetString("drydock-admin-chip-Impounded"), Impounded),
+            "Destroyed" => (Loc.GetString("drydock-admin-chip-Destroyed"), Destroyed),
+            "Abandoned" => (Loc.GetString("drydock-admin-chip-Abandoned"), Abandoned),
+            // Stored lands here, and so does a state nobody wrote an arm for: keying off the name
+            // means the next one renders a missing key rather than claiming to be berthed, which is
+            // the direction an unhandled state should fail in on an adjudication panel.
+            _ => (Loc.GetString($"drydock-admin-chip-{ship.State}"), Plain),
         };
 
         return Pill(text, colour);
@@ -433,12 +442,19 @@ public sealed partial class DrydockAdminWindow : FancyWindow
             VerbRow.AddChild(restore);
         }
 
-        var held = ship.State == "Held";
-        var hold = Verb(held ? "drydock-admin-release" : "drydock-admin-hold", "drydock-admin-hold-tooltip");
-        hold.OnPressed += _ => _eui.Send(new DrydockAdminHoldMessage { ShipGuid = ship.ShipGuid, Hold = !held, Reason = Reason() });
-        VerbRow.AddChild(hold);
+        // Impound takes a hull that is somewhere. On a terminal row there is no hull to take and the
+        // state IS the verdict, so the verb would overwrite the verdict; on a sale it also takes
+        // restore-from-sale away with it, since that button reads State. Restore-to is the verb for
+        // bringing a terminal hull back, and it is still offered below.
+        if (ship.State is not ("Sold" or "Destroyed" or "Abandoned"))
+        {
+            var impounded = ship.State == "Impounded";
+            var impound = Verb(impounded ? "drydock-admin-release" : "drydock-admin-impound", "drydock-admin-impound-tooltip");
+            impound.OnPressed += _ => _eui.Send(new DrydockAdminImpoundMessage { ShipGuid = ship.ShipGuid, Impound = !impounded, Reason = Reason() });
+            VerbRow.AddChild(impound);
+        }
 
-        // Restore puts a hull that is out, held or sold back into a berth; a stored one is home.
+        // Restore puts a hull that is out, impounded or sold back into a berth; a stored one is home.
         if (ship.State != "Stored" && ship.State != "InEscrow")
         {
             var restoreTo = new DrydockMenuButton

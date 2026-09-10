@@ -239,6 +239,31 @@ public sealed class DrydockShip
 
     public string? AdminNotes { get; set; }
 
+    //
+    // The impound fields. None of the three is cleared when the ship leaves the holding area, and
+    // that is a rule rather than an oversight: the next impound overwrites them, so a reversal has
+    // something to restore to and the timeline can still say what the hull was taken for. Read them
+    // only against <see cref="DrydockShipState.Impounded"/>; on any other state they are the last
+    // impound's residue.
+    //
+
+    /// <summary>
+    /// What redemption costs, in credits, frozen at impound rather than recomputed. Appraisal lives
+    /// per revision on <see cref="DrydockRevision.AppraisedValue"/> and moves with every store, and a
+    /// debt already quoted to a player must not move under them. Zero is legal and means free.
+    /// </summary>
+    public int ImpoundFee { get; set; }
+
+    /// <summary>What the hull was taken for, shown to its owner. Null when nothing was given.</summary>
+    public string? ImpoundReason { get; set; }
+
+    /// <summary>
+    /// Whether the owner may act on the impound at all. Not inferable from the fee, which is why it
+    /// is a column: a courtesy impound is free and redeemable, an adjudication is frozen at any
+    /// price, and both are the same state at the same number of credits.
+    /// </summary>
+    public bool ImpoundRedeemable { get; set; }
+
     /// <summary>Pointer into <see cref="DrydockRevision"/>. Zero means nothing filed yet.</summary>
     public int CurrentRevision { get; set; }
 
@@ -319,9 +344,11 @@ public enum DrydockShipState
 
     /// <summary>
     /// An administrative freeze pending adjudication. Refuses retrieve without any machine having
-    /// decided anything, which is the point: the system records and a person adjudicates.
+    /// decided anything, which is the point: the system records and a person adjudicates. The
+    /// impound fields on <see cref="DrydockShip"/> carry what it was taken for and what it costs
+    /// to get back.
     /// </summary>
-    Held = 2,
+    Impounded = 2,
 
     /// <summary>
     /// Offered to another player and waiting on their answer. The ship keeps its berth and
@@ -331,10 +358,27 @@ public enum DrydockShipState
     InEscrow = 3,
 
     /// <summary>
-    /// Scrapped by its owner for credits. The berth is freed and the blobs are kept under the
-    /// normal retention, so an admin can undo a sale made in anger; nothing else can.
+    /// Scrapped by its owner for credits, and the berth is freed. Terminal, and pruning only runs
+    /// inside a store or a promote, so a terminal ship's remaining blobs are frozen rather than
+    /// decaying: an admin can undo a sale made in anger for as long as the row exists.
     /// </summary>
     Sold = 4,
+
+    /// <summary>
+    /// The hull could not have brought itself home: no piloting console, or nothing to dock with.
+    /// Holds no berth, and terminal in the same sense <see cref="Sold"/> is. Says the hull is gone
+    /// and never that the data is, which is what makes an admin
+    /// <see cref="DrydockAuditAction.Restore"/> the way back.
+    /// </summary>
+    Destroyed = 5,
+
+    /// <summary>
+    /// The owner gave up an impounded hull rather than redeem it, and was paid nothing for it.
+    /// Holds no berth, and terminal in the same sense <see cref="Sold"/> is. Separate from
+    /// <see cref="Destroyed"/> so that an admin reads the cause instead of inferring it: this one
+    /// was somebody's choice.
+    /// </summary>
+    Abandoned = 6,
 }
 
 /// <summary>
@@ -520,11 +564,11 @@ public enum DrydockAuditAction
     Delete = 4,
     Rebake = 5,
 
-    /// <summary>Froze the ship pending adjudication.</summary>
-    Hold = 6,
+    /// <summary>Took the hull into the holding area; the reason carries the trigger and the fee.</summary>
+    Impound = 6,
 
-    /// <summary>Released a hold.</summary>
-    Release = 7,
+    /// <summary>An admin lifted an impound.</summary>
+    ImpoundReleased = 7,
 
     BerthPurchase = 8,
     BerthSale = 9,
@@ -576,4 +620,35 @@ public enum DrydockAuditAction
     /// reason says so when the save was not actually spent.
     /// </summary>
     Imported = 25,
+
+    /// <summary>The owner paid the fee and the hull went back to one of their berths.</summary>
+    ImpoundRedeemed = 26,
+
+    /// <summary>
+    /// The owner gave up an impounded hull rather than redeem it. No money moved in either
+    /// direction, which is the whole difference from <see cref="ShipSold"/>.
+    /// </summary>
+    ShipAbandoned = 27,
+
+    /// <summary>An admin undid an abandon. The counterpart of <see cref="SaleReversed"/>, with no arithmetic.</summary>
+    AbandonReversed = 28,
+
+    /// <summary>
+    /// The round-end sweep judged a hull unable to have brought itself home. A verdict, not an
+    /// action taken against anyone, which is why it reads differently from <see cref="Impound"/>.
+    /// </summary>
+    ShipDestroyed = 29,
+
+    /// <summary>
+    /// The round-end sweep reached the hull and could not file it. The absence of this row for a
+    /// ship still checked out is the other system failure, where the sweep never ran at all.
+    /// </summary>
+    ShipStranded = 30,
+
+    /// <summary>
+    /// A retrieve claimed the ship, failed, and put it back. Nobody decided anything and no hull
+    /// ever materialized, which is why it does not share <see cref="ImpoundReleased"/>: a timeline
+    /// that reads "an admin lifted an impound" for a database hiccup is worse than no row.
+    /// </summary>
+    ClaimReleased = 31,
 }

@@ -11,7 +11,7 @@ using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 namespace Content.Server.Database.Migrations.Sqlite
 {
     [DbContext(typeof(SqliteServerDbContext))]
-    [Migration("20260910175916_AddTriadDrydock")]
+    [Migration("20260910183437_AddTriadDrydock")]
     partial class AddTriadDrydock
     {
         /// <inheritdoc />
@@ -1157,6 +1157,18 @@ namespace Content.Server.Database.Migrations.Sqlite
                     b.Property<int>("CurrentRevision")
                         .HasColumnType("INTEGER")
                         .HasColumnName("current_revision");
+
+                    b.Property<int>("ImpoundFee")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("impound_fee");
+
+                    b.Property<string>("ImpoundReason")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("impound_reason");
+
+                    b.Property<bool>("ImpoundRedeemable")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("impound_redeemable");
 
                     b.Property<int?>("LastBerthId")
                         .HasColumnType("INTEGER")

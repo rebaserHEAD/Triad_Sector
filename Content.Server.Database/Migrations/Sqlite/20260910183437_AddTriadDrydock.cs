@@ -1,10 +1,9 @@
 ﻿using System;
 using Microsoft.EntityFrameworkCore.Migrations;
-using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 
 #nullable disable
 
-namespace Content.Server.Database.Migrations.Postgres
+namespace Content.Server.Database.Migrations.Sqlite
 {
     /// <inheritdoc />
     public partial class AddTriadDrydock : Migration
@@ -16,18 +15,18 @@ namespace Content.Server.Database.Migrations.Postgres
                 name: "drydock_audit",
                 columns: table => new
                 {
-                    drydock_audit_id = table.Column<long>(type: "bigint", nullable: false)
-                        .Annotation("Npgsql:ValueGenerationStrategy", NpgsqlValueGenerationStrategy.IdentityByDefaultColumn),
-                    ship_guid = table.Column<Guid>(type: "uuid", nullable: true),
-                    berth_id = table.Column<int>(type: "integer", nullable: true),
-                    ship_name = table.Column<string>(type: "text", nullable: true),
-                    action = table.Column<int>(type: "integer", nullable: false),
-                    actor_user_id = table.Column<Guid>(type: "uuid", nullable: true),
-                    subject_user_id = table.Column<Guid>(type: "uuid", nullable: true),
-                    revision = table.Column<int>(type: "integer", nullable: true),
-                    round_id = table.Column<int>(type: "integer", nullable: true),
-                    reason = table.Column<string>(type: "text", nullable: true),
-                    created_at = table.Column<DateTime>(type: "timestamp with time zone", nullable: false)
+                    drydock_audit_id = table.Column<long>(type: "INTEGER", nullable: false)
+                        .Annotation("Sqlite:Autoincrement", true),
+                    ship_guid = table.Column<Guid>(type: "TEXT", nullable: true),
+                    berth_id = table.Column<int>(type: "INTEGER", nullable: true),
+                    ship_name = table.Column<string>(type: "TEXT", nullable: true),
+                    action = table.Column<int>(type: "INTEGER", nullable: false),
+                    actor_user_id = table.Column<Guid>(type: "TEXT", nullable: true),
+                    subject_user_id = table.Column<Guid>(type: "TEXT", nullable: true),
+                    revision = table.Column<int>(type: "INTEGER", nullable: true),
+                    round_id = table.Column<int>(type: "INTEGER", nullable: true),
+                    reason = table.Column<string>(type: "TEXT", nullable: true),
+                    created_at = table.Column<DateTime>(type: "TEXT", nullable: false)
                 },
                 constraints: table =>
                 {
@@ -38,14 +37,14 @@ namespace Content.Server.Database.Migrations.Postgres
                 name: "drydock_berth",
                 columns: table => new
                 {
-                    berth_id = table.Column<int>(type: "integer", nullable: false)
-                        .Annotation("Npgsql:ValueGenerationStrategy", NpgsqlValueGenerationStrategy.IdentityByDefaultColumn),
-                    owner_user_id = table.Column<Guid>(type: "uuid", nullable: false),
-                    max_size_class = table.Column<string>(type: "text", nullable: false),
-                    kind = table.Column<int>(type: "integer", nullable: false),
-                    price_paid = table.Column<int>(type: "integer", nullable: false),
-                    purchased_at = table.Column<DateTime>(type: "timestamp with time zone", nullable: false),
-                    purchased_round_id = table.Column<int>(type: "integer", nullable: true)
+                    berth_id = table.Column<int>(type: "INTEGER", nullable: false)
+                        .Annotation("Sqlite:Autoincrement", true),
+                    owner_user_id = table.Column<Guid>(type: "TEXT", nullable: false),
+                    max_size_class = table.Column<string>(type: "TEXT", nullable: false),
+                    kind = table.Column<int>(type: "INTEGER", nullable: false),
+                    price_paid = table.Column<int>(type: "INTEGER", nullable: false),
+                    purchased_at = table.Column<DateTime>(type: "TEXT", nullable: false),
+                    purchased_round_id = table.Column<int>(type: "INTEGER", nullable: true)
                 },
                 constraints: table =>
                 {
@@ -68,14 +67,14 @@ namespace Content.Server.Database.Migrations.Postgres
                 name: "triad_shipyard_consumed_ships",
                 columns: table => new
                 {
-                    triad_shipyard_consumed_ships_id = table.Column<int>(type: "integer", nullable: false)
-                        .Annotation("Npgsql:ValueGenerationStrategy", NpgsqlValueGenerationStrategy.IdentityByDefaultColumn),
-                    ship_hash = table.Column<byte[]>(type: "bytea", nullable: false),
-                    player_user_id = table.Column<Guid>(type: "uuid", nullable: false),
-                    imported_at = table.Column<DateTime>(type: "timestamp with time zone", nullable: false),
-                    imported_round_id = table.Column<int>(type: "integer", nullable: true),
-                    ship_guid = table.Column<Guid>(type: "uuid", nullable: true),
-                    ship_name = table.Column<string>(type: "text", nullable: true)
+                    triad_shipyard_consumed_ships_id = table.Column<int>(type: "INTEGER", nullable: false)
+                        .Annotation("Sqlite:Autoincrement", true),
+                    ship_hash = table.Column<byte[]>(type: "BLOB", nullable: false),
+                    player_user_id = table.Column<Guid>(type: "TEXT", nullable: false),
+                    imported_at = table.Column<DateTime>(type: "TEXT", nullable: false),
+                    imported_round_id = table.Column<int>(type: "INTEGER", nullable: true),
+                    ship_guid = table.Column<Guid>(type: "TEXT", nullable: true),
+                    ship_name = table.Column<string>(type: "TEXT", nullable: true)
                 },
                 constraints: table =>
                 {
@@ -91,20 +90,23 @@ namespace Content.Server.Database.Migrations.Postgres
                 name: "drydock_ship",
                 columns: table => new
                 {
-                    ship_guid = table.Column<Guid>(type: "uuid", nullable: false),
-                    owner_user_id = table.Column<Guid>(type: "uuid", nullable: false),
-                    ship_name = table.Column<string>(type: "text", nullable: false),
-                    vessel_proto = table.Column<string>(type: "text", nullable: true),
-                    size_class = table.Column<string>(type: "text", nullable: true),
-                    state = table.Column<int>(type: "integer", nullable: false),
-                    state_changed_at = table.Column<DateTime>(type: "timestamp with time zone", nullable: false),
-                    checked_out_round_id = table.Column<int>(type: "integer", nullable: true),
-                    admin_notes = table.Column<string>(type: "text", nullable: true),
-                    current_revision = table.Column<int>(type: "integer", nullable: false),
-                    created_at = table.Column<DateTime>(type: "timestamp with time zone", nullable: false),
-                    updated_at = table.Column<DateTime>(type: "timestamp with time zone", nullable: false),
-                    berth_id = table.Column<int>(type: "integer", nullable: true),
-                    last_berth_id = table.Column<int>(type: "integer", nullable: true)
+                    ship_guid = table.Column<Guid>(type: "TEXT", nullable: false),
+                    owner_user_id = table.Column<Guid>(type: "TEXT", nullable: false),
+                    ship_name = table.Column<string>(type: "TEXT", nullable: false),
+                    vessel_proto = table.Column<string>(type: "TEXT", nullable: true),
+                    size_class = table.Column<string>(type: "TEXT", nullable: true),
+                    state = table.Column<int>(type: "INTEGER", nullable: false),
+                    state_changed_at = table.Column<DateTime>(type: "TEXT", nullable: false),
+                    checked_out_round_id = table.Column<int>(type: "INTEGER", nullable: true),
+                    admin_notes = table.Column<string>(type: "TEXT", nullable: true),
+                    impound_fee = table.Column<int>(type: "INTEGER", nullable: false),
+                    impound_reason = table.Column<string>(type: "TEXT", nullable: true),
+                    impound_redeemable = table.Column<bool>(type: "INTEGER", nullable: false),
+                    current_revision = table.Column<int>(type: "INTEGER", nullable: false),
+                    created_at = table.Column<DateTime>(type: "TEXT", nullable: false),
+                    updated_at = table.Column<DateTime>(type: "TEXT", nullable: false),
+                    berth_id = table.Column<int>(type: "INTEGER", nullable: true),
+                    last_berth_id = table.Column<int>(type: "INTEGER", nullable: true)
                 },
                 constraints: table =>
                 {
@@ -138,22 +140,22 @@ namespace Content.Server.Database.Migrations.Postgres
                 name: "drydock_revision",
                 columns: table => new
                 {
-                    ship_guid = table.Column<Guid>(type: "uuid", nullable: false),
-                    revision = table.Column<int>(type: "integer", nullable: false),
-                    kind = table.Column<int>(type: "integer", nullable: false),
-                    derived_from_revision = table.Column<int>(type: "integer", nullable: true),
-                    rebake_version = table.Column<int>(type: "integer", nullable: false),
-                    actor_user_id = table.Column<Guid>(type: "uuid", nullable: true),
-                    created_round_id = table.Column<int>(type: "integer", nullable: true),
-                    created_at = table.Column<DateTime>(type: "timestamp with time zone", nullable: false),
-                    engine_format_ver = table.Column<int>(type: "integer", nullable: false),
-                    drydock_format_ver = table.Column<int>(type: "integer", nullable: false),
-                    proto_fingerprint = table.Column<byte[]>(type: "bytea", nullable: false),
-                    captured_key_hash = table.Column<byte[]>(type: "bytea", nullable: false),
-                    checksum = table.Column<byte[]>(type: "bytea", nullable: false),
-                    size_bytes = table.Column<int>(type: "integer", nullable: false),
-                    appraised_value = table.Column<int>(type: "integer", nullable: true),
-                    manifest = table.Column<string>(type: "text", nullable: false)
+                    ship_guid = table.Column<Guid>(type: "TEXT", nullable: false),
+                    revision = table.Column<int>(type: "INTEGER", nullable: false),
+                    kind = table.Column<int>(type: "INTEGER", nullable: false),
+                    derived_from_revision = table.Column<int>(type: "INTEGER", nullable: true),
+                    rebake_version = table.Column<int>(type: "INTEGER", nullable: false),
+                    actor_user_id = table.Column<Guid>(type: "TEXT", nullable: true),
+                    created_round_id = table.Column<int>(type: "INTEGER", nullable: true),
+                    created_at = table.Column<DateTime>(type: "TEXT", nullable: false),
+                    engine_format_ver = table.Column<int>(type: "INTEGER", nullable: false),
+                    drydock_format_ver = table.Column<int>(type: "INTEGER", nullable: false),
+                    proto_fingerprint = table.Column<byte[]>(type: "BLOB", nullable: false),
+                    captured_key_hash = table.Column<byte[]>(type: "BLOB", nullable: false),
+                    checksum = table.Column<byte[]>(type: "BLOB", nullable: false),
+                    size_bytes = table.Column<int>(type: "INTEGER", nullable: false),
+                    appraised_value = table.Column<int>(type: "INTEGER", nullable: true),
+                    manifest = table.Column<string>(type: "TEXT", nullable: false)
                 },
                 constraints: table =>
                 {
@@ -181,16 +183,16 @@ namespace Content.Server.Database.Migrations.Postgres
                 name: "drydock_transfer",
                 columns: table => new
                 {
-                    drydock_transfer_id = table.Column<long>(type: "bigint", nullable: false)
-                        .Annotation("Npgsql:ValueGenerationStrategy", NpgsqlValueGenerationStrategy.IdentityByDefaultColumn),
-                    ship_guid = table.Column<Guid>(type: "uuid", nullable: false),
-                    from_user_id = table.Column<Guid>(type: "uuid", nullable: false),
-                    to_user_id = table.Column<Guid>(type: "uuid", nullable: false),
-                    created_at = table.Column<DateTime>(type: "timestamp with time zone", nullable: false),
-                    expires_at = table.Column<DateTime>(type: "timestamp with time zone", nullable: false),
-                    resolution = table.Column<int>(type: "integer", nullable: false),
-                    resolved_at = table.Column<DateTime>(type: "timestamp with time zone", nullable: true),
-                    round_id = table.Column<int>(type: "integer", nullable: true)
+                    drydock_transfer_id = table.Column<long>(type: "INTEGER", nullable: false)
+                        .Annotation("Sqlite:Autoincrement", true),
+                    ship_guid = table.Column<Guid>(type: "TEXT", nullable: false),
+                    from_user_id = table.Column<Guid>(type: "TEXT", nullable: false),
+                    to_user_id = table.Column<Guid>(type: "TEXT", nullable: false),
+                    created_at = table.Column<DateTime>(type: "TEXT", nullable: false),
+                    expires_at = table.Column<DateTime>(type: "TEXT", nullable: false),
+                    resolution = table.Column<int>(type: "INTEGER", nullable: false),
+                    resolved_at = table.Column<DateTime>(type: "TEXT", nullable: true),
+                    round_id = table.Column<int>(type: "INTEGER", nullable: true)
                 },
                 constraints: table =>
                 {
@@ -207,9 +209,9 @@ namespace Content.Server.Database.Migrations.Postgres
                 name: "drydock_blob",
                 columns: table => new
                 {
-                    ship_guid = table.Column<Guid>(type: "uuid", nullable: false),
-                    revision = table.Column<int>(type: "integer", nullable: false),
-                    blob = table.Column<byte[]>(type: "bytea", nullable: false)
+                    ship_guid = table.Column<Guid>(type: "TEXT", nullable: false),
+                    revision = table.Column<int>(type: "INTEGER", nullable: false),
+                    blob = table.Column<byte[]>(type: "BLOB", nullable: false)
                 },
                 constraints: table =>
                 {
@@ -320,12 +322,6 @@ namespace Content.Server.Database.Migrations.Postgres
                 table: "triad_shipyard_consumed_ships",
                 column: "ship_hash",
                 unique: true);
-
-            // Triad: the blob arrives already compressed by the game server, so tell TOAST
-            // to store it out of line and not to spend CPU trying to compress it again. No
-            // EF expression covers column storage, so this is hand-written and has to be
-            // re-added by hand if this migration is ever regenerated.
-            migrationBuilder.Sql("ALTER TABLE drydock_blob ALTER COLUMN blob SET STORAGE EXTERNAL;");
         }
 
         /// <inheritdoc />

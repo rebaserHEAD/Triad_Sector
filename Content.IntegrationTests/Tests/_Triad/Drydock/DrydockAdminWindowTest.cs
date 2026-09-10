@@ -39,7 +39,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                 window.UpdateState(StateWith(Ship("Kestrel", "Stored")));
 
                 var chips = Named(window, "ChipRow").Children.OfType<ContainerButton>().ToList();
-                Assert.That(chips, Has.Count.EqualTo(7), "All, the five states, and Stranded.");
+                Assert.That(chips, Has.Count.EqualTo(9), "All, the seven states, and Stranded.");
 
                 // The chip in force is the one drawn filled. Two filled at once is the bug this
                 // catches: it is what a toggle button's own pressed state did before they were
@@ -57,10 +57,14 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
         /// verb that cannot apply is absent rather than greyed.
         /// </summary>
         [Test]
-        [TestCase("Stored", new[] { "hold" }, new[] { "cancel-offer", "restore-from-sale", "restore-to" })]
-        [TestCase("CheckedOut", new[] { "hold", "restore-to" }, new[] { "cancel-offer", "restore-from-sale" })]
-        [TestCase("Held", new[] { "release", "restore-to" }, new[] { "cancel-offer", "restore-from-sale" })]
-        [TestCase("Sold", new[] { "restore-from-sale", "hold", "restore-to" }, new[] { "cancel-offer" })]
+        [TestCase("Stored", new[] { "impound" }, new[] { "cancel-offer", "restore-from-sale", "restore-to" })]
+        [TestCase("CheckedOut", new[] { "impound", "restore-to" }, new[] { "cancel-offer", "restore-from-sale" })]
+        [TestCase("Impounded", new[] { "release", "restore-to" }, new[] { "cancel-offer", "restore-from-sale" })]
+        // The terminal three offer restore-to and never impound: their state is the verdict, and on
+        // a sale the impound verb would take restore-from-sale away with it.
+        [TestCase("Sold", new[] { "restore-from-sale", "restore-to" }, new[] { "cancel-offer", "impound", "release" })]
+        [TestCase("Destroyed", new[] { "restore-to" }, new[] { "cancel-offer", "restore-from-sale", "impound", "release" })]
+        [TestCase("Abandoned", new[] { "restore-to" }, new[] { "cancel-offer", "restore-from-sale", "impound", "release" })]
         public async Task TheVerbsFollowTheStateOfTheHull(string state, string[] expected, string[] absent)
         {
             await using var pair = await PoolManager.GetServerClient(new PoolSettings { Connected = true });
@@ -121,7 +125,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             await pair.Client.WaitPost(() =>
             {
                 var window = new DrydockAdminWindow(new DrydockAdminEui());
-                var state = StateWith(Ship("Kestrel", "Stored"), Ship("Behir", "CheckedOut"), Ship("Pelican", "Held"));
+                var state = StateWith(Ship("Kestrel", "Stored"), Ship("Behir", "CheckedOut"), Ship("Pelican", "Impounded"));
                 window.UpdateState(state);
 
                 Assert.Multiple(() =>

@@ -35,8 +35,8 @@ public enum DrydockRetrieveResult : byte
     /// <summary>The record is checked out: a live grid somewhere carries this ship.</summary>
     AlreadyOut,
 
-    /// <summary>An admin has frozen the ship pending a decision.</summary>
-    Held,
+    /// <summary>The ship sits in the impound holding area, out of its owner's berths.</summary>
+    Impounded,
 
     /// <summary>The ship is offered to another captain and waits on their answer.</summary>
     InEscrow,
@@ -59,6 +59,16 @@ public enum DrydockRetrieveResult : byte
     /// nothing is out and the ship is still stored and still retrievable.
     /// </summary>
     Cancelled,
+
+    /// <summary>
+    /// The hull was written off: it could not have brought itself home, so nothing was filed for it
+    /// to come back as. Appended rather than grouped with the other refusals for the reason
+    /// <see cref="NoStagingMap"/> gives.
+    /// </summary>
+    Destroyed,
+
+    /// <summary>Its owner gave the ship up rather than redeem it out of impound.</summary>
+    Abandoned,
 }
 
 /// <summary>
