@@ -240,7 +240,7 @@ public sealed class DrydockShip
     public string? AdminNotes { get; set; }
 
     //
-    // The impound fields. None of the three is cleared when the ship leaves the holding area, and
+    // The impound fields. None of the three is cleared when the ship leaves the lot, and
     // that is a rule rather than an oversight: the next impound overwrites them, so a reversal has
     // something to restore to and the timeline can still say what the hull was taken for. Read them
     // only against <see cref="DrydockShipState.Impounded"/>; on any other state they are the last
@@ -248,7 +248,7 @@ public sealed class DrydockShip
     //
 
     /// <summary>
-    /// What redemption costs, in credits, frozen at impound rather than recomputed. Appraisal lives
+    /// What reclaiming it costs, in credits, frozen at impound rather than recomputed. Appraisal lives
     /// per revision on <see cref="DrydockRevision.AppraisedValue"/> and moves with every store, and a
     /// debt already quoted to a player must not move under them. Zero is legal and means free.
     /// </summary>
@@ -373,7 +373,7 @@ public enum DrydockShipState
     Destroyed = 5,
 
     /// <summary>
-    /// The owner gave up an impounded hull rather than redeem it, and was paid nothing for it.
+    /// The owner gave up an impounded hull rather than reclaim it, and was paid nothing for it.
     /// Holds no berth, and terminal in the same sense <see cref="Sold"/> is. Separate from
     /// <see cref="Destroyed"/> so that an admin reads the cause instead of inferring it: this one
     /// was somebody's choice.
@@ -564,7 +564,7 @@ public enum DrydockAuditAction
     Delete = 4,
     Rebake = 5,
 
-    /// <summary>Took the hull into the holding area; the reason carries the trigger and the fee.</summary>
+    /// <summary>Took the hull into the impound lot; the reason carries the trigger and the fee.</summary>
     Impound = 6,
 
     /// <summary>An admin lifted an impound.</summary>
@@ -625,7 +625,7 @@ public enum DrydockAuditAction
     ImpoundRedeemed = 26,
 
     /// <summary>
-    /// The owner gave up an impounded hull rather than redeem it. No money moved in either
+    /// The owner gave up an impounded hull rather than reclaim it. No money moved in either
     /// direction, which is the whole difference from <see cref="ShipSold"/>.
     /// </summary>
     ShipAbandoned = 27,

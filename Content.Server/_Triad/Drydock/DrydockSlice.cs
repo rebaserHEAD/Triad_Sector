@@ -502,7 +502,7 @@ public sealed class DrydockStoreContext
 
     /// <summary>
     /// Null on an ordinary store. Set means the hull is being taken rather than put away, which
-    /// bends exactly three gates: the berth checks do not apply because the holding area is not a
+    /// bends exactly three gates: the berth checks do not apply because the lot is not a
     /// berth, hazards are destroyed instead of refused for, and anyone found aboard is moved off
     /// instead of refusing. <see cref="DrydockStoreResult.SerializeFailed"/> and
     /// <see cref="DrydockStoreResult.ValidationFailed"/> are never forced: a document that will not
@@ -526,7 +526,7 @@ public sealed class DrydockStoreContext
 /// quoted to a player must not move under them.
 /// </summary>
 /// <param name="Fee">
-/// Credits owed to redeem, clamped by the caller so it can never exceed the appraisal. Zero is
+/// Credits owed to reclaim it, clamped by the caller so it can never exceed the appraisal. Zero is
 /// legal and means free.
 /// </param>
 /// <param name="Reason">Shown to the owner. Null when nothing was given.</param>

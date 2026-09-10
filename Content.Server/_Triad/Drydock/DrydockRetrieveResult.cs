@@ -35,7 +35,7 @@ public enum DrydockRetrieveResult : byte
     /// <summary>The record is checked out: a live grid somewhere carries this ship.</summary>
     AlreadyOut,
 
-    /// <summary>The ship sits in the impound holding area, out of its owner's berths.</summary>
+    /// <summary>The ship sits in the impound lot, out of its owner's berths.</summary>
     Impounded,
 
     /// <summary>The ship is offered to another captain and waits on their answer.</summary>
@@ -67,7 +67,7 @@ public enum DrydockRetrieveResult : byte
     /// </summary>
     Destroyed,
 
-    /// <summary>Its owner gave the ship up rather than redeem it out of impound.</summary>
+    /// <summary>Its owner gave the ship up rather than reclaim it out of the lot.</summary>
     Abandoned,
 }
 

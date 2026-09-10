@@ -171,7 +171,7 @@ public sealed partial class DrydockStore
     /// <para>Unconditional in the state it moves from, unlike <see cref="MarkStored"/>, because an
     /// impound is taken from wherever the hull was: out flying at round end, stored in a berth, or
     /// in escrow when an admin reached for the ripcord. The round it left in is cleared, because
-    /// the hull is now in the holding area and nothing is out.</para>
+    /// the hull is now in the lot and nothing is out.</para>
     /// </summary>
     public Task<bool> MarkImpounded(Guid shipGuid, CancellationToken ct = default)
     {
@@ -1956,7 +1956,7 @@ public sealed class DrydockRevisionRequest
     public required string Manifest { get; init; }
 
     /// <summary>
-    /// Set to file the hull into the holding area rather than into a berth. The berth is left empty
+    /// Set to file the hull into the impound lot rather than into a berth. The berth is left empty
     /// and <see cref="DrydockShip.LastBerthId"/> keeps whichever one the hull came from, because
     /// redemption needs a free berth and a hull still sitting in its own would satisfy that for
     /// nothing. Null files the ordinary way.

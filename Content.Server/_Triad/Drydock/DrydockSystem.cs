@@ -127,7 +127,7 @@ public sealed partial class DrydockSystem : EntitySystem
     /// percentage is what makes an unbounded wait acceptable rather than alarming.
     /// </param>
     /// <param name="impound">
-    /// Set to take the hull into the holding area rather than put it away in a berth. See
+    /// Set to take the hull into the impound lot rather than put it away in a berth. See
     /// <see cref="DrydockImpound"/> and <see cref="TryImpoundShip"/>; ordinary callers leave it null
     /// and get every gate the way it was written.
     /// </param>
@@ -281,7 +281,7 @@ public sealed partial class DrydockSystem : EntitySystem
             ctx.ShipId = shipId;
             var sizeClass = _shipSize.GetSizeClass((gridUid, Comp<MapGridComponent>(gridUid))).ToString();
 
-            // An impound needs no berth: the holding area is not one, and requiring a free berth
+            // An impound needs no berth: the lot is not one, and requiring a free berth
             // would make the round-end sweep fail for exactly the owners whose garage is full.
             if (ctx.Impound == null)
             {

@@ -31,7 +31,7 @@ public sealed partial class DrydockSystem
     [Dependency] private readonly PublicTransitSystem _transit = default!;
 
     /// <summary>
-    /// Takes a live hull into the holding area: the ordinary store pipeline with its two refusal
+    /// Takes a live hull into the impound lot: the ordinary store pipeline with its two refusal
     /// gates turned into instructions, landing the row on
     /// <see cref="DrydockShipState.Impounded"/> with no berth.
     ///
@@ -40,7 +40,7 @@ public sealed partial class DrydockSystem
     /// carries the ship is the duplicate every state transition here exists to prevent.</para>
     /// </summary>
     /// <param name="fee">
-    /// Credits to redeem. Clamped against the appraisal taken during this very store, so it can
+    /// Credits to reclaim it. Clamped against the appraisal taken during this very store, so it can
     /// never exceed what the hull is worth however optimistic the caller was.
     /// </param>
     /// <param name="redeemable">

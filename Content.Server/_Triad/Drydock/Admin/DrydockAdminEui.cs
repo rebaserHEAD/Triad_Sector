@@ -133,8 +133,8 @@ public sealed partial class DrydockAdminEui : BaseEui
                                 impound.Fee, impound.Reason, impound.Redeemable);
 
                             return result == DrydockStoreResult.Success
-                                ? "Ship impounded; the hull is in the holding area."
-                                : $"Refused: the hull could not be filed ({result}).";
+                                ? "Impounded; the hull is in the lot."
+                                : $"Refused: {result}.";
                         }
 
                         var taken = await _store.TrySetState(impound.ShipGuid, null, DrydockShipState.Impounded, DrydockAuditAction.Impound, AdminId, RoundForAudit(), impound.Reason);
@@ -142,15 +142,15 @@ public sealed partial class DrydockAdminEui : BaseEui
                             return "Already impounded, or unknown ship.";
 
                         await _store.SetImpoundTerms(impound.ShipGuid, impound.Fee, impound.Reason, impound.Redeemable);
-                        return "Ship impounded.";
+                        return "Impounded.";
                     }
 
                     // Back to wherever the impound found it. A ship taken while out is still out.
                     return await _store.TryReleaseImpound(impound.ShipGuid, AdminId, RoundForAudit(), impound.Reason) switch
                     {
-                        DrydockShipState.CheckedOut => "Impound lifted; the ship is still out.",
-                        DrydockShipState.Stored => "Impound lifted; the ship is stored again.",
-                        _ => "Not impounded, so nothing to lift.",
+                        DrydockShipState.CheckedOut => "Released; the ship is still out.",
+                        DrydockShipState.Stored => "Released; the ship is stored again.",
+                        _ => "Not impounded.",
                     };
                 });
                 break;
