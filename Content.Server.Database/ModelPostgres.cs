@@ -57,18 +57,6 @@ namespace Content.Server.Database
                 .HasMethod("GIN")
                 .IsTsVectorExpressionIndex("english");
 
-            // Triad: drydock. The manifest is what the drift sweep and the admin diff query,
-            // so it is real jsonb with a GIN index here. SQLite gets a text column and full
-            // scans, which is right for a dev server and wrong to forget. Declared on the
-            // model rather than as migration SQL so the snapshot carries it.
-            modelBuilder.Entity<DrydockRevision>()
-                .Property(r => r.Manifest)
-                .HasColumnType("jsonb");
-
-            modelBuilder.Entity<DrydockRevision>()
-                .HasIndex(r => r.Manifest)
-                .HasMethod("GIN");
-            // End Triad
             // Triad: market data, the parts of the schema that only Postgres can express.
             // Declared on the model rather than as migration SQL, so the snapshot carries them and
             // a later migration cannot silently drop them. Filters name the physical column, which

@@ -410,8 +410,13 @@ public sealed class DrydockRevision
     public int? AppraisedValue { get; set; }
 
     /// <summary>
-    /// What the drift sweep and the admin diff query. JSON: jsonb on Postgres with a GIN index,
-    /// text on SQLite, which means a dev server full-scans the sweep and that is fine.
+    /// What was aboard, one entry per entity in walk order. Minified JSON held as plain text on
+    /// both providers, written on every store and read by nothing yet: <c>DrydockManifest
+    /// .Deserialize</c> has no production caller. No index until a query exists, because
+    /// <c>jsonb_ops</c> indexes every key and every scalar, and each entry carries a
+    /// <c>CapturedKeys</c> list, so a capital hull would pay tens of thousands of index
+    /// insertions inside the store transaction for nobody. A GIN over <c>((manifest)::jsonb)</c>
+    /// is one statement whenever a reader turns up.
     /// </summary>
     public string Manifest { get; set; } = default!;
 

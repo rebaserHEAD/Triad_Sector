@@ -1162,7 +1162,7 @@ namespace Content.Server.Database.Migrations.Postgres
 
                     b.Property<string>("Manifest")
                         .IsRequired()
-                        .HasColumnType("jsonb")
+                        .HasColumnType("text")
                         .HasColumnName("manifest");
 
                     b.Property<byte[]>("ProtoFingerprint")
@@ -1185,10 +1185,6 @@ namespace Content.Server.Database.Migrations.Postgres
 
                     b.HasIndex("CreatedRoundId")
                         .HasDatabaseName("IX_drydock_revision_created_round_id");
-
-                    b.HasIndex("Manifest");
-
-                    NpgsqlIndexBuilderExtensions.HasMethod(b.HasIndex("Manifest"), "GIN");
 
                     b.ToTable("drydock_revision", (string)null);
                 });
