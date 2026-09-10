@@ -968,7 +968,7 @@ public sealed partial class DrydockStore
             if (ship == null || ship.OwnerUserId != fromUserId)
                 return (DrydockBerthResult.NotFound, null);
 
-            if (fromUserId == toUserId || ship.State != DrydockShipState.Stored || ship.Investigating)
+            if (fromUserId == toUserId || ship.State != DrydockShipState.Stored)
                 return (DrydockBerthResult.WrongState, null);
 
             var (outcome, pick) = await PickFreeBerth(db, toUserId, ship.SizeClass, null, new HashSet<int>(), token);
@@ -1034,7 +1034,7 @@ public sealed partial class DrydockStore
             if (ship == null || ship.OwnerUserId != fromUserId)
                 return (DrydockBerthResult.NotFound, null);
 
-            if (fromUserId == toUserId || ship.State != DrydockShipState.Stored || ship.Investigating)
+            if (fromUserId == toUserId || ship.State != DrydockShipState.Stored)
                 return (DrydockBerthResult.WrongState, null);
 
             var (fit, _) = await PickFreeBerth(db, toUserId, ship.SizeClass, null, new HashSet<int>(), token);
@@ -1384,7 +1384,7 @@ public sealed partial class DrydockStore
             if (ship == null || ship.OwnerUserId != ownerUserId)
                 return (DrydockBerthResult.NotFound, null);
 
-            if (ship.State != DrydockShipState.Stored || ship.Investigating)
+            if (ship.State != DrydockShipState.Stored)
                 return (DrydockBerthResult.WrongState, null);
 
             var now = DateTime.UtcNow;
@@ -1434,7 +1434,7 @@ public sealed partial class DrydockStore
             if (ship == null || ship.OwnerUserId != ownerUserId)
                 return DrydockBerthResult.NotFound;
 
-            if (ship.State != DrydockShipState.Stored || ship.Investigating)
+            if (ship.State != DrydockShipState.Stored)
                 return DrydockBerthResult.WrongState;
 
             var now = DateTime.UtcNow;
@@ -1533,9 +1533,6 @@ public sealed partial class DrydockStore
             if (filter.State is { } state)
                 query = query.Where(s => s.State == state);
 
-            if (filter.InvestigatingOnly)
-                query = query.Where(s => s.Investigating);
-
             // Checked out in a round that is over, or in no round at all: the adjudication list.
             if (filter.StrandedOnly)
             {
@@ -1597,51 +1594,6 @@ public sealed partial class DrydockStore
             .Where(p => ids.Contains(p.UserId))
             .Select(p => new { p.UserId, p.LastSeenUserName })
             .ToDictionaryAsync(p => p.UserId, p => p.LastSeenUserName, token), ct);
-    }
-
-    /// <summary>Admin: flags or clears a ship for investigation, on the timeline. Retrieve refuses while flagged.</summary>
-    public Task<bool> SetInvestigating(Guid shipGuid, bool investigating, Guid? actorUserId, int? roundId, string? reason, CancellationToken ct = default)
-    {
-        return _db.RunTriadDbCommand(async (db, token) =>
-        {
-            await using var tx = await db.Database.BeginTransactionAsync(token);
-
-            var ship = await db.DrydockShip.SingleOrDefaultAsync(s => s.ShipGuid == shipGuid, token);
-            if (ship == null || ship.Investigating == investigating)
-                return false;
-
-            var now = DateTime.UtcNow;
-            ship.Investigating = investigating;
-            ship.UpdatedAt = now;
-
-            // An investigation ends any standing offer: a ship under question does not change
-            // hands while the question is open, and the recipient's alert goes with it.
-            if (investigating)
-            {
-                var offer = await db.DrydockTransfer
-                    .SingleOrDefaultAsync(t => t.ShipGuid == shipGuid && t.Resolution == DrydockTransferResolution.Pending, token);
-                if (offer != null)
-                    await ResolveTransferRow(db, offer, ship, DrydockTransferResolution.Cancelled, actorUserId, roundId, "investigation opened", now);
-            }
-
-            db.DrydockAudit.Add(new DrydockAudit
-            {
-                ShipGuid = shipGuid,
-                ShipName = ship.ShipName,
-                BerthId = ship.BerthId,
-                Action = investigating ? DrydockAuditAction.InvestigationOpened : DrydockAuditAction.InvestigationClosed,
-                ActorUserId = actorUserId,
-                SubjectUserId = ship.OwnerUserId,
-                Revision = ship.CurrentRevision,
-                RoundId = roundId,
-                Reason = reason,
-                CreatedAt = now,
-            });
-
-            await db.SaveChangesAsync(token);
-            await tx.CommitAsync(token);
-            return true;
-        }, ct);
     }
 
     /// <summary>Admin scratch notes on a hull. Not on the timeline: the timeline is for decisions.</summary>
@@ -1938,8 +1890,7 @@ public sealed record DrydockShipFilter(
     int? CurrentRoundId,
     // One box from the admin panel: a ship id or account id when it parses as one, else text
     // matched against the owner's name, the ship's name, and every name the ship has had.
-    string? Search = null,
-    bool InvestigatingOnly = false);
+    string? Search = null);
 
 /// <summary>One hull with its history and timeline, newest first, and which revisions still have a document.</summary>
 public sealed record DrydockShipDetail(

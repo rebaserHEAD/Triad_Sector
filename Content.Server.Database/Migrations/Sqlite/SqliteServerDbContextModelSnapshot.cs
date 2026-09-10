@@ -1155,10 +1155,6 @@ namespace Content.Server.Database.Migrations.Sqlite
                         .HasColumnType("INTEGER")
                         .HasColumnName("current_revision");
 
-                    b.Property<bool>("Investigating")
-                        .HasColumnType("INTEGER")
-                        .HasColumnName("investigating");
-
                     b.Property<int?>("LastBerthId")
                         .HasColumnType("INTEGER")
                         .HasColumnName("last_berth_id");

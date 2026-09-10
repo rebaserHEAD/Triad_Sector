@@ -237,12 +237,6 @@ public sealed class DrydockShip
 
     public Round? CheckedOutRound { get; set; }
 
-    /// <summary>
-    /// Admin flag, independent of <see cref="State"/>: a ship can be under investigation while
-    /// still being retrievable, and can be frozen without anyone investigating anything.
-    /// </summary>
-    public bool Investigating { get; set; }
-
     public string? AdminNotes { get; set; }
 
     /// <summary>Pointer into <see cref="DrydockRevision"/>. Zero means nothing filed yet.</summary>
@@ -542,11 +536,6 @@ public enum DrydockAuditAction
     /// document still exists until pruning reaches it, which is why this is on the timeline.
     /// </summary>
     Fallback = 14,
-
-    /// <summary>An admin flagged the ship; retrieve refuses while the flag is set.</summary>
-    InvestigationOpened = 15,
-
-    InvestigationClosed = 16,
 
     /// <summary>
     /// A session sent a drydock message for a ship or berth its account does not own. The console

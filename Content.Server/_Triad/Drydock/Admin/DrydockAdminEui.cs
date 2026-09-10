@@ -50,7 +50,6 @@ public sealed partial class DrydockAdminEui : BaseEui
     private string? _search;
     private DrydockShipState? _stateFilter;
     private bool _strandedOnly;
-    private bool _investigatingOnly;
 
     private Guid? _selected;
     private string? _notice;
@@ -98,14 +97,10 @@ public sealed partial class DrydockAdminEui : BaseEui
                 _search = string.IsNullOrWhiteSpace(req.Search) ? null : req.Search.Trim();
                 _stateFilter = null;
                 _strandedOnly = false;
-                _investigatingOnly = false;
                 switch (req.Chip)
                 {
                     case "Stranded":
                         _strandedOnly = true;
-                        break;
-                    case "Investigating":
-                        _investigatingOnly = true;
                         break;
                     default:
                         _stateFilter = Enum.TryParse<DrydockShipState>(req.Chip, out var state) ? state : null;
@@ -135,18 +130,6 @@ public sealed partial class DrydockAdminEui : BaseEui
                         DrydockShipState.Stored => "Hold released; the ship is stored again.",
                         _ => "Not held, so nothing to release.",
                     };
-                });
-                break;
-
-            case DrydockAdminInvestigateMessage inv:
-                _ = Act(async () =>
-                {
-                    var changed = await _store.SetInvestigating(inv.ShipGuid, inv.Investigating, AdminId, RoundForAudit(), inv.Reason);
-                    if (changed)
-                        KickConsoles();
-                    return changed
-                        ? (inv.Investigating ? "Investigation opened; retrieve is refused and any standing offer is withdrawn." : "Investigation closed.")
-                        : "No change.";
                 });
                 break;
 
@@ -414,7 +397,7 @@ public sealed partial class DrydockAdminEui : BaseEui
     {
         var round = CurrentRoundId();
 
-        var filter = new DrydockShipFilter(null, null, null, _stateFilter, _strandedOnly, round, _search, _investigatingOnly);
+        var filter = new DrydockShipFilter(null, null, null, _stateFilter, _strandedOnly, round, _search);
         var (rows, total) = await _store.QueryShips(filter, _page, _pageSize);
         var offers = await _store.GetPendingOffersForShips(rows.Select(r => r.ShipGuid));
 
@@ -571,7 +554,6 @@ public sealed partial class DrydockAdminEui : BaseEui
             ship.OwnerUserId,
             names.GetValueOrDefault(ship.OwnerUserId),
             ship.State.ToString(),
-            ship.Investigating,
             ship.SizeClass,
             ship.VesselProto,
             ship.BerthId,

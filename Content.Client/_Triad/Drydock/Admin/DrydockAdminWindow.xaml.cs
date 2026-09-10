@@ -82,7 +82,7 @@ public sealed partial class DrydockAdminWindow : FancyWindow
     /// </summary>
     private static readonly string?[] Chips =
     {
-        null, "Stored", "CheckedOut", "InEscrow", "Sold", "Held", "Stranded", "Investigating",
+        null, "Stored", "CheckedOut", "InEscrow", "Sold", "Held", "Stranded",
     };
 
     private readonly DrydockAdminEui _eui;
@@ -294,13 +294,6 @@ public sealed partial class DrydockAdminWindow : FancyWindow
             _ => (Loc.GetString("drydock-admin-chip-Stored"), Plain),
         };
 
-        // Investigating is not a state, so it rides alongside whatever the state is.
-        if (ship.Investigating)
-        {
-            text = $"{text} · {Loc.GetString("drydock-admin-row-investigating")}";
-            colour = Held;
-        }
-
         return Pill(text, colour);
     }
 
@@ -444,16 +437,6 @@ public sealed partial class DrydockAdminWindow : FancyWindow
         var hold = Verb(held ? "drydock-admin-release" : "drydock-admin-hold", "drydock-admin-hold-tooltip");
         hold.OnPressed += _ => _eui.Send(new DrydockAdminHoldMessage { ShipGuid = ship.ShipGuid, Hold = !held, Reason = Reason() });
         VerbRow.AddChild(hold);
-
-        var investigate = Verb(ship.Investigating ? "drydock-admin-close-investigation" : "drydock-admin-investigate",
-            "drydock-admin-investigate-tooltip");
-        investigate.OnPressed += _ => _eui.Send(new DrydockAdminInvestigateMessage
-        {
-            ShipGuid = ship.ShipGuid,
-            Investigating = !ship.Investigating,
-            Reason = Reason(),
-        });
-        VerbRow.AddChild(investigate);
 
         // Restore puts a hull that is out, held or sold back into a berth; a stored one is home.
         if (ship.State != "Stored" && ship.State != "InEscrow")

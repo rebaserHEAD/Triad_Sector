@@ -392,10 +392,8 @@ public sealed partial class ShipyardSystem
             return;
 
         // Every hull the account has, including the ones that are out: the tab warns when an
-        // action would leave a ship with nowhere to dock. A ship under investigation is hidden,
-        // and retrieve refuses it regardless.
+        // action would leave a ship with nowhere to dock.
         var storedShips = rows
-            .Where(r => !r.Investigating)
             .Select(r => new StoredShipInfo(r.ShipGuid, r.ShipName, r.SizeClass, r.State.ToString(), r.BerthId))
             .ToList();
 
@@ -1217,7 +1215,7 @@ public sealed partial class ShipyardSystem
             return false;
         }
 
-        if (current == null || current.State != DrydockShipState.Stored || current.Investigating)
+        if (current == null || current.State != DrydockShipState.Stored)
         {
             ConsolePopup(player, Loc.GetString(current is { State: DrydockShipState.InEscrow }
                 ? "shipyard-console-transfer-busy"
@@ -1499,7 +1497,7 @@ public sealed partial class ShipyardSystem
             return (false, 0, false);
         }
 
-        if (header == null || header.State != DrydockShipState.Stored || header.Investigating)
+        if (header == null || header.State != DrydockShipState.Stored)
         {
             ConsolePopup(player, Loc.GetString("shipyard-console-sell-not-available"));
             PlayDenySound(player, uid, component);
@@ -1576,7 +1574,7 @@ public sealed partial class ShipyardSystem
             return false;
         }
 
-        if (header == null || header.State != DrydockShipState.Stored || header.Investigating)
+        if (header == null || header.State != DrydockShipState.Stored)
         {
             ConsolePopup(player, Loc.GetString("shipyard-console-rename-not-available"));
             PlayDenySound(player, uid, component);
@@ -1625,7 +1623,7 @@ public sealed partial class ShipyardSystem
             return false;
         }
 
-        if (header == null || header.State != DrydockShipState.Stored || header.Investigating)
+        if (header == null || header.State != DrydockShipState.Stored)
         {
             ConsolePopup(player, Loc.GetString("shipyard-console-move-not-available"));
             PlayDenySound(player, uid, component);
@@ -1689,7 +1687,6 @@ public sealed partial class ShipyardSystem
             DrydockRetrieveResult.NoStagingMap => "shipyard-console-retrieve-no-staging",
             DrydockRetrieveResult.NotFound => "shipyard-console-retrieve-not-found",
             DrydockRetrieveResult.NotOwned => "shipyard-console-not-owner",
-            DrydockRetrieveResult.Investigating => "shipyard-console-retrieve-investigating",
             DrydockRetrieveResult.AlreadyOut => "shipyard-console-retrieve-already-out",
             DrydockRetrieveResult.Held => "shipyard-console-retrieve-held",
             DrydockRetrieveResult.InEscrow => "shipyard-console-retrieve-in-escrow",

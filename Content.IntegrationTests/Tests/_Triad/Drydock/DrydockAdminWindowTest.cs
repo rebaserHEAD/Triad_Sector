@@ -57,10 +57,10 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
         /// verb that cannot apply is absent rather than greyed.
         /// </summary>
         [Test]
-        [TestCase("Stored", new[] { "hold", "investigate" }, new[] { "cancel-offer", "restore-from-sale", "restore-to" })]
-        [TestCase("CheckedOut", new[] { "hold", "investigate", "restore-to" }, new[] { "cancel-offer", "restore-from-sale" })]
-        [TestCase("Held", new[] { "release", "investigate", "restore-to" }, new[] { "cancel-offer", "restore-from-sale" })]
-        [TestCase("Sold", new[] { "restore-from-sale", "hold", "investigate", "restore-to" }, new[] { "cancel-offer" })]
+        [TestCase("Stored", new[] { "hold" }, new[] { "cancel-offer", "restore-from-sale", "restore-to" })]
+        [TestCase("CheckedOut", new[] { "hold", "restore-to" }, new[] { "cancel-offer", "restore-from-sale" })]
+        [TestCase("Held", new[] { "release", "restore-to" }, new[] { "cancel-offer", "restore-from-sale" })]
+        [TestCase("Sold", new[] { "restore-from-sale", "hold", "restore-to" }, new[] { "cancel-offer" })]
         public async Task TheVerbsFollowTheStateOfTheHull(string state, string[] expected, string[] absent)
         {
             await using var pair = await PoolManager.GetServerClient(new PoolSettings { Connected = true });
@@ -253,7 +253,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
         }
 
         private static DrydockAdminShipDto Ship(string name, string state) => new(
-            Guid.NewGuid(), name, Guid.NewGuid(), "Mara Voss", state, Investigating: false,
+            Guid.NewGuid(), name, Guid.NewGuid(), "Mara Voss", state,
             "Cutter", "TestVessel", BerthId: 12, LastBerthId: 12, CheckedOutRoundId: 4112,
             DateTime.UtcNow, CurrentRevision: 7, LiveThisRound: false,
             EscrowExpiresAt: state == "InEscrow" ? DateTime.UtcNow.AddMinutes(27) : null);

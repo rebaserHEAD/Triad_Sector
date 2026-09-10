@@ -151,14 +151,6 @@ public sealed partial class DrydockSystem
         if (header.OwnerUserId != ownerUserId)
             return DrydockRetrieve.Refused(DrydockRetrieveResult.NotOwned);
 
-        // The console hides a ship under investigation; this is what actually refuses it. An
-        // investigation is an admin's decision and a forged retrieve request must not walk past it.
-        if (header.Investigating)
-        {
-            Log.Info($"Drydock: retrieve of {shipId} refused, the ship is under investigation.");
-            return DrydockRetrieve.Refused(DrydockRetrieveResult.Investigating);
-        }
-
         // The row's state names the refusal before the claim is tried. The claim below still
         // decides: this read can be stale by the time the claim lands.
         switch (header.State)

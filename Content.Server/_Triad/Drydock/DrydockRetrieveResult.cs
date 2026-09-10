@@ -32,9 +32,6 @@ public enum DrydockRetrieveResult : byte
     /// <summary>Another account owns it. The console refuses earlier; here it is a race with a transfer.</summary>
     NotOwned,
 
-    /// <summary>An admin has flagged the ship. Nothing moves it until the investigation closes.</summary>
-    Investigating,
-
     /// <summary>The record is checked out: a live grid somewhere carries this ship.</summary>
     AlreadyOut,
 

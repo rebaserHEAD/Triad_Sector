@@ -125,7 +125,6 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                 "The store must file the ship under the operating player's own account, or nothing downstream can find it.");
             Assert.That(filed!.State, Is.EqualTo(DrydockShipState.Stored),
                 "A ship that has just been put away has to be in the state the console lists on.");
-            Assert.That(filed.Investigating, Is.False);
 
             // The list the drydock tab renders. It is filled by an awaited database read, so it is
             // the console's own view of what this player may retrieve.

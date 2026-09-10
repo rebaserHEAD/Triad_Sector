@@ -240,7 +240,6 @@ shipyard-console-retrieve-disabled = The drydock is not releasing ships right no
 shipyard-console-retrieve-no-station = This console is not on a station that can receive a ship.
 shipyard-console-retrieve-no-staging = The shipyard has nowhere to stage the ship. Try again shortly.
 shipyard-console-retrieve-not-found = That ship is not in the drydock.
-shipyard-console-retrieve-investigating = That ship is under investigation. Contact an admin.
 shipyard-console-retrieve-already-out = That ship is already out.
 shipyard-console-retrieve-held = That ship is on hold. Contact an admin.
 shipyard-console-retrieve-in-escrow = That ship is offered to another captain. Withdraw the offer first.

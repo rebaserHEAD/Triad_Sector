@@ -331,11 +331,6 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             Assert.That(held.Result, Is.EqualTo(DrydockRetrieveResult.Held));
 
             Assert.That(await store.TrySetState(shipId!.Value, DrydockShipState.Held, DrydockShipState.Stored, DrydockAuditAction.Release, null, null, "test"), Is.True);
-            Assert.That(await store.SetInvestigating(shipId!.Value, true, null, null, "test"), Is.True);
-            var flagged = await RunOnServer(pair, () => drydock.TryRetrieveShip(shipId!.Value, owner, station, null));
-            Assert.That(flagged.Result, Is.EqualTo(DrydockRetrieveResult.Investigating));
-
-            Assert.That(await store.SetInvestigating(shipId!.Value, false, null, null, "test"), Is.True);
             var cleared = await RunOnServer(pair, () => drydock.TryRetrieveShip(shipId!.Value, owner, station, null));
             Assert.That(cleared.Result, Is.EqualTo(DrydockRetrieveResult.Success), "Control: with every reason cleared the same call succeeds.");
 

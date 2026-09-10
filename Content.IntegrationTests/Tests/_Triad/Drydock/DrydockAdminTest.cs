@@ -107,7 +107,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
         }
 
         [Test]
-        public async Task AnInvestigationIsOnTheTimelineAndTheListFindsStrandedShips()
+        public async Task TheListFindsStrandedShips()
         {
             await using var pair = await PoolManager.GetServerClient();
             var store = pair.Server.ResolveDependency<DrydockStore>();
@@ -124,13 +124,6 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             var lost = Guid.NewGuid();
             await store.FileRevision(Request(home, owner, "Home"), Encoding.UTF8.GetBytes("doc"), keepBlobs: 3);
             await store.FileRevision(Request(lost, owner, "Lost"), Encoding.UTF8.GetBytes("doc"), keepBlobs: 3);
-
-            Assert.That(await store.SetInvestigating(home, true, admin, null, "reported duped cargo"), Is.True);
-            Assert.That(await store.SetInvestigating(home, true, admin, null, "again"), Is.False, "Flagging a flagged ship is not a change and logs nothing.");
-
-            var audit = await store.GetAudit(home);
-            Assert.That(audit.Count(a => a.Action == DrydockAuditAction.InvestigationOpened), Is.EqualTo(1));
-            Assert.That((await store.LoadCurrent(home))!.Ship.Investigating, Is.True);
 
             // Out with no round to point at: that is the stranded shape a past round leaves behind.
             await store.TrySetState(lost, DrydockShipState.Stored, DrydockShipState.CheckedOut, DrydockAuditAction.Retrieve, owner, null, null);
@@ -154,12 +147,13 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
         }
 
         /// <summary>
-        /// Opening an investigation withdraws whatever offer was standing. A hull under question
-        /// does not change hands while the question is open, and it refuses to be offered again
-        /// until the flag comes off, so the two rules are asserted together.
+        /// An admin cancelling a standing offer puts the ship back in the owner's own berth and
+        /// says on the timeline who lost the offer. Escrow is the only state that keeps its berth
+        /// while refusing every verb, so the berth being there to come back to is the assertion
+        /// that matters.
         /// </summary>
         [Test]
-        public async Task OpeningAnInvestigationWithdrawsTheStandingOffer()
+        public async Task CancellingAnOfferReturnsTheShipToItsBerth()
         {
             await using var pair = await PoolManager.GetServerClient();
             var store = pair.Server.ResolveDependency<DrydockStore>();
@@ -188,7 +182,9 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             });
             Assert.That((await store.LoadCurrent(ship))!.Ship.State, Is.EqualTo(DrydockShipState.InEscrow));
 
-            Assert.That(await store.SetInvestigating(ship, true, admin, null, "recipient reported for scamming"), Is.True);
+            var resolved = await store.TryResolveTransfer(transfer!.Id, DrydockTransferResolution.Cancelled, admin, null,
+                adminOverride: true, reason: "recipient reported for scamming");
+            Assert.That(resolved, Is.Not.Null);
 
             var standing = await store.GetPendingOfferForShip(ship);
             var after = (await store.LoadCurrent(ship))!.Ship;
@@ -196,7 +192,6 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             {
                 Assert.That(standing, Is.Null, "The offer is gone, so the recipient's alert is too.");
                 Assert.That(after.State, Is.EqualTo(DrydockShipState.Stored), "Escrow releases back to the owner's own berth.");
-                Assert.That(after.Investigating, Is.True);
                 Assert.That(after.BerthId, Is.Not.Null, "A ship in escrow keeps its berth, so there is one to come back to.");
             });
 
@@ -204,13 +199,13 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             var cancelled = audit.Single(a => a.Action == DrydockAuditAction.TransferCancelled);
             Assert.Multiple(() =>
             {
-                Assert.That(cancelled.Reason, Is.EqualTo("investigation opened"), "The timeline says why the offer died, not just that it did.");
+                Assert.That(cancelled.Reason, Is.EqualTo("recipient reported for scamming"), "The timeline says why the offer died, not just that it did.");
                 Assert.That(cancelled.ActorUserId, Is.EqualTo(admin));
                 Assert.That(cancelled.SubjectUserId, Is.EqualTo(recipient), "Subject is who lost the offer.");
             });
 
             var (again, _) = await store.TryOfferTransfer(ship, owner, recipient, TimeSpan.FromMinutes(30), null);
-            Assert.That(again, Is.EqualTo(DrydockBerthResult.WrongState), "An investigated ship refuses a fresh offer.");
+            Assert.That(again, Is.EqualTo(DrydockBerthResult.Success), "Control: back in its berth, the ship can be offered again.");
 
             await pair.CleanReturnAsync();
         }

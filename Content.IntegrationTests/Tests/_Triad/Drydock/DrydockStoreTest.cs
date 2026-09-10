@@ -147,7 +147,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
 
             // An administrative hold does not care what state the ship was in.
             var held = await store.TrySetState(shipId, null, DrydockShipState.Held,
-                DrydockAuditAction.Hold, null, null, "under investigation");
+                DrydockAuditAction.Hold, null, null, "pending a decision");
             Assert.That(held, Is.True);
 
             var heldAgain = await store.TrySetState(shipId, null, DrydockShipState.Held,
@@ -164,7 +164,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                     DrydockAuditAction.Hold,
                 }), "The timeline is ordered and holds one row per accepted change.");
 
-                Assert.That(audit[^1].Reason, Is.EqualTo("under investigation"),
+                Assert.That(audit[^1].Reason, Is.EqualTo("pending a decision"),
                     "An adjudication's reasoning is the whole reason the row exists.");
             });
 

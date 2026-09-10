@@ -36,7 +36,6 @@ public sealed record DrydockAdminShipDto(
     Guid OwnerUserId,
     string? OwnerName,
     string State,
-    bool Investigating,
     string? SizeClass,
     string? VesselProto,
     int? BerthId,
@@ -134,8 +133,8 @@ public sealed class DrydockAdminRequestPageMessage : EuiMessageBase
     public string? Search { get; set; }
 
     /// <summary>
-    /// A <c>DrydockShipState</c> name, or one of the two flags "Stranded" (checked out in a round
-    /// that is not the current one) and "Investigating", or null for every state.
+    /// A <c>DrydockShipState</c> name, or the flag "Stranded" (checked out in a round that is not
+    /// the current one), or null for every state.
     /// </summary>
     public string? Chip { get; set; }
 }
@@ -151,14 +150,6 @@ public sealed class DrydockAdminHoldMessage : EuiMessageBase
 {
     public Guid ShipGuid { get; set; }
     public bool Hold { get; set; }
-    public string? Reason { get; set; }
-}
-
-[Serializable, NetSerializable]
-public sealed class DrydockAdminInvestigateMessage : EuiMessageBase
-{
-    public Guid ShipGuid { get; set; }
-    public bool Investigating { get; set; }
     public string? Reason { get; set; }
 }
 
