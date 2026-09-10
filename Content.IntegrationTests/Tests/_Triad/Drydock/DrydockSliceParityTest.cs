@@ -71,22 +71,37 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             var owner = Guid.NewGuid();
             await InsertPlayer(db, owner);
 
-            // Two, because the ship is stored twice and a berth is only freed once the retrieve that
+            // Three, one per store below, because a berth is only freed once the retrieve that
             // empties it has finished.
-            for (var i = 0; i < 2; i++)
+            for (var i = 0; i < 3; i++)
                 await store.AddBerth(owner, ShipSizeClass.SuperCapital, DrydockBerthKind.Granted, 0, null, null);
 
             var (station, ship) = await BuildShipAndStation(pair);
 
+            // --- the warm-up, which is not measured ---
+            // A retrieve stamps ShipOwnershipComponent and StationVariationHasRunComponent onto the
+            // grid it hands back, and NavMapComponent lands second-hand off RecreateStation's
+            // StationGridAddedEvent (NavMapSystem.cs:66). A never-retrieved hull is therefore a
+            // different shape from a retrieved one, so both measured stores below read a retrieved
+            // grid and the comparison is generation 1 against generation 2, not 0 against 1.
+            await server.WaitPost(() => cfg.SetCVar(TriadCCVars.DrydockTickBudgetMs, 0));
+
+            var warmStore = await RunOnServer(pair, () => drydock.TryStoreShip(ship, owner, null, stationUid: station));
+            Assert.That(warmStore.Result.Result, Is.EqualTo(DrydockStoreResult.Success), "Control: the warm-up store has to succeed.");
+            await pair.RunTicksSync(5);
+
+            var warmBack = await RunOnServer(pair, () => drydock.TryRetrieveShip(warmStore.Result.ShipId!.Value, owner, station, null));
+            Assert.That(warmBack.Result.Result, Is.EqualTo(DrydockRetrieveResult.Success), "Control: the warm-up retrieve has to complete.");
+            var warmGrid = warmBack.Result.Grid!.Value;
+            await pair.RunTicksSync(10);
+
             DrydockStateSnapshot beforeState = default!;
-            await server.WaitPost(() => beforeState = fidelity.SnapshotGrid(ship));
+            await server.WaitPost(() => beforeState = fidelity.SnapshotGrid(warmGrid));
             Assert.That(beforeState.Entities, Is.GreaterThan(1),
                 "The control on the oracle: it has to be looking at more than the grid, or a clean diff below says nothing.");
 
             // --- the unsliced half, which is also the baseline document ---
-            await server.WaitPost(() => cfg.SetCVar(TriadCCVars.DrydockTickBudgetMs, 0));
-
-            var unsliced = await RunOnServer(pair, () => drydock.TryStoreShip(ship, owner, null, stationUid: station));
+            var unsliced = await RunOnServer(pair, () => drydock.TryStoreShip(warmGrid, owner, null, stationUid: station));
             Assert.That(unsliced.Result.Result, Is.EqualTo(DrydockStoreResult.Success), "Control: the unsliced store has to succeed.");
             var unslicedShipId = unsliced.Result.ShipId!.Value;
             await pair.RunTicksSync(5);
@@ -228,7 +243,8 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                 cfg.SetCVar(TriadCCVars.DrydockEnabled, true);
                 cfg.SetCVar(TriadCCVars.DrydockReadOnly, false);
 
-                // Retrieve refuses without a staging map, and nothing in a test pair creates one.
+                // Not for the retrieve, which loads onto a private map of its own and no longer
+                // refuses without this one. The shipyard's own paths still want a staged map.
                 shipyard.SetupShipyardIfNeeded();
 
                 station = entMan.Spawn();
@@ -257,6 +273,9 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                 entMan.SpawnEntity("GasPipeStraight", new EntityCoordinates(ship, new Vector2(1f, 0f)));
                 entMan.SpawnEntity("GasPipeStraight", new EntityCoordinates(ship, new Vector2(1f, 2f)));
             });
+
+            // The station stands on the test grid, which the fork's janitors are built to delete.
+            await pair.MakeCleanupImmune(map.Grid.Owner);
 
             await pair.RunTicksSync(10);
 

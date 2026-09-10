@@ -97,7 +97,10 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             await server.WaitPost(() => storeTask = drydock.TryStoreShip(
                 fixture.Ship, owner, NoSuchRound, stationUid: fixture.HostStation));
 
-            for (var i = 0; i < 600 && !storeTask!.IsCompleted; i++)
+            // Wall clock, not ticks: with the budget off the store's remaining suspensions are
+            // thread-pool hops, and a tick ceiling drains long before they land.
+            var deadline = System.Diagnostics.Stopwatch.StartNew();
+            while (!storeTask!.IsCompleted && deadline.Elapsed < TimeSpan.FromSeconds(60))
             {
                 await pair.RunTicksSync(1);
             }
@@ -178,7 +181,10 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                 await server.WaitPost(() => drydock.CancelAllJobs("a mid-slice abort, induced by DrydockAbortTest"));
             }
 
-            for (var i = 0; i < 600 && !storeTask!.IsCompleted; i++)
+            // Wall clock, not ticks: with the budget off the store's remaining suspensions are
+            // thread-pool hops, and a tick ceiling drains long before they land.
+            var deadline = System.Diagnostics.Stopwatch.StartNew();
+            while (!storeTask!.IsCompleted && deadline.Elapsed < TimeSpan.FromSeconds(60))
             {
                 await pair.RunTicksSync(1);
             }
@@ -383,6 +389,10 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                 // that never recursed pass every assertion here.
                 entMan.SpawnEntity("Airlock", new EntityCoordinates(shipGrid, new Vector2(1f, 1f)));
             });
+
+            // The host station stands on the test grid, which the fork's janitors are built to
+            // delete, and the unwind needs somewhere to fly the ship back to.
+            await pair.MakeCleanupImmune(map.Grid.Owner);
 
             await pair.RunTicksSync(5);
 

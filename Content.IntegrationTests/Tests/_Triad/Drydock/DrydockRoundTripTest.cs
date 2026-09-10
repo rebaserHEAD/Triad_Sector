@@ -199,16 +199,22 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
         }
 
         /// <summary>
-        /// The shipyard builds its staging map on the first purchase of a round and tears it down at
-        /// round end, so a retrieve in a fresh round finds no map. Retrieve asks the shipyard for it
-        /// the way a purchase does. Deleting the map between store and retrieve is the shape
-        /// round-end cleanup leaves; the null it leaves otherwise goes through the same call.
+        /// A retrieve loads onto a private paused map of its own, so the shipyard's shared map being
+        /// gone must not refuse it. Deleting that map first is the shape round-end cleanup leaves.
+        ///
+        /// <para>What this locks in is the decoupling: the ship is presented anyway, the drydock does
+        /// not quietly go back to the shared map, and the private map it made does not outlive the
+        /// pipeline. Asking whether <c>ShipyardMap</c> is null would answer nothing, because it is
+        /// written only by <c>SetupShipyardIfNeeded</c> and <c>CleanupShipyard</c> and a raw
+        /// <c>DeleteMap</c> leaves a stale id in it. Map ids are never recycled, so the question that
+        /// does mean something is whether a live map is behind that id.</para>
         /// </summary>
         [Test]
-        public async Task ARetrieveRestagesTheShipyardAfterARoundRestart()
+        public async Task ARetrieveNeedsNoShipyardMap()
         {
             await using var pair = await PoolManager.GetServerClient();
             var server = pair.Server;
+            var entMan = server.EntMan;
 
             var db = server.ResolveDependency<IServerDbManager>();
             var drydock = server.System<DrydockSystem>();
@@ -221,27 +227,65 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
 
             var (station, shipGrid, _) = await BuildShipAndStation(pair);
 
+            // A delta rather than an absolute count: SweepOrphanStagingMaps deliberately leaves a
+            // Stranded map alone, so a pooled pair that inherited one from an earlier fixture would
+            // fail a zero for reasons that have nothing to do with this retrieve.
+            var stagingBefore = 0;
+            await server.WaitPost(() => stagingBefore = CountStagingMaps(entMan));
+
             var (result, shipId) = await RunOnServer(pair, () => drydock.TryStoreShip(shipGrid, owner, null));
             Assert.That(result, Is.EqualTo(DrydockStoreResult.Success));
             await pair.RunTicksSync(5);
 
             var staged = shipyard.ShipyardMap;
-            Assert.That(staged, Is.Not.Null, "The store ran against a staged shipyard, or this test proves nothing.");
+            Assert.That(staged, Is.Not.Null, "The fixture staged a shipyard map, or the control below proves nothing.");
             await server.WaitPost(() => mapSys.DeleteMap(staged!.Value));
             await pair.RunTicksSync(1);
-            Assert.That(mapSys.MapExists(staged!.Value), Is.False, "Control: the staging map is gone before the retrieve.");
+            Assert.That(mapSys.MapExists(staged!.Value), Is.False, "Control: the shipyard map is gone before the retrieve.");
 
             var retrieved = await RunOnServer(pair, () => drydock.TryRetrieveShip(shipId!.Value, owner, station, null));
+            await pair.RunTicksSync(5);
 
-            Assert.Multiple(() =>
+            await server.WaitAssertion(() =>
             {
-                Assert.That(retrieved.Result, Is.EqualTo(DrydockRetrieveResult.Success), "A retrieve with no staging map brings the map up itself.");
-                Assert.That(shipyard.ShipyardMap, Is.Not.Null);
-                Assert.That(mapSys.MapExists(shipyard.ShipyardMap!.Value), Is.True, "The shipyard was re-staged, not just the ship put somewhere.");
+                // Resolved before the multiple, because a failed TryGetComponent inside one does not
+                // stop the block and the next line would then throw over the real report.
+                EntityUid? shipMap = null;
+                var onStagingMap = false;
+                if (retrieved.Grid is { } grid && entMan.TryGetComponent<TransformComponent>(grid, out var xform))
+                {
+                    shipMap = xform.MapUid;
+                    onStagingMap = xform.MapUid is { } map && entMan.HasComponent<DrydockStagingMapComponent>(map);
+                }
+
+                Assert.Multiple(() =>
+                {
+                    Assert.That(retrieved.Result, Is.EqualTo(DrydockRetrieveResult.Success),
+                        "Retrieve stages onto a private map, so a missing shipyard map cannot refuse it.");
+
+                    Assert.That(shipyard.ShipyardMap is not { } live || !mapSys.MapExists(live), Is.True,
+                        "A retrieve must not re-stage the shipyard; it owns a private map instead.");
+
+                    Assert.That(CountStagingMaps(entMan), Is.EqualTo(stagingBefore),
+                        "Store and retrieve each scrap their own staging map, so neither may outlive the pipeline.");
+
+                    Assert.That(shipMap, Is.Not.Null, "A presented ship is on a live map.");
+                    Assert.That(onStagingMap, Is.False, "The ship left the staging map for the station's.");
+                });
             });
 
-            await pair.RunTicksSync(5);
             await pair.CleanReturnAsync();
+        }
+
+        /// <summary>How many drydock staging maps exist right now, of every kind.</summary>
+        private static int CountStagingMaps(IEntityManager entMan)
+        {
+            var count = 0;
+            var query = entMan.AllEntityQueryEnumerator<DrydockStagingMapComponent>();
+            while (query.MoveNext(out _, out _))
+                count++;
+
+            return count;
         }
 
         /// <summary>
@@ -657,6 +701,27 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             var fireControl = server.System<FireControlSystem>();
             var xform = server.System<SharedTransformSystem>();
 
+            // The gun brings its own cooldown to this probe. WeaponTurretFang fires in bursts and
+            // parks NextFire two seconds out at the end of one (Gun.burstCooldown 2), and the round
+            // trip carries what is left of that: NextFire is a TimeOffsetSerializer field, so the
+            // store writes the residue and the retrieve rebases it onto load time. A fixed settle
+            // after a retrieve is therefore a race against the control shot this same helper fired
+            // earlier, and a gun that loses it looks exactly like a gun that is still frozen.
+            var cooldownTicks = 0;
+            await server.WaitPost(() =>
+            {
+                var timing = server.ResolveDependency<IGameTiming>();
+                var turretUid = ChildrenWith<FireControllableComponent>(entMan, grid).Single();
+                var gun = entMan.GetComponent<GunComponent>(turretUid);
+                var remaining = gun.NextFire - timing.CurTime;
+                cooldownTicks = remaining > TimeSpan.Zero
+                    ? (int) Math.Ceiling(remaining.TotalSeconds * timing.TickRate) + 1
+                    : 0;
+            });
+
+            if (cooldownTicks > 0)
+                await pair.RunTicksSync(cooldownTicks);
+
             var before = 0;
             var attempted = false;
             await server.WaitPost(() =>
@@ -697,6 +762,10 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                     Assert.That(blocker.CanAttack(turretUid), Is.True, "The action blocker lets the turret attack.");
                     Assert.That(gun.ShootCoordinates, Is.Not.Null, "The gun holds its shoot coordinates.");
                     Assert.That(gun.FireRateModified, Is.GreaterThan(0f), $"Fire rate modified {gun.FireRateModified} against base {gun.FireRate}.");
+                    // Deliberately a loose bound, and it is measuring a jump rather than a deadline.
+                    // A gun that just fired is always a little ahead of now, by one inter-shot step
+                    // (measured 0.17 s here). The empty-shot branch instead adds the whole two-second
+                    // burst cooldown, so anything under a second says the shot was real.
                     Assert.That(gun.NextFire, Is.LessThan(timing.CurTime + TimeSpan.FromSeconds(1)), $"Gun NextFire {gun.NextFire} against now {timing.CurTime}: a jump of the burst cooldown means the empty-shot branch ran.");
                     Assert.That(ammo.Shots, Is.LessThan(800), $"The ammo provider gave up a shot (shots {ammo.Shots}, charge {battery.CurrentCharge}).");
                     Assert.That(entMan.Count<ShipWeaponProjectileComponent>() - before, Is.GreaterThan(0), "One tick after the shot a projectile exists.");
@@ -2587,7 +2656,9 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                 // a ship survives a round trip should not also be measuring the scheduler.
                 cfg.SetCVar(TriadCCVars.DrydockTickBudgetMs, 0);
 
-                // Retrieve refuses without a staging map, and nothing in a test pair creates one.
+                // Not for the retrieve, which loads onto a private map of its own and no longer
+                // refuses without this one. The shipyard's own paths still want a staged map, and
+                // ARetrieveNeedsNoShipyardMap needs one here to delete.
                 shipyard.SetupShipyardIfNeeded();
 
                 // The dock target. As far as the retrieve gate is concerned a station is a
@@ -2616,6 +2687,9 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                 airlock = entMan.SpawnEntity(AirlockProtoId, new EntityCoordinates(shipGrid, new Vector2(1f, 1f)));
             });
 
+            // The station stands on the test grid, which the fork's janitors are built to delete.
+            await pair.MakeCleanupImmune(map.Grid.Owner);
+
             await pair.RunTicksSync(5);
 
             return (station, shipGrid, airlock);
@@ -2626,11 +2700,11 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
         /// finishes. Both pipelines await database work, so the continuation has to come back to a
         /// ticking server; awaiting the task from the test thread alone would never let it resume.
         ///
-        /// <para>The six hundred tick ceiling assumes an unsliced pipeline, and
-        /// <see cref="BuildShipAndStation"/> guarantees one by setting
-        /// <c>triad.drydock.tick_budget_ms</c> to zero. A store sliced at the shipping default
-        /// suspends at every phase boundary and again whenever it runs out of budget mid-walk, so a
-        /// capital hull would want thousands of ticks and this ceiling would fail it. Anything that
+        /// <para>Bounded by the wall clock, not by a tick count. <see cref="BuildShipAndStation"/>
+        /// sets <c>triad.drydock.tick_budget_ms</c> to zero, so no job is made and the only real
+        /// suspensions left are the store's three thread-pool hops, which are real time on another
+        /// thread rather than ticks here: a fixed tick ceiling drains in well under a second on an
+        /// idle pair and then calls a store that is merely parked "never completed". Anything that
         /// deliberately exercises slicing pumps its own loop rather than borrowing this one.</para>
         /// </summary>
         private static async Task<T> RunOnServer<T>(TestPair pair, Func<Task<T>> start)
@@ -2638,7 +2712,8 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             Task<T>? task = null;
             await pair.Server.WaitPost(() => task = start());
 
-            for (var i = 0; i < 600 && !task!.IsCompleted; i++)
+            var deadline = System.Diagnostics.Stopwatch.StartNew();
+            while (!task!.IsCompleted && deadline.Elapsed < TimeSpan.FromSeconds(60))
             {
                 await pair.RunTicksSync(1);
             }

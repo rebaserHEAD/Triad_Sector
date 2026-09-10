@@ -98,6 +98,9 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                 stationSys.AddGridToStation(station, map.Grid.Owner);
             });
 
+            // The station stands on the test grid, which the fork's janitors are built to delete.
+            await pair.MakeCleanupImmune(map.Grid.Owner);
+
             await pair.RunTicksSync(5);
 
             var vessels = protoMan.EnumeratePrototypes<VesselPrototype>()

@@ -104,6 +104,11 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                 stationSys.AddGridToStation(station, map.Grid.Owner);
             });
 
+            // This is the fixture the janitor actually caught: an unprotected run lost the station's
+            // grid partway down the roster, and every retrieve after that was refused NoStation with
+            // its berth still held, which then read as twenty-two drydock failures.
+            await pair.MakeCleanupImmune(map.Grid.Owner);
+
             await pair.RunTicksSync(5);
 
             var roster = protoMan.EnumeratePrototypes<VesselPrototype>()
@@ -154,6 +159,19 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             foreach (var vessel in vessels)
             {
                 EntityUid? loaded = null;
+
+                // Checked every vessel, because a station that quietly loses its grid reports as a
+                // drydock refusal on every hull after it: NoStation until the berths fill, then
+                // NoBerth. One named failure here beats twenty-two that blame the wrong system.
+                var stationHasGrid = false;
+                await server.WaitPost(() =>
+                {
+                    stationHasGrid = entMan.TryGetComponent<StationDataComponent>(station, out var data)
+                                     && stationSys.GetLargestGrid(data) is not null;
+                });
+
+                Assert.That(stationHasGrid, Is.True,
+                    $"Before {vessel.ID}: the requesting station has no grid left, so the refusals below would be about the fixture and not about the drydock.");
 
                 await server.WaitPost(() =>
                 {
@@ -444,18 +462,26 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
         }
 
         /// <summary>
-        /// Starts a pipeline on the game thread and pumps until it finishes. The nine hundred tick
-        /// ceiling is sized for an unsliced pipeline waiting on nothing but the database, which the
-        /// fixture guarantees by setting <c>triad.drydock.tick_budget_ms</c> to zero. A sliced store
-        /// suspends at every phase boundary and again whenever it spends its budget mid-walk, so a
-        /// capital hull would want thousands of ticks and fail here.
+        /// Starts a pipeline on the game thread and pumps until it finishes, bounded by the wall
+        /// clock rather than by a tick count.
+        ///
+        /// <para>The fixture sets <c>triad.drydock.tick_budget_ms</c> to zero, so no job is made and
+        /// the only real suspensions left in the pipeline are the store's three thread-pool hops:
+        /// hash, drift and compress. What the pump waits on is therefore real time on another
+        /// thread, which a tick count does not measure. A fixed ceiling of tick round-trips drains
+        /// in about 0.6 s on an idle pair and then calls a store that is merely parked "never
+        /// completed": measured 2026-09-09 across the roster, every hull whose hash, drift and
+        /// compress summed under 571 ms passed a 900-tick pump and every hull over 605 ms failed
+        /// it, each one logging a successful store a moment later, and the set of failing hulls
+        /// moved between runs.</para>
         /// </summary>
         private static async Task<T> RunOnServer<T>(TestPair pair, Func<Task<T>> start)
         {
             Task<T>? task = null;
             await pair.Server.WaitPost(() => task = start());
 
-            for (var i = 0; i < 900 && !task!.IsCompleted; i++)
+            var deadline = System.Diagnostics.Stopwatch.StartNew();
+            while (!task!.IsCompleted && deadline.Elapsed < TimeSpan.FromSeconds(60))
             {
                 await pair.RunTicksSync(1);
             }

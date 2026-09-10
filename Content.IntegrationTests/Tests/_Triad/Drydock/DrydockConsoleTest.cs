@@ -920,7 +920,10 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                     "The control on the overlap: the sentinel is stamped before the store's first await, so both presses really were in flight together.");
             });
 
-            for (var i = 0; i < 600 && !(firstPress!.IsCompleted && secondPress!.IsCompleted); i++)
+            // Wall clock, not ticks: with the budget off the store's remaining suspensions are
+            // thread-pool hops, and a tick ceiling drains long before they land.
+            var deadline = System.Diagnostics.Stopwatch.StartNew();
+            while (!(firstPress!.IsCompleted && secondPress!.IsCompleted) && deadline.Elapsed < TimeSpan.FromSeconds(60))
             {
                 await pair.RunTicksSync(1);
             }
@@ -1059,6 +1062,10 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                 itemSlots.TryInsert(console, comp.TargetIdSlot, card, user: null);
             });
 
+            // The station and the console both stand on the test grid, which the fork's janitors are
+            // built to delete.
+            await pair.MakeCleanupImmune(map.Grid.Owner);
+
             await pair.RunTicksSync(5);
 
             // Docked only after the client has seen both grids. A grid that arrives at the client
@@ -1075,18 +1082,22 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
         }
 
         /// <summary>
-        /// Starts a console operation on the game thread and pumps until it finishes. The six
-        /// hundred tick ceiling assumes a pipeline that only ever waits on the database, which
-        /// <see cref="BuildConsoleAndShip"/> guarantees by setting
-        /// <c>triad.drydock.tick_budget_ms</c> to zero. A sliced store suspends at every phase
-        /// boundary and again whenever it spends its budget, so it wants far more ticks than this.
+        /// Starts a console operation on the game thread and pumps until it finishes, bounded by the
+        /// wall clock rather than by a tick count.
+        ///
+        /// <para><see cref="BuildConsoleAndShip"/> sets <c>triad.drydock.tick_budget_ms</c> to zero,
+        /// so no job is made and the only real suspensions left are the store's three thread-pool
+        /// hops. Those are real time on another thread, which ticks here do not measure: a fixed
+        /// tick ceiling drains in well under a second on an idle pair and then calls a store that is
+        /// merely parked "never completed".</para>
         /// </summary>
         private static async Task<T> RunOnServer<T>(TestPair pair, Func<Task<T>> start)
         {
             Task<T>? task = null;
             await pair.Server.WaitPost(() => task = start());
 
-            for (var i = 0; i < 600 && !task!.IsCompleted; i++)
+            var deadline = System.Diagnostics.Stopwatch.StartNew();
+            while (!task!.IsCompleted && deadline.Elapsed < TimeSpan.FromSeconds(60))
             {
                 await pair.RunTicksSync(1);
             }
