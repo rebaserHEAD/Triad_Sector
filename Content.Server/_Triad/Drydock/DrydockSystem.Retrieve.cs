@@ -240,6 +240,10 @@ public sealed partial class DrydockSystem
             else
                 cancellation?.Dispose();
 
+            // Null on the rollback lever, which clears the table rather than leaving the previous
+            // sliced run's for the next reader to mistake for this one's.
+            RecordPhaseCosts(job?.Meter);
+
             // The bar's last phase belongs to the wrapper, because the two writes it names are the
             // wrapper's own.
             progress?.BeginPhase(DrydockPhase.Release, 0);

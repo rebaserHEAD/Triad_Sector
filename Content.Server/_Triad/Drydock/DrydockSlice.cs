@@ -284,6 +284,77 @@ public sealed class DrydockProgress
 }
 
 /// <summary>
+/// What one phase cost the main thread, in ticks rather than in runs.
+///
+/// <para><see cref="WorstTickMs"/> is the figure the slicing design is judged on: the most
+/// main-thread time this phase took away from a single tick. It is deliberately not "the longest
+/// run", because <c>JobQueue.Process</c> re-runs a suspended job while its own clock has
+/// room and <c>Begin</c> force-suspends whether or not the budget is spent, so one tick routinely
+/// holds several runs. A per-run maximum would read well under the budget while the tick actually
+/// paid more, and it would do it worst in exactly the sliced phases the design exists to
+/// improve.</para>
+/// </summary>
+public readonly record struct DrydockPhaseCost(double WorstTickMs, double TotalMs, int Ticks);
+
+/// <summary>
+/// Buckets main-thread spans by tick and by phase, so a phase's cost is what a bystander felt in
+/// one tick rather than what one resumption happened to take.
+///
+/// <para>The caller owns the clock and the phase, because the two pipelines learn them differently:
+/// a job reads the stopwatch the engine restarts at the top of every run, and knows the phase that
+/// was open when that run started.</para>
+/// </summary>
+public sealed class DrydockSpanMeter
+{
+    private readonly Dictionary<DrydockPhase, double> _thisTick = new();
+    private readonly Dictionary<DrydockPhase, DrydockPhaseCost> _costs = new();
+    private uint _tick;
+    private double _thisTickTotal;
+    private bool _open;
+
+    /// <summary>The worst single tick the pipeline cost, across every phase that shared it.</summary>
+    public double WorstTickMs { get; private set; }
+
+    public IReadOnlyDictionary<DrydockPhase, DrydockPhaseCost> Costs => _costs;
+
+    /// <summary>Credits one main-thread span to the phase that owned it.</summary>
+    public void Add(uint tick, DrydockPhase? phase, double ms)
+    {
+        if (_open && tick != _tick)
+            Flush();
+
+        _tick = tick;
+        _open = true;
+        _thisTickTotal += ms;
+
+        // A span with no phase is the job's own prologue, before the first phase opened. It counts
+        // toward the tick and against no phase, which is why the rows do not have to sum to the
+        // headline.
+        if (phase is { } p)
+            _thisTick[p] = _thisTick.GetValueOrDefault(p) + ms;
+    }
+
+    /// <summary>Closes the tick being accumulated. Idempotent, so the pipeline's exit can just call it.</summary>
+    public void Flush()
+    {
+        if (!_open)
+            return;
+
+        foreach (var (phase, ms) in _thisTick)
+        {
+            var prev = _costs.GetValueOrDefault(phase);
+            _costs[phase] = new DrydockPhaseCost(Math.Max(prev.WorstTickMs, ms), prev.TotalMs + ms, prev.Ticks + 1);
+        }
+
+        WorstTickMs = Math.Max(WorstTickMs, _thisTickTotal);
+
+        _thisTick.Clear();
+        _thisTickTotal = 0;
+        _open = false;
+    }
+}
+
+/// <summary>
 /// The tick-budget handle every pipeline is written against. Two implementations: the two jobs,
 /// which really suspend, and <see cref="DrydockSyncSlice"/>, which never does.
 ///

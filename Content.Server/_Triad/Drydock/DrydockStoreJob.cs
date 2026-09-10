@@ -61,6 +61,18 @@ public sealed class DrydockStoreJob : Job<DrydockStoreOutcome>, IDrydockSlice
 
     public int Slices { get; private set; }
 
+    /// <summary>
+    /// The phase that owns the span currently being timed: whichever one was open when this run
+    /// started, not whichever one is open when it ends. <c>Begin</c> calls
+    /// <c>Progress.BeginPhase</c> before it suspends, so reading the phase off Progress at a
+    /// suspension would file every phase's tail under the phase that follows it, and the serialize
+    /// would land in Validate. Null until the first phase opens.
+    /// </summary>
+    private DrydockPhase? _spanPhase;
+
+    /// <summary>Per-tick, per-phase main-thread cost. See <see cref="DrydockSpanMeter"/>.</summary>
+    public DrydockSpanMeter Meter { get; } = new();
+
     public double SecondsSinceProgress => _sinceProgress.Elapsed.TotalSeconds;
 
     // Explicit, because Job<T>.Cancellation is protected and a public one of the same name would
@@ -73,12 +85,18 @@ public sealed class DrydockStoreJob : Job<DrydockStoreOutcome>, IDrydockSlice
         _sinceProgress.Restart();
 
         if (!Slicing)
+        {
+            _spanPhase = phase;
             return;
+        }
 
         // Unconditional, not budget-conditional. A phase that starts with most of a tick's budget
         // already spent by the phase before it would otherwise overrun on its very first items,
         // and the phases whose first items are expensive are exactly the ones worth protecting.
         Sample();
+
+        // After the sample, so the span just closed is credited to the phase that ran it.
+        _spanPhase = phase;
         await SuspendNow();
     }
 
@@ -124,7 +142,23 @@ public sealed class DrydockStoreJob : Job<DrydockStoreOutcome>, IDrydockSlice
 
     protected override async Task<DrydockStoreOutcome?> Process()
     {
-        return await _system.RunStorePipeline(Context, this);
+        try
+        {
+            return await _system.RunStorePipeline(Context, this);
+        }
+        finally
+        {
+            // The last run of a pipeline ends at its return, and nothing suspends there, so without
+            // this the tail of the store is never sampled. The guard is the engine's own
+            // (Job.cs:193-200): a job still Waiting reached here because an awaited task faulted,
+            // which means WaitAsyncTask never got to its resume park and the stopwatch is still
+            // holding a span that contains the whole off-thread wait. The fault path's own
+            // main-thread work is simply not measured; there is no restart to price it against.
+            if (Status != JobStatus.Waiting)
+                Sample(suspending: false);
+
+            Meter.Flush();
+        }
     }
 
     /// <summary>
@@ -133,12 +167,17 @@ public sealed class DrydockStoreJob : Job<DrydockStoreOutcome>, IDrydockSlice
     /// A tick can still hold more than one run, because the queue re-runs a suspended job while its
     /// own clock has room, so this is a lower bound on the worst tick rather than the worst tick.
     /// </summary>
-    private void Sample()
+    private void Sample(bool suspending = true)
     {
         var ms = StopWatch.Elapsed.TotalMilliseconds;
         if (ms > WorstSliceMs)
             WorstSliceMs = ms;
 
-        Slices++;
+        Meter.Add(_system.CurTickValue, _spanPhase, ms);
+
+        // Only a real suspension is a slice. The pipeline's closing sample is not one, and counting
+        // it would change what the shipped timing line's slices= has always meant.
+        if (suspending)
+            Slices++;
     }
 }

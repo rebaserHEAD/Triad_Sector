@@ -167,6 +167,9 @@ public sealed partial class DrydockSystem : EntitySystem
         var jobId = 0;
         CancellationTokenSource? cancellation = null;
 
+        // Hoisted so the finally can record its meter on every path, the rollback lever included.
+        DrydockStoreJob? job = null;
+
         try
         {
             // A budget of zero or less is the rollback lever on a pipeline whose deploy has no other
@@ -180,7 +183,7 @@ public sealed partial class DrydockSystem : EntitySystem
             }
 
             cancellation = new CancellationTokenSource();
-            var job = new DrydockStoreJob(this, ctx, TickBudgetSeconds, SliceStride, onProgress, cancellation.Token);
+            job = new DrydockStoreJob(this, ctx, TickBudgetSeconds, SliceStride, onProgress, cancellation.Token);
             jobId = RegisterJob(job, cancellation);
             EnqueueJob(job);
 
@@ -215,6 +218,10 @@ public sealed partial class DrydockSystem : EntitySystem
                 RetireJob(jobId);
             else
                 cancellation?.Dispose();
+
+            // Null on the rollback lever, which clears the table rather than leaving the previous
+            // sliced run's for the next reader to mistake for this one's.
+            RecordPhaseCosts(job?.Meter);
 
             // One frame up from where this used to sit, at the bottom of the pipeline's own finally,
             // so it now also covers a job cancelled before its body ever ran. On success the grid is

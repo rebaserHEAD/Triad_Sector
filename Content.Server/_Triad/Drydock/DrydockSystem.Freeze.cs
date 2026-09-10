@@ -142,6 +142,39 @@ public sealed partial class DrydockSystem
         }
     }
 
+    /// <summary>The current tick, for the span meter to bucket by. Value rather than GameTick so the
+    /// meter does not need an engine type.</summary>
+    internal uint CurTickValue => _timing.CurTick.Value;
+
+    /// <summary>
+    /// Per-phase cost of the last store or retrieve that ran a job, for the local timing rig.
+    /// Cleared rather than left standing when a pipeline runs without one, because the benchmark
+    /// runs both arms in the same server and a stale table read as the other arm's would be a
+    /// fabricated result rather than a missing one. <see cref="LastPhaseCostsRun"/> is the tripwire
+    /// that lets a caller prove the table belongs to the run it just made.
+    /// </summary>
+    internal IReadOnlyDictionary<DrydockPhase, DrydockPhaseCost>? LastPhaseCosts { get; private set; }
+
+    /// <summary>Monotonic id of the pipeline that filled <see cref="LastPhaseCosts"/>.</summary>
+    internal int LastPhaseCostsRun { get; private set; }
+
+    /// <summary>Worst whole tick, across every phase, of the pipeline that filled <see cref="LastPhaseCosts"/>.</summary>
+    internal double LastWorstTickMs { get; private set; }
+
+    private int _phaseCostRun;
+
+    /// <summary>
+    /// Records a finished pipeline's meter. Called from the wrapper's finally on every path, so a
+    /// cancelled or refused run clears the table instead of leaving the previous one to be read as
+    /// its own.
+    /// </summary>
+    internal void RecordPhaseCosts(DrydockSpanMeter? meter)
+    {
+        LastPhaseCosts = meter?.Costs;
+        LastWorstTickMs = meter?.WorstTickMs ?? 0;
+        LastPhaseCostsRun = ++_phaseCostRun;
+    }
+
     /// <summary>Job budget in seconds: the cvar's milliseconds over a thousand. Zero or less means no job.</summary>
     internal double TickBudgetSeconds => Math.Max(0, _cfg.GetCVar(TriadCCVars.DrydockTickBudgetMs)) / 1000.0;
 

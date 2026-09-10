@@ -302,12 +302,22 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             Pair.TestPair pair,
             Func<Task<T>> run)
         {
-            Task<T>? task = null;
-            await pair.Server.WaitPost(() => { task = run(); });
-
             var wall = Stopwatch.StartNew();
-            var worstTickMs = 0d;
-            var ticks = 0;
+
+            // The kick-off is timed and counted as a tick, because on the unsliced arm it IS the
+            // expensive one. With no job the pipeline runs on the caller's async path and only a
+            // real await hands the thread back, so everything from the start to the first database
+            // call - freeze, purge, appraise, sidecars, strip, capture, prepare, serialize and
+            // validate - executes inside this WaitPost, before the loop below ever starts a
+            // stopwatch. Timing only the loop reports the unsliced store as an order of magnitude
+            // cheaper than the sliced one by simply not looking at its worst span.
+            Task<T>? task = null;
+            var kick = Stopwatch.StartNew();
+            await pair.Server.WaitPost(() => { task = run(); });
+            kick.Stop();
+
+            var worstTickMs = kick.Elapsed.TotalMilliseconds;
+            var ticks = 1;
 
             while (task == null || !task.IsCompleted)
             {
@@ -323,6 +333,231 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             wall.Stop();
 
             return (await task, wall.Elapsed.TotalMilliseconds, worstTickMs, ticks);
+        }
+
+        /// <summary>
+        /// Old against new, on the same hulls in the same server, with the per-phase breakdown of
+        /// what a tick now pays.
+        ///
+        /// <para>The headline comparison uses ONE instrument for both arms: the pump's own per-tick
+        /// stopwatch. That is a whole pair tick, server and client and sync, so it carries a couple
+        /// of milliseconds of harness overhead, which is why it is quoted only against figures far
+        /// above that and why both arms are measured with it rather than one arm with it and the
+        /// other with something narrower.</para>
+        ///
+        /// <para>The per-phase table comes from the pipeline's own <see cref="DrydockSpanMeter"/>,
+        /// which is main-thread pipeline time only and exists solely on the sliced arm. There is no
+        /// per-phase old column on purpose: deriving one from the wall-clock phase timer would be
+        /// invalid for every phase whose mark straddles a real await, because those marks contain
+        /// database and thread-pool time plus up to a whole tick of parking. Printing that beside a
+        /// sliced figure that correctly excludes both would invent an improvement in the three
+        /// Task.Run phases that are byte-identical on the two paths.</para>
+        ///
+        /// <para>What the old arm gets instead is its worst tick, which is the number the design is
+        /// actually judged against, measured the same way as the new one.</para>
+        /// </summary>
+        [Test]
+        public async Task CompareSlicedAgainstUnsliced()
+        {
+            await using var pair = await PoolManager.GetServerClient();
+            var server = pair.Server;
+            var entMan = server.EntMan;
+
+            var cfg = server.ResolveDependency<IConfigurationManager>();
+            var db = server.ResolveDependency<IServerDbManager>();
+            var protoMan = server.ResolveDependency<IPrototypeManager>();
+            var store = server.ResolveDependency<DrydockStore>();
+            var drydock = server.System<DrydockSystem>();
+            var shipyard = server.System<ShipyardSystem>();
+            var stationSys = server.System<StationSystem>();
+            var mapLoader = server.System<MapLoaderSystem>();
+
+            var owner = Guid.NewGuid();
+            await InsertPlayer(db, owner);
+            for (var i = 0; i < 3; i++)
+                await store.AddBerth(owner, ShipSizeClass.SuperCapital, DrydockBerthKind.Granted, 0, null, null);
+
+            var map = await pair.CreateTestMap();
+
+            EntityUid station = default;
+            await server.WaitPost(() =>
+            {
+                cfg.SetCVar(TriadCCVars.DrydockEnabled, true);
+                cfg.SetCVar(TriadCCVars.DrydockReadOnly, false);
+                shipyard.SetupShipyardIfNeeded();
+
+                station = entMan.Spawn();
+                entMan.AddComponent<StationDataComponent>(station);
+                stationSys.AddGridToStation(station, map.Grid.Owner);
+            });
+
+            await pair.MakeCleanupImmune(map.Grid.Owner);
+            await pair.RunTicksSync(5);
+
+            // A spread rather than the roster: this runs every hull twice per repeat, so breadth
+            // costs four times what the one-armed sweep costs. Smallest, largest and two from the
+            // middle is enough to show whether the per-tick cost tracks hull size.
+            var all = protoMan.EnumeratePrototypes<VesselPrototype>().Where(v => !v.Abstract).OrderBy(v => v.ID).ToList();
+            var picked = new[] { "Kestrel", "Prospector", "Windreign", "Zeros" };
+            var sample = all.Where(v => picked.Contains(v.ID)).ToList();
+            if (sample.Count == 0)
+                sample = all.Where((_, i) => i % 37 == 0).ToList();
+
+            Assert.That(sample, Is.Not.Empty, "Nothing to measure, so the run says nothing.");
+
+            const int repeats = 3;
+            var arms = new[] { 0, MeasuredBudgetMs };
+
+            // hull -> budget -> the worst tick each repeat produced, by the pump's own clock.
+            var pumped = new Dictionary<string, Dictionary<int, List<double>>>();
+            // phase -> worst tick it ever cost on the sliced arm, and the total it ever cost.
+            var phaseWorst = new Dictionary<DrydockPhase, double>();
+            var phaseTotal = new Dictionary<DrydockPhase, double>();
+            var meterWorst = new Dictionary<string, double>();
+
+            // Unmeasured, so the first hull does not pay for JIT on behalf of the arm it happens to
+            // run in.
+            await RunOneStore(pair, drydock, store, mapLoader, entMan, server, cfg, map, owner, sample[0], 0);
+
+            foreach (var vessel in sample)
+            {
+                pumped[vessel.ID] = new Dictionary<int, List<double>>();
+
+                for (var rep = 0; rep < repeats; rep++)
+                {
+                    foreach (var budget in arms)
+                    {
+                        var measured = await RunOneStore(pair, drydock, store, mapLoader, entMan, server, cfg, map, owner, vessel, budget);
+                        if (measured == null)
+                            continue;
+
+                        if (!pumped[vessel.ID].TryGetValue(budget, out var list))
+                            pumped[vessel.ID][budget] = list = new List<double>();
+                        list.Add(measured.WorstTickMs);
+
+                        if (budget <= 0)
+                            continue;
+
+                        // The tripwire: a stale table would otherwise be read as this run's.
+                        Assert.That(measured.CostsRun, Is.EqualTo(measured.ExpectedRun),
+                            $"{vessel.ID}: the phase table belongs to a different run, so every number below it would be someone else's.");
+
+                        meterWorst[vessel.ID] = Math.Max(meterWorst.GetValueOrDefault(vessel.ID), measured.MeterWorstMs);
+
+                        foreach (var (phase, cost) in measured.Costs)
+                        {
+                            phaseWorst[phase] = Math.Max(phaseWorst.GetValueOrDefault(phase), cost.WorstTickMs);
+                            phaseTotal[phase] = Math.Max(phaseTotal.GetValueOrDefault(phase), cost.TotalMs);
+                        }
+                    }
+                }
+            }
+
+            TestContext.Out.WriteLine("");
+            TestContext.Out.WriteLine($"=== worst tick, unsliced against sliced at {MeasuredBudgetMs}ms, {repeats} repeats ===");
+            TestContext.Out.WriteLine("  both columns are the pump's own per-tick clock, so they compare like for like.");
+            TestContext.Out.WriteLine("  meter is the pipeline's own main-thread accounting, sliced arm only.");
+            TestContext.Out.WriteLine("");
+            TestContext.Out.WriteLine($"{"vessel",-14} {"old min",9} {"old med",9} {"old max",9} {"new min",9} {"new med",9} {"new max",9} {"meter",9}");
+
+            foreach (var vessel in sample)
+            {
+                if (!pumped.TryGetValue(vessel.ID, out var byBudget) || byBudget.Count < 2)
+                    continue;
+
+                var old = Stats(byBudget.GetValueOrDefault(0));
+                var now = Stats(byBudget.GetValueOrDefault(MeasuredBudgetMs));
+                TestContext.Out.WriteLine(
+                    $"{vessel.ID,-14} {old.Min,9:F1} {old.Med,9:F1} {old.Max,9:F1} {now.Min,9:F1} {now.Med,9:F1} {now.Max,9:F1} {meterWorst.GetValueOrDefault(vessel.ID),9:F1}");
+            }
+
+            TestContext.Out.WriteLine("");
+            TestContext.Out.WriteLine("=== sliced arm, per phase: the worst any single tick paid ===");
+            TestContext.Out.WriteLine($"{"phase",-14} {"worst tick",11} {"total",10}");
+            foreach (var (phase, worst) in phaseWorst.OrderByDescending(p => p.Value))
+                TestContext.Out.WriteLine($"{phase,-14} {worst,11:F2} {phaseTotal.GetValueOrDefault(phase),10:F1}");
+
+            TestContext.Out.WriteLine("");
+            TestContext.Out.WriteLine("Caveats that belong with these numbers:");
+            TestContext.Out.WriteLine("  - DebugOpt, not Release. Absolute values are pessimistic; the ratio is the point.");
+            TestContext.Out.WriteLine("  - The pump tick is a whole pair tick, so it carries harness overhead. Its floor is not zero.");
+            TestContext.Out.WriteLine("  - Rows do not sum to the headline: a span before the first phase opens counts against the");
+            TestContext.Out.WriteLine("    tick and against no phase, and Despawn's head is booked to Commit because the pipeline");
+            TestContext.Out.WriteLine("    deliberately refuses to suspend between the commit and ctx.Committed.");
+            TestContext.Out.WriteLine("  - The full-tree reparent runs before Begin(Freeze), so it books to the phase before it.");
+            TestContext.Out.WriteLine("  - Hash, drift and compress run on a worker thread on BOTH arms, so their per-tick cost is");
+            TestContext.Out.WriteLine("    near zero here and that is not an improvement over the old path.");
+
+            Assert.That(phaseWorst, Is.Not.Empty, "No phase costs were recorded, so the per-phase table says nothing.");
+            await pair.CleanReturnAsync();
+        }
+
+        private static (double Min, double Med, double Max) Stats(List<double>? values)
+        {
+            if (values == null || values.Count == 0)
+                return (0, 0, 0);
+
+            var sorted = values.OrderBy(v => v).ToList();
+            return (sorted[0], sorted[sorted.Count / 2], sorted[^1]);
+        }
+
+        private sealed record StoreMeasurement(
+            double WorstTickMs,
+            double MeterWorstMs,
+            int CostsRun,
+            int ExpectedRun,
+            IReadOnlyDictionary<DrydockPhase, DrydockPhaseCost> Costs);
+
+        /// <summary>Loads a hull, stores it at the given budget, reads the meter, and cleans up after itself.</summary>
+        private static async Task<StoreMeasurement?> RunOneStore(
+            Pair.TestPair pair,
+            DrydockSystem drydock,
+            DrydockStore store,
+            MapLoaderSystem mapLoader,
+            IEntityManager entMan,
+            Robust.UnitTesting.RobustIntegrationTest.ServerIntegrationInstance server,
+            IConfigurationManager cfg,
+            TestMapData map,
+            Guid owner,
+            VesselPrototype vessel,
+            int budget)
+        {
+            await server.WaitPost(() => cfg.SetCVar(TriadCCVars.DrydockTickBudgetMs, budget));
+
+            EntityUid? loaded = null;
+            await server.WaitPost(() =>
+            {
+                if (mapLoader.TryLoadGrid(map.MapId, vessel.ShuttlePath, out var grid))
+                    loaded = grid!.Value.Owner;
+            });
+            await pair.RunTicksSync(3);
+
+            if (loaded == null)
+                return null;
+
+            var before = drydock.LastPhaseCostsRun;
+            var measured = await RunOnServer(pair, () => drydock.TryStoreShip(loaded.Value, owner, null));
+            var (result, shipId) = measured.Result;
+
+            if (result != DrydockStoreResult.Success || shipId == null)
+            {
+                await server.WaitPost(() => { if (entMan.EntityExists(loaded.Value)) entMan.DeleteEntity(loaded.Value); });
+                return null;
+            }
+
+            var costs = drydock.LastPhaseCosts;
+            var meterWorst = drydock.LastWorstTickMs;
+            var run = drydock.LastPhaseCostsRun;
+
+            await store.TryDeleteShip(shipId.Value, owner, null, "benchmark");
+            await pair.RunTicksSync(1);
+
+            return new StoreMeasurement(
+                measured.WorstTickMs,
+                meterWorst,
+                run,
+                before + 1,
+                costs ?? new Dictionary<DrydockPhase, DrydockPhaseCost>());
         }
 
         private static Task InsertPlayer(IServerDbManager db, Guid userId)
