@@ -126,13 +126,19 @@ public sealed partial class DrydockSystem : EntitySystem
     /// is elastic on purpose, so any caller with a player waiting on it is expected to pass one: the
     /// percentage is what makes an unbounded wait acceptable rather than alarming.
     /// </param>
+    /// <param name="impound">
+    /// Set to take the hull into the holding area rather than put it away in a berth. See
+    /// <see cref="DrydockImpound"/> and <see cref="TryImpoundShip"/>; ordinary callers leave it null
+    /// and get every gate the way it was written.
+    /// </param>
     public async Task<(DrydockStoreResult Result, Guid? ShipId)> TryStoreShip(
         EntityUid gridUid,
         Guid ownerUserId,
         int? roundId,
         int? berthId = null,
         EntityUid? stationUid = null,
-        DrydockProgressCallback? onProgress = null)
+        DrydockProgressCallback? onProgress = null,
+        DrydockImpound? impound = null)
     {
         if (!_cfg.GetCVar(TriadCCVars.DrydockEnabled) || _cfg.GetCVar(TriadCCVars.DrydockReadOnly))
             return (DrydockStoreResult.Disabled, null);
@@ -163,6 +169,7 @@ public sealed partial class DrydockSystem : EntitySystem
             RoundId = roundId,
             BerthId = berthId,
             StationUid = stationUid ?? _station.GetOwningStation(gridUid) ?? EntityUid.Invalid,
+            Impound = impound,
         };
 
         var jobId = 0;
@@ -274,11 +281,16 @@ public sealed partial class DrydockSystem : EntitySystem
             ctx.ShipId = shipId;
             var sizeClass = _shipSize.GetSizeClass((gridUid, Comp<MapGridComponent>(gridUid))).ToString();
 
-            var capacity = await slice.Await(
-                _store.CheckBerthForStore(shipId, ctx.OwnerUserId, sizeClass, ctx.BerthId));
+            // An impound needs no berth: the holding area is not one, and requiring a free berth
+            // would make the round-end sweep fail for exactly the owners whose garage is full.
+            if (ctx.Impound == null)
+            {
+                var capacity = await slice.Await(
+                    _store.CheckBerthForStore(shipId, ctx.OwnerUserId, sizeClass, ctx.BerthId));
 
-            if (capacity != DrydockBerthResult.Success)
-                return new DrydockStoreOutcome(BerthRefusal(capacity), null);
+                if (capacity != DrydockBerthResult.Success)
+                    return new DrydockStoreOutcome(BerthRefusal(capacity), null);
+            }
 
             if (TerminatingOrDeleted(gridUid))
                 return new DrydockStoreOutcome(DrydockStoreResult.SerializeFailed, null);
@@ -286,13 +298,20 @@ public sealed partial class DrydockSystem : EntitySystem
             // Hazards next, because the check mutates nothing and refusing here means nobody has
             // been moved for a store that was never going to happen. Runtime countdowns are
             // ordinary data fields that would resume on thaw, so an armed ship must be refused
-            // rather than frozen.
+            // rather than frozen. An impound has nowhere to refuse to, so it clears them first and
+            // then passes this same gate, which stays put as the backstop.
+            if (ctx.Impound != null)
+                PurgeHazardsAboard(gridUid);
+
             if (HasHazardAboard(gridUid))
                 return new DrydockStoreOutcome(DrydockStoreResult.HazardAboard, null);
 
-            // A mind must never be serialized, and a living mob does not round-trip cleanly.
-            // Relocating loose occupants onto the docked station is the eventual behaviour; until
-            // that exists this refuses, which is the safe direction to be stricter in.
+            // A mind must never be serialized, and a living mob does not round-trip cleanly. A
+            // store refuses, which is the safe direction to be stricter in; an impound moves them
+            // off and passes the same gate, for the same reason it purges rather than refuses.
+            if (ctx.Impound != null)
+                ctx.Evicted += EvictOrganicsAboard(gridUid);
+
             if (_shipyard.FoundOrganics(gridUid, mobQuery, xformQuery) is not null)
                 return new DrydockStoreOutcome(DrydockStoreResult.OrganicsAboard, null);
 
@@ -336,6 +355,9 @@ public sealed partial class DrydockSystem : EntitySystem
             // to refuse for. The old post-database counterpart of this check is gone with it: nobody
             // can walk aboard a ship on a private map, and the reparent that puts it there stays on
             // this side of the next suspension (see FreezeOntoStagingMap).
+            if (ctx.Impound != null)
+                ctx.Evicted += EvictOrganicsAboard(gridUid);
+
             if (_shipyard.FoundOrganics(gridUid, mobQuery, xformQuery) is not null)
                 return new DrydockStoreOutcome(DrydockStoreResult.OrganicsAboard, null);
 
@@ -361,6 +383,9 @@ public sealed partial class DrydockSystem : EntitySystem
             // Anyone found here boarded before the reparent. Refusing is still free: the purge and
             // every strip are below, and the unwind thaws the hull and docks it back with them on
             // it, which is the answer the gate would have given.
+            if (ctx.Impound != null)
+                ctx.Evicted += EvictOrganicsAboard(gridUid);
+
             if (_shipyard.FoundOrganics(gridUid, mobQuery, xformQuery) is not null)
                 return new DrydockStoreOutcome(DrydockStoreResult.OrganicsAboard, null);
 
@@ -543,6 +568,13 @@ public sealed partial class DrydockSystem : EntitySystem
                 SizeBytes = hashed.Bytes.Length,
                 AppraisedValue = appraisal,
                 Manifest = manifest.Serialize(),
+
+                // Clamped against this store's own appraisal rather than the caller's guess: the fee
+                // must never exceed what the hull is worth, and this is the last point where what it
+                // is worth is a measured number rather than a remembered one.
+                Impound = ctx.Impound is { } impound
+                    ? impound with { Fee = Math.Clamp(impound.Fee, 0, appraisal) }
+                    : null,
             };
 
             MarkPhase(DrydockPhase.Manifest);
@@ -618,8 +650,12 @@ public sealed partial class DrydockSystem : EntitySystem
             // state an admin restore exists for, and not a duplicate.
             try
             {
-                if (!await slice.Await(_store.MarkStored(shipId)))
-                    Log.Warning($"Drydock: {shipId} filed revision {filed.Revision} but its row did not move to stored; it may be impounded.");
+                var marked = ctx.Impound != null
+                    ? _store.MarkImpounded(shipId)
+                    : _store.MarkStored(shipId);
+
+                if (!await slice.Await(marked))
+                    Log.Warning($"Drydock: {shipId} filed revision {filed.Revision} but its row did not move to {(ctx.Impound != null ? "impounded" : "stored")}; it may already be impounded.");
             }
             catch (OperationCanceledException)
             {

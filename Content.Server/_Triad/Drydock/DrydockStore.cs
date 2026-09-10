@@ -130,6 +130,66 @@ public sealed partial class DrydockStore
         }, ct);
     }
 
+    /// <summary>The account a hull belongs to, or null when no row carries the id.</summary>
+    public Task<Guid?> GetShipOwner(Guid shipGuid, CancellationToken ct = default)
+    {
+        return _db.RunTriadDbCommand<Guid?>(async (db, token) => await db.DrydockShip
+            .AsNoTracking()
+            .Where(s => s.ShipGuid == shipGuid)
+            .Select(s => (Guid?)s.OwnerUserId)
+            .SingleOrDefaultAsync(token), ct);
+    }
+
+    /// <summary>
+    /// Writes the impound terms onto a row whose hull was never in the world, so there was no store
+    /// to carry them. The fee is NOT clamped here: nothing appraised the hull, because a stored ship
+    /// has nothing left to appraise, so the caller's number is the only one there is.
+    /// </summary>
+    public Task SetImpoundTerms(Guid shipGuid, int fee, string? reason, bool redeemable, CancellationToken ct = default)
+    {
+        return _db.RunTriadDbCommand(async (db, token) =>
+        {
+            var now = DateTime.UtcNow;
+            await db.DrydockShip
+                .Where(s => s.ShipGuid == shipGuid)
+                .ExecuteUpdateAsync(set => set
+                    .SetProperty(s => s.ImpoundFee, Math.Max(0, fee))
+                    .SetProperty(s => s.ImpoundReason, reason)
+                    .SetProperty(s => s.ImpoundRedeemable, redeemable)
+                    .SetProperty(s => s.LastBerthId, s => s.BerthId ?? s.LastBerthId)
+                    .SetProperty(s => s.BerthId, (int?)null)
+                    .SetProperty(s => s.UpdatedAt, now), token);
+        }, ct);
+    }
+
+    /// <summary>
+    /// The impound's counterpart to <see cref="MarkStored"/>, called once the hull is gone. Two
+    /// steps for the same reason a store is two steps: the filing write yields, and a row that says
+    /// impounded while a live grid still carries the ship is the duplicate the split exists to
+    /// prevent.
+    ///
+    /// <para>Unconditional in the state it moves from, unlike <see cref="MarkStored"/>, because an
+    /// impound is taken from wherever the hull was: out flying at round end, stored in a berth, or
+    /// in escrow when an admin reached for the ripcord. The round it left in is cleared, because
+    /// the hull is now in the holding area and nothing is out.</para>
+    /// </summary>
+    public Task<bool> MarkImpounded(Guid shipGuid, CancellationToken ct = default)
+    {
+        return _db.RunTriadDbCommand(async (db, token) =>
+        {
+            var now = DateTime.UtcNow;
+            var moved = await db.DrydockShip
+                .Where(s => s.ShipGuid == shipGuid && s.State != DrydockShipState.Impounded)
+                .ExecuteUpdateAsync(set => set
+                    .SetProperty(s => s.State, DrydockShipState.Impounded)
+                    .SetProperty(s => s.StateChangedAt, now)
+                    .SetProperty(s => s.CheckedOutRoundId, (int?)null)
+                    .SetProperty(s => s.UpdatedAt, now), token);
+
+            return moved > 0;
+        }, ct);
+    }
+
     /// <summary>
     /// Lifts an impound and returns the ship to the state it was in before it: checked out if the
     /// hull was out flying when it was taken (the row still carries the round it left in), stored
@@ -217,7 +277,22 @@ public sealed partial class DrydockStore
         // A player store needs somewhere to put the hull. A re-bake rewrites a document and never
         // touches the berth, because the ship may be out flying while the ladder runs. Refusing
         // here rolls the whole transaction back: nothing is filed for a ship with nowhere to go.
-        if (request.Kind is DrydockRevisionKind.PlayerStore or DrydockRevisionKind.LegacyImport)
+        //
+        // An impound is the third case: it has somewhere to go that is not a berth, so it vacates
+        // instead of seating. LastBerthId keeps where the hull came from, which is what a release
+        // offers as its default and what makes the redemption gate mean something, since a hull
+        // still holding its own berth would satisfy "find a free berth" for nothing.
+        if (request.Impound is { } impound)
+        {
+            if (ship.BerthId is { } vacated)
+                ship.LastBerthId = vacated;
+
+            ship.BerthId = null;
+            ship.ImpoundFee = impound.Fee;
+            ship.ImpoundReason = impound.Reason;
+            ship.ImpoundRedeemable = impound.Redeemable;
+        }
+        else if (request.Kind is DrydockRevisionKind.PlayerStore or DrydockRevisionKind.LegacyImport)
         {
             var seated = await SeatShip(db, ship, request.SizeClass, request.BerthId, excludedBerths, berthPicked, token);
             if (seated != DrydockBerthResult.Success)
@@ -286,12 +361,15 @@ public sealed partial class DrydockStore
             ShipGuid = request.ShipGuid,
             BerthId = ship.BerthId,
             ShipName = request.ShipName,
-            Action = request.Kind == DrydockRevisionKind.SystemRebake
-                ? DrydockAuditAction.Rebake
-                : DrydockAuditAction.Store,
+            Action = request.Impound != null
+                ? DrydockAuditAction.Impound
+                : request.Kind == DrydockRevisionKind.SystemRebake
+                    ? DrydockAuditAction.Rebake
+                    : DrydockAuditAction.Store,
             ActorUserId = request.ActorUserId,
             Revision = revision,
             RoundId = request.CreatedRoundId,
+            Reason = request.Impound?.Reason,
             CreatedAt = now,
         });
 
@@ -1876,6 +1954,14 @@ public sealed class DrydockRevisionRequest
     public int? AppraisedValue { get; init; }
 
     public required string Manifest { get; init; }
+
+    /// <summary>
+    /// Set to file the hull into the holding area rather than into a berth. The berth is left empty
+    /// and <see cref="DrydockShip.LastBerthId"/> keeps whichever one the hull came from, because
+    /// redemption needs a free berth and a hull still sitting in its own would satisfy that for
+    /// nothing. Null files the ordinary way.
+    /// </summary>
+    public DrydockImpound? Impound { get; init; }
 }
 
 /// <summary>What a retrieve reads: the hull row, the revision it is about to rebuild, and the document.</summary>

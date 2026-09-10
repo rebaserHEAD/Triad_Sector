@@ -500,8 +500,41 @@ public sealed class DrydockStoreContext
     public EntityUid? DeedHolder;
     public bool DeedDetached;
 
+    /// <summary>
+    /// Null on an ordinary store. Set means the hull is being taken rather than put away, which
+    /// bends exactly three gates: the berth checks do not apply because the holding area is not a
+    /// berth, hazards are destroyed instead of refused for, and anyone found aboard is moved off
+    /// instead of refusing. <see cref="DrydockStoreResult.SerializeFailed"/> and
+    /// <see cref="DrydockStoreResult.ValidationFailed"/> are never forced: a document that will not
+    /// write or will not read back is the one thing an impound cannot paper over.
+    /// </summary>
+    public DrydockImpound? Impound;
+
+    /// <summary>
+    /// How many occupants the impound moved off, summed across all three gates because somebody can
+    /// board between them. Ends up in the audit reason, so the timeline says a hull was taken with
+    /// people on it rather than leaving an admin to infer it.
+    /// </summary>
+    public int Evicted;
+
     public readonly DrydockPhaseTimer Timer = new();
 }
+
+/// <summary>
+/// What an impound charges and why, carried into the store pipeline and written onto the ship row
+/// when the hull is filed. Frozen here rather than recomputed at redemption, because a debt already
+/// quoted to a player must not move under them.
+/// </summary>
+/// <param name="Fee">
+/// Credits owed to redeem, clamped by the caller so it can never exceed the appraisal. Zero is
+/// legal and means free.
+/// </param>
+/// <param name="Reason">Shown to the owner. Null when nothing was given.</param>
+/// <param name="Redeemable">
+/// Whether the owner may act on it at all. Not inferable from <paramref name="Fee"/>: a courtesy
+/// impound is free and redeemable, an adjudication is frozen at any price.
+/// </param>
+public sealed record DrydockImpound(int Fee, string? Reason, bool Redeemable);
 
 /// <summary>
 /// Per-retrieve mutable state. Constructed by <c>TryRetrieveShip</c>, handed to the job, filled by

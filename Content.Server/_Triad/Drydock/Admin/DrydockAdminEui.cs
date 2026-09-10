@@ -119,8 +119,30 @@ public sealed partial class DrydockAdminEui : BaseEui
                 {
                     if (impound.Impound)
                     {
+                        // A hull still in the world has to be taken out of it first. Impounding the
+                        // row alone would leave the grid flying with a row that says otherwise,
+                        // which is the duplicate the old freeze could produce and this cannot.
+                        var drydock = _entMan.System<DrydockSystem>();
+                        if (drydock.TryGetLiveShipGrid(impound.ShipGuid, out var grid))
+                        {
+                            var owner = await _store.GetShipOwner(impound.ShipGuid);
+                            if (owner == null)
+                                return "Unknown ship.";
+
+                            var (result, _) = await drydock.TryImpoundShip(grid, owner.Value, RoundForAudit(),
+                                impound.Fee, impound.Reason, impound.Redeemable);
+
+                            return result == DrydockStoreResult.Success
+                                ? "Ship impounded; the hull is in the holding area."
+                                : $"Refused: the hull could not be filed ({result}).";
+                        }
+
                         var taken = await _store.TrySetState(impound.ShipGuid, null, DrydockShipState.Impounded, DrydockAuditAction.Impound, AdminId, RoundForAudit(), impound.Reason);
-                        return taken ? "Ship impounded." : "Already impounded, or unknown ship.";
+                        if (!taken)
+                            return "Already impounded, or unknown ship.";
+
+                        await _store.SetImpoundTerms(impound.ShipGuid, impound.Fee, impound.Reason, impound.Redeemable);
+                        return "Ship impounded.";
                     }
 
                     // Back to wherever the impound found it. A ship taken while out is still out.

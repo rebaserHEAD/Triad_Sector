@@ -151,6 +151,18 @@ public sealed class DrydockAdminImpoundMessage : EuiMessageBase
     public Guid ShipGuid { get; set; }
     public bool Impound { get; set; }
     public string? Reason { get; set; }
+
+    /// <summary>
+    /// Credits to redeem. The server clamps it against the hull's appraisal, so a client that sends
+    /// more than the ship is worth gets the ship's worth rather than an argument.
+    /// </summary>
+    public int Fee { get; set; }
+
+    /// <summary>
+    /// Whether the owner may redeem or abandon it themselves. Defaults true, which is the courtesy
+    /// case: an admin who means "frozen until I say otherwise" has to say so.
+    /// </summary>
+    public bool Redeemable { get; set; } = true;
 }
 
 [Serializable, NetSerializable]

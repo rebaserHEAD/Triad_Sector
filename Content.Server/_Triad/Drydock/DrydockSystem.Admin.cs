@@ -31,13 +31,26 @@ public sealed partial class DrydockSystem
 
     public bool IsShipLive(Guid shipId)
     {
+        return TryGetLiveShipGrid(shipId, out _);
+    }
+
+    /// <summary>
+    /// The grid carrying a hull this round, for the callers that need to act on it rather than
+    /// merely refuse because of it. Same walk as <see cref="IsShipLive"/>, which now asks this.
+    /// </summary>
+    public bool TryGetLiveShipGrid(Guid shipId, out EntityUid gridUid)
+    {
         var query = AllEntityQuery<DrydockIdentityComponent>();
         while (query.MoveNext(out var uid, out var identity))
         {
-            if (identity.ShipId == shipId && !TerminatingOrDeleted(uid))
-                return true;
+            if (identity.ShipId != shipId || TerminatingOrDeleted(uid))
+                continue;
+
+            gridUid = uid;
+            return true;
         }
 
+        gridUid = EntityUid.Invalid;
         return false;
     }
 

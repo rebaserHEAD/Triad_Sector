@@ -232,8 +232,77 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             await pair.CleanReturnAsync();
         }
 
-        private static DrydockRevisionRequest Request(Guid shipId, Guid owner, string name, bool markStored = true) => new()
+        /// <summary>
+        /// The impound's whole reason for existing at the store layer: it files a hull that has
+        /// nowhere to go. The berth is vacated rather than seated, which is what makes the
+        /// redemption gate mean something, and the terms survive the way out, which is what makes an
+        /// admin reversal have something to restore to.
+        /// </summary>
+        [Test]
+        public async Task AnImpoundVacatesTheBerthAndKeepsItsTerms()
         {
+            await using var pair = await PoolManager.GetServerClient();
+            var server = pair.Server;
+
+            var store = server.ResolveDependency<DrydockStore>();
+            var db = server.ResolveDependency<IServerDbManager>();
+
+            var owner = Guid.NewGuid();
+            await InsertPlayer(db, owner);
+            await store.AddBerth(owner, ShipSizeClass.Cutter, DrydockBerthKind.Granted, 0, null, null);
+
+            // Stored first, so there is a berth to lose.
+            var shipId = Guid.NewGuid();
+            var filed = await store.FileRevision(Request(shipId, owner, "Kestrel"), Encoding.UTF8.GetBytes("doc"), keepBlobs: 2);
+            Assert.That(filed.Outcome, Is.EqualTo(DrydockBerthResult.Success));
+            Assert.That(filed.BerthId, Is.Not.Null, "A control: the ordinary store seats the hull.");
+            var seated = filed.BerthId!.Value;
+
+            var impound = new DrydockImpound(250, "left in the world at round end", Redeemable: true);
+            var taken = await store.FileRevision(
+                Request(shipId, owner, "Kestrel", markStored: false, impound: impound),
+                Encoding.UTF8.GetBytes("doc2"), keepBlobs: 2);
+
+            Assert.That(taken.Outcome, Is.EqualTo(DrydockBerthResult.Success));
+            Assert.That(await store.MarkImpounded(shipId), Is.True);
+
+            var row = (await store.GetShipsByOwner(owner)).Single(r => r.ShipGuid == shipId);
+            Assert.Multiple(() =>
+            {
+                Assert.That(row.State, Is.EqualTo(DrydockShipState.Impounded));
+                Assert.That(row.BerthId, Is.Null, "The holding area is not a berth, and a hull still holding one redeems for free.");
+                Assert.That(row.LastBerthId, Is.EqualTo(seated), "Where it came from is the release's default.");
+                Assert.That(row.ImpoundFee, Is.EqualTo(250));
+                Assert.That(row.ImpoundRedeemable, Is.True);
+                Assert.That(row.ImpoundReason, Is.EqualTo("left in the world at round end"));
+            });
+
+            var audit = await store.GetAudit(shipId);
+            Assert.That(audit[^1].Action, Is.EqualTo(DrydockAuditAction.Impound),
+                "The filing writes the impound, not a store: a timeline that says stored for a hull nobody put away is a lie.");
+
+            // The way out keeps them. A reversal needs something to restore to, and the timeline has
+            // to keep saying what the hull was taken for.
+            Assert.That(await store.TryReleaseImpound(shipId, null, null, "cleared"), Is.EqualTo(DrydockShipState.Stored));
+
+            var released = (await store.GetShipsByOwner(owner)).Single(r => r.ShipGuid == shipId);
+            Assert.Multiple(() =>
+            {
+                Assert.That(released.ImpoundFee, Is.EqualTo(250), "Never cleared on the way out; the next impound overwrites it.");
+                Assert.That(released.ImpoundReason, Is.EqualTo("left in the world at round end"));
+            });
+
+            await pair.CleanReturnAsync();
+        }
+
+        private static DrydockRevisionRequest Request(
+            Guid shipId,
+            Guid owner,
+            string name,
+            bool markStored = true,
+            DrydockImpound? impound = null) => new()
+        {
+            Impound = impound,
             ShipGuid = shipId,
             OwnerUserId = owner,
             ShipName = name,
