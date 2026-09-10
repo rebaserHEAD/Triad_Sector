@@ -39,9 +39,9 @@ public sealed partial class DrydockSystem
     /// thing the freeze it replaces could never say: a row that reads impounded while a grid still
     /// carries the ship is the duplicate every state transition here exists to prevent.</para>
     /// </summary>
-    /// <param name="fee">
-    /// Credits to reclaim it. Clamped against the appraisal taken during this very store, so it can
-    /// never exceed what the hull is worth however optimistic the caller was.
+    /// <param name="feePercent">
+    /// Share of the appraisal to charge, 0 to 100. Taken against the appraisal measured during this
+    /// very store, so the credits owed can never exceed what the hull is worth.
     /// </param>
     /// <param name="redeemable">
     /// Whether the owner may act on it. False is an adjudication: frozen until an admin says
@@ -51,14 +51,14 @@ public sealed partial class DrydockSystem
         EntityUid gridUid,
         Guid ownerUserId,
         int? roundId,
-        int fee,
+        int feePercent,
         string? reason,
         bool redeemable,
         EntityUid? stationUid = null,
         DrydockProgressCallback? onProgress = null)
     {
         return TryStoreShip(gridUid, ownerUserId, roundId, berthId: null, stationUid, onProgress,
-            new DrydockImpound(fee, reason, redeemable));
+            new DrydockImpound(DrydockImpound.Clamp(feePercent), reason, redeemable));
     }
 
     /// <summary>

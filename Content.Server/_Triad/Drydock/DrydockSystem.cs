@@ -569,12 +569,7 @@ public sealed partial class DrydockSystem : EntitySystem
                 AppraisedValue = appraisal,
                 Manifest = manifest.Serialize(),
 
-                // Clamped against this store's own appraisal rather than the caller's guess: the fee
-                // must never exceed what the hull is worth, and this is the last point where what it
-                // is worth is a measured number rather than a remembered one.
-                Impound = ctx.Impound is { } impound
-                    ? impound with { Fee = Math.Clamp(impound.Fee, 0, appraisal) }
-                    : null,
+                Impound = ctx.Impound,
             };
 
             MarkPhase(DrydockPhase.Manifest);

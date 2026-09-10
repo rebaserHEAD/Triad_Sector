@@ -258,7 +258,9 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             Assert.That(filed.BerthId, Is.Not.Null, "A control: the ordinary store seats the hull.");
             var seated = filed.BerthId!.Value;
 
-            var impound = new DrydockImpound(250, "left in the world at round end", Redeemable: true);
+            // 50% of the request's $24,000 appraisal. The percent is what travels; the credits are computed
+            // against the appraisal, so a fee over the hull's worth cannot be expressed.
+            var impound = new DrydockImpound(50, "left in the world at round end", Redeemable: true);
             var taken = await store.FileRevision(
                 Request(shipId, owner, "Kestrel", markStored: false, impound: impound),
                 Encoding.UTF8.GetBytes("doc2"), keepBlobs: 2);
@@ -272,7 +274,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                 Assert.That(row.State, Is.EqualTo(DrydockShipState.Impounded));
                 Assert.That(row.BerthId, Is.Null, "The holding area is not a berth, and a hull still holding one redeems for free.");
                 Assert.That(row.LastBerthId, Is.EqualTo(seated), "Where it came from is the release's default.");
-                Assert.That(row.ImpoundFee, Is.EqualTo(250));
+                Assert.That(row.ImpoundFee, Is.EqualTo(12000), "50% of the $24,000 this revision appraised at.");
                 Assert.That(row.ImpoundRedeemable, Is.True);
                 Assert.That(row.ImpoundReason, Is.EqualTo("left in the world at round end"));
             });
@@ -288,7 +290,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             var released = (await store.GetShipsByOwner(owner)).Single(r => r.ShipGuid == shipId);
             Assert.Multiple(() =>
             {
-                Assert.That(released.ImpoundFee, Is.EqualTo(250), "Never cleared on the way out; the next impound overwrites it.");
+                Assert.That(released.ImpoundFee, Is.EqualTo(12000), "Never cleared on the way out; the next impound overwrites it.");
                 Assert.That(released.ImpoundReason, Is.EqualTo("left in the world at round end"));
             });
 
@@ -317,6 +319,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             CapturedKeyHash = new byte[] { 4, 5, 6 },
             Checksum = new byte[] { 7, 8, 9 },
             SizeBytes = 23,
+            AppraisedValue = 24000,
             Manifest = "{\"v\":1,\"e\":[]}",
         };
 

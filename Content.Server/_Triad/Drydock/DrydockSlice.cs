@@ -525,16 +525,23 @@ public sealed class DrydockStoreContext
 /// when the hull is filed. Frozen here rather than recomputed at redemption, because a debt already
 /// quoted to a player must not move under them.
 /// </summary>
-/// <param name="Fee">
-/// Credits owed to reclaim it, clamped by the caller so it can never exceed the appraisal. Zero is
-/// legal and means free.
+/// <param name="FeePercent">
+/// Share of the appraisal owed, 0 to 100. Carried as a percent rather than credits so a fee above
+/// the hull's worth cannot be expressed at all: the credits are computed where the appraisal is
+/// known, and <see cref="Clamp"/> is the only way in.
 /// </param>
 /// <param name="Reason">Shown to the owner. Null when nothing was given.</param>
 /// <param name="Redeemable">
-/// Whether the owner may act on it at all. Not inferable from <paramref name="Fee"/>: a courtesy
-/// impound is free and redeemable, an adjudication is frozen at any price.
+/// Whether the owner may act on it at all. Not inferable from <paramref name="FeePercent"/>: a
+/// courtesy impound is free and redeemable, an adjudication is frozen at any price.
 /// </param>
-public sealed record DrydockImpound(int Fee, string? Reason, bool Redeemable);
+public sealed record DrydockImpound(int FeePercent, string? Reason, bool Redeemable)
+{
+    /// <summary>Credits owed against a given appraisal, rounded down. Never more than the appraisal.</summary>
+    public int FeeAgainst(int appraisal) => (int)((long)Math.Max(0, appraisal) * Clamp(FeePercent) / 100);
+
+    public static int Clamp(int percent) => Math.Clamp(percent, 0, 100);
+}
 
 /// <summary>
 /// Per-retrieve mutable state. Constructed by <c>TryRetrieveShip</c>, handed to the job, filled by

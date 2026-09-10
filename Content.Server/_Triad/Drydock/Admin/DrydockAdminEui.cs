@@ -130,7 +130,7 @@ public sealed partial class DrydockAdminEui : BaseEui
                                 return "Unknown ship.";
 
                             var (result, _) = await drydock.TryImpoundShip(grid, owner.Value, RoundForAudit(),
-                                impound.Fee, impound.Reason, impound.Redeemable);
+                                impound.FeePercent, impound.Reason, impound.Redeemable);
 
                             return result == DrydockStoreResult.Success
                                 ? "Impounded; the hull is in the lot."
@@ -141,8 +141,10 @@ public sealed partial class DrydockAdminEui : BaseEui
                         if (!taken)
                             return "Already impounded, or unknown ship.";
 
-                        await _store.SetImpoundTerms(impound.ShipGuid, impound.Fee, impound.Reason, impound.Redeemable);
-                        return "Impounded.";
+                        var owed = await _store.SetImpoundTerms(impound.ShipGuid,
+                            new DrydockImpound(impound.FeePercent, impound.Reason, impound.Redeemable));
+
+                        return $"Impounded. Fee ${owed:N0}.";
                     }
 
                     // Back to wherever the impound found it. A ship taken while out is still out.

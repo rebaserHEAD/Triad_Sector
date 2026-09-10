@@ -142,23 +142,35 @@ public sealed partial class DrydockStore
 
     /// <summary>
     /// Writes the impound terms onto a row whose hull was never in the world, so there was no store
-    /// to carry them. The fee is NOT clamped here: nothing appraised the hull, because a stored ship
-    /// has nothing left to appraise, so the caller's number is the only one there is.
+    /// to carry them. A stored ship has nothing left to appraise, so the percent is taken against
+    /// the current revision's <see cref="DrydockRevision.AppraisedValue"/>; a revision that never
+    /// recorded one charges nothing, which is the safe direction to be wrong in.
     /// </summary>
-    public Task SetImpoundTerms(Guid shipGuid, int fee, string? reason, bool redeemable, CancellationToken ct = default)
+    /// <returns>The credits the row was left owing.</returns>
+    public Task<int> SetImpoundTerms(Guid shipGuid, DrydockImpound impound, CancellationToken ct = default)
     {
         return _db.RunTriadDbCommand(async (db, token) =>
         {
+            var appraisal = await db.DrydockRevision
+                .AsNoTracking()
+                .Where(r => r.ShipGuid == shipGuid && r.Revision == r.Ship.CurrentRevision)
+                .Select(r => r.AppraisedValue)
+                .SingleOrDefaultAsync(token) ?? 0;
+
+            var fee = impound.FeeAgainst(appraisal);
             var now = DateTime.UtcNow;
+
             await db.DrydockShip
                 .Where(s => s.ShipGuid == shipGuid)
                 .ExecuteUpdateAsync(set => set
-                    .SetProperty(s => s.ImpoundFee, Math.Max(0, fee))
-                    .SetProperty(s => s.ImpoundReason, reason)
-                    .SetProperty(s => s.ImpoundRedeemable, redeemable)
+                    .SetProperty(s => s.ImpoundFee, fee)
+                    .SetProperty(s => s.ImpoundReason, impound.Reason)
+                    .SetProperty(s => s.ImpoundRedeemable, impound.Redeemable)
                     .SetProperty(s => s.LastBerthId, s => s.BerthId ?? s.LastBerthId)
                     .SetProperty(s => s.BerthId, (int?)null)
                     .SetProperty(s => s.UpdatedAt, now), token);
+
+            return fee;
         }, ct);
     }
 
@@ -288,7 +300,7 @@ public sealed partial class DrydockStore
                 ship.LastBerthId = vacated;
 
             ship.BerthId = null;
-            ship.ImpoundFee = impound.Fee;
+            ship.ImpoundFee = impound.FeeAgainst(request.AppraisedValue ?? 0);
             ship.ImpoundReason = impound.Reason;
             ship.ImpoundRedeemable = impound.Redeemable;
         }

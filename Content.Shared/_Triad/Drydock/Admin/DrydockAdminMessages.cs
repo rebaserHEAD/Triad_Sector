@@ -153,10 +153,10 @@ public sealed class DrydockAdminImpoundMessage : EuiMessageBase
     public string? Reason { get; set; }
 
     /// <summary>
-    /// Credits to reclaim it. The server clamps it against the hull's appraisal, so a client that sends
-    /// more than the ship is worth gets the ship's worth rather than an argument.
+    /// Share of the appraisal owed, 0 to 100. A percent rather than credits, so a fee above what the
+    /// hull is worth cannot be sent; the server still clamps, because the client is not trusted.
     /// </summary>
-    public int Fee { get; set; }
+    public int FeePercent { get; set; }
 
     /// <summary>
     /// Whether the owner may reclaim or abandon it themselves. Defaults true, which is the courtesy
