@@ -125,9 +125,14 @@ public sealed class TriadCCVars
     /// the rollback lever on a pipeline whose deploy has no other one, and it is what the
     /// integration fixtures set.</para>
     ///
-    /// <para>This does not bound the worst tick on its own. Four engine calls cannot be interrupted
-    /// from content - the grid serialize, the round-trip validation load, the retrieve's grid load,
-    /// and the dock - so the worst tick is this budget plus the longest of those.</para>
+    /// <para>This does not bound the worst tick on its own, for two reasons. The job queue tests its
+    /// clock before each dequeue and re-runs a suspended job, so a run admitted just inside the
+    /// budget carries the tick past it, and a phase boundary that suspends before the budget is
+    /// spent leaves room for another run in the same tick. Four engine calls also cannot be
+    /// interrupted from content - the grid serialize, the round-trip validation load, the retrieve's
+    /// grid load, and the dock - so the worst tick is this budget plus the longest of those. The
+    /// queue's own budget follows this cvar rather than a constant, so lower is both the safe
+    /// direction and a direction that moves.</para>
     /// </summary>
     public static readonly CVarDef<int> DrydockTickBudgetMs =
         CVarDef.Create("triad.drydock.tick_budget_ms", 2, CVar.SERVERONLY);

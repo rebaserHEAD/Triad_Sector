@@ -613,6 +613,24 @@ public sealed partial class DrydockSystem
     }
 
     /// <summary>
+    /// Begin and guard, the pair every phase of the revive epilogue opens with.
+    ///
+    /// <para><see cref="SweepStep"/> covers a grid that dies mid-sweep but cannot cover one that is
+    /// already gone when the sweep starts: <c>SnapshotOnGrid</c> matches nothing on a deleted grid,
+    /// so the loop body never runs and neither does the guard inside it. The epilogue would then
+    /// walk every remaining sweep over a corpse and reach the Station block, where
+    /// <c>EnsureComp</c> throws a plain <see cref="ArgumentException"/> that the pipeline does not
+    /// catch. Every Begin here force-suspends, so every one of them is a window.</para>
+    /// </summary>
+    private async Task ReviveBegin(EntityUid grid, IDrydockSlice slice, DrydockPhase phase, int items)
+    {
+        await slice.Begin(phase, items);
+
+        if (TerminatingOrDeleted(grid))
+            throw new DrydockAbortedException($"{ToPrettyString(grid)} was deleted mid-revive");
+    }
+
+    /// <summary>
     /// The station's largest grid, resolved fresh. Never a remembered uid: the whole reason this
     /// exists is that the answer changes while a pipeline is parked.
     /// </summary>
@@ -650,7 +668,7 @@ public sealed partial class DrydockSystem
     /// </param>
     private async Task ReviveSliced(EntityUid grid, DrydockShip record, IDrydockSlice slice, DrydockPhaseTimer? timer = null)
     {
-        await slice.Begin(DrydockPhase.Fidelity, 0);
+        await ReviveBegin(grid, slice, DrydockPhase.Fidelity, 0);
 
         // The general fidelity net first: everything captured into a sidecar goes back before
         // anything else reads component state.
@@ -704,7 +722,7 @@ public sealed partial class DrydockSystem
 
         timer?.Mark("damage");
 
-        await slice.Begin(DrydockPhase.Station, 0);
+        await ReviveBegin(grid, slice, DrydockPhase.Station, 0);
 
         // The row is authoritative for the name too: a rename made while the ship was stored is a
         // row update, and this is where the hull and its deed learn it. Before the station, which
@@ -753,7 +771,7 @@ public sealed partial class DrydockSystem
     private async Task ReviveGravitySliced(EntityUid grid, IDrydockSlice slice)
     {
         var targets = SnapshotOnGrid<GravityGeneratorComponent>(grid);
-        await slice.Begin(DrydockPhase.Sweeps, targets.Count);
+        await ReviveBegin(grid, slice, DrydockPhase.Sweeps, targets.Count);
 
         for (var i = 0; i < targets.Count; i++)
         {
@@ -780,7 +798,7 @@ public sealed partial class DrydockSystem
     private async Task ReviveNpcsSliced(EntityUid grid, IDrydockSlice slice)
     {
         var targets = SnapshotOnGrid<HTNComponent>(grid);
-        await slice.Begin(DrydockPhase.Sweeps, targets.Count);
+        await ReviveBegin(grid, slice, DrydockPhase.Sweeps, targets.Count);
 
         for (var i = 0; i < targets.Count; i++)
         {
@@ -811,7 +829,7 @@ public sealed partial class DrydockSystem
     private async Task ReviveWiresSliced(EntityUid grid, IDrydockSlice slice)
     {
         var targets = SnapshotOnGrid<WiresComponent>(grid);
-        await slice.Begin(DrydockPhase.Sweeps, targets.Count);
+        await ReviveBegin(grid, slice, DrydockPhase.Sweeps, targets.Count);
 
         for (var i = 0; i < targets.Count; i++)
         {
@@ -831,7 +849,7 @@ public sealed partial class DrydockSystem
     private async Task ReviveDeviceNetworkSliced(EntityUid grid, IDrydockSlice slice)
     {
         var targets = SnapshotOnGrid<DeviceNetworkComponent>(grid);
-        await slice.Begin(DrydockPhase.Sweeps, targets.Count);
+        await ReviveBegin(grid, slice, DrydockPhase.Sweeps, targets.Count);
 
         for (var i = 0; i < targets.Count; i++)
         {
@@ -858,7 +876,7 @@ public sealed partial class DrydockSystem
             ? new List<EntityUid>()
             : SnapshotOnGrid<ResearchClientComponent>(grid);
 
-        await slice.Begin(DrydockPhase.Sweeps, clients.Count);
+        await ReviveBegin(grid, slice, DrydockPhase.Sweeps, clients.Count);
 
         for (var i = 0; i < clients.Count; i++)
         {
@@ -887,7 +905,7 @@ public sealed partial class DrydockSystem
     {
         var shuttleId = grid.ToString();
         var targets = SnapshotOnGrid<ShuttleConsoleLockComponent>(grid);
-        await slice.Begin(DrydockPhase.Sweeps, targets.Count);
+        await ReviveBegin(grid, slice, DrydockPhase.Sweeps, targets.Count);
 
         for (var i = 0; i < targets.Count; i++)
         {
@@ -913,7 +931,7 @@ public sealed partial class DrydockSystem
     private async Task ReviveGeneratorsSliced(EntityUid grid, IDrydockSlice slice)
     {
         var targets = SnapshotOnGrid<FuelGeneratorComponent>(grid);
-        await slice.Begin(DrydockPhase.Sweeps, targets.Count);
+        await ReviveBegin(grid, slice, DrydockPhase.Sweeps, targets.Count);
 
         for (var i = 0; i < targets.Count; i++)
         {
@@ -933,7 +951,7 @@ public sealed partial class DrydockSystem
     private async Task ReviveSmartFridgesSliced(EntityUid grid, IDrydockSlice slice)
     {
         var targets = SnapshotOnGrid<SmartFridgeComponent>(grid);
-        await slice.Begin(DrydockPhase.Sweeps, targets.Count);
+        await ReviveBegin(grid, slice, DrydockPhase.Sweeps, targets.Count);
 
         for (var i = 0; i < targets.Count; i++)
         {
@@ -953,7 +971,7 @@ public sealed partial class DrydockSystem
     private async Task ReviveArtifactAnalyzersSliced(EntityUid grid, IDrydockSlice slice)
     {
         var targets = SnapshotOnGrid<ArtifactAnalyzerComponent>(grid);
-        await slice.Begin(DrydockPhase.Sweeps, targets.Count);
+        await ReviveBegin(grid, slice, DrydockPhase.Sweeps, targets.Count);
 
         for (var i = 0; i < targets.Count; i++)
         {
@@ -975,7 +993,7 @@ public sealed partial class DrydockSystem
     private async Task ReviveFilledHandsSliced(EntityUid grid, IDrydockSlice slice)
     {
         var targets = SnapshotOnGrid<HandsFillComponent>(grid);
-        await slice.Begin(DrydockPhase.Sweeps, targets.Count);
+        await ReviveBegin(grid, slice, DrydockPhase.Sweeps, targets.Count);
 
         for (var i = 0; i < targets.Count; i++)
         {
@@ -1003,7 +1021,7 @@ public sealed partial class DrydockSystem
     private async Task ReviveDispenserSlotsSliced(EntityUid grid, IDrydockSlice slice)
     {
         var targets = SnapshotOnGrid<ReagentDispenserComponent>(grid);
-        await slice.Begin(DrydockPhase.Sweeps, targets.Count);
+        await ReviveBegin(grid, slice, DrydockPhase.Sweeps, targets.Count);
 
         for (var i = 0; i < targets.Count; i++)
         {
@@ -1034,7 +1052,7 @@ public sealed partial class DrydockSystem
     private async Task ReviveCabinetLocksSliced(EntityUid grid, IDrydockSlice slice)
     {
         var targets = SnapshotOnGrid<ItemCabinetComponent>(grid);
-        await slice.Begin(DrydockPhase.Sweeps, targets.Count);
+        await ReviveBegin(grid, slice, DrydockPhase.Sweeps, targets.Count);
 
         for (var i = 0; i < targets.Count; i++)
         {
@@ -1064,7 +1082,7 @@ public sealed partial class DrydockSystem
     private async Task ScrubStaleLatheProductionSliced(EntityUid grid, IDrydockSlice slice)
     {
         var targets = SnapshotOnGrid<LatheComponent>(grid);
-        await slice.Begin(DrydockPhase.Sweeps, targets.Count);
+        await ReviveBegin(grid, slice, DrydockPhase.Sweeps, targets.Count);
 
         for (var i = 0; i < targets.Count; i++)
         {
@@ -1131,7 +1149,7 @@ public sealed partial class DrydockSystem
     private async Task RehydrateDamageSliced(EntityUid grid, IDrydockSlice slice)
     {
         var targets = SnapshotOnGrid<DrydockDamageSidecarComponent>(grid);
-        await slice.Begin(DrydockPhase.Damage, targets.Count);
+        await ReviveBegin(grid, slice, DrydockPhase.Damage, targets.Count);
 
         for (var i = 0; i < targets.Count; i++)
         {

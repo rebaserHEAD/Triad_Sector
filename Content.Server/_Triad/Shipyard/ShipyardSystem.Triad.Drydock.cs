@@ -778,7 +778,9 @@ public sealed partial class ShipyardSystem
     /// somebody else's ship into a garage they do not own.</para>
     ///
     /// <para>Returns null when this console refused before the pipeline was entered, so a caller
-    /// can tell "we did not try" from "we tried and it said no".</para>
+    /// can tell "we did not try" from "we tried and it said no". The in-progress refusal is the one
+    /// exception: it is named rather than swallowed, because the pipeline that would have named it
+    /// is the one holding the hull.</para>
     /// </summary>
     internal async Task<(DrydockStoreResult Result, Guid? ShipId)?> TryDrydockStore(EntityUid uid, ShipyardConsoleComponent component, EntityUid player, ShipyardConsoleUiKey uiKey, int? berthId = null)
     {
@@ -842,6 +844,18 @@ public sealed partial class ShipyardSystem
             ConsolePopup(player, Loc.GetString("shipyard-console-invalid-station"));
             PlayDenySound(player, uid, component);
             return null;
+        }
+
+        // Ahead of the docked gate, because a store already in flight has undocked the hull and moved
+        // it to a private map: every gate below would then refuse it for the wrong reason and tell
+        // the captain their ship is not docked for the length of the store. The pipeline's own
+        // re-entrancy sentinel is the marker, read here because the pipeline is only reached past
+        // these gates.
+        if (HasComp<DrydockInProgressComponent>(shuttleUid))
+        {
+            ConsolePopup(player, Loc.GetString(StoreRefusalLoc(DrydockStoreResult.InProgress)));
+            PlayDenySound(player, uid, component);
+            return (DrydockStoreResult.InProgress, null);
         }
 
         if (!IsDockedToStation(shuttleUid, station))

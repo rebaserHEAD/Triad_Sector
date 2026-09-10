@@ -41,13 +41,13 @@ public sealed partial class DrydockSystem
     [Dependency] private ShuttleConsoleSystem _shuttleConsole = default!;
 
     /// <summary>
-    /// The queue's own budget, deliberately a constant and not the cvar. The queue's max time is a
-    /// get-only property it tests before it dequeues anything, so a cvar of zero there would stop
-    /// every job from ever running rather than turning slicing off. The cvar drives the job's own
-    /// max time, which is a plain field, and a budget of zero or less is handled by not making a job
-    /// at all.
+    /// Floor under the queue's per-tick budget. The queue tests its clock before it dequeues
+    /// anything, so a budget of zero there stops every job from ever running, including one already
+    /// in flight when an admin turns slicing off mid-store: that job would hang until the watchdog
+    /// fired and its unwind could never run either. A cvar of zero means no job is made at all,
+    /// which the caller handles; this only keeps an in-flight one draining.
     /// </summary>
-    private const double JobQueueTime = 0.004;
+    private const double MinQueueTime = 0.0005;
 
     /// <summary>
     /// Ours, because the shuttle system's startup sound is a private readonly field and widening an
@@ -60,7 +60,22 @@ public sealed partial class DrydockSystem
             Params = AudioParams.Default.WithVolume(-5f),
         };
 
-    private readonly JobQueue _jobQueue = new(JobQueueTime);
+    /// <summary>
+    /// The queue's budget has to be the cvar, not a constant. <see cref="JobQueue.Process"/> tests
+    /// its clock before each dequeue and re-enqueues a suspended job immediately, so it re-runs the
+    /// same job until its own clock is spent: a constant larger than the job's max time admits two
+    /// or three runs per tick, and the constant rather than the cvar becomes what a tick costs.
+    /// Overridable because <see cref="JobQueue.MaxTime"/> is virtual; set once per tick in
+    /// <see cref="ProcessJobs"/> rather than captured, so the cvar stays live.
+    /// </summary>
+    private sealed class DrydockJobQueue : JobQueue
+    {
+        public double Budget = MinQueueTime;
+
+        public override double MaxTime => Budget;
+    }
+
+    private readonly DrydockJobQueue _jobQueue = new();
 
     /// <summary>
     /// Every job this system has started and not yet retired, by the id stamped on its staging maps.
@@ -144,6 +159,7 @@ public sealed partial class DrydockSystem
     /// </summary>
     internal void ProcessJobs(float frameTime)
     {
+        _jobQueue.Budget = Math.Max(MinQueueTime, TickBudgetSeconds);
         _jobQueue.Process();
 
         if (_liveJobs.Count == 0)
@@ -391,9 +407,16 @@ public sealed partial class DrydockSystem
         // Counted before the phase opens, because opening a phase force-suspends and the count is
         // what the progress bar divides by.
         var estimate = CountTree(gridUid);
-        await slice.Begin(DrydockPhase.Freeze, estimate);
 
+        // The reparent stays above the phase open. Begin force-suspends unconditionally
+        // (DrydockStoreJob.cs:69-81), the caller's last organics gate is the statement before this
+        // call, and the ship is undocked with its airlock still swinging shut, so a suspension here
+        // is a tick someone can walk aboard in, and the walk-on would be frozen onto the grid below
+        // and written into the document. Past this line the grid is on a private paused map and
+        // unreachable, so every suspension from here down is free.
         _xform.SetCoordinates(gridUid, new EntityCoordinates(stagingMap, Vector2.Zero));
+
+        await slice.Begin(DrydockPhase.Freeze, estimate);
 
         var tree = SnapshotTree(gridUid);
         for (var i = 0; i < tree.Count; i++)

@@ -50,7 +50,7 @@ public sealed class DrydockRetrieveJob : Job<DrydockRetrieveOutcome>, IDrydockSl
 
     public bool Slicing => MaxTime > 0.0;
 
-    /// <summary>Worst single run span in milliseconds, for the timing line. Sampled at each suspension.</summary>
+    /// <summary>Worst single run span in milliseconds, a lower bound on the worst tick. Sampled at each suspension.</summary>
     public double WorstSliceMs { get; private set; }
 
     public int Slices { get; private set; }
@@ -119,8 +119,9 @@ public sealed class DrydockRetrieveJob : Job<DrydockRetrieveOutcome>, IDrydockSl
 
     /// <summary>
     /// Records the run span that is about to end. The engine restarts the stopwatch at the top of
-    /// every run, so its elapsed time at the moment of a suspension is exactly how long this job
-    /// held the main thread for.
+    /// every run, so its elapsed time at a suspension is how long this one run held the main thread.
+    /// A tick can still hold more than one run, because the queue re-runs a suspended job while its
+    /// own clock has room, so this is a lower bound on the worst tick rather than the worst tick.
     /// </summary>
     private void Sample()
     {

@@ -192,7 +192,8 @@ public sealed partial class DrydockSystem : EntitySystem
             catch (OperationCanceledException)
             {
                 // A round restart, a shutdown, or the slice watchdog. The pipeline's own finally has
-                // already run the unwind, so the ship is back where it was and nothing was filed. The
+                // already run the unwind, so the ship is back where it was; nothing was filed, because
+                // the pipeline stops being cancellable the moment the filing transaction commits. The
                 // job wrapper cancels its task without recording an exception, so a cancelled job is
                 // only ever visible here and never through its exception property.
                 return (DrydockStoreResult.Cancelled, null);
@@ -325,7 +326,8 @@ public sealed partial class DrydockSystem : EntitySystem
             // something off it, and right here the ship is still whole and still docked, so a
             // straggler who walked aboard while the capacity check was in the database costs nothing
             // to refuse for. The old post-database counterpart of this check is gone with it: nobody
-            // can walk aboard a ship on a private map.
+            // can walk aboard a ship on a private map, and the reparent that puts it there stays on
+            // this side of the next suspension (see FreezeOntoStagingMap).
             if (_shipyard.FoundOrganics(gridUid, mobQuery, xformQuery) is not null)
                 return new DrydockStoreOutcome(DrydockStoreResult.OrganicsAboard, null);
 
@@ -346,6 +348,14 @@ public sealed partial class DrydockSystem : EntitySystem
             ctx.EntityCount = await FreezeOntoStagingMap(gridUid, ctx.StagingMap.Value, slice);
             ctx.Frozen = true;
             GuardStoreResume(ctx);
+
+            // Backstop to the gate above, so a future reorder cannot reopen the window silently.
+            // Anyone found here boarded before the reparent. Refusing is still free: the purge and
+            // every strip are below, and the unwind thaws the hull and docks it back with them on
+            // it, which is the answer the gate would have given.
+            if (_shipyard.FoundOrganics(gridUid, mobQuery, xformQuery) is not null)
+                return new DrydockStoreOutcome(DrydockStoreResult.OrganicsAboard, null);
+
             MarkPhase(DrydockPhase.Freeze);
 
             // The saving-contraband purge, by the same component rule the ship-save path applies:
@@ -522,26 +532,55 @@ public sealed partial class DrydockSystem : EntitySystem
             MarkPhase(DrydockPhase.Compress);
 
             await slice.Begin(DrydockPhase.Commit, 0);
-            var filed = await slice.Await(
-                _store.FileRevision(request, payload, _cfg.GetCVar(TriadCCVars.DrydockKeepBlobs)));
-
             GuardStoreResume(ctx);
+
+            // Held in a local because the suspension inside slice.Await lands AFTER the transaction
+            // commits: Job.WaitAsyncTask awaits the task and only then parks on a resume handle
+            // (RobustToolbox Job.cs:92-107), which Job.Run cancels when the job is cancelled.
+            // Reading the result off the task is what stops a round restart landing in that gap from
+            // throwing out of a store whose revision is already durable.
+            var fileTask = _store.FileRevision(request, payload, _cfg.GetCVar(TriadCCVars.DrydockKeepBlobs));
+
+            DrydockFileResult filed;
+            try
+            {
+                filed = await slice.Await(fileTask);
+            }
+            catch (OperationCanceledException) when (fileTask.IsCompletedSuccessfully)
+            {
+                // Not through the slice, and it does not need to be: the filter above has already
+                // established the task is complete, so this await returns synchronously and cannot
+                // strand the job the way an unwrapped suspending await would.
+                filed = await fileTask;
+            }
+
             MarkPhase(DrydockPhase.Commit);
 
             // The garage filled up between the capacity check and the commit, or this store lost
-            // the last berth to another committing in the same instant. Nothing was filed; the
-            // unwind below thaws the ship and hands it back to the station.
+            // the last berth to another committing in the same instant. The transaction rolled back,
+            // so nothing was filed, the ordinary staleness rules still apply, and the unwind below
+            // thaws the ship and hands it back to the station.
             if (filed.Outcome != DrydockBerthResult.Success)
+            {
+                GuardStoreResume(ctx);
                 return new DrydockStoreOutcome(BerthRefusal(filed.Outcome), null);
+            }
 
+            // Past a successful filing the store is durable and stops being abortable. No suspension
+            // and no resume guard between here and ctx.Committed, deliberately: an abort in this
+            // window unwinds a ship whose revision is already filed and whose berth is already
+            // seated, and if the grid died while the write was in the database it leaves the row
+            // checked out with no hull behind it, which is the state MarkStored exists to prevent.
+            // A grid that died in that window is the end state the despawn was about to produce.
+            //
             // The organics re-check that used to sit here is gone with the private map. It existed
             // because the write above yields and the in-progress marker blocked insertion rather than
             // boarding; there is no boarding a ship that has been on a paused map of its own since
             // long before the write started. The late re-check in the freeze block is what covers the
             // one window that is still real.
-            await slice.Begin(DrydockPhase.Despawn, 0);
-            GuardStoreResume(ctx);
+            slice.Progress.BeginPhase(DrydockPhase.Despawn, 0);
 
+            // A no-op when the grid died while the write was in flight, which is the point.
             QueueDel(gridUid);
             ctx.Committed = true;
 
