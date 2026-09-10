@@ -39,7 +39,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                 window.UpdateState(StateWith(Ship("Kestrel", "Stored")));
 
                 var chips = Named(window, "ChipRow").Children.OfType<ContainerButton>().ToList();
-                Assert.That(chips, Has.Count.EqualTo(8), "All, the five states, and the two flags.");
+                Assert.That(chips, Has.Count.EqualTo(7), "All, the five states, and Stranded.");
 
                 // The chip in force is the one drawn filled. Two filled at once is the bug this
                 // catches: it is what a toggle button's own pressed state did before they were
