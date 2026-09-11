@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using System.Linq;
 using Content.Client._NF.Shipyard.UI;
 using Content.Client.Resources;
+using Content.Client.Stylesheets;
 using Content.Client.UserInterface.Controls;
 using Content.Shared._NF.Bank;
 using Content.Shared._NF.Shipyard.BUI;
@@ -294,7 +295,10 @@ public sealed partial class DrydockAdminWindow : FancyWindow
             "CheckedOut" => (Loc.GetString("drydock-admin-row-out", ("round", ship.CheckedOutRoundId ?? 0)), Out),
             "InEscrow" => (Loc.GetString("drydock-admin-row-escrow", ("left", TimeLeft(ship.EscrowExpiresAt))), Escrow),
             "Sold" => (Loc.GetString("drydock-admin-chip-Sold"), Sold),
-            "Impounded" => (Loc.GetString("drydock-admin-chip-Impounded"), Impounded),
+            // The fee on the row, as the canvas draws it, and a locked one says so: the two are the
+            // same state at the same number of credits and read very differently to an admin.
+            "Impounded" => (Loc.GetString(ship.ImpoundRedeemable ? "drydock-admin-row-impounded" : "drydock-admin-row-impounded-locked",
+                ("fee", BankSystemExtensions.ToSpesoString(ship.ImpoundFee))), Impounded),
             "Destroyed" => (Loc.GetString("drydock-admin-chip-Destroyed"), Destroyed),
             "Abandoned" => (Loc.GetString("drydock-admin-chip-Abandoned"), Abandoned),
             // Stored lands here, and so does a state nobody wrote an arm for: keying off the name
@@ -442,20 +446,29 @@ public sealed partial class DrydockAdminWindow : FancyWindow
             VerbRow.AddChild(restore);
         }
 
-        // Impound takes a hull that is somewhere. On a terminal row there is no hull to take and the
-        // state IS the verdict, so the verb would overwrite the verdict; on a sale it also takes
-        // restore-from-sale away with it, since that button reads State. Restore-to is the verb for
-        // bringing a terminal hull back, and it is still offered below.
-        if (ship.State is not ("Sold" or "Destroyed" or "Abandoned"))
+        // An impounded hull leads with Release, one press into its last berth; Restore to… below is
+        // the same exit with the berth chosen. Impound takes a hull that is somewhere: berthed or in
+        // the world. It is absent on a terminal row, where the state IS the verdict and the verb
+        // would overwrite it (on a sale it would also take restore-from-sale with it, since that
+        // button reads State), and absent in escrow, where the server refuses until the offer is
+        // withdrawn and Cancel offer is already first in the row.
+        if (ship.State == "Impounded")
         {
-            var impounded = ship.State == "Impounded";
-            var impound = Verb(impounded ? "drydock-admin-release" : "drydock-admin-impound", "drydock-admin-impound-tooltip");
-            impound.OnPressed += _ => _eui.Send(new DrydockAdminImpoundMessage { ShipGuid = ship.ShipGuid, Impound = !impounded, Reason = Reason() });
+            var release = Verb("drydock-admin-release", "drydock-admin-release-tooltip", StyleNano.ButtonPrimary);
+            release.OnPressed += _ => _eui.Send(new DrydockAdminReleaseImpoundMessage { ShipGuid = ship.ShipGuid, Reason = Reason() });
+            VerbRow.AddChild(release);
+        }
+        else if (ship.State is not ("Sold" or "Destroyed" or "Abandoned" or "InEscrow"))
+        {
+            var impound = Verb("drydock-admin-impound", "drydock-admin-impound-tooltip", "ButtonCaution");
+            impound.OnPressed += _ => OpenImpoundDialog(detail);
             VerbRow.AddChild(impound);
         }
 
-        // Restore puts a hull that is out, impounded or sold back into a berth; a stored one is home.
-        if (ship.State != "Stored" && ship.State != "InEscrow")
+        // Restore puts a hull that is out, impounded, written off or abandoned back into a berth; a
+        // stored one is home, an escrow one is spoken for, and a sold one comes back only through
+        // the sale reversal above, which decides about the money before anything else.
+        if (ship.State is not ("Stored" or "InEscrow" or "Sold"))
         {
             var restoreTo = new DrydockMenuButton
             {
@@ -493,9 +506,13 @@ public sealed partial class DrydockAdminWindow : FancyWindow
     {
         var ship = detail.Ship;
 
+        // Vacating is the repair for a hull that is out and still shown in its slot. A stored ship
+        // lives in its berth and is moved, never vacated, and the entry says so.
         var items = new List<DrydockMenuButton.Item>
         {
-            new(Loc.GetString("drydock-admin-vacate"), null, ship.BerthId != null,
+            new(Loc.GetString("drydock-admin-vacate"),
+                ship.State == "Stored" && ship.BerthId != null ? Loc.GetString("drydock-admin-vacate-stored") : null,
+                ship.BerthId != null && ship.State != "Stored",
                 () => _eui.Send(new DrydockAdminMoveMessage { ShipGuid = ship.ShipGuid, BerthId = null, Reason = Reason() })),
         };
 
@@ -615,7 +632,7 @@ public sealed partial class DrydockAdminWindow : FancyWindow
             {
                 new(Loc.GetString("drydock-admin-berth-restore-here"),
                     BerthReason(empty, fits),
-                    empty && fits && ship.State != "Stored" && ship.State != "InEscrow",
+                    empty && fits && ship.State is not ("Stored" or "InEscrow" or "Sold"),
                     () => _eui.Send(new DrydockAdminRestoreMessage { ShipGuid = ship.ShipGuid, BerthId = id, Reason = Reason() })),
                 new(Loc.GetString("drydock-admin-berth-move-here"),
                     BerthReason(empty, fits),
@@ -698,6 +715,29 @@ public sealed partial class DrydockAdminWindow : FancyWindow
 
             TimelineContainer.AddChild(rule);
         }
+    }
+
+    /// <summary>
+    /// The fee is quoted against the current revision's appraisal, which is the figure the server
+    /// charges against for a berthed hull; the dialog says when the hull is live and will be
+    /// appraised again. The dialog's own reason is what the owner reads, and the panel's inline
+    /// reason box stands in when it is left empty.
+    /// </summary>
+    private void OpenImpoundDialog(DrydockAdminShipDetailDto detail)
+    {
+        var ship = detail.Ship;
+        var appraisal = detail.Revisions.FirstOrDefault(r => r.Revision == ship.CurrentRevision)?.AppraisedValue;
+
+        var dialog = new DrydockImpoundDialog(ship, appraisal, (percent, redeemable, reason) =>
+            _eui.Send(new DrydockAdminImpoundMessage
+            {
+                ShipGuid = ship.ShipGuid,
+                FeePercent = percent,
+                Redeemable = redeemable,
+                Reason = reason ?? Reason(),
+            }));
+
+        dialog.OpenCentered();
     }
 
     private void OpenRestoreSaleDialog(DrydockAdminEuiState state, DrydockAdminShipDto ship, DrydockAdminSaleDto sale)

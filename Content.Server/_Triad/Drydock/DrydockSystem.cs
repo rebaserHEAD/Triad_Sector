@@ -160,6 +160,15 @@ public sealed partial class DrydockSystem : EntitySystem
         if (HasComp<DrydockInProgressComponent>(gridUid))
             return (DrydockStoreResult.InProgress, null);
 
+        // A grid on a drydock staging map is inside a pipeline already: a retrieve still loading it,
+        // or an unwind that could not put the ship back. The sentinel above cannot see either, and a
+        // second pipeline would freeze a frozen hull, so this refuses as in progress and sits with
+        // the other refusals outside the try. Only the admin ripcord can reach it: no console can
+        // see a grid on a private map.
+        var homeXform = Transform(gridUid);
+        if (homeXform.MapUid is { } currentMap && HasComp<DrydockStagingMapComponent>(currentMap))
+            return (DrydockStoreResult.InProgress, null);
+
         EnsureComp<DrydockInProgressComponent>(gridUid);
 
         var ctx = new DrydockStoreContext
@@ -170,6 +179,8 @@ public sealed partial class DrydockSystem : EntitySystem
             BerthId = berthId,
             StationUid = stationUid ?? _station.GetOwningStation(gridUid) ?? EntityUid.Invalid,
             Impound = impound,
+            HomeMap = homeXform.MapUid,
+            HomePosition = _xform.GetWorldPosition(gridUid),
         };
 
         var jobId = 0;
@@ -310,7 +321,7 @@ public sealed partial class DrydockSystem : EntitySystem
             // store refuses, which is the safe direction to be stricter in; an impound moves them
             // off and passes the same gate, for the same reason it purges rather than refuses.
             if (ctx.Impound != null)
-                ctx.Evicted += EvictOrganicsAboard(gridUid);
+                ctx.Evicted += EvictOrganicsAboard(ctx);
 
             if (_shipyard.FoundOrganics(gridUid, mobQuery, xformQuery) is not null)
                 return new DrydockStoreOutcome(DrydockStoreResult.OrganicsAboard, null);
@@ -356,7 +367,7 @@ public sealed partial class DrydockSystem : EntitySystem
             // can walk aboard a ship on a private map, and the reparent that puts it there stays on
             // this side of the next suspension (see FreezeOntoStagingMap).
             if (ctx.Impound != null)
-                ctx.Evicted += EvictOrganicsAboard(gridUid);
+                ctx.Evicted += EvictOrganicsAboard(ctx);
 
             if (_shipyard.FoundOrganics(gridUid, mobQuery, xformQuery) is not null)
                 return new DrydockStoreOutcome(DrydockStoreResult.OrganicsAboard, null);
@@ -380,11 +391,13 @@ public sealed partial class DrydockSystem : EntitySystem
             GuardStoreResume(ctx);
 
             // Backstop to the gate above, so a future reorder cannot reopen the window silently.
-            // Anyone found here boarded before the reparent. Refusing is still free: the purge and
-            // every strip are below, and the unwind thaws the hull and docks it back with them on
-            // it, which is the answer the gate would have given.
+            // Anyone found here boarded before the reparent. Refusing is still free for a store: the
+            // purge and every strip are below, and the unwind thaws the hull and docks it back with
+            // them on it, which is the answer the gate would have given. An impound has already
+            // deleted hazards and moved occupants by here and puts neither back on any later
+            // refusal; that trade is stated on DrydockSystem.Impound.cs.
             if (ctx.Impound != null)
-                ctx.Evicted += EvictOrganicsAboard(gridUid);
+                ctx.Evicted += EvictOrganicsAboard(ctx);
 
             if (_shipyard.FoundOrganics(gridUid, mobQuery, xformQuery) is not null)
                 return new DrydockStoreOutcome(DrydockStoreResult.OrganicsAboard, null);
@@ -559,7 +572,10 @@ public sealed partial class DrydockSystem : EntitySystem
                 SizeClass = sizeClass,
                 BerthId = ctx.BerthId,
                 Kind = DrydockRevisionKind.PlayerStore,
-                ActorUserId = ctx.OwnerUserId,
+                // An impound is filed by whoever took the hull, an admin or the sweep, never by the
+                // owner: the revision and its audit row both name this, and a timeline that says the
+                // owner impounded their own ship is the wrong record of an adjudication.
+                ActorUserId = ctx.Impound != null ? ctx.Impound.ActorUserId : ctx.OwnerUserId,
                 CreatedRoundId = ctx.RoundId,
                 EngineFormatVer = engineFormat,
                 ProtoFingerprint = fingerprint,
@@ -570,6 +586,7 @@ public sealed partial class DrydockSystem : EntitySystem
                 Manifest = manifest.Serialize(),
 
                 Impound = ctx.Impound,
+                Evicted = ctx.Evicted,
             };
 
             MarkPhase(DrydockPhase.Manifest);

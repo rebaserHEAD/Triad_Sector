@@ -57,12 +57,16 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
         /// verb that cannot apply is absent rather than greyed.
         /// </summary>
         [Test]
-        [TestCase("Stored", new[] { "impound" }, new[] { "cancel-offer", "restore-from-sale", "restore-to" })]
-        [TestCase("CheckedOut", new[] { "impound", "restore-to" }, new[] { "cancel-offer", "restore-from-sale" })]
-        [TestCase("Impounded", new[] { "release", "restore-to" }, new[] { "cancel-offer", "restore-from-sale" })]
-        // The terminal three offer restore-to and never impound: their state is the verdict, and on
-        // a sale the impound verb would take restore-from-sale away with it.
-        [TestCase("Sold", new[] { "restore-from-sale", "restore-to" }, new[] { "cancel-offer", "impound", "release" })]
+        [TestCase("Stored", new[] { "impound" }, new[] { "release", "cancel-offer", "restore-from-sale", "restore-to" })]
+        [TestCase("CheckedOut", new[] { "impound", "restore-to" }, new[] { "release", "cancel-offer", "restore-from-sale" })]
+        // An impounded hull offers the two ways out and never a second taking.
+        [TestCase("Impounded", new[] { "release", "restore-to" }, new[] { "impound", "cancel-offer", "restore-from-sale" })]
+        // Escrow offers the withdrawal and nothing that the server would refuse until it is withdrawn.
+        [TestCase("InEscrow", new[] { "cancel-offer" }, new[] { "impound", "release", "restore-to", "restore-from-sale" })]
+        // The terminal three never offer impound: their state is the verdict. A sale comes back only
+        // through the reversal, which decides about the money first; a plain restore would hand the
+        // hull back on top of the credits.
+        [TestCase("Sold", new[] { "restore-from-sale" }, new[] { "cancel-offer", "restore-to", "impound", "release" })]
         [TestCase("Destroyed", new[] { "restore-to" }, new[] { "cancel-offer", "restore-from-sale", "impound", "release" })]
         [TestCase("Abandoned", new[] { "restore-to" }, new[] { "cancel-offer", "restore-from-sale", "impound", "release" })]
         public async Task TheVerbsFollowTheStateOfTheHull(string state, string[] expected, string[] absent)
@@ -72,7 +76,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             await pair.Client.WaitPost(() =>
             {
                 var window = new DrydockAdminWindow(new DrydockAdminEui());
-                window.UpdateState(StateWith(Ship("Kestrel", state), sold: state == "Sold"));
+                window.UpdateState(StateWith(Ship("Kestrel", state), escrow: state == "InEscrow", sold: state == "Sold"));
 
                 var labels = VerbLabels(window);
 

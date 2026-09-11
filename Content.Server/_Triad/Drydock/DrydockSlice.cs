@@ -1,7 +1,10 @@
 using System;
 using System.Collections.Generic;
+using System.Numerics;
 using System.Threading;
 using System.Threading.Tasks;
+using Content.Shared._NF.Bank;
+using Content.Shared._Triad.Drydock;
 using Robust.Shared.GameObjects;
 
 namespace Content.Server._Triad.Drydock;
@@ -471,6 +474,18 @@ public sealed class DrydockStoreContext
     /// </summary>
     public EntityUid StationUid;
 
+    /// <summary>
+    /// The map the hull was on, and where on it, when the store began. Read before anything moves
+    /// the grid, because the freeze reparents it onto a private map and the ordinary transform
+    /// then answers "the staging map" for every question about where the ship came from. An
+    /// impound's eviction puts occupants down here and nowhere else: a spawn point on another map
+    /// is at best a different sector and at worst a hull mid-store, where a body dropped on it is
+    /// written into somebody else's document.
+    /// </summary>
+    public EntityUid? HomeMap;
+
+    public Vector2 HomePosition;
+
     public Guid ShipId;
     public EntityUid? StagingMap;
 
@@ -512,7 +527,8 @@ public sealed class DrydockStoreContext
 
     /// <summary>
     /// How many occupants the impound moved off, summed across all three gates because somebody can
-    /// board between them. Ends up in the audit reason, so the timeline says a hull was taken with
+    /// board between them. Copied onto <see cref="DrydockRevisionRequest.Evicted"/> when the hull
+    /// is filed, and from there into the audit reason, so the timeline says a hull was taken with
     /// people on it rather than leaving an admin to infer it.
     /// </summary>
     public int Evicted;
@@ -521,26 +537,53 @@ public sealed class DrydockStoreContext
 }
 
 /// <summary>
-/// What an impound charges and why, carried into the store pipeline and written onto the ship row
-/// when the hull is filed. Frozen here rather than recomputed at redemption, because a debt already
-/// quoted to a player must not move under them.
+/// What an impound charges and why, and who took it: carried into the store pipeline and written
+/// onto the ship row when the hull is filed. Frozen here rather than recomputed at redemption,
+/// because a debt already quoted to a player must not move under them.
 /// </summary>
 /// <param name="FeePercent">
-/// Share of the appraisal owed, 0 to 100. Carried as a percent rather than credits so a fee above
-/// the hull's worth cannot be expressed at all: the credits are computed where the appraisal is
-/// known, and <see cref="Clamp"/> is the only way in.
+/// Share of the appraisal owed, 0 to 100, clamped on construction. Carried as a percent rather
+/// than credits so a fee above the hull's worth cannot be expressed at all: the credits are
+/// computed where the appraisal is known, by <see cref="FeeAgainst"/>.
 /// </param>
 /// <param name="Reason">Shown to the owner. Null when nothing was given.</param>
 /// <param name="Redeemable">
 /// Whether the owner may act on it at all. Not inferable from <paramref name="FeePercent"/>: a
 /// courtesy impound is free and redeemable, an adjudication is frozen at any price.
 /// </param>
-public sealed record DrydockImpound(int FeePercent, string? Reason, bool Redeemable)
+/// <param name="ActorUserId">
+/// Who took it: the admin, or null for the round-end sweep. Written as the actor of the impound's
+/// revision and of its audit row, where the owner would otherwise be named for a taking they never
+/// asked for.
+/// </param>
+public sealed record DrydockImpound(int FeePercent, string? Reason, bool Redeemable, Guid? ActorUserId)
 {
-    /// <summary>Credits owed against a given appraisal, rounded down. Never more than the appraisal.</summary>
-    public int FeeAgainst(int appraisal) => (int)((long)Math.Max(0, appraisal) * Clamp(FeePercent) / 100);
+    public int FeePercent { get; init; } = DrydockImpoundFee.ClampPercent(FeePercent);
 
-    public static int Clamp(int percent) => Math.Clamp(percent, 0, 100);
+    /// <summary>Credits owed against a given appraisal, rounded down. Never more than the appraisal.</summary>
+    public int FeeAgainst(int appraisal) => DrydockImpoundFee.Against(appraisal, FeePercent);
+
+    /// <summary>
+    /// The timeline row's text: the reason given, the fee with the share and appraisal it was taken
+    /// against, whether the owner may reclaim it, and how many occupants were moved off. The ship
+    /// row keeps only the latest impound's terms, so this is where an earlier impound's numbers
+    /// survive being overwritten.
+    /// </summary>
+    public string AuditReason(int fee, int appraisal, int evicted)
+    {
+        var parts = new List<string>(4);
+
+        if (!string.IsNullOrWhiteSpace(Reason))
+            parts.Add(Reason);
+
+        parts.Add($"fee {BankSystemExtensions.ToSpesoString(fee)}, {FeePercent}% of {BankSystemExtensions.ToSpesoString(appraisal)}");
+        parts.Add(Redeemable ? "owner can reclaim" : "held for adjudication");
+
+        if (evicted > 0)
+            parts.Add($"{evicted} moved off");
+
+        return string.Join(" · ", parts);
+    }
 }
 
 /// <summary>

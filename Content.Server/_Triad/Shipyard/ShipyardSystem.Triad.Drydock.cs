@@ -382,8 +382,11 @@ public sealed partial class ShipyardSystem
         var appraisals = await _drydockStore.GetCurrentAppraisals(owner);
 
         // Everyone else online, for the transfer picker, with the classes of their free berths so
-        // the picker can grey the captains with nowhere to put the ship. Read in one query.
-        var online = _player.Sessions.Where(s => s.UserId.UserId != owner).ToList();
+        // the picker can grey the captains with nowhere to put the ship. Read in one query, and only
+        // when the operator has a stored ship to offer: every open tab refreshes on every expiry
+        // sweep and every admin action, and a list nobody can pick from is a query per tab for nothing.
+        var canOffer = rows.Any(r => r.State == DrydockShipState.Stored);
+        var online = canOffer ? _player.Sessions.Where(s => s.UserId.UserId != owner).ToList() : new List<ICommonSession>();
         var freeClasses = await _drydockStore.GetFreeBerthClasses(online.Select(s => s.UserId.UserId));
         var names = await _drydockStore.GetPlayerNames(offersOut.Values.Select(t => t.ToUserId).Concat(offersIn.Select(o => o.Transfer.FromUserId)));
 
@@ -806,8 +809,16 @@ public sealed partial class ShipyardSystem
         if (!TryGetOperatorAccount(player, out var operatorAccount))
             return null;
 
-        if (!TryComp<ShipOwnershipComponent>(shuttleUid, out var ownership)
-            || ownership.OwnerUserId.UserId != operatorAccount)
+        // No account owns it, so nobody can put it away. Not a forged message and not somebody
+        // else's ship, so it is a refusal and not a timeline row.
+        if (!TryComp<ShipOwnershipComponent>(shuttleUid, out var ownership))
+        {
+            ConsolePopup(player, Loc.GetString("shipyard-console-store-unregistered"));
+            PlayDenySound(player, uid, component);
+            return null;
+        }
+
+        if (ownership.OwnerUserId.UserId != operatorAccount)
         {
             // A ship that has been stored before carries its id; a new hull has none yet, and the
             // refusal is filed against the actor alone.
@@ -815,7 +826,7 @@ public sealed partial class ShipyardSystem
                 ? identity.ShipId
                 : null;
 
-            RefuseAccess(uid, component, player, operatorAccount, knownId, Name(shuttleUid), ownership?.OwnerUserId.UserId, null, "store");
+            RefuseAccess(uid, component, player, operatorAccount, knownId, Name(shuttleUid), ownership.OwnerUserId.UserId, null, "store");
             return null;
         }
 
@@ -1005,8 +1016,9 @@ public sealed partial class ShipyardSystem
         var grid = retrieve.Grid!.Value;
 
         // The read yielded and the card may be gone. The ship is already docked and its row is
-        // checked out, so skipping the mint is recoverable - the owner stores it and retrieves
-        // again - where throwing out of an async void handler is not.
+        // checked out, so skipping the mint is recoverable through an admin: the console cannot
+        // store a hull no card carries a deed to, but an impound takes it and a release puts it
+        // back in a berth for nothing. Throwing out of an async void handler is not recoverable.
         if (TerminatingOrDeleted(targetId) || TerminatingOrDeleted(player))
             return grid;
 
@@ -1332,8 +1344,9 @@ public sealed partial class ShipyardSystem
             return false;
         }
 
-        // The recipient's own card has to be in the slot: it is how the tab lists against their
-        // account, and it is what they will mint the deed onto when they retrieve.
+        // A card has to be in the slot. The tab lists against the account behind the click, not the
+        // card, so this is not who the card belongs to; it is that a retrieve mints the deed onto
+        // a card, and a recipient with none in cannot follow the accept with the retrieve.
         if (component.TargetIdSlot.ContainerSlot?.ContainedEntity is not { Valid: true })
         {
             ConsolePopup(player, Loc.GetString("shipyard-console-no-idcard"));
@@ -1359,12 +1372,12 @@ public sealed partial class ShipyardSystem
             return false;
         }
 
-        var (outcome, _, accepted) = await _drydockStore.TryAcceptTransfer(transferId, recipient, DrydockRoundId);
+        var (outcome, _, acceptedName) = await _drydockStore.TryAcceptTransfer(transferId, recipient, DrydockRoundId);
 
         if (TerminatingOrDeleted(uid) || TerminatingOrDeleted(player))
             return outcome == DrydockBerthResult.Success;
 
-        if (outcome != DrydockBerthResult.Success || accepted == null)
+        if (outcome != DrydockBerthResult.Success || acceptedName == null)
         {
             ConsolePopup(player, Loc.GetString(outcome switch
             {
@@ -1376,7 +1389,7 @@ public sealed partial class ShipyardSystem
             return false;
         }
 
-        ConsolePopup(player, Loc.GetString("shipyard-console-transfer-complete", ("ship", accepted.ShipName)));
+        ConsolePopup(player, Loc.GetString("shipyard-console-transfer-complete", ("ship", acceptedName)));
         PlayConfirmSound(player, uid, component);
         await RefreshDrydockState(uid, component, player, uiKey);
         KickDrydockRefreshForAccount(transfer.FromUserId);
@@ -1519,12 +1532,12 @@ public sealed partial class ShipyardSystem
         }
 
         var price = DrydockSalePrice((uid, component), value);
-        var (outcome, sold) = await _drydockStore.TrySellShip(shipId, owner, price.Net, value, DrydockRoundId);
+        var (outcome, soldName) = await _drydockStore.TrySellShip(shipId, owner, price.Net, value, DrydockRoundId);
 
         if (TerminatingOrDeleted(uid) || TerminatingOrDeleted(player))
             return (outcome == DrydockBerthResult.Success, price.Net, false);
 
-        if (outcome != DrydockBerthResult.Success || sold == null)
+        if (outcome != DrydockBerthResult.Success || soldName == null)
         {
             ConsolePopup(player, Loc.GetString("shipyard-console-sell-not-available"));
             PlayDenySound(player, uid, component);
@@ -1536,14 +1549,44 @@ public sealed partial class ShipyardSystem
 
         var paid = price.Net <= 0 || _bank.TryBankDeposit(player, price.Net, new MarketRecord { Kind = MarketTransactionKind.ShipyardSale });
         if (!paid)
-            Log.Error($"Drydock: {sold.ShipGuid} ({sold.ShipName}) was sold by {owner} for {price.Net} but the deposit to {ToPrettyString(player)} failed; the timeline row carries the amount.");
+            Log.Error($"Drydock: {shipId} ({soldName}) was sold by {owner} for {price.Net} but the deposit to {ToPrettyString(player)} failed; the timeline row carries the amount.");
 
-        _adminLogger.Add(LogType.ShipYardUsage, LogImpact.Low, $"{ToPrettyString(player):actor} scrapped stored ship {sold.ShipName} ({sold.ShipGuid}) for {price.Net} credits via {ToPrettyString(uid)}");
+        _adminLogger.Add(LogType.ShipYardUsage, LogImpact.Low, $"{ToPrettyString(player):actor} scrapped stored ship {soldName} ({shipId}) for {price.Net} credits via {ToPrettyString(uid)}");
 
-        ConsolePopup(player, Loc.GetString("shipyard-console-sell-complete", ("ship", sold.ShipName), ("price", price.Net)));
+        ConsolePopup(player, Loc.GetString("shipyard-console-sell-complete", ("ship", soldName), ("price", price.Net)));
         PlayConfirmSound(player, uid, component);
         await RefreshDrydockState(uid, component, player, uiKey);
         return (true, price.Net, paid);
+    }
+
+    /// <summary>
+    /// The shipyard's own live sale, catching the drydock row up. Called by the upstream sell
+    /// handler through one marked line after the credits have moved, with the identity read off the
+    /// grid before the sale deleted it. Only a hull the drydock has filed carries an identity, so a
+    /// fresh purchase sold the same round never reaches here. Without this the row goes on reading
+    /// as checked out: the panel lists a scrapped ship as stranded, a plain restore hands it back on
+    /// top of the credits, and a restore from sale finds no sale on file.
+    /// </summary>
+    internal void RecordDrydockLiveSale(Guid shipId, EntityUid player, int price, int appraisal)
+    {
+        if (!TryGetOperatorAccount(player, out var seller))
+            return;
+
+        _ = RecordDrydockLiveSaleAsync(shipId, seller, price, appraisal);
+    }
+
+    private async Task RecordDrydockLiveSaleAsync(Guid shipId, Guid seller, int price, int appraisal)
+    {
+        try
+        {
+            var (outcome, _) = await _drydockStore.TrySellLiveShip(shipId, seller, price, appraisal, DrydockRoundId);
+            if (outcome != DrydockBerthResult.Success)
+                Log.Warning($"Drydock: {shipId} was sold live at the shipyard but its row would not move to sold ({outcome}); the shipyard log carries the sale.");
+        }
+        catch (Exception e)
+        {
+            Log.Error($"Drydock: recording the live sale of {shipId} threw: {e}");
+        }
     }
 
     /// <summary>

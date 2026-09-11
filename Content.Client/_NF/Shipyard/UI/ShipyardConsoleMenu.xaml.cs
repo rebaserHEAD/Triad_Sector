@@ -4,6 +4,7 @@ using Content.Client.UserInterface.Controls;
 using Content.Client._NF.Shipyard.BUI;
 using Content.Shared._NF.Bank;
 using Content.Shared._NF.Shipyard.BUI;
+using Content.Shared._NF.Shipyard.Components; // Triad: drydock tab, the deed's name length
 using Content.Shared._NF.Shipyard.Events; // Triad: drydock tab, the progress message's kind
 using Content.Shared._NF.Shipyard.Prototypes;
 using Content.Shared._Triad.ShipSize;
@@ -543,7 +544,9 @@ public sealed partial class ShipyardConsoleMenu : FancyWindow
         // makes a console opened halfway through draw it at all.
         PopulateDeedShip(state.DeedShip, state.StoreProgressPercent);
         PopulateOffers();
-        PopulateBerths(state.Berths, canRetrieve: state.IsTargetIdPresent && state.ShipDeedTitle == null);
+        // A voucher in the slot reads as free listings; it is not a card a stored ship can be called
+        // in on, and the server refuses the press, so the button is not drawn.
+        PopulateBerths(state.Berths, canRetrieve: state.IsTargetIdPresent && state.ShipDeedTitle == null && !state.FreeListings);
 
         // The retrieve half of the same rule. The rows were just rebuilt, so the greying is applied
         // here rather than carried on any one row: one ship comes back per card, and the server
@@ -895,7 +898,7 @@ public sealed partial class ShipyardConsoleMenu : FancyWindow
             Loc.GetString("shipyard-console-rename-placeholder"),
             Loc.GetString("shipyard-console-rename-button"),
             IsValidStoredShipName,
-            30,
+            ShuttleDeedComponent.MaxNameLength,
             destructive: false,
             name => OnRenameStoredShip?.Invoke(shipId, name.Trim())).OpenCentered();
     }
@@ -928,12 +931,13 @@ public sealed partial class ShipyardConsoleMenu : FancyWindow
 
     /// <summary>
     /// Triad: the same rule the server applies to a stored ship's new name, so the button greys
-    /// on the same input the server would refuse. Thirty characters is the deed's own limit.
+    /// on the same input the server would refuse. The length is the deed's own limit, read from
+    /// the deed so the two cannot drift.
     /// </summary>
     private static bool IsValidStoredShipName(string name)
     {
         name = name.Trim();
-        if (name.Length == 0 || name.Length > 30)
+        if (name.Length == 0 || name.Length > ShuttleDeedComponent.MaxNameLength)
             return false;
 
         foreach (var c in name)

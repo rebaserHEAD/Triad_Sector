@@ -6,6 +6,7 @@ using Content.Server._NF.Shipyard.Components;
 using Content.Server._NF.ShuttleRecords;
 using Content.Shared._NF.Bank.Components;
 using Content.Shared._NF.Shipyard;
+using Content.Server._Triad.Drydock; // Triad: drydock, the live sale reports into the row
 using Content.Shared._Triad.CCVar; // Triad: drydock tab
 using Content.Shared._NF.Shipyard.Events;
 using Content.Shared._NF.Shipyard.BUI;
@@ -440,6 +441,12 @@ public sealed partial class ShipyardSystem : SharedShipyardSystem
 
         bool loadedFromSave = deed.LoadedFromSave;
 
+        // Triad: drydock. Read before the sale deletes the grid: a hull the drydock has filed carries
+        // its id, and the row has to hear about the sale or it goes on reading as checked out.
+        Guid? drydockShipId = TryComp<DrydockIdentityComponent>(shuttleUid.Value, out var drydockIdentity) && drydockIdentity.ShipId != Guid.Empty
+            ? drydockIdentity.ShipId
+            : null;
+
         // Check if this is a loaded ship by looking at the ship's deed component
         if (loadedFromSave)
         {
@@ -510,6 +517,8 @@ public sealed partial class ShipyardSystem : SharedShipyardSystem
 
         RemComp<ShuttleDeedComponent>(targetId);
 
+        var drydockAppraisal = bill; // Triad: drydock, the appraisal the sale rate is cut from
+
         if (!voucherUsed)
         {
             if (!component.IgnoreBaseSaleRate)
@@ -527,6 +536,9 @@ public sealed partial class ShipyardSystem : SharedShipyardSystem
             _bank.TryBankDeposit(player, bill, new MarketRecord { Kind = MarketTransactionKind.ShipyardSale }); // Triad: market data
             PlayConfirmSound(player, uid, component);
         }
+
+        if (drydockShipId is { } drydockId) // Triad: drydock
+            RecordDrydockLiveSale(drydockId, player, voucherUsed ? 0 : bill, drydockAppraisal); // Triad: drydock
 
         var name = GetFullName(deed);
         SendSellMessage(uid, deed.ShuttleOwner!, name, component.ShipyardChannel, player, secret: false);

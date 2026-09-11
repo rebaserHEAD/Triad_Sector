@@ -46,13 +46,16 @@ public enum DrydockStoreResult : byte
     BerthTooSmall,
 
     /// <summary>
-    /// A store of this grid is already in flight. The second request does nothing.
+    /// A store of this grid is already in flight, or the grid is inside another drydock pipeline: a
+    /// retrieve still loading it onto its private map, or an unwind that could not put it back. The
+    /// second request does nothing.
     ///
     /// <para>The ordinary answer to a second press, not a rare race. A store used to be one blocked
     /// tick, so hitting this needed two clicks inside the same database round trip; sliced, it lasts
     /// as long as the hull is big, and any second press in that window lands here. The console
     /// message and the progress indicator have to read as the same story - one says the ship is being
-    /// stored, the other says how far along it is.</para>
+    /// stored, the other says how far along it is. Only the admin ripcord can reach the other two
+    /// cases, since no console can see a grid on a private map.</para>
     /// </summary>
     InProgress,
 

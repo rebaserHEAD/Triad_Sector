@@ -23,12 +23,18 @@ namespace Content.Server._Triad.Drydock;
 /// that protect a store from doing damage become instructions to do the damage deliberately, and
 /// only those two: a document that will not write or will not read back still fails, because those
 /// are the failures an impound cannot paper over.</para>
+///
+/// <para>That damage is not undone when one of those two failures follows it. A hazard is deleted
+/// and an occupant is moved at the gates, before serialize and validate can run, because a mind
+/// must never reach the document and a countdown must never resume from one; a refusal after them
+/// hands the hull back to its station intact but emptied, with its crew at a bus stop. Both are
+/// survivable and neither is a duplicate, which is the trade the gates exist to make.</para>
 /// </summary>
 public sealed partial class DrydockSystem
 {
-    [Dependency] private readonly SharedMindSystem _mind = default!;
-    [Dependency] private readonly SharedBuckleSystem _buckle = default!;
-    [Dependency] private readonly PublicTransitSystem _transit = default!;
+    [Dependency] private SharedMindSystem _mind = default!;
+    [Dependency] private SharedBuckleSystem _buckle = default!;
+    [Dependency] private PublicTransitSystem _transit = default!;
 
     /// <summary>
     /// Takes a live hull into the impound lot: the ordinary store pipeline with its two refusal
@@ -39,26 +45,20 @@ public sealed partial class DrydockSystem
     /// thing the freeze it replaces could never say: a row that reads impounded while a grid still
     /// carries the ship is the duplicate every state transition here exists to prevent.</para>
     /// </summary>
-    /// <param name="feePercent">
-    /// Share of the appraisal to charge, 0 to 100. Taken against the appraisal measured during this
-    /// very store, so the credits owed can never exceed what the hull is worth.
-    /// </param>
-    /// <param name="redeemable">
-    /// Whether the owner may act on it. False is an adjudication: frozen until an admin says
-    /// otherwise, whatever the fee.
+    /// <param name="terms">
+    /// The fee share, the reason, whether the owner may act on it, and who is taking it. The fee is
+    /// taken against the appraisal measured during this very store, so the credits owed can never
+    /// exceed what the hull is worth.
     /// </param>
     public Task<(DrydockStoreResult Result, Guid? ShipId)> TryImpoundShip(
         EntityUid gridUid,
         Guid ownerUserId,
         int? roundId,
-        int feePercent,
-        string? reason,
-        bool redeemable,
+        DrydockImpound terms,
         EntityUid? stationUid = null,
         DrydockProgressCallback? onProgress = null)
     {
-        return TryStoreShip(gridUid, ownerUserId, roundId, berthId: null, stationUid, onProgress,
-            new DrydockImpound(DrydockImpound.Clamp(feePercent), reason, redeemable));
+        return TryStoreShip(gridUid, ownerUserId, roundId, berthId: null, stationUid, onProgress, terms);
     }
 
     /// <summary>
@@ -121,15 +121,17 @@ public sealed partial class DrydockSystem
     /// not today", so it answers it by emptying the ship.
     /// </summary>
     /// <returns>How many were moved, for the log line and the audit reason.</returns>
-    private int EvictOrganicsAboard(EntityUid gridUid)
+    private int EvictOrganicsAboard(DrydockStoreContext ctx)
     {
+        var gridUid = ctx.GridUid;
+
         var aboard = new List<EntityUid>();
         CollectMindsAboard(gridUid, aboard);
 
         if (aboard.Count == 0)
             return 0;
 
-        var drop = FindImpoundDropOff(gridUid);
+        var drop = FindImpoundDropOff(ctx);
 
         foreach (var uid in aboard)
         {
@@ -139,6 +141,8 @@ public sealed partial class DrydockSystem
             _buckle.TryUnbuckle(uid, uid, popup: false);
             _containers.TryRemoveFromContainer(uid, force: true);
 
+            // Leaving the paused staging map, when this runs after the freeze, is what unpauses
+            // them: the engine re-derives an entity's pause state from the map it lands on.
             _xform.SetCoordinates(uid, drop);
         }
 
@@ -175,53 +179,69 @@ public sealed partial class DrydockSystem
     }
 
     /// <summary>
-    /// Where an evicted occupant lands. Bus service outranks distance, because somewhere close with
-    /// no way to leave is worse than somewhere further along a route: the whole point of putting a
-    /// player down rather than deleting them is that they can carry on playing.
+    /// Where an evicted occupant lands: a spawn point on the map the hull came from, and on that
+    /// map only. Bus service outranks distance, because somewhere close with no way to leave is
+    /// worse than somewhere further along a route: the whole point of putting a player down rather
+    /// than deleting them is that they can carry on playing.
+    ///
+    /// <para>The home map is read off the context, never the grid, because after the freeze the grid
+    /// is on a private staging map and a query keyed on its transform would either find nothing or,
+    /// unfiltered, find spawn points on every map at once: another sector, or a hull mid-store on a
+    /// paused map of its own, where a body put down past that store's last organics gate is written
+    /// into its document. A grid that is itself one tick from its own freeze is skipped for the same
+    /// reason.</para>
     ///
     /// <para>Observer spawns are skipped because they are ghost markers, and a body put on one is
     /// standing in whatever the mapper thought a ghost could occupy.</para>
     ///
     /// <para>The last rung is not a refusal. An impound never refuses, so a sector that offers no
-    /// spawn point at all still takes the hull, and the occupants are left on the map at the hull's
-    /// own position: whatever they are wearing, wherever they were, which is survivable and
+    /// spawn point at all still takes the hull, and the occupants are left on the home map at the
+    /// hull's own position: whatever they are wearing, wherever they were, which is survivable and
     /// reversible. Being written into the document is neither.</para>
     /// </summary>
-    private EntityCoordinates FindImpoundDropOff(EntityUid gridUid)
+    private EntityCoordinates FindImpoundDropOff(DrydockStoreContext ctx)
     {
-        var origin = _xform.GetWorldPosition(gridUid);
+        var gridUid = ctx.GridUid;
 
         EntityCoordinates? best = null;
         var bestRank = (Unserved: 0, Distance: 0f);
 
-        var spawns = AllEntityQuery<SpawnPointComponent, TransformComponent>();
-        while (spawns.MoveNext(out var uid, out var spawn, out var xform))
+        if (ctx.HomeMap is { } home)
         {
-            if (spawn.SpawnType == SpawnPointType.Observer)
-                continue;
+            var spawns = AllEntityQuery<SpawnPointComponent, TransformComponent>();
+            while (spawns.MoveNext(out var uid, out var spawn, out var xform))
+            {
+                if (spawn.SpawnType == SpawnPointType.Observer)
+                    continue;
 
-            if (xform.GridUid is not { } grid || grid == gridUid)
-                continue;
+                if (xform.MapUid != home)
+                    continue;
 
-            var rank = (
-                Unserved: _transit.StationList.Contains(grid) ? 0 : 1,
-                Distance: (_xform.GetWorldPosition(uid) - origin).Length());
+                if (xform.GridUid is not { } grid || grid == gridUid)
+                    continue;
 
-            if (best != null && rank.CompareTo(bestRank) >= 0)
-                continue;
+                if (HasComp<DrydockInProgressComponent>(grid))
+                    continue;
 
-            best = xform.Coordinates;
-            bestRank = rank;
+                var rank = (
+                    Unserved: _transit.StationList.Contains(grid) ? 0 : 1,
+                    Distance: (_xform.GetWorldPosition(uid) - ctx.HomePosition).Length());
+
+                if (best != null && rank.CompareTo(bestRank) >= 0)
+                    continue;
+
+                best = xform.Coordinates;
+                bestRank = rank;
+            }
         }
 
         if (best is { } found)
             return found;
 
-        var mapUid = Transform(gridUid).MapUid;
-        Log.Error($"Drydock: impound of {ToPrettyString(gridUid)} found no spawn point in the sector; its occupants stay on the map where the hull was.");
+        Log.Error($"Drydock: impound of {ToPrettyString(gridUid)} found no spawn point on its home map; its occupants stay on that map where the hull was.");
 
-        return mapUid is { } map
-            ? new EntityCoordinates(map, origin)
+        return ctx.HomeMap is { } map
+            ? new EntityCoordinates(map, ctx.HomePosition)
             : EntityCoordinates.Invalid;
     }
 }

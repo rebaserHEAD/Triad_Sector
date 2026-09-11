@@ -10,6 +10,7 @@ using Content.Server.Database;
 using Content.Server.EUI;
 using Content.Server.GameTicking;
 using Content.Server.Preferences.Managers;
+using Content.Shared._NF.Bank;
 using Content.Shared._NF.Bank.Components;
 using Content.Shared._Triad.CCVar;
 using Content.Shared._Triad.Drydock.Admin;
@@ -117,42 +118,62 @@ public sealed partial class DrydockAdminEui : BaseEui
             case DrydockAdminImpoundMessage impound:
                 _ = Act(async () =>
                 {
-                    if (impound.Impound)
+                    var terms = new DrydockImpound(impound.FeePercent, Clean(impound.Reason), impound.Redeemable, AdminId);
+                    var drydock = _entMan.System<DrydockSystem>();
+
+                    // A hull still in the world has to be taken out of it first. Impounding the
+                    // row alone would leave the grid flying with a row that says otherwise,
+                    // which is the duplicate the old freeze could produce and this cannot.
+                    if (drydock.TryGetLiveShipGrid(impound.ShipGuid, out var grid))
                     {
-                        // A hull still in the world has to be taken out of it first. Impounding the
-                        // row alone would leave the grid flying with a row that says otherwise,
-                        // which is the duplicate the old freeze could produce and this cannot.
-                        var drydock = _entMan.System<DrydockSystem>();
-                        if (drydock.TryGetLiveShipGrid(impound.ShipGuid, out var grid))
-                        {
-                            var owner = await _store.GetShipOwner(impound.ShipGuid);
-                            if (owner == null)
-                                return "Unknown ship.";
+                        var header = await _store.GetShipHeader(impound.ShipGuid);
+                        if (header == null)
+                            return "Refused: unknown ship.";
 
-                            var (result, _) = await drydock.TryImpoundShip(grid, owner.Value, RoundForAudit(),
-                                impound.FeePercent, impound.Reason, impound.Redeemable);
+                        var (result, _) = await drydock.TryImpoundShip(grid, header.OwnerUserId, RoundForAudit(), terms);
+                        if (result != DrydockStoreResult.Success)
+                            return ImpoundRefusalText(result);
 
-                            return result == DrydockStoreResult.Success
-                                ? "Impounded; the hull is in the lot."
-                                : $"Refused: {result}.";
-                        }
-
-                        var taken = await _store.TrySetState(impound.ShipGuid, null, DrydockShipState.Impounded, DrydockAuditAction.Impound, AdminId, RoundForAudit(), impound.Reason);
-                        if (!taken)
-                            return "Already impounded, or unknown ship.";
-
-                        var owed = await _store.SetImpoundTerms(impound.ShipGuid,
-                            new DrydockImpound(impound.FeePercent, impound.Reason, impound.Redeemable));
-
-                        return $"Impounded. Fee ${owed:N0}.";
+                        KickConsoles(header.OwnerUserId);
+                        return "Impounded; the hull is in the lot.";
                     }
 
-                    // Back to wherever the impound found it. A ship taken while out is still out.
-                    return await _store.TryReleaseImpound(impound.ShipGuid, AdminId, RoundForAudit(), impound.Reason) switch
+                    // Sitting in a berth: no hull to take, one transaction, and only from Stored.
+                    var (outcome, fee) = await _store.TryImpoundStored(impound.ShipGuid, terms, RoundForAudit());
+                    if (outcome != DrydockBerthResult.Success)
                     {
-                        DrydockShipState.CheckedOut => "Released; the ship is still out.",
-                        DrydockShipState.Stored => "Released; the ship is stored again.",
-                        _ => "Not impounded.",
+                        return outcome switch
+                        {
+                            DrydockBerthResult.NotFound => "Refused: unknown ship.",
+                            DrydockBerthResult.WrongState => "Refused: only a ship in a berth can be impounded from here. Withdraw a standing offer first; a sold, written-off or abandoned row is a verdict, not a hull.",
+                            _ => $"Refused: {outcome}.",
+                        };
+                    }
+
+                    KickConsolesOf(impound.ShipGuid);
+                    return $"Impounded. Fee {BankSystemExtensions.ToSpesoString(fee)}.";
+                });
+                break;
+
+            case DrydockAdminReleaseImpoundMessage release:
+                _ = Act(async () =>
+                {
+                    var reason = Clean(release.Reason) ?? "released by admin";
+                    var (outcome, berth) = await _store.TryReleaseImpound(release.ShipGuid, null, AdminId, RoundForAudit(), reason);
+                    if (outcome == DrydockBerthResult.Success)
+                    {
+                        KickConsolesOf(release.ShipGuid);
+                        return $"Released into berth #{berth}.";
+                    }
+
+                    return outcome switch
+                    {
+                        DrydockBerthResult.WrongState => "Refused: that ship is not impounded.",
+                        DrydockBerthResult.NoBerth => "Refused: the owner has no free berth. Grant one, or vacate one and use Restore to….",
+                        DrydockBerthResult.BerthTooSmall => "Refused: no free berth of the owner's fits this hull. Grant a larger one.",
+                        DrydockBerthResult.BerthOccupied => "Refused: the berth was taken in the same instant. Try again.",
+                        DrydockBerthResult.NotFound => "Refused: unknown ship.",
+                        _ => $"Refused: {outcome}.",
                     };
                 });
                 break;
@@ -163,7 +184,10 @@ public sealed partial class DrydockAdminEui : BaseEui
                     var resolved = await _store.TryResolveTransfer(cancel.TransferId, DrydockTransferResolution.Cancelled, AdminId, RoundForAudit(),
                         adminOverride: true, reason: string.IsNullOrWhiteSpace(cancel.Reason) ? "cancelled by admin" : cancel.Reason);
                     if (resolved != null)
-                        KickConsoles();
+                    {
+                        KickConsoles(resolved.FromUserId);
+                        KickConsoles(resolved.ToUserId);
+                    }
                     return resolved != null ? "Offer withdrawn; the ship is stored again." : "No standing offer by that id.";
                 });
                 break;
@@ -182,7 +206,7 @@ public sealed partial class DrydockAdminEui : BaseEui
                     var reason = string.IsNullOrWhiteSpace(restore.Reason) ? "restored by admin" : restore.Reason;
                     var outcome = await _entMan.System<DrydockSystem>().TryAdminRestore(restore.ShipGuid, restore.BerthId, AdminId, RoundForAudit(), reason);
                     if (outcome == DrydockBerthResult.Success)
-                        KickConsoles();
+                        KickConsolesOf(restore.ShipGuid);
                     return RestoreOutcomeText(outcome);
                 });
                 break;
@@ -196,10 +220,11 @@ public sealed partial class DrydockAdminEui : BaseEui
                 {
                     var outcome = await _store.TryMoveShip(move.ShipGuid, move.BerthId, AdminId, RoundForAudit(), move.Reason);
                     if (outcome == DrydockBerthResult.Success)
-                        KickConsoles();
+                        KickConsolesOf(move.ShipGuid);
                     return outcome switch
                     {
                         DrydockBerthResult.Success => move.BerthId is null ? "Berth vacated." : "Ship moved.",
+                        DrydockBerthResult.WrongState when move.BerthId is null => "Refused: a stored ship lives in its berth. Move it instead; vacating is for a hull that is out and still shown in its slot.",
                         DrydockBerthResult.WrongState => "Refused: only a stored ship can be moved into a berth.",
                         DrydockBerthResult.BerthTooSmall => "Refused: that berth cannot hold this hull.",
                         DrydockBerthResult.BerthOccupied => "Refused: that berth is occupied.",
@@ -215,7 +240,7 @@ public sealed partial class DrydockAdminEui : BaseEui
                         return "Refused: not a size class.";
 
                     var id = await _store.AddBerth(grant.OwnerUserId, sizeClass, DrydockBerthKind.Granted, 0, AdminId, RoundForAudit());
-                    KickConsoles();
+                    KickConsoles(grant.OwnerUserId);
                     return $"Granted {sizeClass} berth #{id}.";
                 });
                 break;
@@ -223,9 +248,9 @@ public sealed partial class DrydockAdminEui : BaseEui
             case DrydockAdminDeleteBerthMessage delBerth:
                 _ = Act(async () =>
                 {
-                    var (outcome, _) = await _store.TryRemoveBerth(delBerth.BerthId, null, DrydockAuditAction.BerthDelete, AdminId, RoundForAudit());
-                    if (outcome == DrydockBerthResult.Success)
-                        KickConsoles();
+                    var (outcome, removed) = await _store.TryRemoveBerth(delBerth.BerthId, null, DrydockAuditAction.BerthDelete, AdminId, RoundForAudit());
+                    if (outcome == DrydockBerthResult.Success && removed != null)
+                        KickConsoles(removed.OwnerUserId);
                     return outcome switch
                     {
                         DrydockBerthResult.Success => $"Berth #{delBerth.BerthId} deleted.",
@@ -262,6 +287,27 @@ public sealed partial class DrydockAdminEui : BaseEui
                 });
                 break;
         }
+    }
+
+    private static string? Clean(string? text) => string.IsNullOrWhiteSpace(text) ? null : text.Trim();
+
+    /// <summary>
+    /// What the footer says when the pipeline would not take a live hull. An impound never refuses
+    /// for a berth, a hazard or an occupant, so what is left is the drydock being off, the hull
+    /// already inside a pipeline, or a document that would not write or read back. The last two
+    /// hand the hull back emptied: the occupants an impound moves off are not put back.
+    /// </summary>
+    private static string ImpoundRefusalText(DrydockStoreResult result)
+    {
+        return result switch
+        {
+            DrydockStoreResult.Disabled => "Refused: the drydock is off or read-only (triad.drydock.enabled, triad.drydock.read_only).",
+            DrydockStoreResult.InProgress => "Refused: that hull is already inside a drydock pipeline. Try again when it finishes.",
+            DrydockStoreResult.SerializeFailed => "Refused: the hull would not serialize. Nothing was filed; the hull was handed back, without anyone who was aboard.",
+            DrydockStoreResult.ValidationFailed => "Refused: the document would not read back. Nothing was filed; the hull was handed back, without anyone who was aboard.",
+            DrydockStoreResult.Cancelled => "Refused: the store was cancelled before it finished. Nothing was filed; the hull was handed back, without anyone who was aboard.",
+            _ => $"Refused: {result}.",
+        };
     }
 
     private static string RestoreOutcomeText(DrydockBerthResult outcome)
@@ -306,7 +352,7 @@ public sealed partial class DrydockAdminEui : BaseEui
         }
 
         var reason = string.IsNullOrWhiteSpace(undo.Reason) ? "sale reversed by admin" : undo.Reason;
-        var outcome = await _entMan.System<DrydockSystem>().TryAdminRestore(undo.ShipGuid, undo.BerthId, AdminId, RoundForAudit(), reason);
+        var outcome = await _entMan.System<DrydockSystem>().TryAdminRestore(undo.ShipGuid, undo.BerthId, AdminId, RoundForAudit(), reason, fromSale: true);
         if (outcome != DrydockBerthResult.Success)
         {
             if (took > 0 && !await TryGiveBack(header.OwnerUserId, took))
@@ -329,7 +375,7 @@ public sealed partial class DrydockAdminEui : BaseEui
             CreatedAt = DateTime.UtcNow,
         });
 
-        KickConsoles();
+        KickConsoles(header.OwnerUserId);
         return took > 0 ? $"Sale reversed; {took} taken back from the owner." : "Sale reversed; the owner keeps the money.";
     }
 
@@ -394,10 +440,27 @@ public sealed partial class DrydockAdminEui : BaseEui
         return await _db.GetPlayerPreferencesAsync(id, CancellationToken.None);
     }
 
-    /// <summary>Every open drydock tab re-reads after an admin action, so the player sees it without reopening.</summary>
-    private void KickConsoles()
+    /// <summary>
+    /// The account's open drydock tabs re-read after an admin action, so the player sees it without
+    /// reopening. Aimed at one account rather than every tab, because a refresh is five database
+    /// reads per tab and nobody else's list changed.
+    /// </summary>
+    private void KickConsoles(Guid owner)
     {
-        _entMan.System<ShipyardSystem>().KickDrydockRefreshAll();
+        _entMan.System<ShipyardSystem>().KickDrydockRefreshForAccount(owner);
+    }
+
+    /// <summary>
+    /// The same, for an action that named a ship rather than an account: the owner is read off the
+    /// selected hull when it is the one acted on, else every tab is kicked, since the panel does not
+    /// carry the owner of a hull that is not selected.
+    /// </summary>
+    private void KickConsolesOf(Guid shipGuid)
+    {
+        if (_state.Selected is { } detail && detail.Ship.ShipGuid == shipGuid)
+            KickConsoles(detail.Ship.OwnerUserId);
+        else
+            _entMan.System<ShipyardSystem>().KickDrydockRefreshAll();
     }
 
     // ---------------------------------------------------------------- State
@@ -586,7 +649,10 @@ public sealed partial class DrydockAdminEui : BaseEui
             ship.StateChangedAt,
             ship.CurrentRevision,
             live.Contains(ship.ShipGuid),
-            escrow?.ExpiresAt);
+            escrow?.ExpiresAt,
+            ship.ImpoundFee,
+            ship.ImpoundReason,
+            ship.ImpoundRedeemable);
     }
 
     private async Task<Dictionary<Guid, string>> ResolveNames(HashSet<Guid> ids)

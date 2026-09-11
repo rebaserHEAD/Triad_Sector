@@ -8,6 +8,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using Content.Server._Triad.Drydock;
 using Content.Server.Database;
+using Content.Shared._NF.Bank;
 using Content.Shared._Triad.ShipSize;
 using Microsoft.EntityFrameworkCore;
 
@@ -172,14 +173,16 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
         }
 
         /// <summary>
-        /// An impound is an adjudication, not a location. Lifting one has to put the ship back where
-        /// the impound found it: a ship taken while out flying is still out, and a release that called
-        /// it stored would make the same hull retrievable twice, once from the world and once from the
-        /// garage. Pinned from both sides: taken-while-out releases to checked out, and a hull stored
-        /// while impounded releases to stored.
+        /// The impound of a ship sitting in a berth: one conditional move from Stored, with the berth
+        /// vacated and remembered, the terms and the fee written, and the audit row naming who took
+        /// it from whom, all under one commit. Anything not sitting in a berth is refused, because a
+        /// hull that is out is the pipeline's to take and a terminal row is a verdict rather than a
+        /// hull. And the only way back out of the lot is into a berth: the one it left by default,
+        /// another that fits when that one is taken, and a refusal that leaves the ship in the lot
+        /// when nothing is free.
         /// </summary>
         [Test]
-        public async Task AReleasedImpoundReturnsTheShipToWhereItFoundIt()
+        public async Task AnImpoundFromABerthIsOneMoveAndTheWayOutIsIntoABerth()
         {
             await using var pair = await PoolManager.GetServerClient();
             var server = pair.Server;
@@ -188,45 +191,128 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             var db = server.ResolveDependency<IServerDbManager>();
 
             var owner = Guid.NewGuid();
+            var admin = Guid.NewGuid();
             await InsertPlayer(db, owner);
-            await store.AddBerth(owner, ShipSizeClass.Cutter, DrydockBerthKind.Granted, 0, null, null);
-            await store.AddBerth(owner, ShipSizeClass.Cutter, DrydockBerthKind.Granted, 0, null, null);
+            for (var i = 0; i < 3; i++)
+                await store.AddBerth(owner, ShipSizeClass.Cutter, DrydockBerthKind.Granted, 0, null, null);
 
             // A checkout records the round it left in, and that column is a foreign key, so the
-            // round has to exist. In play it always does: a retrieve happens inside a round.
+            // round has to exist. In play it always does: an impound happens inside a round.
             var round = await db.AddNewRound(await db.AddOrGetServer("drydock-test"));
+            var doc = Encoding.UTF8.GetBytes("doc");
 
-            // Out flying, then impounded, then released: still out.
-            var flying = Guid.NewGuid();
-            await store.FileRevision(Request(flying, owner, "Harrier"), Encoding.UTF8.GetBytes("doc"), keepBlobs: 2);
-            Assert.That(await store.TrySetState(flying, DrydockShipState.Stored, DrydockShipState.CheckedOut, DrydockAuditAction.Retrieve, owner, round, null), Is.True);
-            Assert.That(await store.TrySetState(flying, null, DrydockShipState.Impounded, DrydockAuditAction.Impound, null, round, "suspect"), Is.True);
-
-            Assert.That(await store.TryReleaseImpound(flying, null, round, "cleared"), Is.EqualTo(DrydockShipState.CheckedOut),
-                "The hull was in the world when it was taken and nothing has put it away since, so the row must not say stored.");
-
-            // A control on the other side: a ship impounded at rest releases to stored.
             var resting = Guid.NewGuid();
-            await store.FileRevision(Request(resting, owner, "Kestrel"), Encoding.UTF8.GetBytes("doc"), keepBlobs: 2);
-            Assert.That(await store.TrySetState(resting, null, DrydockShipState.Impounded, DrydockAuditAction.Impound, null, round, "suspect"), Is.True);
-            Assert.That(await store.TryReleaseImpound(resting, null, round, "cleared"), Is.EqualTo(DrydockShipState.Stored));
-
-            // Impounded while out, then the owner puts it away through the pipeline's two-step filing.
-            // The hull is in the garage now, so a release must say stored, not out.
-            Assert.That(await store.TrySetState(flying, DrydockShipState.CheckedOut, DrydockShipState.Impounded, DrydockAuditAction.Impound, null, round, "suspect again"), Is.True);
-            var filed = await store.FileRevision(Request(flying, owner, "Harrier", markStored: false), Encoding.UTF8.GetBytes("doc2"), keepBlobs: 2);
+            var filed = await store.FileRevision(Request(resting, owner, "Kestrel"), doc, keepBlobs: 2);
             Assert.That(filed.Outcome, Is.EqualTo(DrydockBerthResult.Success));
-            Assert.That(await store.MarkStored(flying), Is.False, "An impounded ship stays impounded through a store; only the hull's whereabouts changes.");
-            Assert.That(await store.TryReleaseImpound(flying, null, round, "cleared"), Is.EqualTo(DrydockShipState.Stored),
-                "The store put the hull in the garage, so the impound now releases to stored.");
+            var seated = filed.BerthId!.Value;
 
-            Assert.That(await store.TryReleaseImpound(flying, null, round, "again"), Is.Null, "Nothing to release twice.");
+            // A second hull, out flying but still seated, which is how a row reads between a
+            // retrieve's claim and its vacate. Filed before the impound so it takes a berth of its
+            // own rather than the one the impound is about to vacate, since a store seats into the
+            // lowest free berth that fits.
+            var flying = Guid.NewGuid();
+            await store.FileRevision(Request(flying, owner, "Harrier"), doc, keepBlobs: 2);
+            Assert.That(await store.TrySetState(flying, DrydockShipState.Stored, DrydockShipState.CheckedOut, DrydockAuditAction.Retrieve, owner, round, null), Is.True);
 
-            var rows = await store.GetShipsByOwner(owner);
+            var terms = new DrydockImpound(25, "ticket #94", Redeemable: false, ActorUserId: admin);
+            var (outcome, fee) = await store.TryImpoundStored(resting, terms, round);
             Assert.Multiple(() =>
             {
-                Assert.That(rows.Single(r => r.ShipGuid == flying).State, Is.EqualTo(DrydockShipState.Stored));
-                Assert.That(rows.Single(r => r.ShipGuid == resting).State, Is.EqualTo(DrydockShipState.Stored));
+                Assert.That(outcome, Is.EqualTo(DrydockBerthResult.Success));
+                Assert.That(fee, Is.EqualTo(6000), "25% of the $24,000 the current revision appraised at.");
+            });
+
+            var row = (await store.GetShipsByOwner(owner)).Single(r => r.ShipGuid == resting);
+            Assert.Multiple(() =>
+            {
+                Assert.That(row.State, Is.EqualTo(DrydockShipState.Impounded));
+                Assert.That(row.BerthId, Is.Null, "The holding area is not a berth.");
+                Assert.That(row.LastBerthId, Is.EqualTo(seated), "Where it came from is the release's default.");
+                Assert.That(row.CheckedOutRoundId, Is.Null, "Nothing is out.");
+                Assert.That(row.ImpoundFee, Is.EqualTo(6000));
+                Assert.That(row.ImpoundRedeemable, Is.False);
+                Assert.That(row.ImpoundReason, Is.EqualTo("ticket #94"));
+            });
+
+            var taken = (await store.GetAudit(resting))[^1];
+            Assert.Multiple(() =>
+            {
+                Assert.That(taken.Action, Is.EqualTo(DrydockAuditAction.Impound));
+                Assert.That(taken.ActorUserId, Is.EqualTo(admin), "The admin took it; the owner is never the actor of their own impound.");
+                Assert.That(taken.SubjectUserId, Is.EqualTo(owner));
+                Assert.That(taken.BerthId, Is.EqualTo(seated), "The berth vacated.");
+                Assert.That(taken.RoundId, Is.EqualTo(round));
+                Assert.That(taken.Reason, Does.Contain("ticket #94"));
+                Assert.That(taken.Reason, Does.Contain($"fee {BankSystemExtensions.ToSpesoString(6000)}, 25% of {BankSystemExtensions.ToSpesoString(24000)}"),
+                    "The timeline keeps the numbers; the row keeps only the latest impound's.");
+                Assert.That(taken.Reason, Does.Contain("held for adjudication"));
+            });
+
+            Assert.That((await store.TryImpoundStored(resting, terms, round)).Outcome, Is.EqualTo(DrydockBerthResult.WrongState),
+                "Already in the lot.");
+
+            // A hull that is out is not taken from a berth. That is the pipeline's job, because the
+            // grid has to leave the world before the row may say impounded.
+            Assert.That((await store.TryImpoundStored(flying, terms, round)).Outcome, Is.EqualTo(DrydockBerthResult.WrongState));
+            Assert.That((await store.GetShipsByOwner(owner)).Single(r => r.ShipGuid == flying).State, Is.EqualTo(DrydockShipState.CheckedOut),
+                "Refused means untouched.");
+
+            // The way out: into the berth it left, for nothing, with the terms left on the row.
+            var (released, into) = await store.TryReleaseImpound(resting, null, admin, round, "cleared");
+            Assert.Multiple(() =>
+            {
+                Assert.That(released, Is.EqualTo(DrydockBerthResult.Success));
+                Assert.That(into, Is.EqualTo(seated), "Its last berth was free, so that is the default.");
+            });
+
+            row = (await store.GetShipsByOwner(owner)).Single(r => r.ShipGuid == resting);
+            Assert.Multiple(() =>
+            {
+                Assert.That(row.State, Is.EqualTo(DrydockShipState.Stored));
+                Assert.That(row.BerthId, Is.EqualTo(seated), "A stored ship holds a berth; a release that left it berthless would be invisible to its owner and free capacity for the anti-join.");
+                Assert.That(row.ImpoundFee, Is.EqualTo(6000), "Never cleared on the way out; the next impound overwrites it.");
+                Assert.That(row.ImpoundReason, Is.EqualTo("ticket #94"));
+            });
+
+            var lifted = (await store.GetAudit(resting))[^1];
+            Assert.Multiple(() =>
+            {
+                Assert.That(lifted.Action, Is.EqualTo(DrydockAuditAction.ImpoundReleased));
+                Assert.That(lifted.BerthId, Is.EqualTo(seated), "The berth it landed in.");
+                Assert.That(lifted.ActorUserId, Is.EqualTo(admin));
+            });
+
+            Assert.That((await store.TryReleaseImpound(resting, null, admin, round, "again")).Outcome, Is.EqualTo(DrydockBerthResult.WrongState),
+                "Nothing to release twice.");
+
+            // With its last berth taken, the release picks another that fits.
+            Assert.That((await store.TryImpoundStored(resting, terms, round)).Outcome, Is.EqualTo(DrydockBerthResult.Success));
+            var squatter = Guid.NewGuid();
+            var squat = await store.FileRevision(Request(squatter, owner, "Pelican", berthId: seated), doc, keepBlobs: 2);
+            Assert.That(squat.BerthId, Is.EqualTo(seated), "Control: the vacated berth was free to take.");
+
+            var (again, elsewhere) = await store.TryReleaseImpound(resting, null, admin, round, "cleared");
+            Assert.Multiple(() =>
+            {
+                Assert.That(again, Is.EqualTo(DrydockBerthResult.Success));
+                Assert.That(elsewhere, Is.Not.Null.And.Not.EqualTo(seated), "Its last berth is taken, so the smallest free one that fits.");
+            });
+
+            // With nothing free, the release refuses and the ship stays in the lot rather than
+            // becoming a stored ship with nowhere to be.
+            Assert.That((await store.TryImpoundStored(resting, terms, round)).Outcome, Is.EqualTo(DrydockBerthResult.Success));
+            var fourth = Guid.NewGuid();
+            var filler = await store.FileRevision(Request(fourth, owner, "Osprey"), doc, keepBlobs: 2);
+            Assert.That(filler.BerthId, Is.EqualTo(elsewhere), "Control: the berth the release used is free again and the store takes it.");
+
+            var (refused, nowhere) = await store.TryReleaseImpound(resting, null, admin, round, "cleared");
+            row = (await store.GetShipsByOwner(owner)).Single(r => r.ShipGuid == resting);
+            Assert.Multiple(() =>
+            {
+                Assert.That(refused, Is.EqualTo(DrydockBerthResult.NoBerth));
+                Assert.That(nowhere, Is.Null);
+                Assert.That(row.State, Is.EqualTo(DrydockShipState.Impounded), "Refused means still in the lot.");
+                Assert.That(row.BerthId, Is.Null);
             });
 
             await pair.CleanReturnAsync();
@@ -259,10 +345,11 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             var seated = filed.BerthId!.Value;
 
             // 50% of the request's $24,000 appraisal. The percent is what travels; the credits are computed
-            // against the appraisal, so a fee over the hull's worth cannot be expressed.
-            var impound = new DrydockImpound(50, "left in the world at round end", Redeemable: true);
+            // against the appraisal, so a fee over the hull's worth cannot be expressed. A null actor is
+            // the round-end sweep, which files as the system.
+            var impound = new DrydockImpound(50, "left in the world at round end", Redeemable: true, ActorUserId: null);
             var taken = await store.FileRevision(
-                Request(shipId, owner, "Kestrel", markStored: false, impound: impound),
+                Request(shipId, owner, "Kestrel", markStored: false, impound: impound, evicted: 2),
                 Encoding.UTF8.GetBytes("doc2"), keepBlobs: 2);
 
             Assert.That(taken.Outcome, Is.EqualTo(DrydockBerthResult.Success));
@@ -279,20 +366,99 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                 Assert.That(row.ImpoundReason, Is.EqualTo("left in the world at round end"));
             });
 
-            var audit = await store.GetAudit(shipId);
-            Assert.That(audit[^1].Action, Is.EqualTo(DrydockAuditAction.Impound),
-                "The filing writes the impound, not a store: a timeline that says stored for a hull nobody put away is a lie.");
+            var audit = (await store.GetAudit(shipId))[^1];
+            Assert.Multiple(() =>
+            {
+                Assert.That(audit.Action, Is.EqualTo(DrydockAuditAction.Impound),
+                    "The filing writes the impound, not a store: a timeline that says stored for a hull nobody put away is a lie.");
+                Assert.That(audit.ActorUserId, Is.Null, "The sweep is the system, and the owner is never the actor of their own impound.");
+                Assert.That(audit.SubjectUserId, Is.EqualTo(owner));
+                Assert.That(audit.BerthId, Is.EqualTo(seated), "The berth vacated.");
+                Assert.That(audit.Reason, Does.Contain("left in the world at round end"));
+                Assert.That(audit.Reason, Does.Contain($"fee {BankSystemExtensions.ToSpesoString(12000)}, 50% of {BankSystemExtensions.ToSpesoString(24000)}"));
+                Assert.That(audit.Reason, Does.Contain("owner can reclaim"));
+                Assert.That(audit.Reason, Does.Contain("2 moved off"), "A hull taken with people on it says so on the timeline.");
+            });
 
             // The way out keeps them. A reversal needs something to restore to, and the timeline has
             // to keep saying what the hull was taken for.
-            Assert.That(await store.TryReleaseImpound(shipId, null, null, "cleared"), Is.EqualTo(DrydockShipState.Stored));
-
-            var released = (await store.GetShipsByOwner(owner)).Single(r => r.ShipGuid == shipId);
+            var (released, into) = await store.TryReleaseImpound(shipId, null, null, null, "cleared");
             Assert.Multiple(() =>
             {
-                Assert.That(released.ImpoundFee, Is.EqualTo(12000), "Never cleared on the way out; the next impound overwrites it.");
-                Assert.That(released.ImpoundReason, Is.EqualTo("left in the world at round end"));
+                Assert.That(released, Is.EqualTo(DrydockBerthResult.Success));
+                Assert.That(into, Is.EqualTo(seated));
             });
+
+            var back = (await store.GetShipsByOwner(owner)).Single(r => r.ShipGuid == shipId);
+            Assert.Multiple(() =>
+            {
+                Assert.That(back.State, Is.EqualTo(DrydockShipState.Stored));
+                Assert.That(back.BerthId, Is.EqualTo(seated));
+                Assert.That(back.ImpoundFee, Is.EqualTo(12000), "Never cleared on the way out; the next impound overwrites it.");
+                Assert.That(back.ImpoundReason, Is.EqualTo("left in the world at round end"));
+            });
+
+            await pair.CleanReturnAsync();
+        }
+
+        /// <summary>
+        /// The shipyard scrapping a hull that is out on a retrieve. The credits move at the console;
+        /// this is the row hearing about it, so a scrapped ship never reads as stranded, is never
+        /// handed back by a plain restore, and the reversal finds the price on the timeline.
+        /// </summary>
+        [Test]
+        public async Task ALiveSaleAtTheShipyardMovesTheRowToSold()
+        {
+            await using var pair = await PoolManager.GetServerClient();
+            var server = pair.Server;
+
+            var store = server.ResolveDependency<DrydockStore>();
+            var db = server.ResolveDependency<IServerDbManager>();
+
+            var owner = Guid.NewGuid();
+            await InsertPlayer(db, owner);
+            await store.AddBerth(owner, ShipSizeClass.Cutter, DrydockBerthKind.Granted, 0, null, null);
+            var round = await db.AddNewRound(await db.AddOrGetServer("drydock-test"));
+
+            var shipId = Guid.NewGuid();
+            var filed = await store.FileRevision(Request(shipId, owner, "Kestrel"), Encoding.UTF8.GetBytes("doc"), keepBlobs: 2);
+            Assert.That(filed.Outcome, Is.EqualTo(DrydockBerthResult.Success));
+
+            // Control: a stored ship is scrapped by the stored sale, never by the live one.
+            Assert.That((await store.TrySellLiveShip(shipId, owner, 800, 1000, round)).Outcome, Is.EqualTo(DrydockBerthResult.WrongState));
+
+            // Out on a retrieve: the claim, then the vacate.
+            Assert.That(await store.TrySetState(shipId, DrydockShipState.Stored, DrydockShipState.CheckedOut, DrydockAuditAction.Retrieve, owner, round, null), Is.True);
+            await store.VacateBerth(shipId);
+
+            var (sold, name) = await store.TrySellLiveShip(shipId, owner, 800, 1000, round);
+            Assert.Multiple(() =>
+            {
+                Assert.That(sold, Is.EqualTo(DrydockBerthResult.Success));
+                Assert.That(name, Is.EqualTo("Kestrel"));
+            });
+
+            var row = (await store.GetShipsByOwner(owner)).Single(r => r.ShipGuid == shipId);
+            Assert.Multiple(() =>
+            {
+                Assert.That(row.State, Is.EqualTo(DrydockShipState.Sold));
+                Assert.That(row.BerthId, Is.Null);
+                Assert.That(row.CheckedOutRoundId, Is.Null, "Nothing is out any more, so the stranded query must not find it.");
+            });
+
+            var audit = (await store.GetAudit(shipId))[^1];
+            Assert.Multiple(() =>
+            {
+                Assert.That(audit.Action, Is.EqualTo(DrydockAuditAction.ShipSold));
+                Assert.That(audit.ActorUserId, Is.EqualTo(owner));
+                Assert.That(audit.Reason, Does.Contain("live at the shipyard"));
+            });
+
+            var sale = await store.GetLastSale(shipId);
+            Assert.That(sale?.Price, Is.EqualTo(800), "The reversal reads the live sale's price the same way it reads a stored one's.");
+
+            Assert.That((await store.TrySellLiveShip(shipId, owner, 800, 1000, round)).Outcome, Is.EqualTo(DrydockBerthResult.WrongState),
+                "Sold once.");
 
             await pair.CleanReturnAsync();
         }
@@ -302,9 +468,13 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             Guid owner,
             string name,
             bool markStored = true,
-            DrydockImpound? impound = null) => new()
+            DrydockImpound? impound = null,
+            int evicted = 0,
+            int? berthId = null) => new()
         {
             Impound = impound,
+            Evicted = evicted,
+            BerthId = berthId,
             ShipGuid = shipId,
             OwnerUserId = owner,
             ShipName = name,
@@ -312,7 +482,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             SizeClass = nameof(ShipSizeClass.Cutter),
             Kind = DrydockRevisionKind.PlayerStore,
             MarkStored = markStored,
-            ActorUserId = owner,
+            ActorUserId = impound != null ? impound.ActorUserId : owner,
             CreatedRoundId = null,
             EngineFormatVer = 7,
             ProtoFingerprint = new byte[] { 1, 2, 3 },

@@ -264,6 +264,15 @@ public sealed partial class ShipyardSystem
             return Refuse(uid, component, player, "shipyard-console-import-load-failed");
         }
 
+        // A file that already carries a drydock identity describes a hull the drydock has filed.
+        // Importing it would file a revision onto that row and, for a hull that is out, mark the
+        // row stored while the original flies: the duplicate the design refuses outright.
+        if (HasComp<DrydockIdentityComponent>(grid))
+        {
+            QueueDel(grid);
+            return Refuse(uid, component, player, "shipyard-console-import-drydock-identity");
+        }
+
         var sizeClass = _drydockSizes.GetSizeClass((grid, mapGrid));
 
         var berthId = await _drydockStore.AddBerth(

@@ -59,7 +59,8 @@ public sealed partial class DrydockSystem
     /// its row back to stored would let it be retrieved into a duplicate while the original
     /// flies. Everything else is the store's decision.
     /// </summary>
-    public Task<DrydockBerthResult> TryAdminRestore(Guid shipId, int berthId, Guid? actorUserId, int? roundId, string reason)
+    /// <param name="fromSale">Set by the sale reversal, the one path allowed to restore a sold hull.</param>
+    public Task<DrydockBerthResult> TryAdminRestore(Guid shipId, int berthId, Guid? actorUserId, int? roundId, string reason, bool fromSale = false)
     {
         if (IsShipLive(shipId))
         {
@@ -67,6 +68,6 @@ public sealed partial class DrydockSystem
             return Task.FromResult(DrydockBerthResult.WrongState);
         }
 
-        return _store.TryRestoreShip(shipId, berthId, actorUserId, roundId, reason);
+        return _store.TryRestoreShip(shipId, berthId, actorUserId, roundId, reason, fromSale);
     }
 }

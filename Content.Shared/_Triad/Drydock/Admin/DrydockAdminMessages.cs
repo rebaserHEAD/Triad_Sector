@@ -46,7 +46,12 @@ public sealed record DrydockAdminShipDto(
     // A grid carrying this hull's id exists in the current round. Restore is refused while true.
     bool LiveThisRound,
     // While in escrow: when the standing offer runs out, so the row can carry a clock.
-    DateTime? EscrowExpiresAt);
+    DateTime? EscrowExpiresAt,
+    // The impound terms. Meaningful only while the state is Impounded; on any other state they are
+    // the last impound's residue, which the row deliberately keeps.
+    int ImpoundFee = 0,
+    string? ImpoundReason = null,
+    bool ImpoundRedeemable = false);
 
 [Serializable, NetSerializable]
 public sealed record DrydockAdminRevisionDto(
@@ -145,11 +150,16 @@ public sealed class DrydockAdminSelectShipMessage : EuiMessageBase
     public Guid? ShipGuid { get; set; }
 }
 
+/// <summary>
+/// Take a hull into the impound lot, from its berth or from the world. The dialog behind it is the
+/// only place the terms are chosen; the server decides which of the two takings applies.
+/// </summary>
 [Serializable, NetSerializable]
 public sealed class DrydockAdminImpoundMessage : EuiMessageBase
 {
     public Guid ShipGuid { get; set; }
-    public bool Impound { get; set; }
+
+    /// <summary>Shown to the owner, and written on the timeline row.</summary>
     public string? Reason { get; set; }
 
     /// <summary>
@@ -163,6 +173,17 @@ public sealed class DrydockAdminImpoundMessage : EuiMessageBase
     /// case: an admin who means "frozen until I say otherwise" has to say so.
     /// </summary>
     public bool Redeemable { get; set; } = true;
+}
+
+/// <summary>
+/// Lift an impound into one of the owner's berths without naming which: the hull's last berth if it
+/// is free and fits, else the smallest free berth that fits. Naming a berth is the restore message.
+/// </summary>
+[Serializable, NetSerializable]
+public sealed class DrydockAdminReleaseImpoundMessage : EuiMessageBase
+{
+    public Guid ShipGuid { get; set; }
+    public string? Reason { get; set; }
 }
 
 [Serializable, NetSerializable]

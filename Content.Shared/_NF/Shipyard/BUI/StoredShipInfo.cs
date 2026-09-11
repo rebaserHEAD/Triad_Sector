@@ -27,9 +27,10 @@ public sealed class StoredShipInfo
     public string? SizeClass;
 
     /// <summary>
-    /// The row state as text: Stored, CheckedOut or Held. A ship that is out is listed so the
-    /// player sees why their berth is empty and so the tab can warn when an action would leave it
-    /// with nowhere to dock; only a stored ship offers Retrieve.
+    /// The row state as text, spelled as <c>DrydockShipState.ToString</c> gives it. Every hull the
+    /// account has is listed, the ones that are out included, so the player sees why a berth is
+    /// empty and so the tab can warn when an action would leave a ship with nowhere to dock; only a
+    /// stored ship offers Retrieve.
     /// </summary>
     public string State = string.Empty;
 

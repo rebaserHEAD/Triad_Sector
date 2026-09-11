@@ -902,7 +902,9 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             var (result, shipId) = await RunOnServer(pair, () => drydock.TryStoreShip(shipGrid, seller, null));
             Assert.That(result, Is.EqualTo(DrydockStoreResult.Success));
 
-            var (moved, _) = await store.TryTransferShip(shipId!.Value, seller, buyer, null, "sale");
+            var (offered, offer) = await store.TryOfferTransfer(shipId!.Value, seller, buyer, TimeSpan.FromMinutes(30), null);
+            Assert.That(offered, Is.EqualTo(DrydockBerthResult.Success));
+            var (moved, _, _) = await store.TryAcceptTransfer(offer!.Id, buyer, null);
             Assert.That(moved, Is.EqualTo(DrydockBerthResult.Success));
 
             // The previous owner can no longer bring it out; the new one can.

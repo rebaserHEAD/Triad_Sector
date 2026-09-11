@@ -186,18 +186,26 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             var ship = Guid.NewGuid();
             await store.FileRevision(Request(ship, seller, "Sold", ShipSizeClass.Cutter), Blob(), keepBlobs: 2);
 
-            // Nowhere to put it on the recipient's side is the same refusal a store gives.
-            var (noRoom, _) = await store.TryTransferShip(ship, seller, pauper, null, "gift");
+            // Nowhere to put it on the recipient's side is the same refusal a store gives, and it
+            // comes at the offer, before anyone has waited thirty minutes to hear it.
+            var (noRoom, _) = await store.TryOfferTransfer(ship, seller, pauper, TimeSpan.FromMinutes(30), null);
             Assert.That(noRoom, Is.EqualTo(DrydockBerthResult.NoBerth));
-            Assert.That((await store.LoadCurrent(ship))!.Ship.OwnerUserId, Is.EqualTo(seller), "A refused transfer changes nothing.");
+            Assert.That((await store.LoadCurrent(ship))!.Ship.OwnerUserId, Is.EqualTo(seller), "A refused offer changes nothing.");
 
             // Only the owner may give it away.
-            var (notYours, _) = await store.TryTransferShip(ship, buyer, pauper, null, "theft");
+            var (notYours, _) = await store.TryOfferTransfer(ship, buyer, pauper, TimeSpan.FromMinutes(30), null);
             Assert.That(notYours, Is.EqualTo(DrydockBerthResult.NotFound));
 
-            var (moved, berth) = await store.TryTransferShip(ship, seller, buyer, null, "sale");
-            Assert.That(moved, Is.EqualTo(DrydockBerthResult.Success));
-            Assert.That(berth, Is.EqualTo(buyersBerth));
+            var (offered, offer) = await store.TryOfferTransfer(ship, seller, buyer, TimeSpan.FromMinutes(30), null);
+            Assert.That(offered, Is.EqualTo(DrydockBerthResult.Success));
+
+            var (moved, berth, name) = await store.TryAcceptTransfer(offer!.Id, buyer, null);
+            Assert.Multiple(() =>
+            {
+                Assert.That(moved, Is.EqualTo(DrydockBerthResult.Success));
+                Assert.That(berth, Is.EqualTo(buyersBerth));
+                Assert.That(name, Is.EqualTo("Sold"));
+            });
 
             var after = (await store.LoadCurrent(ship))!.Ship;
             Assert.Multiple(() =>
@@ -210,6 +218,8 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             var sellersSlots = await store.GetBerths(seller);
             Assert.That(sellersSlots.Single(s => s.Berth.BerthId == sellersBerth).Occupant, Is.Null, "The seller keeps an empty berth.");
 
+            // The timeline reads the direction the ship went: the giver did it to the recipient,
+            // whoever pressed the button.
             var audit = await store.GetAudit(ship);
             var transfer = audit.Single(a => a.Action == DrydockAuditAction.Transfer);
             Assert.Multiple(() =>
@@ -219,9 +229,14 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                 Assert.That(transfer.BerthId, Is.EqualTo(buyersBerth));
             });
 
+            // An offer resolves once. A second accept of the same offer, which is what a decline or
+            // an expiry landing in the same instant looks like from the other side, finds nothing.
+            var (again, _, _) = await store.TryAcceptTransfer(offer.Id, buyer, null);
+            Assert.That(again, Is.EqualTo(DrydockBerthResult.NotFound));
+
             // A ship that is out cannot change hands: there is nothing in the drydock to hand over.
             await store.TrySetState(ship, DrydockShipState.Stored, DrydockShipState.CheckedOut, DrydockAuditAction.Retrieve, buyer, null, null);
-            var (outNow, _) = await store.TryTransferShip(ship, buyer, seller, null, "return");
+            var (outNow, _) = await store.TryOfferTransfer(ship, buyer, seller, TimeSpan.FromMinutes(30), null);
             Assert.That(outNow, Is.EqualTo(DrydockBerthResult.WrongState));
 
             await pair.CleanReturnAsync();
@@ -298,10 +313,14 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
 
             Assert.That(await store.TryRestoreShip(ship, corvetteSlot, admin, null, "already home"), Is.EqualTo(DrydockBerthResult.WrongState),
                 "A ship that is stored has nothing to restore.");
+            Assert.That(await store.TryMoveShip(ship, null, admin, null, "vacate"), Is.EqualTo(DrydockBerthResult.WrongState),
+                "A stored ship lives in its berth: vacating it would make a stored ship with nowhere to be.");
 
-            // Out, and then lost: the retrieve claim plus the vacate, with no store ever coming.
+            // Out, and then lost: the retrieve claim with no store ever coming. The vacate is the
+            // admin's, which is the repair for a hull that went out and was left shown in its slot.
             await store.TrySetState(ship, DrydockShipState.Stored, DrydockShipState.CheckedOut, DrydockAuditAction.Retrieve, owner, null, null);
-            await store.VacateBerth(ship);
+            Assert.That(await store.TryMoveShip(ship, null, admin, null, "still shown in its slot"), Is.EqualTo(DrydockBerthResult.Success));
+            Assert.That((await store.LoadCurrent(ship))!.Ship.BerthId, Is.Null);
 
             Assert.That(await store.TryRestoreShip(ship, cutterSlot, admin, null, "wrong slot"), Is.EqualTo(DrydockBerthResult.BerthTooSmall),
                 "Fit is enforced for admins too; grant a fitting berth instead.");

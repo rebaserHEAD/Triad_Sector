@@ -564,10 +564,15 @@ public enum DrydockAuditAction
     Delete = 4,
     Rebake = 5,
 
-    /// <summary>Took the hull into the impound lot; the reason carries the trigger and the fee.</summary>
+    /// <summary>
+    /// Took the hull into the impound lot. The actor is the admin, or null for the round-end sweep;
+    /// the subject is the owner; the berth is the one vacated, if any; the reason carries the fee
+    /// with the share and appraisal it was taken against, whether the owner may reclaim it, and how
+    /// many occupants were moved off.
+    /// </summary>
     Impound = 6,
 
-    /// <summary>An admin lifted an impound.</summary>
+    /// <summary>An admin lifted an impound into one of the owner's berths, for nothing; the berth is the one it landed in.</summary>
     ImpoundReleased = 7,
 
     BerthPurchase = 8,
@@ -651,4 +656,11 @@ public enum DrydockAuditAction
     /// that reads "an admin lifted an impound" for a database hiccup is worse than no row.
     /// </summary>
     ClaimReleased = 31,
+
+    /// <summary>
+    /// An admin promoted an older revision to current, filed forward as a copy. Its own row rather
+    /// than <see cref="Restore"/>, which is the word for a hull judged lost: a promote changes which
+    /// document a retrieve reads, never where the hull is.
+    /// </summary>
+    RevisionPromoted = 32,
 }

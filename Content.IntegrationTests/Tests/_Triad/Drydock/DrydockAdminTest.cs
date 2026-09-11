@@ -64,8 +64,60 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             Assert.That(pruned, Is.EqualTo(DrydockBerthResult.NotFound));
 
             var audit = await store.GetAudit(ship);
-            var restore = audit.Single(a => a.Action == DrydockAuditAction.Restore);
-            Assert.That(restore.Reason, Does.Contain("promoted revision 1"));
+            var promoted3 = audit.Single(a => a.Action == DrydockAuditAction.RevisionPromoted);
+            Assert.Multiple(() =>
+            {
+                Assert.That(promoted3.Reason, Does.Contain("promoted revision 1"));
+                Assert.That(audit.Select(a => a.Action), Does.Not.Contain(DrydockAuditAction.Restore),
+                    "A promote changes which document a retrieve reads, never where the hull is, so it is not a restore.");
+            });
+
+            await pair.CleanReturnAsync();
+        }
+
+        /// <summary>
+        /// A sold hull comes back only through the sale reversal, which decides about the money
+        /// before anything else. The plain restore refuses it, so an admin picking the wrong verb
+        /// cannot hand a hull back on top of the credits its owner was paid.
+        /// </summary>
+        [Test]
+        public async Task ASoldShipComesBackOnlyThroughTheSaleReversal()
+        {
+            await using var pair = await PoolManager.GetServerClient();
+            var store = pair.Server.ResolveDependency<DrydockStore>();
+            var db = pair.Server.ResolveDependency<IServerDbManager>();
+
+            var owner = Guid.NewGuid();
+            var admin = Guid.NewGuid();
+            await InsertPlayer(db, owner);
+            await InsertPlayer(db, admin);
+            var berth = await store.AddBerth(owner, ShipSizeClass.Cutter, DrydockBerthKind.Granted, 0, null, null);
+
+            var ship = Guid.NewGuid();
+            await store.FileRevision(Request(ship, owner, "Regretted"), Encoding.UTF8.GetBytes("doc"), keepBlobs: 3);
+
+            var (sold, soldName) = await store.TrySellShip(ship, owner, price: 800, appraisal: 1000, roundId: null);
+            Assert.Multiple(() =>
+            {
+                Assert.That(sold, Is.EqualTo(DrydockBerthResult.Success));
+                Assert.That(soldName, Is.EqualTo("Regretted"));
+            });
+
+            var sale = await store.GetLastSale(ship);
+            Assert.That(sale?.Price, Is.EqualTo(800), "The reversal reads the price back off the timeline.");
+
+            Assert.That(await store.TryRestoreShip(ship, berth, admin, null, "wrong verb"), Is.EqualTo(DrydockBerthResult.WrongState),
+                "A plain restore refuses a sold hull.");
+            Assert.That((await store.LoadCurrent(ship))!.Ship.State, Is.EqualTo(DrydockShipState.Sold), "Refused means untouched.");
+
+            Assert.That(await store.TryRestoreShip(ship, berth, admin, null, "sale reversed", fromSale: true), Is.EqualTo(DrydockBerthResult.Success));
+
+            var back = (await store.LoadCurrent(ship))!.Ship;
+            Assert.Multiple(() =>
+            {
+                Assert.That(back.State, Is.EqualTo(DrydockShipState.Stored));
+                Assert.That(back.BerthId, Is.EqualTo(berth));
+            });
 
             await pair.CleanReturnAsync();
         }
