@@ -363,7 +363,53 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             await pair.CleanReturnAsync();
         }
 
+        /// <summary>
+        /// The Transfer… and Move… pickers size to their contents, and their list sits in a scroll
+        /// box, which measures to zero unless told to report its content. Lay a picker out the way a
+        /// window is and demand the rows, and the empty line when there are none, have height.
+        /// </summary>
+        [Test]
+        public async Task APickersListHasHeightWhenItIsLaidOut()
+        {
+            await using var pair = await PoolManager.GetServerClient(new PoolSettings { Connected = true });
+
+            await pair.Client.WaitPost(() =>
+            {
+                var picker = new DrydockListPicker("Transfer Kestrel", "Filter", null, "Offer", "No one else is online.", new[]
+                {
+                    new DrydockListPicker.Item("Mara Voss", "2 berths free", true, () => { }),
+                    new DrydockListPicker.Item("Ilse Varga", "no berth fits", false, () => { }),
+                });
+                var empty = new DrydockListPicker("Transfer Kestrel", "Filter", null, "Offer", "No one else is online.",
+                    Array.Empty<DrydockListPicker.Item>());
+
+                LayOut(picker);
+                LayOut(empty);
+
+                Assert.Multiple(() =>
+                {
+                    Assert.That(LabelWith(picker, "Mara Voss").Height, Is.GreaterThan(0f), "A captain row draws.");
+                    Assert.That(LabelWith(picker, "Ilse Varga").Height, Is.GreaterThan(0f), "A greyed captain row draws too.");
+                    Assert.That(Descendants(picker).OfType<ScrollContainer>().Single().Height, Is.GreaterThan(40f),
+                        "The list has room for both rows.");
+                    Assert.That(LabelWith(empty, "No one else is online.").Height, Is.GreaterThan(0f), "The empty line draws.");
+                });
+            });
+
+            await pair.CleanReturnAsync();
+        }
+
         // ------------------------------------------------------------------ helpers
+
+        /// <summary>A window sized to its contents, measured and arranged the way the UI root does it.</summary>
+        private static void LayOut(Control window)
+        {
+            window.Measure(new System.Numerics.Vector2(430, float.PositiveInfinity));
+            window.Arrange(UIBox2.FromDimensions(System.Numerics.Vector2.Zero, window.DesiredSize));
+        }
+
+        private static Label LabelWith(Control root, string text)
+            => Descendants(root).OfType<Label>().Single(l => l.Text == text);
 
         private static IEnumerable<Control> Descendants(Control root)
         {

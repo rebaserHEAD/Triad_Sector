@@ -91,7 +91,10 @@ public sealed class DrydockListPicker : FancyWindow
 
         listPanel.AddChild(list);
 
-        var scroll = new ScrollContainer { HorizontalExpand = true, HScrollEnabled = false, MaxHeight = 220 };
+        // ReturnMeasure makes the scroll box report its content's height, up to MaxHeight. Without it
+        // a scroll box measures to zero, and in this content-sized window the list drew into 0px:
+        // Transfer… and Move… opened with no rows and no empty line either.
+        var scroll = new ScrollContainer { HorizontalExpand = true, HScrollEnabled = false, MaxHeight = 220, ReturnMeasure = true };
         scroll.AddChild(listPanel);
         column.AddChild(scroll);
 
