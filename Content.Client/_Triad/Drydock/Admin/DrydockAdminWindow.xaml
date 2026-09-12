@@ -1,167 +1,143 @@
-<!-- Triad: the drydock admin panel, built to the "Drydock Surfaces" canvas (AdminEscrow /
-     AdminSold artboards). One full-width bar across the top carries the search and the state
-     chips; under it the hull list on the left and the selected hull on the right. There is no
-     revisions panel: a revision is a timeline row, because the question an admin asks is always
-     "what happened to this ship", never "list its documents".
+<!-- Triad: the drydock admin panel, built to the "Drydock Surfaces" canvas as redrawn at game scale
+     (artboards "Admin: an impounded ship" and "Admin: nothing selected", 2026-09-12). The canvas
+     draws in game pixels: body text is size 12 (16px), headings 13, timestamps 11.
 
-     Rows, chips and state tags are built in code so their exact fill can change with selection
-     and state; this file is the frame and the named holders. Type is set in code too, from the
-     canvas's four sizes, so no label here carries a size class of its own: the title, heading and
-     hint labels are named and the window assigns their fonts. Tooltips live on this surface only,
-     the player tab has none. -->
+     The left column is the whole finding side: the search box, the state chips in a 3x3 grid, the
+     cards, then the match count and the page. The right side is the selected hull: the verb row
+     with the reason box, the escrow card while an offer stands, and the owner's berths beside the
+     timeline. With nothing selected the right side is one empty panel that says so.
+
+     Chips, cards, verbs and rows are built in code into the named holders; this file is the frame.
+     Tooltips live on this surface only, the player tab has none. -->
 <controls:FancyWindow xmlns="https://spacestation14.io"
                       xmlns:gfx="clr-namespace:Robust.Client.Graphics;assembly=Robust.Client"
                       xmlns:controls="clr-namespace:Content.Client.UserInterface.Controls"
                       xmlns:ui="clr-namespace:Content.Client._NF.Shipyard.UI"
                       SetSize="1400 800"
-                      MinSize="1100 640">
+                      MinSize="1240 640">
     <PanelContainer VerticalExpand="True" HorizontalExpand="True">
         <PanelContainer.PanelOverride>
             <gfx:StyleBoxFlat BackgroundColor="#1b1b1e"/>
         </PanelContainer.PanelOverride>
         <BoxContainer Orientation="Vertical" VerticalExpand="True" HorizontalExpand="True">
 
-            <!-- ===================== Search and chips, one bar ===================== -->
-            <PanelContainer HorizontalExpand="True">
-                <PanelContainer.PanelOverride>
-                    <gfx:StyleBoxFlat BackgroundColor="#1b1b1e" BorderColor="#3a3a3e" BorderThickness="0 0 0 1"/>
-                </PanelContainer.PanelOverride>
-                <BoxContainer Orientation="Horizontal" Margin="8 6" VerticalAlignment="Center">
+            <BoxContainer Orientation="Horizontal" VerticalExpand="True" HorizontalExpand="True" Margin="4 4 4 4">
+
+                <!-- ===================== Finding a hull ===================== -->
+                <BoxContainer Name="ListColumn" Orientation="Vertical" SetWidth="400" VerticalExpand="True">
                     <LineEdit Name="SearchInput"
-                              MinWidth="360"
+                              PlaceHolder="{Loc 'drydock-admin-search-placeholder'}"
                               ToolTip="{Loc 'drydock-admin-search-tooltip'}" />
-                    <!-- The hint sits beside the box, as the canvas draws it: inside, a placeholder
-                         this long clips. Enter searches; there is no button. -->
-                    <Label Text="{Loc 'drydock-admin-search-hint'}" Modulate="#8d8d8d" Margin="8 0 8 0" VerticalAlignment="Center" />
-                    <BoxContainer Name="ChipRow" Orientation="Horizontal" VerticalAlignment="Center" />
-                    <Control HorizontalExpand="True" />
-                    <Label Name="CountLabel" Modulate="#8d8d8d" />
-                </BoxContainer>
-            </PanelContainer>
-
-            <BoxContainer Orientation="Horizontal" VerticalExpand="True" HorizontalExpand="True" Margin="4">
-
-                <!-- ===================== The hulls that matched ===================== -->
-                <BoxContainer Orientation="Vertical" MinWidth="400" VerticalExpand="True">
-                    <ScrollContainer Name="ShipScroll" VerticalExpand="True" HorizontalExpand="True" HScrollEnabled="False">
+                    <GridContainer Name="ChipGrid" Columns="3" HSeparationOverride="4" VSeparationOverride="4" Margin="0 4 0 0" />
+                    <ScrollContainer Name="ShipScroll" VerticalExpand="True" HorizontalExpand="True" HScrollEnabled="False" Margin="0 6 0 0">
                         <BoxContainer Name="ShipContainer" Orientation="Vertical" HorizontalExpand="True" />
                     </ScrollContainer>
-                    <BoxContainer Orientation="Horizontal" Margin="2 4 2 0" VerticalAlignment="Center">
-                        <Button Name="PrevPageButton" Text="{Loc 'drydock-admin-prev'}" StyleClasses="ButtonSquare" MinWidth="60" />
-                        <Label Name="PageLabel" Margin="8 0" Modulate="#8d8d8d" HorizontalExpand="True" />
-                        <Button Name="NextPageButton" Text="{Loc 'drydock-admin-next'}" StyleClasses="ButtonSquare" MinWidth="60" />
+                    <BoxContainer Orientation="Horizontal" Margin="0 4 0 0" MinHeight="28" VerticalAlignment="Center">
+                        <Label Name="CountLabel" Modulate="#8d8d8d" HorizontalExpand="True" VerticalAlignment="Center" />
+                        <Button Name="PrevPageButton" Text="{Loc 'drydock-admin-prev'}" StyleClasses="ButtonSquare" VerticalAlignment="Center" />
+                        <Label Name="PageLabel" Margin="6 0" VerticalAlignment="Center" />
+                        <Button Name="NextPageButton" Text="{Loc 'drydock-admin-next'}" StyleClasses="ButtonSquare" VerticalAlignment="Center" />
                     </BoxContainer>
                 </BoxContainer>
 
                 <!-- ===================== The selected hull ===================== -->
                 <BoxContainer Orientation="Vertical" HorizontalExpand="True" VerticalExpand="True" Margin="4 0 0 0">
 
-                    <PanelContainer HorizontalExpand="True">
+                    <!-- Nothing selected: one empty panel and one line. -->
+                    <PanelContainer Name="EmptyPanel" HorizontalExpand="True" VerticalExpand="True">
                         <PanelContainer.PanelOverride>
                             <gfx:StyleBoxFlat BackgroundColor="#1b1b1e" BorderColor="#3a3a3e" BorderThickness="1"/>
                         </PanelContainer.PanelOverride>
-                        <BoxContainer Orientation="Vertical" Margin="8">
-                            <BoxContainer Name="HeaderRow" Orientation="Horizontal" VerticalAlignment="Center" />
-                            <BoxContainer Orientation="Horizontal" Margin="0 6 0 0" VerticalAlignment="Center">
+                        <Label Text="{Loc 'drydock-admin-no-selection'}" Modulate="#8d8d8d"
+                               HorizontalAlignment="Center" VerticalAlignment="Center" />
+                    </PanelContainer>
+
+                    <BoxContainer Name="DetailPanel" Orientation="Vertical" HorizontalExpand="True" VerticalExpand="True" Visible="False">
+
+                        <PanelContainer HorizontalExpand="True">
+                            <PanelContainer.PanelOverride>
+                                <gfx:StyleBoxFlat BackgroundColor="#1b1b1e" BorderColor="#3a3a3e" BorderThickness="1"/>
+                            </PanelContainer.PanelOverride>
+                            <BoxContainer Orientation="Horizontal" Margin="8" VerticalAlignment="Center">
                                 <BoxContainer Name="VerbRow" Orientation="Horizontal" VerticalAlignment="Center" />
-                                <Control HorizontalExpand="True" />
                                 <LineEdit Name="ReasonInput"
-                                          MinWidth="300"
+                                          HorizontalExpand="True"
+                                          MinWidth="150"
+                                          Margin="4 0 0 0"
                                           PlaceHolder="{Loc 'drydock-admin-reason-placeholder'}"
                                           ToolTip="{Loc 'drydock-admin-reason-tooltip'}" />
                             </BoxContainer>
-                        </BoxContainer>
-                    </PanelContainer>
+                        </PanelContainer>
 
-                    <!-- The standing offer. Only drawn while the hull is in escrow. -->
-                    <PanelContainer Name="EscrowPanel" Visible="False" HorizontalExpand="True" Margin="0 4 0 0">
-                        <PanelContainer.PanelOverride>
-                            <gfx:StyleBoxFlat BackgroundColor="#26221a" BorderColor="#8a6a3a" BorderThickness="1"/>
-                        </PanelContainer.PanelOverride>
-                        <BoxContainer Orientation="Vertical" Margin="8">
-                            <RichTextLabel Name="EscrowBodyLabel" />
-                            <RichTextLabel Name="EscrowLandsLabel" Margin="0 2 0 0" />
-                        </BoxContainer>
-                    </PanelContainer>
-
-                    <!-- The impound terms (AdminImpounded artboard). Only drawn while the hull is in the
-                         lot: who took it and when, the fee's basis, whether the owner may act, and where
-                         a release would seat it, with the frozen fee large on the right. -->
-                    <PanelContainer Name="ImpoundPanel" Visible="False" HorizontalExpand="True" Margin="0 4 0 0">
-                        <PanelContainer.PanelOverride>
-                            <gfx:StyleBoxFlat BackgroundColor="#261a1a" BorderColor="#7a3f3f" BorderThickness="1"/>
-                        </PanelContainer.PanelOverride>
-                        <BoxContainer Orientation="Horizontal" Margin="8" VerticalAlignment="Center">
-                            <RichTextLabel Name="ImpoundBodyLabel" HorizontalExpand="True" VerticalAlignment="Center" />
-                            <BoxContainer Orientation="Vertical" MinWidth="100" Margin="12 0 0 0" VerticalAlignment="Center">
-                                <Label Name="ImpoundFeeLabel" Align="Right" Modulate="#cf4f4f" />
-                                <Label Name="ImpoundFeeNote" Align="Right" Text="{Loc 'drydock-admin-impound-card-fee-note'}" Modulate="#999999" />
-                            </BoxContainer>
-                        </BoxContainer>
-                    </PanelContainer>
-
-                    <BoxContainer Orientation="Horizontal" VerticalExpand="True" Margin="0 4 0 0">
-
-                        <!-- Berths, then notes under them. -->
-                        <PanelContainer MinWidth="420" VerticalExpand="True">
+                        <!-- The standing offer: only where the ship would land. Drawn while in escrow. -->
+                        <PanelContainer Name="EscrowPanel" Visible="False" HorizontalExpand="True" Margin="0 4 0 0">
                             <PanelContainer.PanelOverride>
-                                <gfx:StyleBoxFlat BackgroundColor="#1b1b1e" BorderColor="#3a3a3e" BorderThickness="1"/>
+                                <gfx:StyleBoxFlat BackgroundColor="#26221a" BorderColor="#8a6a3a" BorderThickness="1"/>
                             </PanelContainer.PanelOverride>
-                            <BoxContainer Orientation="Vertical" Margin="8" VerticalExpand="True">
-                                <BoxContainer Orientation="Horizontal" VerticalAlignment="Center">
-                                    <Label Name="BerthsTitle" />
-                                    <!-- The free count in the dim colour and body weight, as the canvas draws it. -->
-                                    <Label Name="BerthsCount" Modulate="#8d8d8d" Margin="4 0 0 0" HorizontalExpand="True" />
-                                    <ui:DrydockMenuButton Name="GrantBerthButton"
-                                                          Text="{Loc 'drydock-admin-grant-berth'}"
-                                                          StyleClasses="ButtonSquare"
-                                                          MinWidth="110"
-                                                          AlignRight="True"
-                                                          ToolTip="{Loc 'drydock-admin-grant-berth-tooltip'}" />
+                            <BoxContainer Orientation="Horizontal" Margin="8">
+                                <Label Text="{Loc 'drydock-admin-escrow-lands'}" Modulate="#999999" />
+                                <Label Name="EscrowLandsLabel" Margin="4 0 0 0" />
+                            </BoxContainer>
+                        </PanelContainer>
+
+                        <BoxContainer Orientation="Horizontal" VerticalExpand="True" Margin="0 4 0 0">
+
+                            <!-- Berths, then notes under them. -->
+                            <PanelContainer SetWidth="420" VerticalExpand="True">
+                                <PanelContainer.PanelOverride>
+                                    <gfx:StyleBoxFlat BackgroundColor="#1b1b1e" BorderColor="#3a3a3e" BorderThickness="1"/>
+                                </PanelContainer.PanelOverride>
+                                <BoxContainer Orientation="Vertical" Margin="8" VerticalExpand="True">
+                                    <BoxContainer Orientation="Horizontal" VerticalAlignment="Center">
+                                        <Label Name="BerthsTitle" VerticalAlignment="Center" />
+                                        <Label Name="BerthsCount" Modulate="#8d8d8d" Margin="4 0 0 0" HorizontalExpand="True" VerticalAlignment="Center" />
+                                        <ui:DrydockMenuButton Name="GrantBerthButton"
+                                                              StyleClasses="ButtonSquare"
+                                                              MinWidth="110"
+                                                              AlignRight="True"
+                                                              VerticalAlignment="Center"
+                                                              ToolTip="{Loc 'drydock-admin-grant-berth-tooltip'}" />
+                                    </BoxContainer>
+                                    <!-- The scroll box takes the vertical slack itself: a scroll container with no
+                                         expand measures to nothing and draws its rows into zero height. -->
+                                    <ScrollContainer Name="BerthScroll" HScrollEnabled="False" HorizontalExpand="True" VerticalExpand="True" Margin="0 6 0 0">
+                                        <BoxContainer Name="BerthContainer" Orientation="Vertical" HorizontalExpand="True" />
+                                    </ScrollContainer>
+                                    <Label Name="NotesTitle" Text="{Loc 'drydock-admin-notes-title'}" Margin="0 6 0 6" />
+                                    <!-- TextEdit paints no frame of its own, so the panel gives it the input
+                                         look. It always carries a scrollbar, which the canvas draws. -->
+                                    <PanelContainer HorizontalExpand="True" MinHeight="52">
+                                        <PanelContainer.PanelOverride>
+                                            <gfx:StyleBoxFlat BackgroundColor="#111214" BorderColor="#3a3a3e" BorderThickness="1"/>
+                                        </PanelContainer.PanelOverride>
+                                        <TextEdit Name="NotesInput" HorizontalExpand="True" VerticalExpand="True" Margin="4 2" />
+                                    </PanelContainer>
                                 </BoxContainer>
-                                <!-- The scroll box has to take the vertical slack itself: a scroll container with
-                                     no expand measures to nothing, and a spacer below it was taking the space,
-                                     so the berth rows were drawn into zero height. -->
-                                <ScrollContainer Name="BerthScroll" HScrollEnabled="False" HorizontalExpand="True" VerticalExpand="True" Margin="0 6 0 0">
-                                    <BoxContainer Name="BerthContainer" Orientation="Vertical" HorizontalExpand="True" />
-                                </ScrollContainer>
-                                <Label Name="BerthsHint" Text="{Loc 'drydock-admin-berths-hint'}" StyleClasses="LabelSubText" Margin="0 4 0 0" />
-                                <Label Name="NotesTitle" Text="{Loc 'drydock-admin-notes-title'}" Margin="0 6 0 3" />
-                                <!-- A box a few lines tall, as the canvas draws it. TextEdit paints no frame of
-                                     its own (the stylesheet only colours its placeholder), so the panel around it
-                                     gives it the input look. -->
-                                <PanelContainer HorizontalExpand="True" MinHeight="52">
-                                    <PanelContainer.PanelOverride>
-                                        <gfx:StyleBoxFlat BackgroundColor="#111214" BorderColor="#3a3a3e" BorderThickness="1"/>
-                                    </PanelContainer.PanelOverride>
-                                    <TextEdit Name="NotesInput" HorizontalExpand="True" VerticalExpand="True" Margin="4 2" />
-                                </PanelContainer>
-                            </BoxContainer>
-                        </PanelContainer>
+                            </PanelContainer>
 
-                        <!-- The hull's whole life. A revision is a row here, not a list of its own. -->
-                        <PanelContainer HorizontalExpand="True" VerticalExpand="True" Margin="4 0 0 0">
-                            <PanelContainer.PanelOverride>
-                                <gfx:StyleBoxFlat BackgroundColor="#1b1b1e" BorderColor="#3a3a3e" BorderThickness="1"/>
-                            </PanelContainer.PanelOverride>
-                            <BoxContainer Orientation="Vertical" Margin="8" VerticalExpand="True">
-                                <Label Name="TimelineTitle" Text="{Loc 'drydock-admin-timeline-title'}" />
-                                <ScrollContainer Name="TimelineScroll" HScrollEnabled="False" VerticalExpand="True" HorizontalExpand="True" Margin="0 6 0 0">
-                                    <BoxContainer Name="TimelineContainer" Orientation="Vertical" HorizontalExpand="True" />
-                                </ScrollContainer>
-                                <Label Name="TimelineHint" Text="{Loc 'drydock-admin-timeline-hint'}" StyleClasses="LabelSubText" Margin="0 4 0 0" />
-                            </BoxContainer>
-                        </PanelContainer>
+                            <!-- The hull's whole life. A revision is a row here, not a list of its own. -->
+                            <PanelContainer HorizontalExpand="True" VerticalExpand="True" Margin="4 0 0 0">
+                                <PanelContainer.PanelOverride>
+                                    <gfx:StyleBoxFlat BackgroundColor="#1b1b1e" BorderColor="#3a3a3e" BorderThickness="1"/>
+                                </PanelContainer.PanelOverride>
+                                <BoxContainer Orientation="Vertical" Margin="8" VerticalExpand="True">
+                                    <Label Name="TimelineTitle" Text="{Loc 'drydock-admin-timeline-title'}" />
+                                    <ScrollContainer Name="TimelineScroll" HScrollEnabled="False" VerticalExpand="True" HorizontalExpand="True" Margin="0 6 0 0">
+                                        <BoxContainer Name="TimelineContainer" Orientation="Vertical" HorizontalExpand="True" />
+                                    </ScrollContainer>
+                                </BoxContainer>
+                            </PanelContainer>
+                        </BoxContainer>
                     </BoxContainer>
 
-                    <!-- What the last action did. The mockup has no such line, but every verb
-                         returns a refusal string and swallowing it would hide the answer. -->
+                    <!-- What the last action did. Not on the canvas, but every verb returns a refusal
+                         string and swallowing it would hide the answer. -->
                     <Label Name="NoticeLabel" Visible="False" Margin="2 4 0 0" Modulate="#d9a441" />
                 </BoxContainer>
             </BoxContainer>
 
             <!-- The shipyard console's own footer, because this is the same machine. -->
-            <BoxContainer Orientation="Vertical" Margin="0 2 0 0">
+            <BoxContainer Orientation="Vertical">
                 <PanelContainer StyleClasses="LowDivider" />
                 <BoxContainer Orientation="Horizontal" Margin="10 5 5 4" VerticalAlignment="Bottom">
                     <Label Text="{Loc 'drydock-admin-flavor-left'}" StyleClasses="WindowFooterText" />

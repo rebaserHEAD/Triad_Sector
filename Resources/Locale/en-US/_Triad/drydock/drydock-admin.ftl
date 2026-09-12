@@ -1,13 +1,14 @@
 # Triad: the drydock admin panel (drydockadmin). One key per control; the tooltips are the only
-# tooltips in the drydock, the player tab has none.
+# tooltips in the drydock, the player tab has none. A tooltip says what the control does; a greyed
+# verb's tooltip is the bare reason.
 
 drydock-admin-title = Drydock Administration
 drydock-admin-flavor-left = SKR-OS Drydock Administration
 # The button on the Admin menu's Admin tab that opens the panel.
 drydock-admin-button = Drydock
 
-drydock-admin-search-hint = player, ship name (any it ever had), ship id, or account
-drydock-admin-search-tooltip = One box. A player name, a ship name including any past name from its timeline, a ship id, or an account id. Enter searches.
+drydock-admin-search-placeholder = Character, account or ship name, or callsign
+drydock-admin-search-tooltip = Enter to search.
 
 drydock-admin-chip-All = All
 drydock-admin-chip-Stored = Stored
@@ -16,95 +17,94 @@ drydock-admin-chip-InEscrow = Escrow
 drydock-admin-chip-Impounded = Impounded
 drydock-admin-chip-Sold = Sold
 drydock-admin-chip-Abandoned = Abandoned
-drydock-admin-chip-Destroyed = Written off
+drydock-admin-chip-Destroyed = Destroyed
 drydock-admin-chip-Stranded = Stranded
-drydock-admin-chip-Stranded-tooltip = Checked out in a round that is over. Each one is a decision.
+drydock-admin-chip-Stranded-tooltip = Out in a round that has ended.
 
-drydock-admin-count = {$total} match
+drydock-admin-count = { $total ->
+    [one] 1 match
+   *[other] { $total } matches
+}
 drydock-admin-page = Page {$page} of {$pages}
 drydock-admin-prev = Prev
 drydock-admin-next = Next
 
-drydock-admin-row-owner = owner {$owner}
-drydock-admin-row-berth = #{$berth}
-drydock-admin-row-live = live now
-drydock-admin-row-out = out · round {$round}
-drydock-admin-row-escrow = escrow · {$left}
-drydock-admin-row-impounded = impounded · {$fee}
-drydock-admin-row-impounded-locked = impounded · {$fee} · locked
-drydock-admin-row-sold = sold · {$price}
+# A list card: the callsign and name, then one labelled line each for class, owner and status. The
+# status is a comma list: the state, the berth when it holds one, then the state's own figure.
+drydock-admin-card-title = {$callsign} | {$name}
+drydock-admin-card-class = Class:
+drydock-admin-card-owner = Owner:
+drydock-admin-card-status = Status:
+drydock-admin-status-berth = Berth {$berth}
+drydock-admin-status-round = Round {$round}
+drydock-admin-status-expires = Expires in {$minutes}m
+drydock-admin-status-expired = Expired
+drydock-admin-status-locked = Locked
 
 drydock-admin-no-selection = Select a ship.
-drydock-admin-header = {$class} · id {$id} · revision {$revision} · {$owner} (account {$account})
-drydock-admin-header-berth = Berth {$berth}
-drydock-admin-header-no-berth = no berth
-drydock-admin-header-since = since {$since}
-drydock-admin-header-live = LIVE THIS ROUND
+drydock-admin-live = Live this round
 
-drydock-admin-cancel-offer = Cancel offer
-drydock-admin-cancel-offer-tooltip = Withdraw the standing offer on this ship. It returns to Stored in its own berth and the recipient's alert goes.
-drydock-admin-restore-from-sale = Restore from sale…
-drydock-admin-restore-from-sale-tooltip = Undo the sale: the ship returns to a berth, and by default the price is taken back from the owner.
 drydock-admin-impound = Impound…
-drydock-admin-impound-tooltip = Takes the hull to the impound lot, from its berth or from the world. The fee, the reason and whether the owner may reclaim it are set in the dialog.
+drydock-admin-impound-tooltip = Moves the ship to the impound lot.
 drydock-admin-release = Release
-drydock-admin-release-tooltip = Lifts the impound for nothing, into the hull's last berth if it is free, else the smallest free berth that fits. Restore to… picks the berth instead.
+drydock-admin-release-tooltip = Releases the ship from impound. No fee.
 drydock-admin-restore-to = Restore to…
-drydock-admin-restore-to-tooltip = Puts a ship back in one of the owner's berths. Refused while a live grid still carries it.
+drydock-admin-restore-to-tooltip = Restores the ship to a chosen berth.
+drydock-admin-restore-from-sale = Restore from sale…
+drydock-admin-restore-from-sale-tooltip = Reverses the sale and restores the ship.
+drydock-admin-cancel-offer = Cancel offer
+drydock-admin-cancel-offer-tooltip = Withdraws the transfer offer.
 drydock-admin-more = ···
 drydock-admin-vacate = Vacate berth
 drydock-admin-vacate-stored = a stored ship lives in its berth
 drydock-admin-vacate-escrow = an escrow ship keeps its berth
 drydock-admin-delete-ship = Delete ship record
-drydock-admin-delete-ship-tooltip = Removes the ship and its documents. The timeline is kept. Refused while a live grid carries it.
-drydock-admin-reason-placeholder = Reason, for the timeline
-drydock-admin-reason-tooltip = Written on the timeline row of the next action. Required when leaving money with the owner on a sale reversal.
+drydock-admin-reason-placeholder = Reason
+drydock-admin-reason-tooltip = Logged with the next action.
 drydock-admin-notes-placeholder = Notes
-drydock-admin-save-notes = Save
 
 # Every verb is always in the row (2026-09-12); a greyed one carries the reason as its tooltip.
-drydock-admin-impound-why-impounded = Already in the impound lot. Release or Restore to… take it out.
-drydock-admin-impound-why-escrow = An offer is standing on it. Cancel the offer first.
-drydock-admin-impound-why-terminal = The state is the verdict: a sold, written-off or abandoned ship is not impounded.
-drydock-admin-release-why = Not in the impound lot.
-drydock-admin-restore-to-why-stored = Already in its berth. Move it from the berth row's menu.
-drydock-admin-restore-to-why-escrow = An offer is standing on it and holds its berth. Cancel the offer first.
-drydock-admin-restore-to-why-sold = A sold ship comes back only through Restore from sale…, which decides about the money first.
-drydock-admin-restore-to-why-no-berths = The owner has no berth. Grant one first.
+drydock-admin-impound-why-impounded = Already impounded.
+drydock-admin-impound-why-escrow = Offer pending. Cancel it first.
+drydock-admin-impound-why-terminal = Sold, destroyed or abandoned.
+drydock-admin-release-why = Not impounded.
+drydock-admin-restore-to-why-stored = Already stored.
+drydock-admin-restore-to-why-escrow = Offer pending. Cancel it first.
+drydock-admin-restore-to-why-sold = Sold. Use Restore from sale…
+drydock-admin-restore-to-why-no-berths = Owner has no berths.
 drydock-admin-restore-from-sale-why = Not sold.
-drydock-admin-restore-from-sale-why-no-record = Sold, but no sale is on record to reverse.
-drydock-admin-cancel-offer-why = No offer is standing on this ship.
+drydock-admin-restore-from-sale-why-no-record = No sale on record.
+drydock-admin-cancel-offer-why = No pending offer.
 
-drydock-admin-escrow-title = In escrow
-drydock-admin-escrow-body = Offered to {$to} (account {$toAccount}) at {$made}.
-drydock-admin-escrow-lands = Lands in their Berth {$berth}
-drydock-admin-escrow-no-room = No berth of theirs fits it now
+# The escrow card: the one fact about a standing offer that the list card and timeline do not show.
+drydock-admin-escrow-lands = Lands in:
+drydock-admin-escrow-lands-berth = Berth {$berth}
+drydock-admin-escrow-lands-none = No free berth
 
 drydock-admin-berths-title = {$owner}'s berths
 drydock-admin-berths-count = · {$free} of {$total} free
 drydock-admin-grant-berth = Grant berth
-drydock-admin-grant-berth-tooltip = Add a berth of this class to the owner's drydock at no charge. A granted berth refunds nothing if sold.
+drydock-admin-grant-berth-tooltip = Adds a free berth of the chosen class.
 drydock-admin-berth-delete = Delete berth
-drydock-admin-berth-delete-tooltip = Remove an empty berth. A berth with a ship in it is refused; move the ship first.
 drydock-admin-berth-restore-here = Restore here
 drydock-admin-berth-move-here = Move here
 drydock-admin-berth-occupied = occupied
 drydock-admin-berth-too-small = too small
+# An empty berth that is the unberthed selected ship's last: where Release puts it.
+drydock-admin-berth-last = empty · {$ship}'s last berth
 
-drydock-admin-revisions-title = Revisions
-drydock-admin-revision = r{$revision} · {$kind} · {$at} · by {$by} · {$size} KB · {$document}
-drydock-admin-revision-kept = kept
-drydock-admin-revision-pruned = pruned
 drydock-admin-revision-appraisal = appraisal {$value}
 drydock-admin-promote = Promote revision {$revision}
 
+drydock-admin-notes-title = Notes
 drydock-admin-timeline-title = Timeline
-drydock-admin-refused-tooltip = A message the console never offers: the sending account did not own the ship or berth. Only a modified client sends one. Actor is who sent it, subject is whose ship it was.
+drydock-admin-timeline-today = {$time} · today
+drydock-admin-refused-tooltip = Sent by a modified client.
 
 drydock-admin-sale-title = Restore {$ship} from sale
 drydock-admin-sale-body = Sold for {$price} on {$at}.
 drydock-admin-sale-take-back = Take the {$price} back
-drydock-admin-sale-take-back-tooltip = Withdraws the sale price from the owner's selected character. Unticks itself when their balance cannot cover it; then a reason is required.
+drydock-admin-sale-take-back-tooltip = Withdraws the sale price from the owner.
 drydock-admin-sale-balance = Owner's balance: {$balance}
 drydock-admin-sale-balance-unknown = Owner's balance could not be read.
 drydock-admin-sale-berth = Berth
@@ -129,34 +129,7 @@ drydock-admin-impound-redeemable-note = Untick to hold the hull through an adjud
 drydock-admin-impound-confirm = Impound
 drydock-admin-impound-cancel = Cancel
 
-# The impound card on the detail panel (AdminImpounded artboard): who took the hull and when, the
-# fee's basis, whether the owner may act on it, and where a release would seat it.
-drydock-admin-impound-card-sweep = the round-end sweep
-drydock-admin-impound-card-taken = Taken by [bold]{$by}[/bold] at {$at}, round {$round}.
-drydock-admin-impound-card-taken-no-round = Taken by [bold]{$by}[/bold] at {$at}.
-drydock-admin-impound-card-reason = Reason given: {$reason}
-drydock-admin-impound-card-basis = {$percent}% of the {$appraisal} it appraised at.
-drydock-admin-impound-card-basis-unknown = No appraisal was on file, so the fee came to nothing.
-drydock-admin-impound-card-redeemable = Owner can reclaim or abandon it.
-drydock-admin-impound-card-locked = Held for adjudication: the owner can neither reclaim nor abandon it.
-drydock-admin-impound-card-seat-last = Holds no berth; release defaults to #{$berth} {$class}, its last.
-drydock-admin-impound-card-seat-other = Holds no berth; its last is taken, so release picks #{$berth} {$class}.
-drydock-admin-impound-card-seat-none = Holds no berth, and no free berth of the owner's fits it. Grant one before releasing.
-drydock-admin-impound-card-fee-note = fee, frozen
-
-drydock-admin-minutes-left = {$minutes} min left
-drydock-admin-expired = expired
-
-
-# Added when the panel was rebuilt to the canvas: the escrow card's second line, the two
-# section hints, the empty-selection berth heading, and one label per audit action so the
-# timeline reads as prose instead of enum names.
-drydock-admin-escrow-expiry = Expires {$expires}, {$left}. The ship keeps its berth and refuses retrieve, sell, rename and move until then.
-drydock-admin-berths-title-empty = Berths
-drydock-admin-berths-hint = Same rows the player sees on the console.
-drydock-admin-timeline-hint = Every row is one audit entry. Actor first, then who it was done to.
-drydock-admin-notes-title = Notes
-
+# One label per audit action, so the timeline reads as prose instead of enum names.
 drydock-admin-action-Store = Stored
 drydock-admin-action-Retrieve = Retrieved
 drydock-admin-action-Restore = Restored

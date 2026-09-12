@@ -8,6 +8,7 @@ using System.Threading.Tasks;
 using Content.Client._NF.Shipyard.UI;
 using Content.Client._Triad.Drydock.Admin;
 using Content.Shared._Triad.Drydock.Admin;
+using Robust.Client.Graphics;
 using Robust.Client.UserInterface;
 using Robust.Client.UserInterface.Controls;
 using Robust.Shared.Localization;
@@ -17,17 +18,22 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
 {
     /// <summary>
     /// The drydock admin panel as it actually draws. These build the real window on a real client
-    /// and read the control tree back, which is the only thing short of a screenshot that can say
-    /// a surface is what it was designed to be.
+    /// and read the control tree back. They pin what the canvas fixes (the card's four lines, every
+    /// verb greyed rather than absent, the escrow card's one fact, the stripes, the empty state) and
+    /// one thing the canvas cannot see: that nothing runs past the window's edge at its minimum size.
+    /// A screenshot beside the artboard is still the only proof of the look.
     ///
-    /// <para>They exist because the panel was twice wrong in ways nothing else could catch: every
-    /// state chip lit at once, and a layout that no test disagreed with because no test looked.
-    /// Controls are found by their XAML name rather than by making fields public, so the
+    /// <para>Controls are found by their XAML name rather than by making fields public, so the
     /// production surface is unchanged by being tested.</para>
     /// </summary>
     [TestFixture]
     public sealed class DrydockAdminWindowTest
     {
+        private static readonly string[] VerbKeys =
+        {
+            "impound", "release", "restore-to", "restore-from-sale", "cancel-offer",
+        };
+
         [Test]
         public async Task ExactlyOneStateChipIsEverLit()
         {
@@ -36,135 +42,176 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             await pair.Client.WaitPost(() =>
             {
                 var window = new DrydockAdminWindow(new DrydockAdminEui());
-                window.UpdateState(StateWith(Ship("Kestrel", "Stored")));
+                window.UpdateState(StateWith(Ship("Kestrel EXP-123", "Stored")));
 
-                var chips = Named(window, "ChipRow").Children.OfType<ContainerButton>().ToList();
-                Assert.That(chips, Has.Count.EqualTo(9), "All, the seven states, and Stranded.");
+                var chips = Named(window, "ChipGrid").Children.OfType<ContainerButton>().ToList();
+                Assert.That(chips, Has.Count.EqualTo(9), "All, the seven states, and Stranded, three to a row.");
 
                 // The chip in force is the one drawn filled. Two filled at once is the bug this
                 // catches: it is what a toggle button's own pressed state did before they were
                 // drawn by hand.
-                var lit = chips.Count(c => IsLit(c));
-                Assert.That(lit, Is.EqualTo(1), "Exactly one chip is ever lit, and at rest it is All.");
-
+                Assert.That(chips.Count(IsLit), Is.EqualTo(1), "Exactly one chip is ever lit, and at rest it is All.");
             });
 
             await pair.CleanReturnAsync();
         }
 
         /// <summary>
-        /// The whole point of the verb row: what a hull offers follows the state it is in, and a
-        /// verb that cannot apply is absent rather than greyed.
+        /// Every verb is always in the row, in one order, so an admin sees everything the panel can
+        /// do; the state decides which are live. A greyed verb is drawn greyed (its own box, not the
+        /// style sheet's, which vanishes on this panel) and its tooltip is the reason.
         /// </summary>
         [Test]
-        [TestCase("Stored", new[] { "impound" }, new[] { "release", "cancel-offer", "restore-from-sale", "restore-to" })]
-        [TestCase("CheckedOut", new[] { "impound", "restore-to" }, new[] { "release", "cancel-offer", "restore-from-sale" })]
+        [TestCase("Stored", new[] { "impound" })]
+        [TestCase("CheckedOut", new[] { "impound", "restore-to" })]
         // An impounded hull offers the two ways out and never a second taking.
-        [TestCase("Impounded", new[] { "release", "restore-to" }, new[] { "impound", "cancel-offer", "restore-from-sale" })]
-        // Escrow offers the withdrawal and nothing that the server would refuse until it is withdrawn.
-        [TestCase("InEscrow", new[] { "cancel-offer" }, new[] { "impound", "release", "restore-to", "restore-from-sale" })]
+        [TestCase("Impounded", new[] { "release", "restore-to" })]
+        // Escrow offers the withdrawal and nothing the server would refuse until it is withdrawn.
+        [TestCase("InEscrow", new[] { "cancel-offer" })]
         // The terminal three never offer impound: their state is the verdict. A sale comes back only
-        // through the reversal, which decides about the money first; a plain restore would hand the
-        // hull back on top of the credits.
-        [TestCase("Sold", new[] { "restore-from-sale" }, new[] { "cancel-offer", "restore-to", "impound", "release" })]
-        [TestCase("Destroyed", new[] { "restore-to" }, new[] { "cancel-offer", "restore-from-sale", "impound", "release" })]
-        [TestCase("Abandoned", new[] { "restore-to" }, new[] { "cancel-offer", "restore-from-sale", "impound", "release" })]
-        public async Task TheVerbsFollowTheStateOfTheHull(string state, string[] expected, string[] absent)
+        // through the reversal, which decides about the money first.
+        [TestCase("Sold", new[] { "restore-from-sale" })]
+        [TestCase("Destroyed", new[] { "restore-to" })]
+        [TestCase("Abandoned", new[] { "restore-to" })]
+        public async Task EveryVerbIsInTheRowAndTheStateDecidesWhichAreLive(string state, string[] live)
         {
             await using var pair = await PoolManager.GetServerClient(new PoolSettings { Connected = true });
 
             await pair.Client.WaitPost(() =>
             {
                 var window = new DrydockAdminWindow(new DrydockAdminEui());
-                window.UpdateState(StateWith(Ship("Kestrel", state), escrow: state == "InEscrow", sold: state == "Sold"));
+                var berth = state is "Stored" or "InEscrow" ? 12 : (int?)null;
+                window.UpdateState(StateWith(Ship("Kestrel EXP-123", state, berth), escrow: state == "InEscrow", sold: state == "Sold"));
 
-                var labels = VerbLabels(window);
-
-                Assert.Multiple(() =>
-                {
-                    foreach (var key in expected)
-                        Assert.That(labels, Does.Contain(Text($"drydock-admin-{key}")), $"{state} offers {key}.");
-
-                    foreach (var key in absent)
-                        Assert.That(labels, Does.Not.Contain(Text($"drydock-admin-{key}")), $"{state} does not offer {key}.");
-                });
-
-            });
-
-            await pair.CleanReturnAsync();
-        }
-
-        /// <summary>An escrow hull leads with the withdrawal, and draws the card that explains it.</summary>
-        [Test]
-        public async Task AnEscrowHullLeadsWithCancelOfferAndDrawsTheCard()
-        {
-            await using var pair = await PoolManager.GetServerClient(new PoolSettings { Connected = true });
-
-            await pair.Client.WaitPost(() =>
-            {
-                var window = new DrydockAdminWindow(new DrydockAdminEui());
-                window.UpdateState(StateWith(Ship("Kestrel", "InEscrow"), escrow: true));
+                var verbs = Named(window, "VerbRow").Children.OfType<Button>().ToList();
+                Assert.That(verbs, Has.Count.EqualTo(VerbKeys.Length + 1), "The five verbs and the overflow menu.");
 
                 Assert.Multiple(() =>
                 {
-                    Assert.That(VerbLabels(window).First(), Is.EqualTo(Text("drydock-admin-cancel-offer")),
-                        "The verb that answers the state comes first.");
-                    Assert.That(Named(window, "EscrowPanel").Visible, Is.True);
+                    for (var i = 0; i < VerbKeys.Length; i++)
+                    {
+                        var key = VerbKeys[i];
+                        var button = verbs[i];
+                        Assert.That(button.Text, Does.StartWith(Text($"drydock-admin-{key}")), $"{key} sits in its fixed place.");
+
+                        var shouldBeLive = live.Contains(key);
+                        Assert.That(button.Disabled, Is.EqualTo(!shouldBeLive), $"{state}: {key} is {(shouldBeLive ? "live" : "greyed")}.");
+                        Assert.That(button.StyleBoxOverride != null, Is.EqualTo(!shouldBeLive),
+                            $"{state}: a greyed {key} draws the panel's own greyed box, a live one the style sheet's.");
+                        if (!shouldBeLive)
+                            Assert.That(button.ToolTip, Does.Not.StartWith("drydock-admin-"), $"{state}: a greyed {key} says why.");
+                    }
+
+                    Assert.That(verbs[^1].Disabled, Is.False, "The overflow menu always has something in it.");
                 });
-
-                // And it is gone again for a hull that is not in escrow.
-                window.UpdateState(StateWith(Ship("Kestrel", "Stored")));
-                Assert.That(Named(window, "EscrowPanel").Visible, Is.False, "The card does not outlive the offer.");
-
             });
 
             await pair.CleanReturnAsync();
         }
 
         /// <summary>
-        /// An impounded hull draws the card the AdminImpounded artboard fixes: who took it and when,
-        /// the share and appraisal behind the fee, whether the owner may act, where Release would
-        /// seat it, and the frozen fee. The card does not outlive the impound.
+        /// A card is four lines: callsign and name, class, owner, status. The callsign comes first
+        /// when the name ends in one by the deed's own rule, and a name that does not keeps its shape.
+        /// Status is the state, the berth when it holds one, then the state's own figure.
         /// </summary>
         [Test]
-        public async Task AnImpoundedHullDrawsTheTermsCard()
+        public async Task ACardReadsCallsignClassOwnerAndStatus()
         {
             await using var pair = await PoolManager.GetServerClient(new PoolSettings { Connected = true });
 
             await pair.Client.WaitPost(() =>
             {
                 var window = new DrydockAdminWindow(new DrydockAdminEui());
+                window.UpdateState(StateWith(
+                    Ship("Kestrel EXP-123", "Stored", berth: 12),
+                    escrow: false, sold: false,
+                    Ship("Behir EXP-632", "Impounded", berth: null) with { ImpoundFee = 19000, ImpoundRedeemable = false },
+                    Ship("Pelican EXP-058", "Sold", berth: null) with { LastSalePrice = 8400 },
+                    Ship("Marlin CIV-904", "CheckedOut", berth: null),
+                    Ship("Harrier", "Stored", berth: 31),
+                    Ship("Sleipnir SCAV-123", "Abandoned", berth: null)));
 
-                // The sweep's taking: no actor, the last berth still free.
-                window.UpdateState(StateWith(Ship("Behir", "Impounded"), impound: SweepImpound()));
-                var body = ((RichTextLabel)Named(window, "ImpoundBodyLabel")).GetMessage();
+                var cards = Named(window, "ShipContainer").Children.Select(CardText).ToList();
                 Assert.Multiple(() =>
                 {
-                    Assert.That(Named(window, "ImpoundPanel").Visible, Is.True);
-                    Assert.That(body, Does.Contain("round-end sweep"), "A null actor is the system.");
-                    Assert.That(body, Does.Contain("round 4112"));
-                    Assert.That(body, Does.Contain("50% of the $38,000"), "The share is read back off the fee and the appraisal.");
-                    Assert.That(body, Does.Contain("Owner can reclaim"));
-                    Assert.That(body, Does.Contain("#15 Frigate, its last"), "Release's default, said before the press.");
-                    Assert.That(((Label)Named(window, "ImpoundFeeLabel")).Text, Is.EqualTo("$19,000"));
-                    Assert.That(body, Does.Not.Contain("drydock-admin-"), "No key drawn as text.");
+                    Assert.That(cards[0], Is.EqualTo(new[] { "EXP-123 | Kestrel", "Class:", "Cutter", "Owner:", "Mara Voss", "Status:", "Stored, Berth 12" }));
+                    Assert.That(cards[1][^1], Is.EqualTo("Impounded, $19,000, Locked"), "The fee, and a locked impound says so.");
+                    Assert.That(cards[2][^1], Is.EqualTo("Sold, $8,400"));
+                    Assert.That(cards[3][^1], Is.EqualTo("Out, Round 4112"));
+                    Assert.That(cards[4][0], Is.EqualTo("Harrier"), "A name with no callsign keeps its shape.");
+                    Assert.That(cards[5][0], Is.EqualTo("Sleipnir SCAV-123"),
+                        "Eight characters is past the deed's suffix limit, so the deed never split it and neither does the card.");
                 });
 
-                // An admin's taking, locked, with the last berth gone: the card names them, repeats
-                // their words, says the hull is held, and names the berth a release would pick.
-                window.UpdateState(StateWith(Ship("Behir", "Impounded"), impound: AdminImpound()));
-                body = ((RichTextLabel)Named(window, "ImpoundBodyLabel")).GetMessage();
+                // Escrow carries its clock after the berth, so the two numbers never sit side by side.
+                window.UpdateState(StateWith(Ship("Kestrel EXP-123", "InEscrow", berth: 12), escrow: true));
+                var escrow = CardText(Named(window, "ShipContainer").Children.First());
+                Assert.That(escrow[^1], Does.StartWith("Escrow, Berth 12, Expires in "));
+            });
+
+            await pair.CleanReturnAsync();
+        }
+
+        /// <summary>An escrow hull's card says one thing, where it would land, and goes with the offer.</summary>
+        [Test]
+        public async Task AnEscrowHullSaysWhereItLands()
+        {
+            await using var pair = await PoolManager.GetServerClient(new PoolSettings { Connected = true });
+
+            await pair.Client.WaitPost(() =>
+            {
+                var window = new DrydockAdminWindow(new DrydockAdminEui());
+                window.UpdateState(StateWith(Ship("Kestrel EXP-123", "InEscrow", berth: 12), escrow: true));
+
                 Assert.Multiple(() =>
                 {
-                    Assert.That(body, Does.Contain("Dov Ashkenazi"));
-                    Assert.That(body, Does.Contain("ticket #94"), "An admin's reason is what the owner reads, so the card repeats it.");
-                    Assert.That(body, Does.Contain("Held for adjudication"));
-                    Assert.That(body, Does.Contain("release picks #31 Cutter"));
+                    Assert.That(Named(window, "EscrowPanel").Visible, Is.True);
+                    Assert.That(((Label) Named(window, "EscrowLandsLabel")).Text, Is.EqualTo("Berth 40"));
                 });
 
-                // Out of the lot, the card goes.
-                window.UpdateState(StateWith(Ship("Behir", "Stored")));
-                Assert.That(Named(window, "ImpoundPanel").Visible, Is.False, "The card does not outlive the impound.");
+                // The berth row the escrow ship sits in wears the stripes, and only that row.
+                var rows = Named(window, "BerthContainer").Children.OfType<DrydockBerthRow>().ToList();
+                Assert.Multiple(() =>
+                {
+                    Assert.That(HasStripes(rows.Single(r => r.BerthId == 12)), Is.True, "The escrow berth is striped instead of badged.");
+                    Assert.That(HasStripes(rows.Single(r => r.BerthId == 15)), Is.False, "An empty berth is not.");
+                });
+
+                window.UpdateState(StateWith(Ship("Kestrel EXP-123", "Stored", berth: 12)));
+                Assert.Multiple(() =>
+                {
+                    Assert.That(Named(window, "EscrowPanel").Visible, Is.False, "The card does not outlive the offer.");
+                    Assert.That(HasStripes(Named(window, "BerthContainer").Children.OfType<DrydockBerthRow>().Single(r => r.BerthId == 12)), Is.False);
+                });
+            });
+
+            await pair.CleanReturnAsync();
+        }
+
+        /// <summary>
+        /// An impounded hull draws no card: the fee is on its list card and the rest is on the
+        /// timeline. The one fact that lived nowhere else, where Release puts it, is on the empty
+        /// berth it came from.
+        /// </summary>
+        [Test]
+        public async Task AnImpoundedHullsLastBerthSaysSo()
+        {
+            await using var pair = await PoolManager.GetServerClient(new PoolSettings { Connected = true });
+
+            await pair.Client.WaitPost(() =>
+            {
+                var window = new DrydockAdminWindow(new DrydockAdminEui());
+                window.UpdateState(StateWith(Ship("Behir EXP-632", "Impounded", berth: null, lastBerth: 15) with { ImpoundFee = 19000, ImpoundRedeemable = true }));
+
+                var rows = Named(window, "BerthContainer").Children.OfType<DrydockBerthRow>().ToList();
+                Assert.Multiple(() =>
+                {
+                    Assert.That(Descendants(window).Any(c => c.Name is "ImpoundPanel" or "HeaderRow"), Is.False,
+                        "No impound card and no header: everything they said lives elsewhere.");
+                    Assert.That(rows.Single(r => r.BerthId == 15).OccupantLabel.GetMessage(), Does.Contain("Behir's last berth"),
+                        "The callsign is dropped where the name is possessive.");
+                    Assert.That(rows.Single(r => r.BerthId == 12).OccupantLabel.GetMessage(), Does.Not.Contain("last berth"));
+                });
             });
 
             await pair.CleanReturnAsync();
@@ -178,12 +225,13 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             await pair.Client.WaitPost(() =>
             {
                 var window = new DrydockAdminWindow(new DrydockAdminEui());
-                var state = StateWith(Ship("Kestrel", "Stored"), Ship("Behir", "CheckedOut"), Ship("Pelican", "Impounded"));
+                var state = StateWith(Ship("Kestrel EXP-123", "Stored"), escrow: false, sold: false,
+                    Ship("Behir EXP-632", "CheckedOut", berth: null), Ship("Pelican EXP-058", "Impounded", berth: null));
                 window.UpdateState(state);
 
                 Assert.Multiple(() =>
                 {
-                    Assert.That(Named(window, "ShipContainer").ChildCount, Is.EqualTo(3), "One row per hull that matched.");
+                    Assert.That(Named(window, "ShipContainer").ChildCount, Is.EqualTo(3), "One card per hull that matched.");
                     Assert.That(Named(window, "BerthContainer").Children.OfType<DrydockBerthRow>().Count(),
                         Is.EqualTo(state.OwnerBerths.Count),
                         "The owner's berths, drawn by the player's own row control.");
@@ -208,11 +256,49 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
         }
 
         /// <summary>
-        /// With nothing picked the right-hand side says so and offers nothing, rather than drawing
-        /// empty panels and an editable notes box for a hull that is not there.
+        /// Prev and Next exist only when there is more than one page; on the first page Prev is
+        /// greyed. The count is plural-aware.
         /// </summary>
         [Test]
-        public async Task WithNothingSelectedThereIsNothingToActon()
+        public async Task ThePagerOnlyAppearsWhenThereIsSomewhereToGo()
+        {
+            await using var pair = await PoolManager.GetServerClient(new PoolSettings { Connected = true });
+
+            await pair.Client.WaitPost(() =>
+            {
+                var window = new DrydockAdminWindow(new DrydockAdminEui());
+
+                var one = StateWith(Ship("Kestrel EXP-123", "Stored"));
+                window.UpdateState(one);
+                Assert.Multiple(() =>
+                {
+                    Assert.That(Named(window, "PrevPageButton").Visible, Is.False);
+                    Assert.That(Named(window, "NextPageButton").Visible, Is.False);
+                    Assert.That(((Label) Named(window, "CountLabel")).Text, Is.EqualTo("1 match"));
+                });
+
+                var many = StateWith(Ship("Kestrel EXP-123", "Stored"));
+                many.TotalShips = 142;
+                window.UpdateState(many);
+                Assert.Multiple(() =>
+                {
+                    Assert.That(Named(window, "PrevPageButton").Visible, Is.True);
+                    Assert.That(((Button) Named(window, "PrevPageButton")).Disabled, Is.True, "Page one has nowhere before it.");
+                    Assert.That(((Button) Named(window, "NextPageButton")).Disabled, Is.False);
+                    Assert.That(((Label) Named(window, "CountLabel")).Text, Is.EqualTo("142 matches"));
+                    Assert.That(((Label) Named(window, "PageLabel")).Text, Is.EqualTo("Page 1 of 3"));
+                });
+            });
+
+            await pair.CleanReturnAsync();
+        }
+
+        /// <summary>
+        /// With nothing picked the right-hand side is one empty panel, rather than empty berths, an
+        /// empty timeline and a notes box for a hull that is not there.
+        /// </summary>
+        [Test]
+        public async Task WithNothingSelectedThereIsNothingToActOn()
         {
             await using var pair = await PoolManager.GetServerClient(new PoolSettings { Connected = true });
 
@@ -223,14 +309,80 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
 
                 Assert.Multiple(() =>
                 {
-                    Assert.That(VerbLabels(window), Is.Empty, "No hull, no verbs.");
-                    Assert.That(Named(window, "BerthContainer").ChildCount, Is.Zero);
-                    Assert.That(Named(window, "TimelineContainer").ChildCount, Is.Zero);
-                    Assert.That(Named(window, "EscrowPanel").Visible, Is.False);
-                    Assert.That(((LineEdit)Named(window, "NotesInput")).Editable, Is.False,
+                    Assert.That(Named(window, "EmptyPanel").Visible, Is.True);
+                    Assert.That(Named(window, "DetailPanel").Visible, Is.False, "No verbs, berths, notes or timeline to see.");
+                    Assert.That(Named(window, "VerbRow").ChildCount, Is.Zero);
+                    Assert.That(((TextEdit) Named(window, "NotesInput")).Editable, Is.False,
                         "Notes belong to a hull, so there is nothing to type into.");
                 });
 
+                // And selecting a hull swaps them.
+                window.UpdateState(StateWith(Ship("Kestrel EXP-123", "Stored")));
+                Assert.Multiple(() =>
+                {
+                    Assert.That(Named(window, "EmptyPanel").Visible, Is.False);
+                    Assert.That(Named(window, "DetailPanel").Visible, Is.True);
+                });
+            });
+
+            await pair.CleanReturnAsync();
+        }
+
+        /// <summary>
+        /// The rule the first build broke: a row wider than the window does not shrink or wrap, it
+        /// runs off the edge. Lay the window out at its minimum size, with the widest states the
+        /// panel draws, and demand every control of the finding column and the verb row ends inside.
+        /// </summary>
+        [Test]
+        public async Task NothingRunsPastTheWindowEdgeAtItsMinimumSize()
+        {
+            await using var pair = await PoolManager.GetServerClient(new PoolSettings { Connected = true });
+
+            await pair.Client.WaitPost(() =>
+            {
+                var window = new DrydockAdminWindow(new DrydockAdminEui());
+                var state = StateWith(Ship("Kestrel EXP-123", "CheckedOut", berth: null));
+                state.TotalShips = 142;
+                window.UpdateState(state);
+
+                // A window lays out at its set size whatever it is offered, so shrink it the way
+                // dragging its corner does before laying it out.
+                var min = window.MinSize;
+                LayOut(window, min);
+
+                var watched = new List<Control>
+                {
+                    Named(window, "SearchInput"),
+                    Named(window, "ChipGrid"),
+                    Named(window, "PrevPageButton"),
+                    Named(window, "PageLabel"),
+                    Named(window, "NextPageButton"),
+                    Named(window, "ReasonInput"),
+                    Named(window, "GrantBerthButton"),
+                };
+                watched.AddRange(Named(window, "ChipGrid").Children);
+                watched.AddRange(Named(window, "VerbRow").Children);
+
+                Assert.Multiple(() =>
+                {
+                    foreach (var control in watched)
+                    {
+                        var right = RightEdge(control, window);
+                        Assert.That(right, Is.LessThanOrEqualTo(min.X + 0.5f),
+                            $"{control.Name ?? control.GetType().Name} ends at {right}, past the {min.X} wide window.");
+                    }
+
+                });
+
+                // Control: the same layout and measure catch a control that really is past the edge.
+                // A fresh window, because a child added after layout is only re-measured on the next
+                // frame, and this test has no frames.
+                var control = new DrydockAdminWindow(new DrydockAdminEui());
+                control.UpdateState(state);
+                var wide = new Control { MinWidth = min.X + 50 };
+                Named(control, "VerbRow").AddChild(wide);
+                LayOut(control, min);
+                Assert.That(RightEdge(wide, control), Is.GreaterThan(min.X), "Control: an over-wide child is caught.");
             });
 
             await pair.CleanReturnAsync();
@@ -249,14 +401,15 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             await pair.Client.WaitPost(() =>
             {
                 var window = new DrydockAdminWindow(new DrydockAdminEui());
-                window.UpdateState(StateWith(Ship("Kestrel", "InEscrow"), escrow: true));
+                window.UpdateState(StateWith(Ship("Kestrel EXP-123", "InEscrow", berth: 12), escrow: true));
 
-                // Rich text has to be read back through GetMessage: the timeline, the header and
-                // every row are RichTextLabels, and a scan of plain Labels alone sees none of
-                // them. That blindness let a deliberately deleted key pass this test once.
+                // Rich text has to be read back through GetMessage: the timeline and the berth rows
+                // are RichTextLabels, and a scan of plain Labels alone sees none of them. That
+                // blindness let a deliberately deleted key pass this test once.
                 var drawn = Descendants(window).OfType<Label>().Select(l => l.Text)
                     .Concat(Descendants(window).OfType<Button>().Select(b => b.Text))
                     .Concat(Descendants(window).OfType<RichTextLabel>().Select(r => r.GetMessage()))
+                    .Concat(Descendants(window).Select(c => c.ToolTip))
                     .Where(t => !string.IsNullOrEmpty(t))
                     .ToList();
 
@@ -266,16 +419,17 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
 
                 Assert.That(raw, Is.Empty, "A key drawn as text is a key with no entry in the ftl.");
 
-                // Every audit action has a label, including the ones this sample does not happen
-                // to contain. The tree scan can only see the rows it was given.
+                // Every audit action and every state has a label, including the ones this sample
+                // does not happen to contain. The tree scan can only see the rows it was given.
                 var unlabelled = Enum.GetNames<Content.Server.Database.DrydockAuditAction>()
-                    .Where(a => Text($"drydock-admin-action-{a}") == $"drydock-admin-action-{a}")
+                    .Select(a => $"drydock-admin-action-{a}")
+                    .Concat(Enum.GetNames<Content.Server.Database.DrydockShipState>().Select(s => $"drydock-admin-chip-{s}"))
+                    .Where(key => Text(key) == key)
                     .ToList();
-                Assert.That(unlabelled, Is.Empty, "An action with no label renders as its own key.");
+                Assert.That(unlabelled, Is.Empty, "An action or state with no label renders as its own key.");
 
                 // Control: an absent key resolves to itself, which is what both checks look for.
                 Assert.That(Text("drydock-admin-not-a-real-key"), Is.EqualTo("drydock-admin-not-a-real-key"));
-
             });
 
             await pair.CleanReturnAsync();
@@ -298,39 +452,47 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
         private static Control Named(Control root, string name)
             => Descendants(root).Single(c => c.Name == name);
 
-        private static List<string> VerbLabels(Control window)
-            => Named(window, "VerbRow").Children.OfType<Button>().Select(b => b.Text ?? string.Empty).ToList();
+        private static void LayOut(Control window, Vector2 size)
+        {
+            window.SetSize = size;
+            window.Measure(size);
+            window.Arrange(UIBox2.FromDimensions(Vector2.Zero, size));
+        }
+
+        /// <summary>A control's right edge in the window's space, summed up the parent chain.</summary>
+        private static float RightEdge(Control control, Control window)
+        {
+            var x = control.Position.X + control.Width;
+            for (var parent = control.Parent; parent != null && parent != window; parent = parent.Parent)
+                x += parent.Position.X;
+            return x;
+        }
+
+        /// <summary>A card's text, top to bottom, left to right: the title, then each label and value.</summary>
+        private static string[] CardText(Control card)
+            => Descendants(card).OfType<Label>().Select(l => l.Text ?? string.Empty).ToArray();
+
+        private static bool HasStripes(DrydockBerthRow row)
+            => row.Children.OfType<PanelContainer>().Any(p => p.PanelOverride is StyleBoxTexture);
 
         /// <summary>A chip is lit when its panel is drawn in the accent rather than the resting fill.</summary>
         private static bool IsLit(ContainerButton chip)
         {
             var panel = chip.Children.OfType<PanelContainer>().Single();
-            return panel.PanelOverride is Robust.Client.Graphics.StyleBoxFlat box
-                   && box.BackgroundColor != Robust.Shared.Maths.Color.FromHex("#222226");
+            return panel.PanelOverride is StyleBoxFlat box
+                   && box.BackgroundColor != Color.FromHex("#222226");
         }
 
-        private static DrydockAdminShipDto Ship(string name, string state) => new(
+        private static DrydockAdminShipDto Ship(string name, string state, int? berth = 12, int? lastBerth = 12) => new(
             Guid.NewGuid(), name, Guid.NewGuid(), "Mara Voss", state,
-            "Cutter", "TestVessel", BerthId: 12, LastBerthId: 12, CheckedOutRoundId: 4112,
+            "Cutter", "TestVessel", BerthId: berth, LastBerthId: lastBerth, CheckedOutRoundId: 4112,
             DateTime.UtcNow, CurrentRevision: 7, LiveThisRound: false,
             EscrowExpiresAt: state == "InEscrow" ? DateTime.UtcNow.AddMinutes(27) : null);
 
-        /// <summary>The sweep took it at 50% of a $38,000 appraisal; the owner may reclaim it; its last berth is free.</summary>
-        private static DrydockAdminImpoundDto SweepImpound() => new(
-            Fee: 19000, Appraisal: 38000, Redeemable: true, Reason: "Still in the world at the end of round 4112.",
-            TakenAt: DateTime.UtcNow, TakenByUserId: null, TakenByName: null, RoundId: 4112,
-            LastBerthId: 15, LastBerthClass: "Frigate", LastBerthFree: true, FallbackBerthId: null, FallbackBerthClass: null);
+        private static DrydockAdminEuiState StateWith(DrydockAdminShipDto selected)
+            => StateWith(selected, false, false);
 
-        /// <summary>An admin took it and locked it; its last berth is taken, so a release would pick another.</summary>
-        private static DrydockAdminImpoundDto AdminImpound() => new(
-            Fee: 0, Appraisal: 38000, Redeemable: false, Reason: "ticket #94",
-            TakenAt: DateTime.UtcNow, TakenByUserId: Guid.NewGuid(), TakenByName: "Dov Ashkenazi", RoundId: 4112,
-            LastBerthId: 15, LastBerthClass: "Frigate", LastBerthFree: false, FallbackBerthId: 31, FallbackBerthClass: "Cutter");
-
-        private static DrydockAdminEuiState StateWith(DrydockAdminShipDto selected, params DrydockAdminShipDto[] others)
-            => StateWith(selected, false, false, null, others);
-
-        private static DrydockAdminEuiState StateWith(DrydockAdminShipDto selected, bool escrow = false, bool sold = false, DrydockAdminImpoundDto? impound = null, params DrydockAdminShipDto[] others)
+        private static DrydockAdminEuiState StateWith(DrydockAdminShipDto selected, bool escrow, bool sold = false, params DrydockAdminShipDto[] others)
         {
             var ships = new List<DrydockAdminShipDto> { selected };
             ships.AddRange(others);
@@ -341,6 +503,8 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                 new(2, DateTime.UtcNow.AddMinutes(-5), "AccessRefused", Guid.NewGuid(), "Dov Ashkenazi", selected.OwnerUserId, "Mara Voss", null, null, 4112, null, selected.Name),
             };
 
+            // Berth 12 holds the selected hull when it is berthed there; berth 15 is always empty.
+            var inTwelve = selected.BerthId == 12;
             return new DrydockAdminEuiState
             {
                 Ships = ships,
@@ -348,7 +512,11 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                 CurrentRoundId = 4112,
                 OwnerBerths =
                 {
-                    new DrydockAdminBerthDto(12, "Cutter", "Purchased", 2500, selected.ShipGuid, selected.Name, "Cutter", selected.State),
+                    new DrydockAdminBerthDto(12, "Cutter", "Purchased", 2500,
+                        inTwelve ? selected.ShipGuid : Guid.NewGuid(),
+                        inTwelve ? selected.Name : "Harrier MIL-317",
+                        "Cutter",
+                        inTwelve ? selected.State : "Stored"),
                     new DrydockAdminBerthDto(15, "Frigate", "Purchased", 10000, null, null, null, null),
                 },
                 Selected = new DrydockAdminShipDetailDto(
@@ -363,8 +531,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                         ? new DrydockAdminEscrowDto(1, selected.OwnerUserId, "Mara Voss", Guid.NewGuid(), "Tomas Reyes",
                             DateTime.UtcNow, DateTime.UtcNow.AddMinutes(27), 40)
                         : null,
-                    sold ? new DrydockAdminSaleDto(8400, DateTime.UtcNow, 12300) : null,
-                    impound),
+                    sold ? new DrydockAdminSaleDto(8400, DateTime.UtcNow, 12300) : null),
             };
         }
     }
