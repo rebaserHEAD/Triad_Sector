@@ -954,6 +954,13 @@ namespace Content.Server.GameTicking
             if (DummyTicker)
                 return;
 
+            // Triad: the drydock's round-end sweep files every hull still out, and a restart that
+            // ran ahead of it would delete them. The system holds the restart until the sweep
+            // drains or its ceiling passes, then calls back in here. Ahead of the replay and the
+            // update check, so both still run exactly once, on the pass that goes through.
+            if (_drydock.HoldRestartForSweep(RestartRound))
+                return;
+
             ReplayEndRound();
 
             // Handle restart for server update

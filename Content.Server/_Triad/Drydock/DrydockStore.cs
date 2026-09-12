@@ -231,6 +231,77 @@ public sealed partial class DrydockStore
     }
 
     /// <summary>
+    /// The hulls the round-end sweep has to judge: checked out in the round that just ended and
+    /// never stored back. Rows from earlier rounds are the panel's Stranded chip, not the sweep's:
+    /// their hulls are long gone, and a verdict needs a hull to look at.
+    /// </summary>
+    public Task<List<DrydockShip>> GetShipsCheckedOutInRound(int roundId, CancellationToken ct = default)
+    {
+        return _db.RunTriadDbCommand(async (db, token) => await db.DrydockShip
+            .AsNoTracking()
+            .Where(s => s.State == DrydockShipState.CheckedOut && s.CheckedOutRoundId == roundId)
+            .OrderBy(s => s.ShipName)
+            .ToListAsync(token), ct);
+    }
+
+    /// <summary>
+    /// The sweep's verdict on a hull that could not have brought itself home: the row goes to
+    /// <see cref="DrydockShipState.Destroyed"/>, a berth it still showed is vacated and remembered,
+    /// and the timeline says so with the reason. One conditional update from CheckedOut, so a store
+    /// that beat the sweep to the row is not overwritten. Revisions stay: the panel's Restore to is
+    /// the way back, and it is always a human decision.
+    /// </summary>
+    public Task<bool> MarkDestroyed(Guid shipGuid, int? roundId, string reason, CancellationToken ct = default)
+    {
+        return _db.RunTriadDbCommand(async (db, token) =>
+        {
+            await using var tx = await db.Database.BeginTransactionAsync(token);
+
+            var snapshot = await db.DrydockShip
+                .AsNoTracking()
+                .Where(s => s.ShipGuid == shipGuid)
+                .Select(s => new { s.ShipName, s.OwnerUserId, s.CurrentRevision, s.BerthId })
+                .SingleOrDefaultAsync(token);
+
+            if (snapshot == null)
+                return false;
+
+            var now = DateTime.UtcNow;
+            var moved = await db.DrydockShip
+                .Where(s => s.ShipGuid == shipGuid && s.State == DrydockShipState.CheckedOut)
+                .ExecuteUpdateAsync(set => set
+                    .SetProperty(s => s.State, DrydockShipState.Destroyed)
+                    .SetProperty(s => s.StateChangedAt, now)
+                    .SetProperty(s => s.CheckedOutRoundId, (int?)null)
+                    .SetProperty(s => s.LastBerthId, s => s.BerthId ?? s.LastBerthId)
+                    .SetProperty(s => s.BerthId, (int?)null)
+                    .SetProperty(s => s.UpdatedAt, now), token);
+
+            if (moved == 0)
+                return false;
+
+            db.DrydockAudit.Add(new DrydockAudit
+            {
+                ShipGuid = shipGuid,
+                BerthId = snapshot.BerthId,
+                ShipName = snapshot.ShipName,
+                Action = DrydockAuditAction.ShipDestroyed,
+                ActorUserId = null,
+                SubjectUserId = snapshot.OwnerUserId,
+                Revision = snapshot.CurrentRevision,
+                RoundId = roundId,
+                Reason = reason,
+                CreatedAt = now,
+            });
+
+            await db.SaveChangesAsync(token);
+            await tx.CommitAsync(token);
+
+            return true;
+        }, ct);
+    }
+
+    /// <summary>
     /// Lifts an impound into one of the owner's berths, for nothing. An impounded ship holds no
     /// berth, so the only way out of the lot is into one: the named berth when the caller names it,
     /// otherwise the hull's last berth if it is still free and fits, otherwise the smallest free

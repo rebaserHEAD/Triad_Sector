@@ -786,7 +786,7 @@ public sealed partial class DrydockAdminWindow : FancyWindow
         var ship = detail.Ship;
         var appraisal = detail.Revisions.FirstOrDefault(r => r.Revision == ship.CurrentRevision)?.AppraisedValue;
 
-        var dialog = new DrydockImpoundDialog(ship, appraisal, (percent, redeemable, reason) =>
+        var dialog = new DrydockImpoundDialog(ship, appraisal, _lastState?.ImpoundDefaultPercent ?? 50, (percent, redeemable, reason) =>
             _eui.Send(new DrydockAdminImpoundMessage
             {
                 ShipGuid = ship.ShipGuid,

@@ -11,10 +11,11 @@ namespace Content.Server._Triad.Drydock;
 /// <see cref="Initialize"/> and the only <see cref="Update"/> across every partial of
 /// <see cref="DrydockSystem"/>, so everything that needs a heartbeat or a round boundary lands here.
 ///
-/// <para>Three things run from it. The sliced store and retrieve jobs, which are the reason a store
+/// <para>Four things run from it. The sliced store and retrieve jobs, which are the reason a store
 /// no longer stalls the server for two seconds. The escrow sweep, whose deadlines are persisted
 /// timestamps that keep running while the owner is logged off and across a restart, so a ship past
-/// its deadline goes back to Stored and its offer is marked Expired. And the round boundary, which
+/// its deadline goes back to Stored and its offer is marked Expired. The round-end sweep's hooks,
+/// which live on the sweep partial and are subscribed from here. And the round boundary, which
 /// cancels any pipeline still in flight and then sweeps up whatever private maps they left.</para>
 /// </summary>
 public sealed partial class DrydockSystem
@@ -43,6 +44,8 @@ public sealed partial class DrydockSystem
         // process-local and no map of any kind exists yet at system init, so it would provably do
         // nothing, and a hook whose name implies a recovery it cannot perform is worse than none.
         SubscribeLocalEvent<RoundRestartCleanupEvent>(OnRoundRestart);
+
+        InitializeSweep();
     }
 
     public override void Update(float frameTime)
@@ -85,6 +88,7 @@ public sealed partial class DrydockSystem
     {
         CancelAllJobs("round restart");
         SweepOrphanStagingMaps();
+        _warnedThisRound = false;
     }
 
     private async Task SweepExpiredTransfers()

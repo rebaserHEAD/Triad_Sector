@@ -188,6 +188,26 @@ public sealed class TriadCCVars
     /// </summary>
     public static readonly CVarDef<bool> DrydockSerializeShadowCompare =
         CVarDef.Create("triad.drydock.serialize_shadow_compare", false, CVar.SERVERONLY);
+
+    /// <summary>
+    /// The share of a hull's appraisal the round-end sweep charges to reclaim a ship it impounded,
+    /// 0 to 1. Frozen onto the row at impound, so changing this never moves a fee already quoted.
+    /// The admin impound dialog opens at this rate too, so an impound by hand charges what the sweep
+    /// would have unless the admin moves the slider.
+    /// </summary>
+    public static readonly CVarDef<float> DrydockImpoundRoundEndFraction =
+        CVarDef.Create("triad.drydock.impound_round_end_fraction", 0.5f, CVar.SERVERONLY);
+
+    /// <summary>
+    /// How many seconds the round-end sweep may hold the restart while it is still filing hulls.
+    /// The sweep starts when the round ends and mostly drains inside game.round_restart_time; this
+    /// is the ceiling past that, because twenty capital hulls at a few seconds each fit inside the
+    /// window until the night they do not, and a restart that runs ahead of the sweep deletes the
+    /// hulls it had not reached. Past the ceiling the restart goes ahead and every hull not yet
+    /// filed stays checked out with a timeline row saying so. Zero holds nothing.
+    /// </summary>
+    public static readonly CVarDef<int> DrydockImpoundRestartCeilingSeconds =
+        CVarDef.Create("triad.drydock.impound_restart_ceiling_seconds", 180, CVar.SERVERONLY);
     // End Triad
     // Triad: market data
     // The queue knobs mirror the admin log ones, which solve the same problem at production volume

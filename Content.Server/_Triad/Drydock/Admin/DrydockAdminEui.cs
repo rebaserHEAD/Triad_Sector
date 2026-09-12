@@ -549,6 +549,7 @@ public sealed partial class DrydockAdminEui : BaseEui
             TotalShips = total,
             CurrentRoundId = round,
             Notice = _notice,
+            ImpoundDefaultPercent = _entMan.System<DrydockSystem>().RoundEndFeePercent,
         };
 
         foreach (var row in rows)

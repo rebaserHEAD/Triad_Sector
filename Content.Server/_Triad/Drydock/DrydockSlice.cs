@@ -526,6 +526,14 @@ public sealed class DrydockStoreContext
     public DrydockImpound? Impound;
 
     /// <summary>
+    /// Set by the round-end sweep: the pipeline runs on the caller's own async path with no job and
+    /// the engine's own serializer, whatever the two cvars say. Slicing exists to protect bystanders
+    /// from tick hitches and costs roughly twice the wall time to do it; at round end there are no
+    /// bystanders left and the restart is waiting.
+    /// </summary>
+    public bool Inline;
+
+    /// <summary>
     /// How many occupants the impound moved off, summed across all three gates because somebody can
     /// board between them. Copied onto <see cref="DrydockRevisionRequest.Evicted"/> when the hull
     /// is filed, and from there into the audit reason, so the timeline says a hull was taken with

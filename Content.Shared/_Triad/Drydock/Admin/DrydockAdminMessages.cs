@@ -27,6 +27,13 @@ public sealed class DrydockAdminEuiState : EuiStateBase
 
     /// <summary>The outcome of the last action, for the footer. Null when nothing has happened yet.</summary>
     public string? Notice { get; set; }
+
+    /// <summary>
+    /// The fee share the impound dialog opens at: the round-end sweep's rate, so an admin who
+    /// impounds by hand charges what the sweep would have unless they move the slider. The cvar
+    /// behind it is server-only, so the client has to be told.
+    /// </summary>
+    public int ImpoundDefaultPercent { get; set; } = 50;
 }
 
 [Serializable, NetSerializable]

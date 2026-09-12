@@ -26,9 +26,6 @@ namespace Content.Client._Triad.Drydock.Admin;
 /// </summary>
 public sealed class DrydockImpoundDialog : DefaultWindow
 {
-    /// <summary>Where the slider opens: the share the design gives the round-end sweep.</summary>
-    private const int DefaultPercent = 50;
-
     private static readonly Color Key = Color.FromHex("#999999");
     private static readonly Color Fee = Color.FromHex("#cf4f4f");
 
@@ -44,7 +41,11 @@ public sealed class DrydockImpoundDialog : DefaultWindow
     /// The current revision's appraisal, or null when none is on file. For a hull that is still in
     /// the world this is only the last store's figure: the pipeline appraises it again as it is taken.
     /// </param>
-    public DrydockImpoundDialog(DrydockAdminShipDto ship, int? appraisal, Action<int, bool, string?> onConfirm)
+    /// <param name="defaultPercent">
+    /// Where the slider opens: the round-end sweep's share, carried on the state because its cvar is
+    /// server-only, so an impound by hand charges what the sweep would have unless the admin moves it.
+    /// </param>
+    public DrydockImpoundDialog(DrydockAdminShipDto ship, int? appraisal, int defaultPercent, Action<int, bool, string?> onConfirm)
     {
         Title = Loc.GetString("drydock-admin-impound-title", ("ship", ship.Name));
         // A NaN height is "measure the contents"; a zero height is a fixed zero, which the
@@ -75,7 +76,7 @@ public sealed class DrydockImpoundDialog : DefaultWindow
         {
             MinValue = 0,
             MaxValue = DrydockImpoundFee.MaxPercent,
-            Value = DefaultPercent,
+            Value = DrydockImpoundFee.ClampPercent(defaultPercent),
             Rounded = true,
             HorizontalExpand = true,
             Margin = new Thickness(0, 0, 10, 0),

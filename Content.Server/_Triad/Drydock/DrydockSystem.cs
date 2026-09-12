@@ -131,6 +131,11 @@ public sealed partial class DrydockSystem : EntitySystem
     /// <see cref="DrydockImpound"/> and <see cref="TryImpoundShip"/>; ordinary callers leave it null
     /// and get every gate the way it was written.
     /// </param>
+    /// <param name="inline">
+    /// Run the whole pipeline on this caller's async path with no job and the engine's own
+    /// serializer, whatever the slicing cvars say. The round-end sweep sets it: nobody is left to
+    /// protect from a hitch and the restart is waiting. See <see cref="DrydockStoreContext.Inline"/>.
+    /// </param>
     public async Task<(DrydockStoreResult Result, Guid? ShipId)> TryStoreShip(
         EntityUid gridUid,
         Guid ownerUserId,
@@ -138,7 +143,8 @@ public sealed partial class DrydockSystem : EntitySystem
         int? berthId = null,
         EntityUid? stationUid = null,
         DrydockProgressCallback? onProgress = null,
-        DrydockImpound? impound = null)
+        DrydockImpound? impound = null,
+        bool inline = false)
     {
         if (!_cfg.GetCVar(TriadCCVars.DrydockEnabled) || _cfg.GetCVar(TriadCCVars.DrydockReadOnly))
             return (DrydockStoreResult.Disabled, null);
@@ -179,6 +185,7 @@ public sealed partial class DrydockSystem : EntitySystem
             BerthId = berthId,
             StationUid = stationUid ?? _station.GetOwningStation(gridUid) ?? EntityUid.Invalid,
             Impound = impound,
+            Inline = inline,
             HomeMap = homeXform.MapUid,
             HomePosition = _xform.GetWorldPosition(gridUid),
         };
@@ -194,8 +201,9 @@ public sealed partial class DrydockSystem : EntitySystem
             // A budget of zero or less is the rollback lever on a pipeline whose deploy has no other
             // one: no job, no queue, no queue latency, and the whole store on this caller's own async
             // path, in the order it ran before slicing. It is also what the integration fixtures set,
-            // because a sliced store outruns their tick pumps.
-            if (TickBudgetSeconds <= 0)
+            // because a sliced store outruns their tick pumps, and what the round-end sweep asks for
+            // by name, because nobody is left to protect from a hitch.
+            if (TickBudgetSeconds <= 0 || inline)
             {
                 var direct = await RunStorePipeline(ctx, new DrydockSyncSlice(DrydockPhases.Store, onProgress));
                 return (direct.Result, direct.ShipId);
@@ -499,7 +507,7 @@ public sealed partial class DrydockSystem : EntitySystem
             // "the budget" - and the whole phase lands inside one tick.
             string yaml;
 
-            if (_cfg.GetCVar(TriadCCVars.DrydockSlicedSerialize))
+            if (_cfg.GetCVar(TriadCCVars.DrydockSlicedSerialize) && !ctx.Inline)
             {
                 // Opens its own phase, because it knows the entity count and the bar wants it.
                 var sliced = await SerializeGridSliced(ctx, slice, saveOptions);

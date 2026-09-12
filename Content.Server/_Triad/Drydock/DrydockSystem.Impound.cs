@@ -50,15 +50,20 @@ public sealed partial class DrydockSystem
     /// taken against the appraisal measured during this very store, so the credits owed can never
     /// exceed what the hull is worth.
     /// </param>
+    /// <param name="inline">
+    /// Run the pipeline unsliced on this caller's path. The round-end sweep sets it; the admin
+    /// ripcord, taken mid-round with players to protect, leaves it off.
+    /// </param>
     public Task<(DrydockStoreResult Result, Guid? ShipId)> TryImpoundShip(
         EntityUid gridUid,
         Guid ownerUserId,
         int? roundId,
         DrydockImpound terms,
         EntityUid? stationUid = null,
-        DrydockProgressCallback? onProgress = null)
+        DrydockProgressCallback? onProgress = null,
+        bool inline = false)
     {
-        return TryStoreShip(gridUid, ownerUserId, roundId, berthId: null, stationUid, onProgress, terms);
+        return TryStoreShip(gridUid, ownerUserId, roundId, berthId: null, stationUid, onProgress, terms, inline);
     }
 
     /// <summary>
