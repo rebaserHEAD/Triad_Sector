@@ -224,7 +224,7 @@ public sealed partial class DrydockAdminEui : BaseEui
                     return outcome switch
                     {
                         DrydockBerthResult.Success => move.BerthId is null ? "Berth vacated." : "Ship moved.",
-                        DrydockBerthResult.WrongState when move.BerthId is null => "Refused: a stored ship lives in its berth. Move it instead; vacating is for a hull that is out and still shown in its slot.",
+                        DrydockBerthResult.WrongState when move.BerthId is null => "Refused: a stored ship lives in its berth and an escrow ship keeps it for the offer. Vacating is for a hull that is out and still shown in its slot.",
                         DrydockBerthResult.WrongState => "Refused: only a stored ship can be moved into a berth.",
                         DrydockBerthResult.BerthTooSmall => "Refused: that berth cannot hold this hull.",
                         DrydockBerthResult.BerthOccupied => "Refused: that berth is occupied.",

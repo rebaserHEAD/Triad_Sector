@@ -1048,7 +1048,9 @@ public sealed partial class DrydockStore
     /// <para>Vacating is for a hull that is out: a crash between a retrieve's confirm and its vacate
     /// leaves a flying ship in its slot, and this is the repair. A stored ship lives in its berth
     /// and is moved, never vacated: a stored ship with nowhere to be is one the console cannot draw
-    /// and the free-berth anti-join counts as room.</para>
+    /// and the free-berth anti-join counts as room. A ship in escrow keeps its berth for the same
+    /// reason: every resolution but an accept sets it Stored without touching the berth, so a
+    /// vacate under a standing offer manufactures exactly that row.</para>
     ///
     /// <para>Both moves are one conditional update on the state the row was read in, so a retrieve
     /// claiming the ship in the same instant is not overwritten by a move that read it as stored.</para>
@@ -1102,11 +1104,14 @@ public sealed partial class DrydockStore
             }
             else
             {
-                if (ship.State == DrydockShipState.Stored || ship.BerthId == null)
+                if (ship.State is DrydockShipState.Stored or DrydockShipState.InEscrow || ship.BerthId == null)
                     return DrydockBerthResult.WrongState;
 
                 moved = await db.DrydockShip
-                    .Where(s => s.ShipGuid == shipGuid && s.State != DrydockShipState.Stored && s.BerthId != null)
+                    .Where(s => s.ShipGuid == shipGuid
+                        && s.State != DrydockShipState.Stored
+                        && s.State != DrydockShipState.InEscrow
+                        && s.BerthId != null)
                     .ExecuteUpdateAsync(set => set
                         .SetProperty(s => s.LastBerthId, s => s.BerthId)
                         .SetProperty(s => s.BerthId, (int?)null)
@@ -1988,7 +1993,9 @@ public sealed partial class DrydockStore
     ///
     /// <para>A sold hull comes back only through the sale reversal, which decides about the money
     /// before anything else; a plain restore would hand it back with the price left with the
-    /// owner. The move is one conditional update on the state the row was read in.</para>
+    /// owner. A hull in escrow is spoken for: seating it under a standing offer leaves the offer
+    /// resolving against a row that already moved. The move is one conditional update on the state
+    /// the row was read in.</para>
     /// </summary>
     /// <param name="fromSale">Set by the sale reversal, which is the one caller allowed to restore a sold hull.</param>
     public Task<DrydockBerthResult> TryRestoreShip(
@@ -2012,7 +2019,8 @@ public sealed partial class DrydockStore
             if (ship == null)
                 return DrydockBerthResult.NotFound;
 
-            if (ship.State == DrydockShipState.Stored)
+            // The panel hides the verb on both; this is what stops a forged message.
+            if (ship.State is DrydockShipState.Stored or DrydockShipState.InEscrow)
                 return DrydockBerthResult.WrongState;
 
             if (ship.State == DrydockShipState.Sold && !fromSale)

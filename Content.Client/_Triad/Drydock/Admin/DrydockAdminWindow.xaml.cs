@@ -507,12 +507,13 @@ public sealed partial class DrydockAdminWindow : FancyWindow
         var ship = detail.Ship;
 
         // Vacating is the repair for a hull that is out and still shown in its slot. A stored ship
-        // lives in its berth and is moved, never vacated, and the entry says so.
+        // lives in its berth and is moved, never vacated; an escrow ship keeps its berth for the
+        // offer to hand over. The entry says which, and the server refuses both regardless.
         var items = new List<DrydockMenuButton.Item>
         {
             new(Loc.GetString("drydock-admin-vacate"),
-                ship.State == "Stored" && ship.BerthId != null ? Loc.GetString("drydock-admin-vacate-stored") : null,
-                ship.BerthId != null && ship.State != "Stored",
+                VacateReason(ship),
+                ship.BerthId != null && ship.State is not ("Stored" or "InEscrow"),
                 () => _eui.Send(new DrydockAdminMoveMessage { ShipGuid = ship.ShipGuid, BerthId = null, Reason = Reason() })),
         };
 
@@ -543,6 +544,20 @@ public sealed partial class DrydockAdminWindow : FancyWindow
             () => _eui.Send(new DrydockAdminDeleteShipMessage { ShipGuid = ship.ShipGuid, Reason = Reason() })));
 
         return items;
+    }
+
+    /// <summary>Why Vacate is greyed, for the two states that hold a berth on purpose; null when it is offered.</summary>
+    private static string? VacateReason(DrydockAdminShipDto ship)
+    {
+        if (ship.BerthId == null)
+            return null;
+
+        return ship.State switch
+        {
+            "Stored" => Loc.GetString("drydock-admin-vacate-stored"),
+            "InEscrow" => Loc.GetString("drydock-admin-vacate-escrow"),
+            _ => null,
+        };
     }
 
     private static Button Verb(string label, string tooltip, string? extraClass = null)

@@ -402,6 +402,73 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
         }
 
         /// <summary>
+        /// A ship in escrow keeps its berth: every resolution but an accept sets it Stored without
+        /// touching the berth, so a vacate or a restore landing under a standing offer would leave a
+        /// stored row with nowhere to be, or an offer resolving against a row that already moved.
+        /// Both refuse. The control is the same two verbs on the states they are for.
+        /// </summary>
+        [Test]
+        public async Task AnEscrowShipKeepsItsBerthAgainstVacateAndRestore()
+        {
+            await using var pair = await PoolManager.GetServerClient();
+            var server = pair.Server;
+
+            var store = server.ResolveDependency<DrydockStore>();
+            var db = server.ResolveDependency<IServerDbManager>();
+
+            var owner = Guid.NewGuid();
+            var recipient = Guid.NewGuid();
+            var admin = Guid.NewGuid();
+            await InsertPlayer(db, owner);
+            await InsertPlayer(db, recipient);
+            var home = await store.AddBerth(owner, ShipSizeClass.Cutter, DrydockBerthKind.Granted, 0, null, null);
+            var spare = await store.AddBerth(owner, ShipSizeClass.Cutter, DrydockBerthKind.Granted, 0, null, null);
+            await store.AddBerth(recipient, ShipSizeClass.Cutter, DrydockBerthKind.Granted, 0, null, null);
+            var round = await db.AddNewRound(await db.AddOrGetServer("drydock-test"));
+
+            var shipId = Guid.NewGuid();
+            var filed = await store.FileRevision(Request(shipId, owner, "Kestrel", berthId: home), Encoding.UTF8.GetBytes("doc"), keepBlobs: 2);
+            Assert.That(filed.BerthId, Is.EqualTo(home));
+
+            var (offered, transfer) = await store.TryOfferTransfer(shipId, owner, recipient, TimeSpan.FromMinutes(30), round);
+            Assert.That(offered, Is.EqualTo(DrydockBerthResult.Success), "Control: the offer opens, so the row below is in escrow.");
+
+            Assert.That(await store.TryMoveShip(shipId, null, admin, round, "vacate"), Is.EqualTo(DrydockBerthResult.WrongState),
+                "Vacating an escrow ship would leave the decline that follows landing on Stored with no berth.");
+            Assert.That(await store.TryRestoreShip(shipId, spare, admin, round, "restore"), Is.EqualTo(DrydockBerthResult.WrongState),
+                "Restoring an escrow ship seats it under an offer that still resolves against it.");
+
+            var row = (await store.GetShipsByOwner(owner)).Single(r => r.ShipGuid == shipId);
+            Assert.Multiple(() =>
+            {
+                Assert.That(row.State, Is.EqualTo(DrydockShipState.InEscrow), "Refused means untouched.");
+                Assert.That(row.BerthId, Is.EqualTo(home));
+            });
+
+            // Resolved, the ship is stored in the berth it never left.
+            Assert.That(await store.TryResolveTransfer(transfer!.Id, DrydockTransferResolution.Declined, recipient, round), Is.Not.Null);
+            row = (await store.GetShipsByOwner(owner)).Single(r => r.ShipGuid == shipId);
+            Assert.Multiple(() =>
+            {
+                Assert.That(row.State, Is.EqualTo(DrydockShipState.Stored));
+                Assert.That(row.BerthId, Is.EqualTo(home), "A decline keeps the berth, which is why a vacate before it had to refuse.");
+            });
+
+            // Control: the same verb on the state it is for. Out with a berth still shown, which is
+            // the crash between a retrieve's confirm and its vacate, is exactly what vacate repairs.
+            Assert.That(await store.TrySetState(shipId, DrydockShipState.Stored, DrydockShipState.CheckedOut, DrydockAuditAction.Retrieve, owner, round, null), Is.True);
+            Assert.That(await store.TryMoveShip(shipId, null, admin, round, "vacate"), Is.EqualTo(DrydockBerthResult.Success));
+            row = (await store.GetShipsByOwner(owner)).Single(r => r.ShipGuid == shipId);
+            Assert.Multiple(() =>
+            {
+                Assert.That(row.BerthId, Is.Null);
+                Assert.That(row.LastBerthId, Is.EqualTo(home));
+            });
+
+            await pair.CleanReturnAsync();
+        }
+
+        /// <summary>
         /// The shipyard scrapping a hull that is out on a retrieve. The credits move at the console;
         /// this is the row hearing about it, so a scrapped ship never reads as stranded, is never
         /// handed back by a plain restore, and the reversal finds the price on the timeline.

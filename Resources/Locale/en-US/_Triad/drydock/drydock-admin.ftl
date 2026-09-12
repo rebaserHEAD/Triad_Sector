@@ -54,6 +54,7 @@ drydock-admin-restore-to-tooltip = Puts a ship back in one of the owner's berths
 drydock-admin-more = ···
 drydock-admin-vacate = Vacate berth
 drydock-admin-vacate-stored = a stored ship lives in its berth
+drydock-admin-vacate-escrow = an escrow ship keeps its berth
 drydock-admin-delete-ship = Delete ship record
 drydock-admin-delete-ship-tooltip = Removes the ship and its documents. The timeline is kept. Refused while a live grid carries it.
 drydock-admin-reason-placeholder = Reason, for the timeline
