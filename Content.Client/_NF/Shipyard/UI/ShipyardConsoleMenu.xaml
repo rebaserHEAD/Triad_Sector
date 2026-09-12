@@ -203,7 +203,9 @@
                  classes and berth numbers stayed legible straight through the denial. -->
             <gfx:StyleBoxFlat BackgroundColor="#140000"/>
         </PanelContainer.PanelOverride>
-        <TextureRect TexturePath="/Textures/_Triad/Interface/drydock_lockout_stripes.png" Stretch="Tile" VerticalExpand="True" HorizontalExpand="True" />
+        <!-- The stripes tile through a styled panel set in code: TextureRect's Tile mode is not
+             implemented in the engine and draws the texture once in the corner. -->
+        <PanelContainer Name="LockoutStripes" VerticalExpand="True" HorizontalExpand="True" />
         <!-- The two big lines take their fonts in code; Nano has no 44 pt face to name here. -->
         <BoxContainer Orientation="Vertical" VerticalAlignment="Center" HorizontalAlignment="Center">
             <Label Name="LockoutTitle" Text="{Loc 'shipyard-console-lockout-title'}" Modulate="#ff4a4a" Align="Center" />

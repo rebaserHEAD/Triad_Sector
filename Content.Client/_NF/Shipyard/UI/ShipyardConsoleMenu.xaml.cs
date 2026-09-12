@@ -26,7 +26,7 @@ namespace Content.Client._NF.Shipyard.UI;
 public sealed partial class ShipyardConsoleMenu : FancyWindow
 {
     [Dependency] private IPrototypeManager _protoManager = default!;
-    [Dependency] private IResourceCache _resourceCache = default!; // Triad: drydock tab, the lockout's fonts
+    [Dependency] private IResourceCache _resourceCache = default!; // Triad: drydock tab, the lockout's fonts and stripes
 
     public event Action<ButtonEventArgs>? OnSellShip;
     public event Action<ButtonEventArgs>? OnOrderApproved;
@@ -142,6 +142,13 @@ public sealed partial class ShipyardConsoleMenu : FancyWindow
         var regular = _resourceCache.GetResource<FontResource>("/Fonts/NotoSans/NotoSans-Regular.ttf");
         LockoutTitle.FontOverride = new VectorFont(bold, 44);
         LockoutSubtitle.FontOverride = new VectorFont(regular, 14);
+        // The stripes tile through a style box: TextureRect's Tile mode is unimplemented in the
+        // engine and draws the texture once in the top-left corner.
+        LockoutStripes.PanelOverride = new StyleBoxTexture
+        {
+            Texture = _resourceCache.GetResource<TextureResource>("/Textures/_Triad/Interface/drydock_lockout_stripes.png").Texture,
+            Mode = StyleBoxTexture.StretchMode.Tile,
+        };
     }
 
     /// <summary>
