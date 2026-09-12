@@ -11,6 +11,7 @@ using System.Runtime.InteropServices;
 using Content.Server.Radio.EntitySystems;
 using Robust.Shared.Map.Components;
 using Content.Server.Mind;
+using Content.Shared.Mind;
 using Robust.Server.GameStates;
 using Content.Shared.Humanoid;
 using Content.Server.Preferences.Managers;
@@ -259,6 +260,42 @@ public sealed partial class ContrabandPermitSystem : SharedContrabandPermitSyste
         {
             Del(uid);
         }
+    }
+
+    /// <summary>
+    /// Whether a permitted item may go away with a ship: the permit has to belong to whoever the ship
+    /// is being put away for, and the item has to still be permittable. The drydock store's half of
+    /// <see cref="ClearPermitItemsOnGrid"/>, judged per item so the store can apply it inside its own
+    /// purge rather than as a second walk of the grid.
+    ///
+    /// <para>The holder is the strictest identity the caller can vouch for. A store made at a console
+    /// has someone standing at it, so <paramref name="holderMind"/> is theirs and the permit's mind has
+    /// to be the same one, which is the ship-save path's rule. An impound or the round-end sweep has
+    /// nobody, so any character of <paramref name="ownerAccount"/> will do; the original owner is read
+    /// because a player who has moved on to another character has had the old mind's current user
+    /// cleared.</para>
+    ///
+    /// <para>A permit whose owner cannot be resolved to a mind does not travel. That is every permit
+    /// on a hull loaded from a file and not yet re-stamped by <see cref="InitializePermitItemsOnGrid"/>,
+    /// since the owner fields are session-local and never serialized.</para>
+    /// </summary>
+    public bool PermitTravelsWith(Entity<ContrabandPermitItemComponent> item, EntityUid? holderMind, Guid ownerAccount)
+    {
+        if (!TryComp<ContrabandPermittableComponent>(item, out var permittable) || !permittable.Permittable)
+            return false;
+
+        var permitMind = item.Comp.PermitOwnerMind;
+        if (permitMind == null && item.Comp.PermitOwner is { } owner && _mind.TryGetMind(owner, out var ownerMind, out _))
+            permitMind = ownerMind;
+
+        if (permitMind is not { } mindId)
+            return false;
+
+        if (holderMind != null)
+            return mindId == holderMind;
+
+        return TryComp<MindComponent>(mindId, out var mind)
+            && (mind.OriginalOwnerUserId ?? mind.UserId)?.UserId == ownerAccount;
     }
 
     private void SendConsoleRadioMessage(EntityUid console, string message)

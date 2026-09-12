@@ -534,6 +534,16 @@ public sealed class DrydockStoreContext
     public bool Inline;
 
     /// <summary>
+    /// The mind of whoever is putting the ship away, or null when nobody is. Read by the purge: a
+    /// permitted item travels only when its permit was issued to this mind, the ship-save path's rule,
+    /// so a player cannot store someone else's permitted kit aboard their own hull. Null means an
+    /// impound or the round-end sweep, and permits are judged against <see cref="OwnerUserId"/>
+    /// instead. The drydock's verbs check the account and never the mind; this is not a verb check
+    /// but a permit one, and a permit is issued to a character.
+    /// </summary>
+    public EntityUid? PermitHolderMind;
+
+    /// <summary>
     /// How many occupants the impound moved off, summed across all three gates because somebody can
     /// board between them. Copied onto <see cref="DrydockRevisionRequest.Evicted"/> when the hull
     /// is filed, and from there into the audit reason, so the timeline says a hull was taken with

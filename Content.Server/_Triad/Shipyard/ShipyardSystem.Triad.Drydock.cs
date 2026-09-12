@@ -959,10 +959,15 @@ public sealed partial class ShipyardSystem
         DrydockProgressCallback onProgress = (percent, _) =>
             PushDrydockProgress(uid, component, player, uiKey, DrydockProgressKind.Store, percent);
 
+        // The operator's own permits are the only ones that go with the ship, the ship-save path's
+        // ClearPermitItemsOnGrid rule: anyone else's permitted kit left aboard is purged at store
+        // rather than re-stamped to this captain on the next retrieve.
+        EntityUid? permitHolderMind = _mind.TryGetMind(player, out var operatorMind, out _) ? operatorMind : null;
+
         (DrydockStoreResult Result, Guid? ShipId) result;
         try
         {
-            result = await _drydock.TryStoreShip(shuttleUid, ownership.OwnerUserId.UserId, DrydockRoundId, berthId, station, onProgress);
+            result = await _drydock.TryStoreShip(shuttleUid, ownership.OwnerUserId.UserId, DrydockRoundId, berthId, station, onProgress, permitHolderMind: permitHolderMind);
         }
         finally
         {

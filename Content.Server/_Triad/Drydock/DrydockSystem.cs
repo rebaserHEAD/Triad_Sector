@@ -7,6 +7,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using Content.Server._Mono.Shuttles.Components;
 using Content.Server._NF.Shipyard.Systems;
+using Content.Server._Triad.ContrabandPermit;
 using Content.Server._NF.Station.Components;
 using Content.Server.NodeContainer;
 using Content.Server.NodeContainer.Nodes;
@@ -70,6 +71,7 @@ public sealed partial class DrydockSystem : EntitySystem
     [Dependency] private ShipyardSystem _shipyard = default!;
     [Dependency] private DockingSystem _docking = default!;
     [Dependency] private StationSystem _station = default!;
+    [Dependency] private ContrabandPermitSystem _contrabandPermit = default!;
 
     /// <summary>
     /// Components cut from the live grid before it is written, because they are derived state or
@@ -137,6 +139,12 @@ public sealed partial class DrydockSystem : EntitySystem
     /// serializer, whatever the slicing cvars say. The round-end sweep sets it: nobody is left to
     /// protect from a hitch and the restart is waiting. See <see cref="DrydockStoreContext.Inline"/>.
     /// </param>
+    /// <param name="permitHolderMind">
+    /// The mind of whoever is putting the ship away, when somebody is: a console store and an import
+    /// pass it, and then only permits issued to that mind travel. Null judges permits by the owning
+    /// account instead, which is all an impound or the round-end sweep can vouch for. See
+    /// <see cref="DrydockStoreContext.PermitHolderMind"/>.
+    /// </param>
     public async Task<(DrydockStoreResult Result, Guid? ShipId)> TryStoreShip(
         EntityUid gridUid,
         Guid ownerUserId,
@@ -145,7 +153,8 @@ public sealed partial class DrydockSystem : EntitySystem
         EntityUid? stationUid = null,
         DrydockProgressCallback? onProgress = null,
         DrydockImpound? impound = null,
-        bool inline = false)
+        bool inline = false,
+        EntityUid? permitHolderMind = null)
     {
         if (!_cfg.GetCVar(TriadCCVars.DrydockEnabled) || _cfg.GetCVar(TriadCCVars.DrydockReadOnly))
             return (DrydockStoreResult.Disabled, null);
@@ -187,6 +196,7 @@ public sealed partial class DrydockSystem : EntitySystem
             StationUid = stationUid ?? _station.GetOwningStation(gridUid) ?? EntityUid.Invalid,
             Impound = impound,
             Inline = inline,
+            PermitHolderMind = permitHolderMind,
             HomeMap = homeXform.MapUid,
             HomePosition = _xform.GetWorldPosition(gridUid),
         };
@@ -422,9 +432,10 @@ public sealed partial class DrydockSystem : EntitySystem
 
             MarkPhase(DrydockPhase.Freeze);
 
-            // The saving-contraband purge, by the same component rule the ship-save path applies:
-            // marked entities go unless they carry a permit. After every refusal above, so a refused
-            // store deletes nothing, and before the appraisal, so the quote is for what is filed.
+            // The saving-contraband purge, by the ship-save path's two rules: marked entities go
+            // unless they carry a permit, and a permit that does not belong to whoever the ship is
+            // going away for takes its item with it. After every refusal above, so a refused store
+            // deletes nothing, and before the appraisal, so the quote is for what is filed.
             // Not undoable.
             await PurgeSavingContrabandSliced(ctx, slice);
             MarkPhase(DrydockPhase.Purge);
@@ -1262,11 +1273,15 @@ public sealed partial class DrydockSystem : EntitySystem
     }
 
     /// <summary>
-    /// Deletes every entity aboard marked as saving contraband without a permit, containers and
-    /// contents included, and returns how many went. The ship-save path's rule
-    /// (<c>IsInvalidEntity</c>), applied by component rather than by a list: the component is what
-    /// the content marks. Immediate deletes, not queued: the serializer walks the tree many ticks
-    /// later now, and a queued deletion would be honoured well before then, but a merely queued
+    /// Deletes every entity aboard that may not go away with the ship, containers and contents
+    /// included. Two rules, both the ship-save path's. Anything marked as saving contraband goes
+    /// unless it carries a permit (<c>IsInvalidEntity</c>), applied by component rather than by a
+    /// list: the component is what the content marks. And any permitted item goes whose permit does
+    /// not travel with whoever the ship is being put away for (<c>ClearPermitItemsOnGrid</c>, judged
+    /// by <see cref="ContrabandPermitSystem.PermitTravelsWith"/>), whether or not it is marked, since
+    /// the retrieve re-stamps every permit left aboard to whoever takes the ship out and a permit is
+    /// not the ship's to hand on. Immediate deletes, not queued: the serializer walks the tree many
+    /// ticks later now, and a queued deletion would be honoured well before then, but a merely queued
     /// entity is still a real grid child in the meantime and every walk between here and the save -
     /// the sidecars, the capture, the manifest - would count and touch it.
     ///
@@ -1278,9 +1293,23 @@ public sealed partial class DrydockSystem : EntitySystem
     private async Task PurgeSavingContrabandSliced(DrydockStoreContext ctx, IDrydockSlice slice)
     {
         var doomed = new List<EntityUid>();
+
+        var permits = AllEntityQuery<ContrabandPermitItemComponent, TransformComponent>();
+        while (permits.MoveNext(out var uid, out var permit, out var xform))
+        {
+            if (xform.GridUid != ctx.GridUid
+                || _contrabandPermit.PermitTravelsWith((uid, permit), ctx.PermitHolderMind, ctx.OwnerUserId))
+            {
+                continue;
+            }
+
+            doomed.Add(uid);
+        }
+
         var query = AllEntityQuery<SavingContrabandComponent, TransformComponent>();
         while (query.MoveNext(out var uid, out _, out var xform))
         {
+            // A permitted item was judged by its permit above, whichever way that went.
             if (xform.GridUid != ctx.GridUid || HasComp<ContrabandPermitItemComponent>(uid))
                 continue;
 
@@ -1303,7 +1332,7 @@ public sealed partial class DrydockSystem : EntitySystem
         }
 
         if (count > 0)
-            Log.Info($"Drydock: {ctx.ShipId} store purged {count} saving-contraband entities without a permit.");
+            Log.Info($"Drydock: {ctx.ShipId} store purged {count} entities: saving contraband without a permit, or a permit that is not the holder's.");
     }
 
     /// <summary>

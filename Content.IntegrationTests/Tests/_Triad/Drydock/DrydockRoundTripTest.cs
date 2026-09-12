@@ -21,6 +21,7 @@ using Content.Server.Database;
 using Content.Server.DeviceLinking.Systems;
 using Content.Server.DeviceNetwork.Systems;
 using Content.Server.Lathe.Components;
+using Content.Server.Mind;
 using Content.Server.NodeContainer.Nodes;
 using Content.Server.Power.Components;
 using Content.Server.Station.Components;
@@ -1902,8 +1903,12 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
         /// <summary>
         /// The ship-save path deletes anything marked as saving contraband unless it carries a
         /// contraband permit; the drydock kept everything, so ID cards and grenades rode along. The
-        /// store purges by the same component rule now. The permit exception and an ordinary item are
-        /// the controls that the purge takes only what it should.
+        /// store purges by the same component rule now, and a permit only counts when it is the
+        /// owner's: stored with nobody at a console, which is an impound or the round-end sweep, a
+        /// permit travels when its mind belongs to the owning account. A stranger's permitted kit
+        /// left aboard is purged rather than re-stamped to the owner on the next retrieve. The
+        /// owner's permit and an ordinary item are the controls that the purge takes only what it
+        /// should.
         /// </summary>
         [Test]
         public async Task SavingContrabandIsPurgedAtStoreUnlessPermitted()
@@ -1914,6 +1919,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
 
             var db = server.ResolveDependency<IServerDbManager>();
             var drydock = server.System<DrydockSystem>();
+            var minds = server.System<MindSystem>();
 
             var owner = Guid.NewGuid();
             await InsertPlayer(db, owner);
@@ -1926,17 +1932,21 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                 var contraband = entMan.SpawnEntity(MarketItemProtoId, new EntityCoordinates(shipGrid, new Vector2(0.5f, 0.5f)));
                 entMan.EnsureComponent<SavingContrabandComponent>(contraband);
 
-                var permitted = entMan.SpawnEntity(MarketItemProtoId, new EntityCoordinates(shipGrid, new Vector2(1.5f, 0.5f)));
-                entMan.EnsureComponent<SavingContrabandComponent>(permitted);
-                entMan.EnsureComponent<ContrabandPermitItemComponent>(permitted);
+                var ownersPermit = SpawnPermitted(entMan, new EntityCoordinates(shipGrid, new Vector2(1.5f, 0.5f)), MindOfAccount(minds, owner));
+                entMan.EnsureComponent<SavingContrabandComponent>(ownersPermit);
 
-                entMan.SpawnEntity(MarketItemProtoId, new EntityCoordinates(shipGrid, new Vector2(2.5f, 0.5f)));
+                var strangersPermit = SpawnPermitted(entMan, new EntityCoordinates(shipGrid, new Vector2(2.5f, 0.5f)), MindOfAccount(minds, Guid.NewGuid()));
+                entMan.EnsureComponent<SavingContrabandComponent>(strangersPermit);
+
+                // Second row: the fixture lays only a 3x3 floor, and a sheet spawned off it is
+                // reparented to the map and never reaches the store at all.
+                entMan.SpawnEntity(MarketItemProtoId, new EntityCoordinates(shipGrid, new Vector2(0.5f, 1.5f)));
             });
 
             await pair.RunTicksSync(5);
 
             var before = await CensusGrid(pair, shipGrid);
-            Assert.That(before[MarketItemProtoId], Is.EqualTo(3), "The control: three sheets aboard before the store.");
+            Assert.That(before[MarketItemProtoId], Is.EqualTo(4), "The control: four sheets aboard before the store.");
 
             var (result, shipId) = await RunOnServer(pair, () => drydock.TryStoreShip(shipGrid, owner, null));
             Assert.That(result, Is.EqualTo(DrydockStoreResult.Success));
@@ -1947,7 +1957,8 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             await pair.RunTicksSync(5);
 
             var after = await CensusGrid(pair, retrieved.Grid!.Value);
-            Assert.That(after.GetValueOrDefault(MarketItemProtoId), Is.EqualTo(2), "The unpermitted contraband is gone; the permitted one and the plain sheet are not.");
+            Assert.That(after.GetValueOrDefault(MarketItemProtoId), Is.EqualTo(2),
+                "The unpermitted contraband and the stranger's permitted one are gone; the owner's permitted one and the plain sheet are not.");
 
             await server.WaitAssertion(() =>
             {
@@ -1963,6 +1974,115 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             });
 
             await pair.CleanReturnAsync();
+        }
+
+        /// <summary>
+        /// A store made at a console has someone standing at it, and then a permit travels only when
+        /// it was issued to that person's mind: the ship-save path's ClearPermitItemsOnGrid rule,
+        /// reported missing from the drydock when a player stored a hull carrying another character's
+        /// permitted kit. The foreign permit sits on an item that is NOT marked as saving contraband,
+        /// so nothing but the permit rule can take it; the holder's own permit sits on a marked one, so
+        /// its survival is the permit counting rather than the item being harmless.
+        /// </summary>
+        [Test]
+        public async Task APermitTravelsOnlyWithTheMindThatStoresTheShip()
+        {
+            await using var pair = await PoolManager.GetServerClient();
+            var server = pair.Server;
+            var entMan = server.EntMan;
+
+            var db = server.ResolveDependency<IServerDbManager>();
+            var drydock = server.System<DrydockSystem>();
+            var minds = server.System<MindSystem>();
+
+            var owner = Guid.NewGuid();
+            await InsertPlayer(db, owner);
+            await server.ResolveDependency<DrydockStore>().AddBerth(owner, ShipSizeClass.SuperCapital, DrydockBerthKind.Granted, 0, null, null);
+
+            var (station, shipGrid, _) = await BuildShipAndStation(pair);
+
+            var holder = EntityUid.Invalid;
+            await server.WaitPost(() =>
+            {
+                // Both minds belong to the owning account, so the account rule would keep both
+                // permits: only the mind rule can tell them apart.
+                holder = MindOfAccount(minds, owner);
+                var otherCharacter = MindOfAccount(minds, owner);
+
+                var held = SpawnPermitted(entMan, new EntityCoordinates(shipGrid, new Vector2(0.5f, 0.5f)), holder);
+                entMan.EnsureComponent<SavingContrabandComponent>(held);
+
+                SpawnPermitted(entMan, new EntityCoordinates(shipGrid, new Vector2(1.5f, 0.5f)), otherCharacter);
+
+                entMan.SpawnEntity(MarketItemProtoId, new EntityCoordinates(shipGrid, new Vector2(2.5f, 0.5f)));
+            });
+
+            await pair.RunTicksSync(5);
+
+            var before = await CensusGrid(pair, shipGrid);
+            Assert.That(before[MarketItemProtoId], Is.EqualTo(3), "The control: three sheets aboard before the store.");
+
+            var (result, shipId) = await RunOnServer(pair,
+                () => drydock.TryStoreShip(shipGrid, owner, null, permitHolderMind: holder));
+            Assert.That(result, Is.EqualTo(DrydockStoreResult.Success));
+            await pair.RunTicksSync(5);
+
+            var retrieved = await RunOnServer(pair, () => drydock.TryRetrieveShip(shipId!.Value, owner, station, null));
+            Assert.That(retrieved.Result, Is.EqualTo(DrydockRetrieveResult.Success));
+            await pair.RunTicksSync(5);
+
+            var after = await CensusGrid(pair, retrieved.Grid!.Value);
+            Assert.That(after.GetValueOrDefault(MarketItemProtoId), Is.EqualTo(2),
+                "The other character's permitted item is gone; the holder's and the plain sheet are not.");
+
+            await server.WaitAssertion(() =>
+            {
+                var marked = 0;
+                var unmarked = 0;
+                var query = entMan.AllEntityQueryEnumerator<ContrabandPermitItemComponent, TransformComponent>();
+                while (query.MoveNext(out var uid, out _, out var xform))
+                {
+                    if (xform.GridUid != retrieved.Grid!.Value)
+                        continue;
+
+                    if (entMan.HasComponent<SavingContrabandComponent>(uid))
+                        marked++;
+                    else
+                        unmarked++;
+                }
+
+                Assert.That(marked, Is.EqualTo(1), "The holder's own permitted contraband came back.");
+                Assert.That(unmarked, Is.Zero,
+                    "The other character's permit was on an unmarked item, so only the permit rule could have taken it, and it did.");
+            });
+
+            await pair.CleanReturnAsync();
+        }
+
+        /// <summary>
+        /// A permittable item carrying a permit issued to <paramref name="mind"/>, the way the permit
+        /// console stamps one.
+        /// </summary>
+        private static EntityUid SpawnPermitted(IEntityManager entMan, EntityCoordinates at, EntityUid mind)
+        {
+            var item = entMan.SpawnEntity(MarketItemProtoId, at);
+            entMan.EnsureComponent<ContrabandPermittableComponent>(item);
+            entMan.EnsureComponent<ContrabandPermitItemComponent>(item).PermitOwnerMind = mind;
+            return item;
+        }
+
+        /// <summary>
+        /// A mind standing for a character of <paramref name="account"/>. Created with no user, since
+        /// the mind system refuses a user id with no player data behind it and logs an error doing so;
+        /// the original owner is written directly instead, which is the field the permit rule reads.
+        /// </summary>
+        private static EntityUid MindOfAccount(MindSystem minds, Guid account)
+        {
+            var mind = minds.CreateMind(null);
+#pragma warning disable RA0002
+            mind.Comp.OriginalOwnerUserId = new NetUserId(account);
+#pragma warning restore RA0002
+            return mind.Owner;
         }
 
         /// <summary>
