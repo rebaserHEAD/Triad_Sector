@@ -974,6 +974,100 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             await pair.CleanReturnAsync();
         }
 
+        /// <summary>
+        /// The impound lot is on the tab the FIRST time the console opens, which it was not: the
+        /// upstream open handler strips a deed pointing at a dead ship and returns before it
+        /// publishes anything, and an impound is exactly that state, because the forced store
+        /// despawns the hull and never touches the card. The lot appeared on the second open.
+        ///
+        /// <para>The open is raised as the event rather than driven through the real interface: the
+        /// fixture's console is hand-built and carries no interface data, and the handler is what
+        /// the defect lives in. <c>SetUiState</c> no-ops on a console with no interface for the key,
+        /// so the cache the tab is built from is what this reads.</para>
+        /// </summary>
+        [Test]
+        public async Task TheImpoundLotIsOnTheTabTheFirstTimeTheConsoleOpens()
+        {
+            await using var pair = await PoolManager.GetServerClient(new PoolSettings { Connected = true });
+            using var clientUiKeyLog = ExpectClientUiKeyLog(pair);
+            var server = pair.Server;
+            var entMan = server.EntMan;
+
+            var playerMan = server.ResolveDependency<IPlayerManager>();
+            var drydock = server.System<DrydockSystem>();
+
+            var session = playerMan.Sessions.First();
+            var me = session.UserId.UserId;
+            var admin = Guid.NewGuid();
+            var (station, stationGrid, ship, console, consoleComp, card, operatorEnt) = await BuildConsoleAndShip(pair, session.UserId);
+
+            // A forced store files a revision whose actor is the impounding admin, and
+            // drydock_revision.actor_user_id is a foreign key to the player table. An admin with no
+            // player row fails that INSERT rather than any assertion here, which is scaffolding
+            // rather than a fork problem: a real admin has connected. The berthed impound at the
+            // test above needs none of this, because it writes an audit row and no revision.
+            await DrydockStoreTest.InsertPlayer(server.ResolveDependency<IServerDbManager>(), admin);
+
+            // The open handler needs an account to price the deed against, and a key to publish on.
+            // The key goes on before the component does: its ComponentStartup logs an error on a
+            // null key, and the pool counts that as a failure.
+            await server.WaitPost(() =>
+            {
+                entMan.EnsureComponent<BankAccountComponent>(operatorEnt);
+                entMan.AddComponent(console, new Content.Shared.UserInterface.ActivatableUIComponent
+                {
+                    Key = ShipyardConsoleUiKey.Shipyard,
+                });
+            });
+
+            // An admin takes the live hull. No console is involved, so nothing cleans up the card.
+            var (result, shipId) = await RunOnServer(pair, () => drydock.TryImpoundShip(
+                ship, me, null, new DrydockImpound(50, "left in a traffic lane", Redeemable: true, ActorUserId: admin), inline: true));
+            Assert.Multiple(() =>
+            {
+                Assert.That(result, Is.EqualTo(DrydockStoreResult.Success));
+                Assert.That(shipId, Is.Not.Null);
+            });
+            await pair.RunTicksSync(5);
+
+            await server.WaitAssertion(() =>
+            {
+                Assert.Multiple(() =>
+                {
+                    // The two controls this test turns on. Without the dangling deed the handler
+                    // never reaches its early return, and a cache that is already filled would pass
+                    // whatever the handler did.
+                    Assert.That(entMan.TryGetComponent<ShuttleDeedComponent>(card, out var dangling), Is.True,
+                        "Control: the impound left the deed on the card.");
+                    Assert.That(dangling!.ShuttleUid, Is.Not.Null);
+                    Assert.That(entMan.EntityExists(dangling.ShuttleUid!.Value), Is.False,
+                        "Control: and it points at a ship that no longer exists.");
+                    Assert.That(consoleComp.CachedImpounded, Is.Empty,
+                        "Control: nothing has read the tab yet, so the lot is not in the cache.");
+                });
+            });
+
+            // The open itself.
+            await server.WaitPost(() => entMan.EventBus.RaiseLocalEvent(
+                console, new BoundUIOpenedEvent(ShipyardConsoleUiKey.Shipyard, console, operatorEnt)));
+
+            var listed = false;
+            var deadline = System.Diagnostics.Stopwatch.StartNew();
+            while (!listed && deadline.Elapsed < TimeSpan.FromSeconds(30))
+            {
+                await pair.RunTicksSync(5);
+                await server.WaitPost(() => listed = consoleComp.CachedImpounded.Any(i => i.ShipId == shipId));
+            }
+
+            Assert.That(listed, Is.True,
+                "The first open published the impound lot, rather than returning once the dangling deed was stripped.");
+            await server.WaitAssertion(() =>
+                Assert.That(entMan.HasComponent<ShuttleDeedComponent>(card), Is.False,
+                    "And upstream's cleanup still took the dead deed off the card."));
+
+            await pair.CleanReturnAsync();
+        }
+
         /// <summary>A revision request with only what the impound tests read back: the name, the class, and an appraisal.</summary>
         private static DrydockRevisionRequest Revision(Guid shipId, Guid owner, string name, int appraisal, int? berthId = null) => new()
         {
@@ -1017,6 +1111,21 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
         /// its full sensitivity throughout.
         /// </summary>
         private static IDisposable ExpectDockJointLog(TestPair pair)
+        {
+            var level = pair.ClientLogHandler.FailureLevel;
+            pair.ClientLogHandler.FailureLevel = LogLevel.Fatal;
+            return new RestoreScope(() => pair.ClientLogHandler.FailureLevel = level);
+        }
+
+        /// <summary>
+        /// This fixture's console is hand-built, so an <c>ActivatableUI</c> added to it at runtime
+        /// replicates to the client without the key it was given here: the client's copy starts on a
+        /// null key and its startup logs an error. A console spawned from a prototype reads the key
+        /// from the prototype on both sides and never does this, so it is harness noise rather than a
+        /// fork defect, and the client's failure level is raised for the test the way the dock-joint
+        /// log does it. The server keeps its full sensitivity, which is where the drydock lives.
+        /// </summary>
+        private static IDisposable ExpectClientUiKeyLog(TestPair pair)
         {
             var level = pair.ClientLogHandler.FailureLevel;
             pair.ClientLogHandler.FailureLevel = LogLevel.Fatal;
