@@ -23,6 +23,7 @@ using Content.Server.Shuttles.Components;
 using Content.Server.Shuttles.Systems;
 using Content.Server.Wires;
 using Content.Shared._Mono.ShipRepair;
+using Content.Shared._Mono.Ships.Components;
 using Content.Shared._NF.Shipyard.Components;
 using Content.Shared._NF.Shipyard.Prototypes;
 using Content.Shared._Shitmed.Autodoc.Components;
@@ -440,10 +441,14 @@ public sealed partial class DrydockSystem
 
                     // The dock a purchase of this hull would pick: the vessel's priority tag steers
                     // the choice toward the shipyard's own docks. Without it a retrieve took whatever
-                    // dock was free first ("my ship spawned on the other side of Venmar").
+                    // dock was free first ("my ship spawned on the other side of Venmar"). Resolved
+                    // the same way the station is, so an imported hull docks where its class does.
                     string? dockTag = null;
-                    if (stored.Ship.VesselProto is { } vesselId && _protoMan.TryIndex<VesselPrototype>(vesselId, out var vesselProto))
+                    if (ResolveVesselProto(grid, stored.Ship) is { } vesselId
+                        && _protoMan.TryIndex<VesselPrototype>(vesselId, out var vesselProto))
+                    {
                         dockTag = vesselProto.PriorityDockTag;
+                    }
 
                     if (!_shuttle.TryFTLDock(grid, shuttle, dockTarget, priorityTag: dockTag))
                         Log.Warning($"Drydock: {ctx.ShipId} found no docking config at {ToPrettyString(ctx.StationUid)}; presented by proximity.");
@@ -1201,16 +1206,38 @@ public sealed partial class DrydockSystem
     };
 
     /// <summary>
+    /// The vessel this hull came from, row first and grid second. The row is filled in by the store
+    /// from the ship's own station, which a legacy import never had one of; the grid's
+    /// <c>VesselComponent</c> is written by the purchase, is not on the ship-save exporter's strip
+    /// list and is not stripped at store either, so it rides both kinds of document. A hull that was
+    /// never bought - a mapped one, or a save old enough to predate the component - carries neither,
+    /// and that is what the plain station is for.
+    ///
+    /// <para>The row is not healed here. The next store of this hull reads the recreated station's
+    /// vessel information, or failing that this same component, and files it.</para>
+    /// </summary>
+    private string? ResolveVesselProto(EntityUid grid, DrydockShip record)
+    {
+        if (!string.IsNullOrEmpty(record.VesselProto))
+            return record.VesselProto;
+
+        if (TryComp<VesselComponent>(grid, out var vessel) && !string.IsNullOrEmpty(vessel.VesselId.Id))
+            return vessel.VesselId.Id;
+
+        return null;
+    }
+
+    /// <summary>
     /// The station a ship comes back as. It is recreated rather than restored because a station is
     /// round-scoped, and the ship's own name is passed through so a player's rename survives rather
     /// than being replaced by the prototype's name generator.
     ///
-    /// <para>A row whose vessel prototype is missing still gets a station, just a plain one. Coming
-    /// back stationless is not a safe answer: without <c>StationMemberComponent</c> a ship draws
-    /// yellow on radar instead of white and is invisible to station records, expeditions and
-    /// everything else keyed on stations. Legacy imports are the population that hits this, because
-    /// the vessel id lived on the station entity and a save only ever carried the grid, so there is
-    /// nothing in the document to recover it from and no amount of re-saving will conjure one.</para>
+    /// <para>A hull with no recoverable vessel still gets a station, just a plain one. Coming back
+    /// stationless is not a safe answer: without <c>StationMemberComponent</c> a ship is invisible
+    /// to station records, expeditions, late-join spawning and everything else keyed on stations.
+    /// Legacy imports are the population that lands here, because the store reads the vessel id off
+    /// the ship's own station and an import is staged into the console's;
+    /// <see cref="ResolveVesselProto"/> is what recovers it from the grid instead.</para>
     /// </summary>
     private void RecreateStation(EntityUid grid, DrydockShip record)
     {
@@ -1221,19 +1248,21 @@ public sealed partial class DrydockSystem
         // Stamped before the vessel check: a stationless retrieve must not be varied later either.
         EnsureComp<StationVariationHasRunComponent>(grid);
 
+        var vesselProto = ResolveVesselProto(grid, record);
+
         StationConfig stationConfig;
         bool known;
 
-        if (!string.IsNullOrEmpty(record.VesselProto)
-            && _protoMan.TryIndex<GameMapPrototype>(record.VesselProto, out var stationProto)
-            && stationProto.Stations.TryGetValue(record.VesselProto, out var vesselConfig))
+        if (!string.IsNullOrEmpty(vesselProto)
+            && _protoMan.TryIndex<GameMapPrototype>(vesselProto, out var stationProto)
+            && stationProto.Stations.TryGetValue(vesselProto, out var vesselConfig))
         {
             stationConfig = vesselConfig;
             known = true;
         }
         else
         {
-            Log.Info($"Drydock: {record.ShipGuid} has no vessel prototype ('{record.VesselProto}'); giving it a plain station.");
+            Log.Info($"Drydock: {record.ShipGuid} has no vessel prototype ('{vesselProto}'); giving it a plain station.");
             stationConfig = GenericVesselStation;
             known = false;
         }
@@ -1242,9 +1271,9 @@ public sealed partial class DrydockSystem
 
         // Only a ship that came from a vessel can claim to be one. A generic station keeps the
         // component the prototype gives it, with no vessel named, rather than being labelled as a
-        // hull it is not.
+        // hull it is not. Naming it is also what lets the next store file the id back onto the row.
         if (known)
-            EnsureComp<ExtraShuttleInformationComponent>(station).Vessel = record.VesselProto;
+            EnsureComp<ExtraShuttleInformationComponent>(station).Vessel = vesselProto;
     }
 
     private static byte[] DecompressZstd(byte[] input)

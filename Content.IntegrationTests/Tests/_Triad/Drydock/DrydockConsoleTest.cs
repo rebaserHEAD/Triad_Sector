@@ -9,26 +9,34 @@ using Content.IntegrationTests.Pair;
 using Content.Server._NF.Bank;
 using Content.Server._NF.Shipyard.Components;
 using Content.Server._NF.Shipyard.Systems;
+using Content.Server._NF.SectorServices;
+using Content.Server._NF.ShuttleRecords;
+using Content.Server._NF.Station.Components;
 using Content.Server._Triad.Drydock;
 using Content.Server.Database;
 using Content.Shared._NF.Bank.Components;
+using Content.Server.Maps;
 using Content.Server.Station.Components;
 using Content.Server.Station.Systems;
 using Content.Server.Shuttles.Components;
 using Content.Server.Shuttles.Systems;
+using Content.Shared._Mono.Ships.Components;
 using Content.Shared._NF.Shipyard;
 using Content.Shared._NF.Shipyard.Components;
+using Content.Shared._NF.Shipyard.Prototypes;
 using Content.Shared._Triad.CCVar;
 using Content.Shared._Triad.Shipyard.Save;
 using Content.Shared._Triad.ShipSize;
 using Content.Shared.Containers.ItemSlots;
 using Content.Shared.Shuttles.Components;
+using Content.Shared.Station.Components;
 using Robust.Server.Player;
 using Robust.Shared.Configuration;
 using Robust.Shared.GameObjects;
 using Robust.Shared.Log;
 using Robust.Shared.Map;
 using Robust.Shared.Maths;
+using Robust.Shared.Prototypes;
 
 namespace Content.IntegrationTests.Tests._Triad.Drydock
 {
@@ -174,6 +182,161 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                 Assert.That(retrievedLock, Is.Not.Null, "The locked helm has to come back with the ship.");
                 Assert.That(retrievedLock!.ShuttleId, Is.EqualTo(retrieved.Value.ToString()),
                     "A console lock holds the ship's uid as a string; retrieve has to re-key it to the reborn grid or the deed never opens it.");
+            });
+
+            await pair.CleanReturnAsync();
+        }
+
+        /// <summary>
+        /// The imported-hull shape: a document that brings no grid-side deed. The ship-save exporter
+        /// strips <c>ShuttleDeed</c> from everything it writes, so every legacy import reaches the
+        /// drydock deed-less, and the record filing reads the grid deed to build its row. Until
+        /// retrieve minted both halves an imported hull filed no shuttle record at all, so the
+        /// records console showed no trace of a ship that was flying.
+        /// </summary>
+        [Test]
+        public async Task AnImportedHullComesBackWithAGridDeedAndARecord()
+        {
+            await using var pair = await PoolManager.GetServerClient(new PoolSettings { Connected = true });
+            using var _ = ExpectDockJointLog(pair);
+            var server = pair.Server;
+            var entMan = server.EntMan;
+
+            var playerMan = server.ResolveDependency<IPlayerManager>();
+            var shipyard = server.System<ShipyardSystem>();
+            var records = server.System<ShuttleRecordsSystem>();
+
+            var session = playerMan.Sessions.First();
+            var (_, _, ship, console, consoleComp, _, operatorEnt) = await BuildConsoleAndShip(pair, session.UserId);
+
+            // The import shape, made by hand: the grid-side deed comes off the way the exporter's
+            // strip list takes it. The card deed stays, because the console resolves the ship to
+            // store from it and an import's own first store is reached through the import path.
+            await server.WaitPost(() => entMan.RemoveComponent<ShuttleDeedComponent>(ship));
+
+            await server.WaitAssertion(() =>
+            {
+                Assert.That(entMan.HasComponent<ShuttleDeedComponent>(ship), Is.False,
+                    "The control: with a grid deed still on the hull, a deed after the retrieve proves nothing.");
+                Assert.That(records.TryGetRecord(entMan.GetNetEntity(ship), out var existing), Is.False,
+                    $"Nothing has filed this hull yet, so a record found here ('{existing?.Name}') would belong to another test.");
+            });
+
+            var stored = await RunOnServer(pair,
+                () => shipyard.TryDrydockStore(console, consoleComp, operatorEnt, ShipyardConsoleUiKey.Shipyard));
+
+            Assert.That(stored, Is.Not.Null, "A store of the operator's own ship must reach the pipeline.");
+            Assert.That(stored!.Value.Result, Is.EqualTo(DrydockStoreResult.Success));
+
+            await pair.RunTicksSync(5);
+
+            var retrieved = await RunOnServer(pair,
+                () => shipyard.TryDrydockRetrieve(console, consoleComp, operatorEnt, stored.Value.ShipId!.Value, ShipyardConsoleUiKey.Shipyard));
+
+            Assert.That(retrieved, Is.Not.Null, "A hull with no grid deed still belongs to the account that filed it.");
+
+            await pair.RunTicksSync(5);
+
+            await server.WaitAssertion(() =>
+            {
+                var grid = retrieved!.Value;
+
+                Assert.That(entMan.TryGetComponent<ShuttleDeedComponent>(grid, out var gridDeed), Is.True,
+                    "A hull whose document carried no deed has to be minted one, or it files no record and takes no name stamp.");
+                Assert.That(gridDeed!.ShuttleUid, Is.EqualTo(grid), "The minted grid deed has to name its own hull.");
+                Assert.That(gridDeed.LoadedFromSave, Is.False,
+                    "That flag bars a sale at every shipyard console, and a retrieved hull sells like a purchased one.");
+
+                Assert.That(records.TryGetRecord(entMan.GetNetEntity(grid), out var record), Is.True,
+                    "The records console reads this list and nothing else, so an unfiled hull is invisible on it.");
+                Assert.That(record!.Name, Is.EqualTo("Kestrel"),
+                    "The record carries the row's name, which is the name standing on the hull.");
+            });
+
+            await pair.CleanReturnAsync();
+        }
+
+        /// <summary>
+        /// Vessel identity, recovered from the grid when the row has none. The store reads the id off
+        /// the ship's own station, and a legacy import is staged into the <em>console's</em> station,
+        /// which carries no vessel information - so an imported hull filed with no vessel and came
+        /// back on a plain station every time, without its class's job slots or priority dock tag.
+        /// The grid's own <c>VesselComponent</c> is written by the purchase and is stripped by
+        /// neither the exporter nor the store, which is what makes it recoverable at all.
+        ///
+        /// <para>The fixture ship is a station member of nothing, which is the half of the import
+        /// shape that matters here: the station branch of the read has nothing to answer with.</para>
+        /// </summary>
+        [Test]
+        public async Task AVesselIdOnTheGridIsRecoveredWhenTheRowHasNone()
+        {
+            await using var pair = await PoolManager.GetServerClient(new PoolSettings { Connected = true });
+            using var _ = ExpectDockJointLog(pair);
+            var server = pair.Server;
+            var entMan = server.EntMan;
+
+            var playerMan = server.ResolveDependency<IPlayerManager>();
+            var protoMan = server.ResolveDependency<IPrototypeManager>();
+            var drydockStore = server.ResolveDependency<DrydockStore>();
+            var shipyard = server.System<ShipyardSystem>();
+            var stationSys = server.System<StationSystem>();
+
+            var session = playerMan.Sessions.First();
+            var (_, _, ship, console, consoleComp, _, operatorEnt) = await BuildConsoleAndShip(pair, session.UserId);
+
+            // Read out of live data rather than named here: the recovery is only worth anything for a
+            // vessel whose gameMap declares a station under its own id, which is the exact shape
+            // RecreateStation asks for, and a hardcoded id rots the day that vessel is renamed.
+            var vesselId = string.Empty;
+            await server.WaitAssertion(() =>
+            {
+                vesselId = protoMan.EnumeratePrototypes<GameMapPrototype>()
+                    .Where(m => m.Stations.ContainsKey(m.ID) && protoMan.HasIndex<VesselPrototype>(m.ID))
+                    .OrderBy(m => m.ID)
+                    .Select(m => m.ID)
+                    .FirstOrDefault() ?? string.Empty;
+
+                Assert.That(vesselId, Is.Not.Empty,
+                    "No vessel declares a station under its own id, so there is no vessel station to recover.");
+            });
+
+            await server.WaitPost(() => entMan.EnsureComponent<VesselComponent>(ship).VesselId = vesselId);
+
+            await server.WaitAssertion(() =>
+                Assert.That(entMan.HasComponent<StationMemberComponent>(ship), Is.False,
+                    "The control: a ship that is already a station member would be answered by the station branch."));
+
+            var stored = await RunOnServer(pair,
+                () => shipyard.TryDrydockStore(console, consoleComp, operatorEnt, ShipyardConsoleUiKey.Shipyard));
+
+            Assert.That(stored, Is.Not.Null);
+            Assert.That(stored!.Value.Result, Is.EqualTo(DrydockStoreResult.Success));
+
+            await pair.RunTicksSync(5);
+
+            var rows = await RunOnServer(pair, () => drydockStore.GetShipsByOwner(session.UserId.UserId));
+            var filed = rows.SingleOrDefault(r => r.ShipGuid == stored.Value.ShipId!.Value);
+
+            Assert.That(filed, Is.Not.Null);
+            Assert.That(filed!.VesselProto, Is.EqualTo(vesselId),
+                "With no station to read, the store has to take the vessel id off the grid or the row is filed blank forever.");
+
+            var retrieved = await RunOnServer(pair,
+                () => shipyard.TryDrydockRetrieve(console, consoleComp, operatorEnt, stored.Value.ShipId!.Value, ShipyardConsoleUiKey.Shipyard));
+
+            Assert.That(retrieved, Is.Not.Null);
+
+            await pair.RunTicksSync(5);
+
+            await server.WaitAssertion(() =>
+            {
+                var shipStation = stationSys.GetOwningStation(retrieved!.Value);
+                Assert.That(shipStation, Is.Not.Null, "A retrieved ship is its own station, whether or not its vessel is known.");
+
+                Assert.That(entMan.TryGetComponent<ExtraShuttleInformationComponent>(shipStation!.Value, out var info), Is.True,
+                    "The vessel's own station config carries this; the plain fallback station names no vessel.");
+                Assert.That(info!.Vessel?.Id, Is.EqualTo(vesselId),
+                    "A hull that came back on its vessel's station has to be labelled as that vessel, which is what the late-join tab reads.");
             });
 
             await pair.CleanReturnAsync();
@@ -1307,6 +1470,14 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
 
                 station = entMan.Spawn();
                 entMan.AddComponent<StationDataComponent>(station);
+
+                // What BaseStation carries in the prototypes, and the console epilogue needs it: the
+                // sector service entity is spawned by this component's init, and the shuttle record
+                // filed on every retrieve is EnsureComp'd onto that entity. Without it the filing
+                // throws "Entity 0 is not valid" partway through the epilogue, taking the steps after
+                // it down with it. A round would have built this; a pooled pair never starts one.
+                entMan.AddComponent<StationSectorServiceHostComponent>(station);
+
                 stationSys.AddGridToStation(station, map.Grid.Owner);
 
                 var shipGrid = mapSys.CreateGridEntity(map.MapId);
@@ -1345,7 +1516,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                 comp = entMan.EnsureComponent<ShipyardConsoleComponent>(console);
 
                 card = entMan.SpawnEntity(null, new MapCoordinates(new Vector2(64f, 64f), map.MapId));
-                shipyard.MintCardDeed(card, ship, operatorEnt);
+                shipyard.MintDeeds(card, ship, operatorEnt);
                 itemSlots.TryInsert(console, comp.TargetIdSlot, card, user: null);
             });
 

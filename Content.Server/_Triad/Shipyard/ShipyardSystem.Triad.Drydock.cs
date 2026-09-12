@@ -1098,7 +1098,7 @@ public sealed partial class ShipyardSystem
         if (TerminatingOrDeleted(targetId) || TerminatingOrDeleted(player))
             return grid;
 
-        MintCardDeed(targetId, grid, player);
+        MintDeeds(targetId, grid, player);
         AddNewShuttleDeedAccessLevels(targetId, component);
         AddCompanyInformation(targetId, grid);
         AddRetrievedShuttleRecord(component, grid, player);
@@ -2048,11 +2048,18 @@ public sealed partial class ShipyardSystem
     }
 
     /// <summary>
-    /// Mints a fresh card-side deed for a retrieved ship, mirroring the deed-assign block of the
-    /// purchase path. The card the ship was stored with is generally gone by now - it was stripped
-    /// at store, and rounds end - so retrieve always mints rather than looking for the old one.
+    /// Mints the deeds a retrieved ship needs, mirroring the deed-assign block of the purchase
+    /// path, which deeds the card and the grid both. The card the ship was stored with is generally
+    /// gone by now - it was stripped at store, and rounds end - so retrieve always mints rather than
+    /// looking for the old one.
+    ///
+    /// <para>The grid-side deed normally rides the document. A legacy import brings none, because
+    /// the ship-save exporter strips <c>ShuttleDeed</c> from everything it writes, and a hull with
+    /// no grid deed files no shuttle record and takes no name stamp. So the grid half is minted when
+    /// the document did not bring one, and left alone when it did: an existing deed carries the
+    /// owner the hull was bought under, which is not this retrieve's to rewrite.</para>
     /// </summary>
-    internal void MintCardDeed(EntityUid targetId, EntityUid shuttleUid, EntityUid player)
+    internal void MintDeeds(EntityUid targetId, EntityUid shuttleUid, EntityUid player)
     {
         TryComp<ShuttleDeedComponent>(shuttleUid, out var gridDeed);
         var name = gridDeed != null ? GetFullName(gridDeed) : Name(shuttleUid);
@@ -2062,10 +2069,19 @@ public sealed partial class ShipyardSystem
         AssignShuttleDeedProperties(deed, shuttleUid, name, owner, purchasedWithVoucher: false);
         deed.DeedHolder = targetId;
 
+        if (gridDeed == null)
+        {
+            // The name is the row's, already stamped onto the grid by the retrieve. Not
+            // loadedFromSave, deliberately: that flag bars a sale at any shipyard console, and a
+            // retrieved hull is meant to sell like a purchased one whichever way it got here.
+            gridDeed = EnsureComp<ShuttleDeedComponent>(shuttleUid);
+            AssignShuttleDeedProperties(gridDeed, shuttleUid, name, owner, purchasedWithVoucher: false);
+        }
+
         // The grid-side deed tracks which card currently holds it; retrieve's rebind left that
         // blank because the card it pointed at did not survive the store.
-        if (gridDeed != null)
-            gridDeed.DeedHolder = targetId;
+        gridDeed.DeedHolder = targetId;
+        Dirty(shuttleUid, gridDeed);
     }
 
     /// <summary>

@@ -16,6 +16,7 @@ using Content.Server.Shuttles.Systems;
 using Content.Server.Station.Components;
 using Content.Server.Station.Systems;
 using Content.Shared._Mono.ShipRepair.Components;
+using Content.Shared._Mono.Ships.Components;
 using Content.Shared._Mono.Shipyard; // Triad
 using Content.Shared._NF.Shipyard.Prototypes;
 using Content.Shared._Triad.CCVar;
@@ -339,22 +340,31 @@ public sealed partial class DrydockSystem : EntitySystem
 
             var shipName = Comp<MetaDataComponent>(gridUid).EntityName;
 
-            // The grid does not know its own vessel prototype; its station's latejoin information
-            // does. Read at the top of the freeze block for two reasons: the strip further down cuts
-            // station membership off the grid, and the unwind needs the vessel's priority dock tag to
-            // hand a refused ship back at the same kind of berth a purchase of it would have picked.
-            // Reparenting does not touch station membership - the station system subscribes to no
-            // parent change - so this reads the same either side of the freeze.
+            // Two sources, both written by a purchase, and the station is asked first because a
+            // vessel's own station config is what fills it in. The grid's VesselComponent is the
+            // fallback, and it is the only one a legacy import has: that path stages the hull into
+            // the CONSOLE's station, which carries no vessel information at all, so a station-only
+            // read filed every imported hull with no vessel and retrieve handed it a plain station
+            // forever after. Read at the top of the freeze block for two reasons: the strip further
+            // down cuts station membership off the grid, and the unwind needs the vessel's priority
+            // dock tag to hand a refused ship back at the same kind of berth a purchase of it would
+            // have picked. Reparenting does not touch station membership - the station system
+            // subscribes to no parent change - so this reads the same either side of the freeze.
             string? vesselProto = null;
             if (TryComp<StationMemberComponent>(gridUid, out var stationMember)
                 && TryComp<ExtraShuttleInformationComponent>(stationMember.Station, out var vesselInfo)
                 && vesselInfo.Vessel is { } vessel)
             {
                 vesselProto = vessel.Id;
-
-                if (_protoMan.TryIndex<VesselPrototype>(vessel.Id, out var vesselPrototype))
-                    ctx.ReturnDockTag = vesselPrototype.PriorityDockTag;
             }
+            else if (TryComp<VesselComponent>(gridUid, out var vesselComp)
+                     && !string.IsNullOrEmpty(vesselComp.VesselId.Id))
+            {
+                vesselProto = vesselComp.VesselId.Id;
+            }
+
+            if (vesselProto != null && _protoMan.TryIndex<VesselPrototype>(vesselProto, out var vesselPrototype))
+                ctx.ReturnDockTag = vesselPrototype.PriorityDockTag;
 
             // The departure. An observer sees what a real jump shows them, because a real jump's
             // vanish is itself a map reparent: the startup sound, then gone. Deliberately not the
