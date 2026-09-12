@@ -282,10 +282,10 @@ public sealed partial class ShipyardSystem
         var berthId = await _drydockStore.AddBerth(
             operatorAccount, sizeClass, DrydockBerthKind.Granted, 0, operatorAccount, DrydockRoundId);
 
-        // A loaded file's permits name nobody: the owner fields are session-local and never written,
-        // so the store's purge would take every one of them. The old load path re-stamped them to
-        // whoever loaded the file, alerting admins when the logged name differs, and this is that
-        // same call; the store then keeps exactly those, as the importer's own.
+        // A loaded file's permits have no live owner: the owner uid and mind are session-local and
+        // never written, so the store's purge would take every one of them. This claims the ones
+        // issued to the importer's character and seizes the rest, since a permit follows its person
+        // and never a ship file somebody else saved; the store then keeps exactly those.
         _contrabandPermit.InitializePermitItemsOnGrid(grid, player);
         EntityUid? permitHolderMind = _mind.TryGetMind(player, out var importerMind, out _) ? importerMind : null;
 

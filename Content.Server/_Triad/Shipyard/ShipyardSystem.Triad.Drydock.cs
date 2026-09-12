@@ -961,7 +961,7 @@ public sealed partial class ShipyardSystem
 
         // The operator's own permits are the only ones that go with the ship, the ship-save path's
         // ClearPermitItemsOnGrid rule: anyone else's permitted kit left aboard is purged at store
-        // rather than re-stamped to this captain on the next retrieve.
+        // rather than filed into the document with the hull.
         EntityUid? permitHolderMind = _mind.TryGetMind(player, out var operatorMind, out _) ? operatorMind : null;
 
         (DrydockStoreResult Result, Guid? ShipId) result;
@@ -1112,7 +1112,7 @@ public sealed partial class ShipyardSystem
         // The rest of what a purchase and a ship load do for their captain, in their order (the
         // list is the ship-load path's, walked with its author): a station record on
         // the ship's own station, ship access on every door and locker, the grid-split lifecycle
-        // marker, the permit items re-stamped to whoever is retrieving, the direction message,
+        // marker, the permits claimed by whoever is retrieving and anyone else's seized, the direction message,
         // and the shipyard channel hearing about it. Ownership is the drydock's own step, since
         // the row, not the card, says who owns a retrieved ship. Console locks are the drydock's
         // too, because they hold the grid uid, which only the retrieve knows.

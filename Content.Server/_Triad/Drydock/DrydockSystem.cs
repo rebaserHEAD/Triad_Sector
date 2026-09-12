@@ -1279,11 +1279,11 @@ public sealed partial class DrydockSystem : EntitySystem
     /// list: the component is what the content marks. And any permitted item goes whose permit does
     /// not travel with whoever the ship is being put away for (<c>ClearPermitItemsOnGrid</c>, judged
     /// by <see cref="ContrabandPermitSystem.PermitTravelsWith"/>), whether or not it is marked, since
-    /// the retrieve re-stamps every permit left aboard to whoever takes the ship out and a permit is
-    /// not the ship's to hand on. Immediate deletes, not queued: the serializer walks the tree many
-    /// ticks later now, and a queued deletion would be honoured well before then, but a merely queued
-    /// entity is still a real grid child in the meantime and every walk between here and the save -
-    /// the sidecars, the capture, the manifest - would count and touch it.
+    /// a permit follows its person and is not the ship's to carry. Immediate deletes, not queued: the
+    /// serializer walks the tree many ticks later now, and a queued deletion would be honoured well
+    /// before then, but a merely queued entity is still a real grid child in the meantime and every
+    /// walk between here and the save - the sidecars, the capture, the manifest - would count and
+    /// touch it.
     ///
     /// <para>Deliberately absolute, with no exemption for anchored entities. Anchoring is a state a
     /// player can create with a wrench, so exempting it would let anyone bolt restricted kit to a

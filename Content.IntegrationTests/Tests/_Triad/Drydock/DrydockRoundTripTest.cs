@@ -13,6 +13,7 @@ using Content.IntegrationTests.Pair;
 using Content.Server._Funkystation.Atmos.Components;
 using Content.Server._Mono.FireControl;
 using Content.Server._NF.Shipyard.Systems;
+using Content.Server._Triad.ContrabandPermit;
 using Content.Server._Triad.Drydock;
 using Content.Server._NF.Market.Components;
 using Content.Server.Atmos.Piping.Binary.Components;
@@ -2054,6 +2055,97 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                 Assert.That(marked, Is.EqualTo(1), "The holder's own permitted contraband came back.");
                 Assert.That(unmarked, Is.Zero,
                     "The other character's permit was on an unmarked item, so only the permit rule could have taken it, and it did.");
+            });
+
+            await pair.CleanReturnAsync();
+        }
+
+        /// <summary>
+        /// Permits follow the person, never the ship. When a ship arrives in someone's hands, by a
+        /// retrieve or an import, a permit aboard is claimed only if it was issued to the character
+        /// taking it, and anything else is seized with its item, so a transfer, a sale or a shared ship
+        /// file cannot hand a permit on. Five permits cover the edges: the holder's own; one issued
+        /// before the account was saved, recognised by name; another character's; a same-named
+        /// character on another account; and the holder's own inside a container, which a lookup over
+        /// the grid's bounds could walk past and leave unclaimed for the next store to purge.
+        /// </summary>
+        [Test]
+        public async Task APermitIsClaimedOnlyByTheCharacterItWasIssuedTo()
+        {
+            await using var pair = await PoolManager.GetServerClient();
+            var server = pair.Server;
+            var entMan = server.EntMan;
+
+            var minds = server.System<MindSystem>();
+            var permits = server.System<ContrabandPermitSystem>();
+            var containers = server.System<SharedContainerSystem>();
+
+            var (_, shipGrid, _) = await BuildShipAndStation(pair);
+
+            var aliceAccount = new NetUserId(Guid.NewGuid());
+            EntityUid retriever = default, aliceMind = default;
+            EntityUid held = default, legacy = default, otherCharacter = default, otherAccount = default, contained = default;
+
+            await server.WaitPost(() =>
+            {
+                retriever = entMan.SpawnEntity(null, MapCoordinates.Nullspace);
+                var mind = minds.CreateMind(null, "Alice");
+#pragma warning disable RA0002
+                mind.Comp.OriginalOwnerUserId = aliceAccount;
+#pragma warning restore RA0002
+                minds.TransferTo(mind, retriever);
+                aliceMind = mind.Owner;
+
+                EntityUid Issued(Vector2 at, string name, NetUserId? account)
+                {
+                    var item = entMan.SpawnEntity(MarketItemProtoId, new EntityCoordinates(shipGrid, at));
+                    var permit = entMan.EnsureComponent<ContrabandPermitItemComponent>(item);
+                    permit.PermitOwnerName = name;
+                    permit.PermitOwnerAccount = account;
+                    return item;
+                }
+
+                held = Issued(new Vector2(0.5f, 0.5f), "Alice", aliceAccount);
+                legacy = Issued(new Vector2(1.5f, 0.5f), "Alice", null);
+                otherCharacter = Issued(new Vector2(2.5f, 0.5f), "Bob", null);
+                otherAccount = Issued(new Vector2(0.5f, 1.5f), "Alice", new NetUserId(Guid.NewGuid()));
+
+                var box = entMan.SpawnEntity(MarketItemProtoId, new EntityCoordinates(shipGrid, new Vector2(1.5f, 1.5f)));
+                contained = Issued(new Vector2(1.5f, 1.5f), "Alice", aliceAccount);
+                containers.Insert(contained, containers.EnsureContainer<Container>(box, "permit-test"));
+            });
+
+            await pair.RunTicksSync(5);
+
+            await server.WaitAssertion(() =>
+            {
+                Assert.That(containers.IsEntityInContainer(contained), Is.True, "The control: the holder's second permit really is inside a container.");
+                Assert.That(entMan.GetComponent<TransformComponent>(contained).GridUid, Is.EqualTo(shipGrid),
+                    "The control: and still aboard the ship, just not loose on its deck.");
+            });
+
+            await server.WaitPost(() => permits.InitializePermitItemsOnGrid(shipGrid, retriever));
+            await pair.RunTicksSync(1);
+
+            await server.WaitAssertion(() =>
+            {
+                Assert.Multiple(() =>
+                {
+                    Assert.That(entMan.Deleted(otherCharacter), Is.True, "Another character's permit is seized with its item.");
+                    Assert.That(entMan.Deleted(otherAccount), Is.True, "A character with the same name on another account is someone else.");
+
+                    Assert.That(entMan.TryGetComponent<ContrabandPermitItemComponent>(held, out var heldPermit), Is.True, "The holder's own permit is claimed.");
+                    Assert.That(heldPermit?.PermitOwnerMind, Is.EqualTo(aliceMind), "Claimed means stamped with the holder's mind, which the next store judges by.");
+                    Assert.That(heldPermit?.PermitOwner, Is.EqualTo(retriever));
+
+                    Assert.That(entMan.TryGetComponent<ContrabandPermitItemComponent>(legacy, out var legacyPermit), Is.True,
+                        "A permit issued before the account was saved goes by the character's name.");
+                    Assert.That(legacyPermit?.PermitOwnerAccount, Is.EqualTo(aliceAccount), "And it picks the account up on the way, so it is judged by both from now on.");
+
+                    Assert.That(entMan.TryGetComponent<ContrabandPermitItemComponent>(contained, out var containedPermit), Is.True, "A permit inside a container is judged too.");
+                    Assert.That(containedPermit?.PermitOwnerMind, Is.EqualTo(aliceMind),
+                        "And claimed, or the next store would purge it from its own holder's ship for having no mind.");
+                });
             });
 
             await pair.CleanReturnAsync();
