@@ -2023,10 +2023,13 @@ public sealed partial class DrydockStore
                 else
                 {
                     // Past names live on the audit rows as snapshots, so a ship renamed to hide
-                    // is still found under the name the complaint was filed with.
+                    // is still found under the name the complaint was filed with. A character name
+                    // in any of the owner's slots finds the account, because an AHelp names the
+                    // character rather than the account.
                     var needle = search.ToLowerInvariant();
                     query = query.Where(s => s.ShipName.ToLower().Contains(needle)
                         || s.Owner.LastSeenUserName.ToLower().Contains(needle)
+                        || db.Profile.Any(p => p.Preference.UserId == s.OwnerUserId && p.CharacterName.ToLower().Contains(needle))
                         || db.DrydockAudit.Any(a => a.ShipGuid == s.ShipGuid && a.ShipName != null && a.ShipName.ToLower().Contains(needle)));
                 }
             }
@@ -2434,7 +2437,8 @@ public sealed record DrydockShipFilter(
     bool StrandedOnly,
     int? CurrentRoundId,
     // One box from the admin panel: a ship id or account id when it parses as one, else text
-    // matched against the owner's name, the ship's name, and every name the ship has had.
+    // matched against the owner's account name, any of the owner's character names, the ship's
+    // name, and every name the ship has had.
     string? Search = null);
 
 /// <summary>One hull with its history and timeline, newest first, and which revisions still have a document.</summary>

@@ -9,6 +9,8 @@ using System.Threading.Tasks;
 using Content.Server._Triad.Drydock;
 using Content.Server.Database;
 using Content.Shared._Triad.ShipSize;
+using Content.Shared.Preferences;
+using Robust.Shared.Network;
 
 namespace Content.IntegrationTests.Tests._Triad.Drydock
 {
@@ -301,6 +303,51 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             // The id boxes are the same box: a guid searches ship and owner, not text.
             var byId = await store.QueryShips(Search(ship.ToString()), 0, 50);
             Assert.That(byId.Rows.Select(s => s.ShipGuid), Is.EquivalentTo(new[] { ship }));
+
+            await pair.CleanReturnAsync();
+        }
+
+        /// <summary>
+        /// An AHelp names a character, not an account. Any of the owner's character names finds
+        /// every ship the account owns, and a name nobody wears finds nothing.
+        /// </summary>
+        [Test]
+        public async Task ACharacterNameFindsTheOwnersShips()
+        {
+            await using var pair = await PoolManager.GetServerClient();
+            var store = pair.Server.ResolveDependency<DrydockStore>();
+            var db = pair.Server.ResolveDependency<IServerDbManager>();
+
+            var owner = Guid.NewGuid();
+            var stranger = Guid.NewGuid();
+            await InsertPlayer(db, owner);
+            await InsertPlayer(db, stranger);
+            await store.AddBerth(owner, ShipSizeClass.Cutter, DrydockBerthKind.Granted, 0, null, null);
+            await store.AddBerth(stranger, ShipSizeClass.Cutter, DrydockBerthKind.Granted, 0, null, null);
+
+            // Pooled pairs share one database, so the needles carry a token no other test uses.
+            var token = Guid.NewGuid().ToString("N")[..8];
+            await db.InitPrefsAsync(new NetUserId(owner), new HumanoidCharacterProfile { Name = $"Mara Voss{token}" }, CancellationToken.None);
+            await db.SaveCharacterSlotAsync(new NetUserId(owner), new HumanoidCharacterProfile { Name = $"Ilse Varga{token}" }, 1);
+            await db.InitPrefsAsync(new NetUserId(stranger), new HumanoidCharacterProfile { Name = $"Tomas Reyes{token}" }, CancellationToken.None);
+
+            var ship = Guid.NewGuid();
+            var other = Guid.NewGuid();
+            await store.FileRevision(Request(ship, owner, "Kestrel"), Encoding.UTF8.GetBytes("doc"), keepBlobs: 3);
+            await store.FileRevision(Request(other, stranger, "Harrier"), Encoding.UTF8.GetBytes("doc"), keepBlobs: 3);
+
+            var bySelected = await store.QueryShips(Search($"voss{token}"), 0, 50);
+            var byAlt = await store.QueryShips(Search($"VARGA{token}"), 0, 50);
+            var byNobody = await store.QueryShips(Search($"Nomad{token}"), 0, 50);
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(bySelected.Rows.Select(s => s.ShipGuid), Is.EquivalentTo(new[] { ship }),
+                    "Part of a character name, any case, finds that account's ships and no one else's.");
+                Assert.That(byAlt.Rows.Select(s => s.ShipGuid), Is.EquivalentTo(new[] { ship }),
+                    "A character in another slot finds the same account.");
+                Assert.That(byNobody.Rows, Is.Empty, "Control: a name nobody wears matches nothing.");
+            });
 
             await pair.CleanReturnAsync();
         }

@@ -169,8 +169,9 @@ public sealed class DrydockAdminRequestPageMessage : EuiMessageBase
     public int PageSize { get; set; }
 
     /// <summary>
-    /// One box: a player name, a ship name including any name it used to have, a ship id, or
-    /// an account id. The server decides which it was.
+    /// One box: a character name from any of the owner's slots, an account name, a ship name
+    /// including any name it used to have (the callsign is part of it), a ship id, or an account
+    /// id. The server decides which it was.
     /// </summary>
     public string? Search { get; set; }
 
