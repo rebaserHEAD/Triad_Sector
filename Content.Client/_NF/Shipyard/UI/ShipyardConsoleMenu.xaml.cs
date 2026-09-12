@@ -48,6 +48,9 @@ public sealed partial class ShipyardConsoleMenu : FancyWindow
     public event Action<Guid, string>? OnSellStoredShip;
     public event Action<Guid, string>? OnRenameStoredShip;
     public event Action<Guid, int>? OnMoveStoredShip;
+    // The impound lot: reclaim names the berth to land in, abandon carries the typed name as sell does.
+    public event Action<Guid, int>? OnRedeemImpound;
+    public event Action<Guid, string>? OnAbandonShip;
 
     /// <summary>
     /// Triad: the viewing account, so the tab can tell the operator from everyone else looking.
@@ -96,6 +99,12 @@ public sealed partial class ShipyardConsoleMenu : FancyWindow
 
     /// <summary>The offers addressed to the viewer, as the last state listed them.</summary>
     private List<DrydockTransferOfferInfo> _lastOffers = new();
+
+    /// <summary>The operator's ships in the impound lot, as the last state listed them.</summary>
+    private List<DrydockImpoundedShipInfo> _lastImpounded = new();
+
+    /// <summary>The balance the last state carried, which is what greys Reclaim on a fee it cannot cover.</summary>
+    private int _lastBalance;
 
     /// <summary>How long an offer stands, for the sentence in the transfer prompt.</summary>
     private int _offerMinutes;
@@ -534,6 +543,8 @@ public sealed partial class ShipyardConsoleMenu : FancyWindow
         _lastCaptains = state.Captains;
         // Never an alert for one's own offer; the escrow row already says it.
         _lastOffers = state.TransferOffers.Where(o => LocalUserId == null || o.OfferedByUserId != LocalUserId).ToList();
+        _lastImpounded = state.ImpoundedShips;
+        _lastBalance = state.Balance;
         _offerMinutes = state.TransferOfferMinutes;
         _sinceState = 0f;
         _lastElapsed = -1;
@@ -543,6 +554,7 @@ public sealed partial class ShipyardConsoleMenu : FancyWindow
         // this console, which is what stops an unrelated refresh taking the indicator down and what
         // makes a console opened halfway through draw it at all.
         PopulateDeedShip(state.DeedShip, state.StoreProgressPercent);
+        PopulateImpounds();
         PopulateOffers();
         // A voucher in the slot reads as free listings; it is not a card a stored ship can be called
         // in on, and the server refuses the press, so the button is not drawn.
@@ -958,6 +970,171 @@ public sealed partial class ShipyardConsoleMenu : FancyWindow
         return Enum.TryParse<ShipSizeClass>(shipClass, out var ship)
             && Enum.TryParse<ShipSizeClass>(berthClass, out var berth)
             && berth >= ship;
+    }
+
+    /// <summary>
+    /// Triad: one card per ship of the operator's in the impound lot, to the Impound artboard: the
+    /// name, class and tag, the reason it was taken, what reclaiming it costs and against what, and
+    /// beside them a picker opening on the berth the server would choose, Reclaim, and Abandon…
+    /// behind a name-typed prompt. Reclaim greys on a fee the balance cannot cover and says why in
+    /// the small print. A locked card draws the reason, says an admin holds it, and offers neither,
+    /// to the ImpoundLocked artboard.
+    /// </summary>
+    private void PopulateImpounds()
+    {
+        Impounds.RemoveAllChildren();
+
+        foreach (var ship in _lastImpounded)
+        {
+            var panel = new PanelContainer
+            {
+                Margin = new Thickness(0, 0, 0, 10),
+                PanelOverride = new StyleBoxFlat
+                {
+                    BorderThickness = new Thickness(2),
+                    BorderColor = ship.Redeemable ? DrydockText.ImpoundBorder : DrydockText.ImpoundLockedBorder,
+                    BackgroundColor = DrydockText.ImpoundFill,
+                },
+            };
+            var line = new BoxContainer { Orientation = BoxContainer.LayoutOrientation.Horizontal, Margin = new Thickness(10, 6), VerticalAlignment = VAlignment.Center };
+            panel.AddChild(line);
+
+            var text = new BoxContainer { Orientation = BoxContainer.LayoutOrientation.Vertical, HorizontalExpand = true, VerticalAlignment = VAlignment.Center };
+            var headline = new FormattedMessage();
+            headline.AddBoldSized(ship.Name, 14);
+            headline.AddColored(" · " + DrydockText.Class(ship.SizeClass) + " · ", DrydockText.Dim);
+            headline.AddColored(Loc.GetString("shipyard-console-impound-tag"), DrydockText.Impound);
+            var headlineLabel = new RichTextLabel();
+            headlineLabel.SetMessage(headline);
+            text.AddChild(headlineLabel);
+
+            if (!string.IsNullOrWhiteSpace(ship.Reason))
+                text.AddChild(new Label { Text = ship.Reason, Modulate = ship.Redeemable ? DrydockText.Dim : DrydockText.ImpoundReason });
+
+            if (ship.Redeemable)
+            {
+                var terms = new RichTextLabel();
+                terms.SetMessage(FormattedMessage.FromMarkupPermissive(ship.Fee > 0 && ship.Appraisal is { } appraisal && appraisal > 0
+                    ? Loc.GetString("shipyard-console-impound-reclaim-for",
+                        ("fee", BankSystemExtensions.ToSpesoString(ship.Fee)),
+                        ("percent", (int)Math.Round(ship.Fee * 100.0 / appraisal)),
+                        ("appraisal", BankSystemExtensions.ToSpesoString(appraisal)))
+                    : Loc.GetString("shipyard-console-impound-reclaim-free")));
+                text.AddChild(terms);
+
+                var unaffordable = ship.Fee > _lastBalance;
+                text.AddChild(new Label
+                {
+                    Text = unaffordable
+                        ? Loc.GetString("shipyard-console-impound-unaffordable-note", ("fee", BankSystemExtensions.ToSpesoString(ship.Fee)))
+                        : Loc.GetString("shipyard-console-impound-no-deadline"),
+                    Modulate = unaffordable ? DrydockText.Warning : DrydockText.Sub,
+                });
+                line.AddChild(text);
+
+                // The picker opens on the berth the server would choose and lists every free berth,
+                // the ones too small greyed with the reason; picking only changes where Reclaim lands.
+                var target = ship.DefaultBerthId;
+                var into = new DrydockMenuButton
+                {
+                    StyleClasses = { "ButtonSquare" },
+                    MinWidth = 130,
+                    AlignRight = true,
+                    Margin = new Thickness(12, 0, 8, 0),
+                    Text = IntoText(target),
+                };
+                var free = _lastBerths.Where(b => b.OccupantShipId == null).OrderBy(b => b.BerthId).ToList();
+                into.SetItems(free.Select(b =>
+                {
+                    var id = b.BerthId;
+                    var fits = ship.FittingBerthIds.Contains(id);
+                    return new DrydockMenuButton.Item(
+                        Loc.GetString("shipyard-console-store-item", ("berth", id), ("class", DrydockText.Class(b.MaxSizeClass))),
+                        fits ? null : Loc.GetString("shipyard-console-store-too-small"),
+                        fits && _validId,
+                        () =>
+                        {
+                            target = id;
+                            into.Text = IntoText(id);
+                        });
+                }));
+                line.AddChild(into);
+
+                var reclaim = new Button
+                {
+                    Text = Loc.GetString("shipyard-console-impound-reclaim-button"),
+                    StyleClasses = { "ButtonSquare", StyleNano.ButtonPrimary },
+                    MinWidth = 96,
+                    Disabled = !_validId || target == null || unaffordable,
+                };
+                var abandon = new Button
+                {
+                    Text = Loc.GetString("shipyard-console-impound-abandon-button"),
+                    StyleClasses = { "ButtonSquare" },
+                    MinWidth = 96,
+                    Margin = new Thickness(8, 0, 0, 0),
+                    Disabled = !_validId,
+                };
+                line.AddChild(reclaim);
+                line.AddChild(abandon);
+
+                var shipId = ship.ShipId;
+                var shipName = ship.Name;
+                reclaim.OnPressed += _ =>
+                {
+                    if (target is { } berth)
+                        OnRedeemImpound?.Invoke(shipId, berth);
+                };
+                abandon.OnPressed += _ => OpenAbandonPrompt(shipId, shipName);
+            }
+            else
+            {
+                text.AddChild(new Label { Text = Loc.GetString("shipyard-console-impound-locked-note"), Modulate = DrydockText.Sub });
+                line.AddChild(text);
+
+                var pill = new PanelContainer
+                {
+                    VerticalAlignment = VAlignment.Center,
+                    Margin = new Thickness(12, 0, 0, 0),
+                    PanelOverride = new StyleBoxFlat
+                    {
+                        BackgroundColor = Color.FromHex("#1a1212"),
+                        BorderColor = DrydockText.ImpoundLockedBorder,
+                        BorderThickness = new Thickness(1),
+                    },
+                };
+                pill.AddChild(new Label { Text = Loc.GetString("shipyard-console-impound-locked-pill"), Modulate = DrydockText.Impound, Margin = new Thickness(8, 2) });
+                line.AddChild(pill);
+            }
+
+            Impounds.AddChild(panel);
+        }
+    }
+
+    private static string IntoText(int? berth)
+    {
+        return (berth is { } id
+            ? Loc.GetString("shipyard-console-impound-into-button", ("berth", id))
+            : Loc.GetString("shipyard-console-impound-no-fit-button")) + DrydockText.Caret;
+    }
+
+    /// <summary>
+    /// Triad: Abandon…, the sale confirmation's shape with its own words: no figure is quoted,
+    /// because abandoning pays nothing, and the ship's exact name unlocks the verb. The server
+    /// compares again.
+    /// </summary>
+    private void OpenAbandonPrompt(Guid shipId, string shipName)
+    {
+        new DrydockTextPrompt(
+            Loc.GetString("shipyard-console-abandon-title", ("ship", shipName)),
+            Loc.GetString("shipyard-console-abandon-body", ("ship", shipName)),
+            Loc.GetString("shipyard-console-abandon-warning"),
+            Loc.GetString("shipyard-console-abandon-placeholder", ("ship", shipName)),
+            Loc.GetString("shipyard-console-abandon-button"),
+            typed => string.Equals(typed.Trim(), shipName, StringComparison.Ordinal),
+            null,
+            destructive: true,
+            typed => OnAbandonShip?.Invoke(shipId, typed.Trim())).OpenCentered();
     }
 
     /// <summary>

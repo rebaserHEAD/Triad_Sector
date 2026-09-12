@@ -194,6 +194,73 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             await pair.CleanReturnAsync();
         }
 
+        /// <summary>
+        /// An impounded ship is a card above the berths, to the Impound artboard: name, class and
+        /// tag, the reason it was taken, the fee and what it was cut from, a picker opening on the
+        /// berth the server would choose, Reclaim, and Abandon…; Reclaim greys on a fee the balance
+        /// cannot cover and the small print says why. A locked one draws the reason, says an admin
+        /// holds it, and offers neither, to the ImpoundLocked artboard.
+        /// </summary>
+        [Test]
+        public async Task AnImpoundedShipDrawsItsCardAboveTheBerths()
+        {
+            await using var pair = await PoolManager.GetServerClient(new PoolSettings { Connected = true });
+
+            await pair.Client.WaitPost(() =>
+            {
+                var menu = new ShipyardConsoleMenu { LocalUserId = Viewer };
+
+                // Affordable: the balance the state carries is 12,300.
+                menu.UpdateState(State(berths: ThreeBerths(), deedShip: null, impounded: new List<DrydockImpoundedShipInfo> { Impounded(fee: 9000, appraisal: 18000) }));
+                var cards = Named(menu, "Impounds").Children.ToList();
+                Assert.That(cards, Has.Count.EqualTo(1), "One card per impounded ship.");
+
+                var drawn = Drawn(cards[0]).Where(t => !string.IsNullOrEmpty(t)).Select(t => t!).ToList();
+                var buttons = Descendants(cards[0]).OfType<Button>().ToList();
+                Assert.Multiple(() =>
+                {
+                    Assert.That(drawn, Has.Some.Contains("Sabine"));
+                    Assert.That(drawn, Has.Some.Contains("impounded"));
+                    Assert.That(drawn, Has.Some.Contains("Still in the world at the end of round 4112."));
+                    Assert.That(drawn, Has.Some.Contains("$9,000"), "The fee.");
+                    Assert.That(drawn, Has.Some.Contains("50% of its $18,000 appraisal"), "And what it was cut from.");
+                    Assert.That(drawn, Has.Some.EqualTo("No deadline. It sits here until you reclaim or abandon it."));
+                    Assert.That(buttons.Select(b => b.Text), Is.EqualTo(new[] { "Into #31 ▾", "Reclaim", "Abandon…" }),
+                        "The picker opens on the berth the server would choose; Reclaim and Abandon beside it.");
+                    Assert.That(buttons[1].Disabled, Is.False, "Affordable, and a berth fits.");
+                });
+
+                // Unaffordable: Reclaim greys and the small print says why.
+                menu.UpdateState(State(berths: ThreeBerths(), deedShip: null, impounded: new List<DrydockImpoundedShipInfo> { Impounded(fee: 19000, appraisal: 38000) }));
+                var card = Named(menu, "Impounds").Children.Single();
+                Assert.Multiple(() =>
+                {
+                    Assert.That(Descendants(card).OfType<Button>().Single(b => b.Text == "Reclaim").Disabled, Is.True);
+                    Assert.That(Drawn(card), Has.Some.EqualTo("Not enough credits: reclaiming it costs $19,000."));
+                });
+
+                // Locked: the reason, the note, the pill, and no verbs at all.
+                menu.UpdateState(State(berths: ThreeBerths(), deedShip: null, impounded: new List<DrydockImpoundedShipInfo>
+                {
+                    Impounded(fee: 0, appraisal: 38000, redeemable: false, reason: "Rammed the Vantage arm twice, ticket #94."),
+                }));
+                card = Named(menu, "Impounds").Children.Single();
+                Assert.Multiple(() =>
+                {
+                    Assert.That(Descendants(card).OfType<Button>(), Is.Empty, "Neither reclaim nor abandon on a locked impound.");
+                    Assert.That(Drawn(card), Has.Some.EqualTo("LOCKED"));
+                    Assert.That(Drawn(card), Has.Some.Contains("Rammed the Vantage arm twice"));
+                    Assert.That(Drawn(card), Has.Some.Contains("until an admin unlocks it"));
+                });
+
+                // Out of the lot, the card goes.
+                menu.UpdateState(State(berths: ThreeBerths(), deedShip: null));
+                Assert.That(Named(menu, "Impounds").ChildCount, Is.Zero);
+            });
+
+            await pair.CleanReturnAsync();
+        }
+
         /// <summary>The lockout covers the tab for another account's card and for nothing else.</summary>
         [Test]
         public async Task TheLockoutFollowsTheAccountOnTheCard()
@@ -236,7 +303,8 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                 {
                     new(1, Guid.NewGuid(), "Sabine", "Cutter", "Mara Voss", Guid.NewGuid(), landsInBerthId: 31, secondsLeft: 30),
                 };
-                menu.UpdateState(State(berths: berths, deedShip: Behir(minutesOut: 48), deedTitle: "Behir", offers: offers));
+                menu.UpdateState(State(berths: berths, deedShip: Behir(minutesOut: 48), deedTitle: "Behir", offers: offers,
+                    impounded: new List<DrydockImpoundedShipInfo> { Impounded(fee: 9000, appraisal: 18000) }));
 
                 // The prompts are built the way the row menu builds them, from the same keys.
                 var sell = new DrydockTextPrompt(
@@ -265,7 +333,15 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                         new DrydockListPicker.Item("Ilse Varga", Loc.GetString("shipyard-console-transfer-picker-no-berth"), false, () => { }),
                     });
 
-                var drawn = new[] { (Control)menu, sell, rename, transfer }
+                var abandon = new DrydockTextPrompt(
+                    Loc.GetString("shipyard-console-abandon-title", ("ship", "Kestrel")),
+                    Loc.GetString("shipyard-console-abandon-body", ("ship", "Kestrel")),
+                    Loc.GetString("shipyard-console-abandon-warning"),
+                    Loc.GetString("shipyard-console-abandon-placeholder", ("ship", "Kestrel")),
+                    Loc.GetString("shipyard-console-abandon-button"),
+                    _ => false, null, destructive: true, _ => { });
+
+                var drawn = new[] { (Control)menu, sell, rename, transfer, abandon }
                     .SelectMany(Drawn)
                     .Where(t => !string.IsNullOrEmpty(t))
                     .Select(t => t!)
@@ -327,6 +403,10 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                 occupantOfferedTo: offeredTo, occupantOfferSecondsLeft: secondsLeft,
                 occupantAppraisal: ship != null ? 24000 : null);
 
+        /// <summary>A Cutter in the lot that fits #31, the one empty berth in <see cref="ThreeBerths"/>.</summary>
+        private static DrydockImpoundedShipInfo Impounded(int fee, int? appraisal, bool redeemable = true, string? reason = "Still in the world at the end of round 4112.")
+            => new(Guid.NewGuid(), "Sabine", "Cutter", fee, appraisal, redeemable, reason, defaultBerthId: 31, fittingBerthIds: new List<int> { 31 });
+
         /// <summary>#12 Cutter with Kestrel, #15 Frigate with Pelican, #31 Cutter empty.</summary>
         private static List<DrydockBerthInfo> ThreeBerths() => new()
         {
@@ -340,7 +420,8 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             DrydockDeedShipInfo? deedShip,
             string? deedTitle = null,
             Guid? deedOwner = null,
-            List<DrydockTransferOfferInfo>? offers = null)
+            List<DrydockTransferOfferInfo>? offers = null,
+            List<DrydockImpoundedShipInfo>? impounded = null)
         {
             var ships = berths.Where(b => b.OccupantShipId != null)
                 .Select(b => new StoredShipInfo(b.OccupantShipId!.Value, b.OccupantName!, b.OccupantSizeClass, b.OccupantState!, b.BerthId))
@@ -348,7 +429,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             if (deedShip != null)
                 ships.Add(new StoredShipInfo(Guid.NewGuid(), deedShip.Name, deedShip.SizeClass, "CheckedOut", null));
 
-            return new ShipyardConsoleInterfaceState(
+            var state = new ShipyardConsoleInterfaceState(
                 balance: 12300,
                 accessGranted: true,
                 shipDeedTitle: deedTitle,
@@ -368,6 +449,8 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                 deedOwnerUserId: deedOwner ?? (deedShip != null ? Viewer : null),
                 deedShip: deedShip,
                 transferOfferMinutes: 30);
+            state.ImpoundedShips = impounded ?? new List<DrydockImpoundedShipInfo>();
+            return state;
         }
     }
 }

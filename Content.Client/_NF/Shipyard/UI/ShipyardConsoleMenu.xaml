@@ -162,6 +162,9 @@
             </BoxContainer>
         </PanelContainer>
 
+        <!-- One card per ship of the operator's in the impound lot, built by PopulateImpounds. -->
+        <BoxContainer Name="Impounds" Orientation="Vertical" />
+
         <!-- One alert per offer addressed to the operator, built by PopulateOffers. -->
         <BoxContainer Name="Offers" Orientation="Vertical" />
 

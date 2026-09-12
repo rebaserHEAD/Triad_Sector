@@ -469,6 +469,133 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
         }
 
         /// <summary>
+        /// The owner's two ways out of the lot. Reclaim pays the fee on the row and seats the hull
+        /// in a berth of theirs, refusing the wrong owner, a fee that changed under the press, a
+        /// berth that will not take it, and a locked impound; abandon pays nothing and lands on its
+        /// own terminal state, refusing a locked impound for the same reason, that an owner must not
+        /// end an adjudication from their side. Both leave the terms on the row, and the admin's way
+        /// back from an abandon is the restore, which says so on the timeline.
+        /// </summary>
+        [Test]
+        public async Task TheOwnerReclaimsOrAbandonsAnImpoundedHull()
+        {
+            await using var pair = await PoolManager.GetServerClient();
+            var server = pair.Server;
+
+            var store = server.ResolveDependency<DrydockStore>();
+            var db = server.ResolveDependency<IServerDbManager>();
+
+            var owner = Guid.NewGuid();
+            var stranger = Guid.NewGuid();
+            var admin = Guid.NewGuid();
+            await InsertPlayer(db, owner);
+            await InsertPlayer(db, stranger);
+            var home = await store.AddBerth(owner, ShipSizeClass.Cutter, DrydockBerthKind.Granted, 0, null, null);
+            var spare = await store.AddBerth(owner, ShipSizeClass.Cutter, DrydockBerthKind.Granted, 0, null, null);
+            var round = await db.AddNewRound(await db.AddOrGetServer("drydock-test"));
+            var doc = Encoding.UTF8.GetBytes("doc");
+
+            var shipId = Guid.NewGuid();
+            var filed = await store.FileRevision(Request(shipId, owner, "Kestrel", berthId: home), doc, keepBlobs: 2);
+            Assert.That(filed.BerthId, Is.EqualTo(home));
+
+            // Into the lot at half its $24,000 appraisal, with the owner free to act on it.
+            var open = new DrydockImpound(50, "left out", Redeemable: true, ActorUserId: admin);
+            var (taken, fee) = await store.TryImpoundStored(shipId, open, round);
+            Assert.Multiple(() =>
+            {
+                Assert.That(taken, Is.EqualTo(DrydockBerthResult.Success));
+                Assert.That(fee, Is.EqualTo(12000));
+            });
+
+            // The refusals, each leaving the hull in the lot.
+            Assert.That(await store.TryRedeemImpound(shipId, stranger, home, 12000, round), Is.EqualTo(DrydockBerthResult.NotFound),
+                "Not the owner's to reclaim, whatever they pay.");
+            Assert.That(await store.TryRedeemImpound(shipId, owner, home, 999, round), Is.EqualTo(DrydockBerthResult.Conflict),
+                "The fee paid has to be the fee on the row: a re-impound on new terms between the read and the press is not honoured at the old price.");
+
+            var squatter = Guid.NewGuid();
+            var squat = await store.FileRevision(Request(squatter, owner, "Pelican", berthId: home), doc, keepBlobs: 2);
+            Assert.That(squat.BerthId, Is.EqualTo(home), "Control: the vacated berth was free to take.");
+            Assert.That(await store.TryRedeemImpound(shipId, owner, home, 12000, round), Is.EqualTo(DrydockBerthResult.BerthOccupied));
+
+            var row = (await store.GetShipsByOwner(owner)).Single(r => r.ShipGuid == shipId);
+            Assert.That(row.State, Is.EqualTo(DrydockShipState.Impounded), "Every refusal above left it in the lot.");
+
+            // Paid and seated, with the terms left on the row.
+            Assert.That(await store.TryRedeemImpound(shipId, owner, spare, 12000, round), Is.EqualTo(DrydockBerthResult.Success));
+            row = (await store.GetShipsByOwner(owner)).Single(r => r.ShipGuid == shipId);
+            Assert.Multiple(() =>
+            {
+                Assert.That(row.State, Is.EqualTo(DrydockShipState.Stored));
+                Assert.That(row.BerthId, Is.EqualTo(spare));
+                Assert.That(row.ImpoundFee, Is.EqualTo(12000), "Never cleared on the way out; a reversal needs it.");
+            });
+
+            var redeemed = (await store.GetAudit(shipId))[^1];
+            Assert.Multiple(() =>
+            {
+                Assert.That(redeemed.Action, Is.EqualTo(DrydockAuditAction.ImpoundRedeemed));
+                Assert.That(redeemed.ActorUserId, Is.EqualTo(owner));
+                Assert.That(redeemed.BerthId, Is.EqualTo(spare));
+                Assert.That(redeemed.Reason, Is.EqualTo("paid 12000"));
+            });
+
+            // Locked: the owner can do neither, whatever they pay.
+            var locked = new DrydockImpound(0, "ticket #94", Redeemable: false, ActorUserId: admin);
+            Assert.That((await store.TryImpoundStored(shipId, locked, round)).Outcome, Is.EqualTo(DrydockBerthResult.Success));
+            Assert.That(await store.TryRedeemImpound(shipId, owner, spare, 0, round), Is.EqualTo(DrydockBerthResult.WrongState),
+                "A locked impound is an adjudication; paying nothing does not end it.");
+            Assert.That((await store.TryAbandonShip(shipId, owner, round)).Outcome, Is.EqualTo(DrydockBerthResult.WrongState),
+                "Nor does walking away: an owner must not end an adjudication from their side.");
+            Assert.That((await store.GetShipsByOwner(owner)).Single(r => r.ShipGuid == shipId).State, Is.EqualTo(DrydockShipState.Impounded));
+
+            // Unlocked by the admin, taken again on open terms, then given up rather than paid for.
+            Assert.That((await store.TryReleaseImpound(shipId, null, admin, round, "cleared")).Outcome, Is.EqualTo(DrydockBerthResult.Success));
+            Assert.That((await store.TryImpoundStored(shipId, open, round)).Outcome, Is.EqualTo(DrydockBerthResult.Success));
+            Assert.That((await store.TryAbandonShip(shipId, stranger, round)).Outcome, Is.EqualTo(DrydockBerthResult.NotFound));
+
+            var (abandoned, name) = await store.TryAbandonShip(shipId, owner, round);
+            Assert.Multiple(() =>
+            {
+                Assert.That(abandoned, Is.EqualTo(DrydockBerthResult.Success));
+                Assert.That(name, Is.EqualTo("Kestrel"));
+            });
+
+            row = (await store.GetShipsByOwner(owner)).Single(r => r.ShipGuid == shipId);
+            Assert.Multiple(() =>
+            {
+                Assert.That(row.State, Is.EqualTo(DrydockShipState.Abandoned));
+                Assert.That(row.BerthId, Is.Null, "The lot held no berth and neither does the state after it.");
+                Assert.That(row.CheckedOutRoundId, Is.Null);
+            });
+
+            var gaveUp = (await store.GetAudit(shipId))[^1];
+            Assert.Multiple(() =>
+            {
+                Assert.That(gaveUp.Action, Is.EqualTo(DrydockAuditAction.ShipAbandoned));
+                Assert.That(gaveUp.ActorUserId, Is.EqualTo(owner));
+                Assert.That(gaveUp.Reason, Is.EqualTo("gave up rather than pay 12000"), "The timeline says what it would have cost.");
+            });
+
+            Assert.That((await store.TryAbandonShip(shipId, owner, round)).Outcome, Is.EqualTo(DrydockBerthResult.WrongState), "Given up once.");
+            Assert.That(await store.TryRedeemImpound(shipId, owner, spare, 12000, round), Is.EqualTo(DrydockBerthResult.WrongState), "Not in the lot any more.");
+
+            // The admin's undo is the restore, and the timeline says it reversed an abandon rather
+            // than recovering a hull judged lost.
+            Assert.That(await store.TryRestoreShip(shipId, spare, admin, round, "on appeal"), Is.EqualTo(DrydockBerthResult.Success));
+            row = (await store.GetShipsByOwner(owner)).Single(r => r.ShipGuid == shipId);
+            Assert.Multiple(() =>
+            {
+                Assert.That(row.State, Is.EqualTo(DrydockShipState.Stored));
+                Assert.That(row.BerthId, Is.EqualTo(spare));
+            });
+            Assert.That((await store.GetAudit(shipId))[^1].Action, Is.EqualTo(DrydockAuditAction.AbandonReversed));
+
+            await pair.CleanReturnAsync();
+        }
+
+        /// <summary>
         /// The shipyard scrapping a hull that is out on a retrieve. The credits move at the console;
         /// this is the row hearing about it, so a scrapped ship never reads as stranded, is never
         /// handed back by a plain restore, and the reversal finds the price on the timeline.

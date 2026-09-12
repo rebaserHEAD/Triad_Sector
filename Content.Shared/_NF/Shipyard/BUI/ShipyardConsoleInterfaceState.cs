@@ -57,6 +57,13 @@ public sealed class ShipyardConsoleInterfaceState : BoundUserInterfaceState
     public List<DrydockImportShipInfo> ImportableShips = new();
 
     /// <summary>
+    /// Triad: the operator's ships in the impound lot, for the cards above the berth list. Set
+    /// after construction for the same reason <see cref="ImportableShips"/> is: it is another list
+    /// the drydock handlers read from the database, and the constructor is wide enough.
+    /// </summary>
+    public List<DrydockImpoundedShipInfo> ImpoundedShips = new();
+
+    /// <summary>
     /// Triad: how far along the store or retrieve running at this console is, or null when nothing
     /// is running. Set after construction rather than passed in, for the same reason
     /// <see cref="ImportableShips"/> is: it is a live figure the state builder reads off the

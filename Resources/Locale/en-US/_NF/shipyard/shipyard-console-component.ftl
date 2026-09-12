@@ -241,7 +241,7 @@ shipyard-console-retrieve-no-station = This console is not on a station that can
 shipyard-console-retrieve-no-staging = The shipyard has nowhere to stage the ship. Try again shortly.
 shipyard-console-retrieve-not-found = That ship is not in the drydock.
 shipyard-console-retrieve-already-out = That ship is already out.
-shipyard-console-retrieve-impounded = That ship is impounded. Contact an admin.
+shipyard-console-retrieve-impounded = That ship is in the impound lot. Reclaim it from the card above the berths, or abandon it.
 shipyard-console-retrieve-in-escrow = That ship is offered to another captain. Withdraw the offer first.
 shipyard-console-retrieve-sold = That ship has been sold.
 shipyard-console-retrieve-destroyed = That ship was written off. Contact an admin.
@@ -250,6 +250,35 @@ shipyard-console-retrieve-not-stored = Another request just claimed that ship. C
 shipyard-console-retrieve-no-revision = None of that ship's stored records can be read. Contact an admin.
 shipyard-console-retrieve-station-lost = The station could not receive the ship. Try again.
 shipyard-console-retrieve-voucher-card = A voucher cannot call in a stored ship. Insert your ID card.
+
+# Triad: the impound lot. A ship taken from the world at round end, or by an admin, sits on a card
+# above the berth list until its owner reclaims it for the fee or gives it up. A locked one offers
+# neither; the reason line is what the admin or the sweep wrote.
+shipyard-console-impound-tag = impounded
+shipyard-console-impound-reclaim-for = Reclaim for [bold]{$fee}[/bold], frozen at {$percent}% of its {$appraisal} appraisal.
+shipyard-console-impound-reclaim-free = Free to reclaim.
+shipyard-console-impound-no-deadline = No deadline. It sits here until you reclaim or abandon it.
+shipyard-console-impound-unaffordable-note = Not enough credits: reclaiming it costs {$fee}.
+shipyard-console-impound-locked-note = Neither reclaim nor abandon is available until an admin unlocks it. No deadline. Ahelp to ask about it.
+shipyard-console-impound-locked-pill = LOCKED
+shipyard-console-impound-into-button = Into #{$berth}
+shipyard-console-impound-no-fit-button = No berth fits
+shipyard-console-impound-reclaim-button = Reclaim
+shipyard-console-impound-abandon-button = Abandon…
+shipyard-console-impound-reclaimed = {$ship} is back in berth #{$berth}.
+shipyard-console-impound-reclaimed-paid = {$ship} is back in berth #{$berth}. {$fee} paid.
+shipyard-console-impound-not-available = That ship is not in the impound lot.
+shipyard-console-impound-locked = An admin is holding that ship. Ahelp to ask about it.
+shipyard-console-impound-unaffordable = Not enough funds: reclaiming it costs {$fee}.
+shipyard-console-impound-terms-changed = That impound is not what the card said. Check it again.
+shipyard-console-impound-failed = The drydock could not do that. Try again shortly.
+shipyard-console-abandon-title = Abandon {$ship}
+shipyard-console-abandon-body = You give up {$ship} instead of paying the release fee. You are paid nothing for it, and it does not return to a berth.
+shipyard-console-abandon-warning = Cannot be undone.
+shipyard-console-abandon-placeholder = Type {$ship} to confirm
+shipyard-console-abandon-button = Abandon
+shipyard-console-abandon-name-mismatch = The name you typed does not match the ship.
+shipyard-console-abandon-complete = {$ship} abandoned.
 
 # Triad: legacy import. Draining the old ship-save system into the drydock.
 shipyard-console-import-success = { $ship } imported. It is in the drydock, in a berth sized to its hull.

@@ -344,6 +344,40 @@ public sealed partial class ShipyardSystem
         }
     }
 
+    private async void OnRedeemImpoundMessage(EntityUid uid, ShipyardConsoleComponent component, ShipyardConsoleRedeemImpoundMessage args)
+    {
+        if (args.Actor is not { Valid: true } player)
+            return;
+
+        try
+        {
+            await TryRedeemImpound(uid, component, player, args.ShipId, args.BerthId, (ShipyardConsoleUiKey)args.UiKey);
+        }
+        catch (Exception e)
+        {
+            Log.Error($"Drydock: reclaim of {args.ShipId} at {ToPrettyString(uid)} by {ToPrettyString(player)} threw: {e}");
+            if (!TerminatingOrDeleted(player))
+                ConsolePopup(player, Loc.GetString("shipyard-console-impound-failed"));
+        }
+    }
+
+    private async void OnAbandonShipMessage(EntityUid uid, ShipyardConsoleComponent component, ShipyardConsoleAbandonShipMessage args)
+    {
+        if (args.Actor is not { Valid: true } player)
+            return;
+
+        try
+        {
+            await TryAbandonShip(uid, component, player, args.ShipId, args.TypedName, (ShipyardConsoleUiKey)args.UiKey);
+        }
+        catch (Exception e)
+        {
+            Log.Error($"Drydock: abandon of {args.ShipId} at {ToPrettyString(uid)} by {ToPrettyString(player)} threw: {e}");
+            if (!TerminatingOrDeleted(player))
+                ConsolePopup(player, Loc.GetString("shipyard-console-impound-failed"));
+        }
+    }
+
     // ---------------------------------------------------------------- State
 
     /// <summary>
@@ -370,6 +404,7 @@ public sealed partial class ShipyardSystem
             component.CachedDeedShip = null;
             component.CachedOffers = new();
             component.CachedCaptains = new();
+            component.CachedImpounded = new();
             RefreshDrydockUi(uid, component, player, uiKey);
             return;
         }
@@ -474,12 +509,38 @@ public sealed partial class ShipyardSystem
             captainInfos.Add(new DrydockCaptainInfo(id, SessionDisplayName(session), freeClasses.GetValueOrDefault(id) ?? new List<string>()));
         }
 
+        // The impound lot: every hull of the account's the lot holds, with what it costs to get
+        // back and which berths it could go into, read off the same slots the rows draw with the
+        // store's own preference. The fee is the row's, frozen at impound; the appraisal beside it
+        // is what that fee was cut from, so the card can say what share of the hull it is.
+        var impoundedInfos = new List<DrydockImpoundedShipInfo>();
+        foreach (var row in rows)
+        {
+            if (row.State != DrydockShipState.Impounded)
+                continue;
+
+            var fitting = FittingFreeBerths(slots, row.SizeClass);
+            appraisals.TryGetValue(row.ShipGuid, out var basis);
+
+            impoundedInfos.Add(new DrydockImpoundedShipInfo(
+                row.ShipGuid,
+                row.ShipName,
+                row.SizeClass,
+                row.ImpoundFee,
+                basis,
+                row.ImpoundRedeemable,
+                row.ImpoundReason,
+                PreferredBerth(fitting, row.LastBerthId),
+                fitting));
+        }
+
         // Everything is read; swap the whole set in at once. Nothing above this line has touched
         // what the console is currently showing.
         component.CachedStoredShips = storedShips;
         component.CachedBerths = berthInfos;
         component.CachedOffers = offerInfos;
         component.CachedCaptains = captainInfos;
+        component.CachedImpounded = impoundedInfos;
         component.CachedDeedShip = BuildDeedShip(uid, targetId, rows, slots);
         RefreshDrydockUi(uid, component, player, uiKey);
     }
@@ -556,20 +617,35 @@ public sealed partial class ShipyardSystem
 
         // The same preference the store applies: the ship's own last berth if it is free and
         // fits, else the smallest free berth that fits. The dropdown lists the rest.
-        var fitting = slots
+        var fitting = FittingFreeBerths(slots, hullClass);
+        var preferred = PreferredBerth(fitting, row?.LastBerthId);
+
+        var docked = _station.GetOwningStation(console) is { Valid: true } station && IsDockedToStation(shuttle, station);
+
+        return new DrydockDeedShipInfo(GetFullName(deed), hullClass, minutesOut, preferred, fitting, docked);
+    }
+
+    /// <summary>The operator's free berths the hull fits, smallest class first, in the order the store's own pick walks them.</summary>
+    private static List<int> FittingFreeBerths(List<DrydockBerthSlot> slots, string? hullClass)
+    {
+        return slots
             .Where(s => s.Occupant == null && DrydockStore.Fits(hullClass, s.Berth.MaxSizeClass))
             .OrderBy(s => DrydockStore.TryParseClass(s.Berth.MaxSizeClass, out var max) ? (int)max : int.MaxValue)
             .ThenBy(s => s.Berth.BerthId)
             .Select(s => s.Berth.BerthId)
             .ToList();
+    }
 
-        int? preferred = row?.LastBerthId is { } last && fitting.Contains(last) ? last : fitting.FirstOrDefault();
+    /// <summary>
+    /// The berth a plain store or a reclaim lands in: the ship's own last berth when it is among
+    /// the fitting ones, else the first of them, which is the smallest. Null when nothing fits.
+    /// </summary>
+    private static int? PreferredBerth(List<int> fitting, int? lastBerthId)
+    {
         if (fitting.Count == 0)
-            preferred = null;
+            return null;
 
-        var docked = _station.GetOwningStation(console) is { Valid: true } station && IsDockedToStation(shuttle, station);
-
-        return new DrydockDeedShipInfo(GetFullName(deed), hullClass, minutesOut, preferred, fitting, docked);
+        return lastBerthId is { } last && fitting.Contains(last) ? last : fitting[0];
     }
 
     /// <summary>
@@ -641,15 +717,15 @@ public sealed partial class ShipyardSystem
     /// The drydock half of the console state, read from the caches. Called by the upstream state
     /// builder so it carries one line of ours rather than a block.
     /// </summary>
-    internal (List<StoredShipInfo> Ships, List<DrydockBerthInfo> Berths, Dictionary<string, int> Prices, List<DrydockTransferOfferInfo> Offers, List<DrydockCaptainInfo> Captains, Guid? DeedOwner, DrydockDeedShipInfo? DeedShip, int OfferMinutes, List<DrydockImportShipInfo> Importables) BuildDrydockState(EntityUid uid)
+    internal (List<StoredShipInfo> Ships, List<DrydockBerthInfo> Berths, Dictionary<string, int> Prices, List<DrydockTransferOfferInfo> Offers, List<DrydockCaptainInfo> Captains, Guid? DeedOwner, DrydockDeedShipInfo? DeedShip, int OfferMinutes, List<DrydockImportShipInfo> Importables, List<DrydockImpoundedShipInfo> Impounded) BuildDrydockState(EntityUid uid)
     {
         // The same floor the offer itself applies, so the prompt never promises less than an offer gets.
         var offerMinutes = (int)Math.Ceiling(Math.Max(60, _configManager.GetCVar(TriadCCVars.DrydockTransferOfferSeconds)) / 60.0);
 
         if (!TryComp<ShipyardConsoleComponent>(uid, out var console))
-            return (new(), new(), DrydockBerthPrices(), new(), new(), null, null, offerMinutes, new());
+            return (new(), new(), DrydockBerthPrices(), new(), new(), null, null, offerMinutes, new(), new());
 
-        return (console.CachedStoredShips, console.CachedBerths, DrydockBerthPrices(), console.CachedOffers, console.CachedCaptains, DeedOwnerAccount(console), console.CachedDeedShip, offerMinutes, console.CachedImportables);
+        return (console.CachedStoredShips, console.CachedBerths, DrydockBerthPrices(), console.CachedOffers, console.CachedCaptains, DeedOwnerAccount(console), console.CachedDeedShip, offerMinutes, console.CachedImportables, console.CachedImpounded);
     }
 
     /// <summary>
@@ -1691,6 +1767,169 @@ public sealed partial class ShipyardSystem
         }
 
         ConsolePopup(player, Loc.GetString("shipyard-console-move-complete", ("ship", header.ShipName), ("berth", berthId)));
+        PlayConfirmSound(player, uid, component);
+        await RefreshDrydockState(uid, component, player, uiKey);
+        return true;
+    }
+
+    // ---------------------------------------------------------------- The impound lot
+
+    /// <summary>
+    /// The owner pays the fee and takes an impounded ship back into one of their berths. Money
+    /// first, then the row, and the money comes back on every refusal: the order a berth purchase
+    /// uses. The fee charged is the one on the row when it was read, and the store refuses the move
+    /// when the row's fee is any different by the time it lands, so a re-impound on new terms
+    /// between the read and the press cannot be paid at the old price.
+    /// </summary>
+    internal async Task<bool> TryRedeemImpound(EntityUid uid, ShipyardConsoleComponent component, EntityUid player, Guid shipId, int berthId, ShipyardConsoleUiKey uiKey)
+    {
+        if (!TryGetOperatorAccount(player, out var owner))
+            return false;
+
+        if (!HasComp<BankAccountComponent>(player))
+        {
+            ConsolePopup(player, Loc.GetString("shipyard-console-no-bank"));
+            PlayDenySound(player, uid, component);
+            return false;
+        }
+
+        var header = await _drydockStore.GetShipHeader(shipId);
+
+        if (TerminatingOrDeleted(uid) || TerminatingOrDeleted(player))
+            return false;
+
+        if (header != null && header.OwnerUserId != owner)
+        {
+            RefuseAccess(uid, component, player, owner, shipId, header.ShipName, header.OwnerUserId, header.BerthId, "reclaim");
+            return false;
+        }
+
+        if (header == null || header.State != DrydockShipState.Impounded)
+        {
+            ConsolePopup(player, Loc.GetString("shipyard-console-impound-not-available"));
+            PlayDenySound(player, uid, component);
+            return false;
+        }
+
+        if (!header.ImpoundRedeemable)
+        {
+            ConsolePopup(player, Loc.GetString("shipyard-console-impound-locked"));
+            PlayDenySound(player, uid, component);
+            return false;
+        }
+
+        // The fee goes nowhere for now. It is owed to the Triad Frontier Administration, which has
+        // no account to receive it until the economy update; the transaction kind is the seam that
+        // work attaches to, so the withdrawals it has to credit are findable rather than searched for.
+        var fee = header.ImpoundFee;
+        if (fee > 0 && !_bank.TryBankWithdraw(player, fee, new MarketRecord { Kind = MarketTransactionKind.DrydockImpound }))
+        {
+            ConsolePopup(player, Loc.GetString("shipyard-console-impound-unaffordable", ("fee", fee)));
+            PlayDenySound(player, uid, component);
+            return false;
+        }
+
+        var outcome = await _drydockStore.TryRedeemImpound(shipId, owner, berthId, fee, DrydockRoundId);
+
+        if (outcome != DrydockBerthResult.Success)
+        {
+            // Nothing moved, so the money goes back to whoever is still standing there.
+            if (fee > 0 && !TerminatingOrDeleted(player)
+                && !_bank.TryBankDeposit(player, fee, new MarketRecord { Kind = MarketTransactionKind.DrydockImpound }))
+            {
+                Log.Error($"Drydock: reclaim of {shipId} by {owner} was refused ({outcome}) and the {fee} taken could not be returned to {ToPrettyString(player)}.");
+            }
+
+            if (TerminatingOrDeleted(uid) || TerminatingOrDeleted(player))
+                return false;
+
+            ConsolePopup(player, Loc.GetString(outcome switch
+            {
+                DrydockBerthResult.BerthTooSmall => "shipyard-console-store-berth-too-small",
+                DrydockBerthResult.BerthOccupied => "shipyard-console-berth-occupied",
+                // The row is not what the card said: re-impounded on other terms, released, or
+                // locked since the read. The refreshed card says which.
+                DrydockBerthResult.Conflict or DrydockBerthResult.WrongState => "shipyard-console-impound-terms-changed",
+                _ => "shipyard-console-impound-failed",
+            }));
+            PlayDenySound(player, uid, component);
+            await RefreshAfterRefusal(uid, component, player, uiKey);
+            return false;
+        }
+
+        if (TerminatingOrDeleted(uid) || TerminatingOrDeleted(player))
+            return true;
+
+        _adminLogger.Add(LogType.ShipYardUsage, LogImpact.Low, $"{ToPrettyString(player):actor} reclaimed impounded ship {header.ShipName} ({shipId}) into berth {berthId} for {fee} credits via {ToPrettyString(uid)}");
+
+        ConsolePopup(player, Loc.GetString(fee > 0 ? "shipyard-console-impound-reclaimed-paid" : "shipyard-console-impound-reclaimed",
+            ("ship", header.ShipName), ("berth", berthId), ("fee", fee)));
+        PlayConfirmSound(player, uid, component);
+        await RefreshDrydockState(uid, component, player, uiKey);
+        return true;
+    }
+
+    /// <summary>
+    /// The owner gives up an impounded ship rather than pay for it. The typed name is the safety,
+    /// compared here exactly as a sale compares it; no money moves in either direction, which is
+    /// the whole difference from a sale; and a locked impound refuses, so an owner cannot end an
+    /// adjudication from their side.
+    /// </summary>
+    internal async Task<bool> TryAbandonShip(EntityUid uid, ShipyardConsoleComponent component, EntityUid player, Guid shipId, string typedName, ShipyardConsoleUiKey uiKey)
+    {
+        if (!TryGetOperatorAccount(player, out var owner))
+            return false;
+
+        var header = await _drydockStore.GetShipHeader(shipId);
+
+        if (TerminatingOrDeleted(uid) || TerminatingOrDeleted(player))
+            return false;
+
+        if (header != null && header.OwnerUserId != owner)
+        {
+            RefuseAccess(uid, component, player, owner, shipId, header.ShipName, header.OwnerUserId, header.BerthId, "abandon");
+            return false;
+        }
+
+        if (header == null || header.State != DrydockShipState.Impounded)
+        {
+            ConsolePopup(player, Loc.GetString("shipyard-console-impound-not-available"));
+            PlayDenySound(player, uid, component);
+            return false;
+        }
+
+        if (!header.ImpoundRedeemable)
+        {
+            ConsolePopup(player, Loc.GetString("shipyard-console-impound-locked"));
+            PlayDenySound(player, uid, component);
+            return false;
+        }
+
+        if (!string.Equals(typedName.Trim(), header.ShipName.Trim(), StringComparison.Ordinal))
+        {
+            ConsolePopup(player, Loc.GetString("shipyard-console-abandon-name-mismatch"));
+            PlayDenySound(player, uid, component);
+            return false;
+        }
+
+        var (outcome, abandonedName) = await _drydockStore.TryAbandonShip(shipId, owner, DrydockRoundId);
+
+        if (TerminatingOrDeleted(uid) || TerminatingOrDeleted(player))
+            return outcome == DrydockBerthResult.Success;
+
+        if (outcome != DrydockBerthResult.Success || abandonedName == null)
+        {
+            ConsolePopup(player, Loc.GetString(outcome == DrydockBerthResult.WrongState
+                ? "shipyard-console-impound-terms-changed"
+                : "shipyard-console-impound-failed"));
+            PlayDenySound(player, uid, component);
+            await RefreshAfterRefusal(uid, component, player, uiKey);
+            return false;
+        }
+
+        _adminLogger.Add(LogType.ShipYardUsage, LogImpact.Low, $"{ToPrettyString(player):actor} abandoned impounded ship {abandonedName} ({shipId}) via {ToPrettyString(uid)}");
+
+        ConsolePopup(player, Loc.GetString("shipyard-console-abandon-complete", ("ship", abandonedName)));
         PlayConfirmSound(player, uid, component);
         await RefreshDrydockState(uid, component, player, uiKey);
         return true;

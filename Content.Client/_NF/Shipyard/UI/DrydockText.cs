@@ -24,6 +24,16 @@ internal static class DrydockText
     public static readonly Color BlueBorder = Color.FromHex("#5b86b8");
     public static readonly Color BlueFill = Color.FromHex("#1a2430");
 
+    // The impound lot: the tag, the reason on a locked card, the small print, and the two frames.
+    // A card the owner can act on is a shade brighter than one an admin holds, as the canvas draws
+    // them.
+    public static readonly Color Impound = Color.FromHex("#cf4f4f");
+    public static readonly Color ImpoundReason = Color.FromHex("#c07a7a");
+    public static readonly Color Sub = Color.FromHex("#8a8a8a");
+    public static readonly Color ImpoundBorder = Color.FromHex("#8a3f3f");
+    public static readonly Color ImpoundLockedBorder = Color.FromHex("#7a3f3f");
+    public static readonly Color ImpoundFill = Color.FromHex("#2a1a1a");
+
     /// <summary>The caret the two dropdown buttons wear, so a label reads as a menu and not a verb.</summary>
     public const string Caret = " ▾";
 

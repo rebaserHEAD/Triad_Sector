@@ -6,10 +6,12 @@ using System.Numerics;
 using System.Threading;
 using System.Threading.Tasks;
 using Content.IntegrationTests.Pair;
+using Content.Server._NF.Bank;
 using Content.Server._NF.Shipyard.Components;
 using Content.Server._NF.Shipyard.Systems;
 using Content.Server._Triad.Drydock;
 using Content.Server.Database;
+using Content.Shared._NF.Bank.Components;
 using Content.Server.Station.Components;
 using Content.Server.Station.Systems;
 using Content.Server.Shuttles.Components;
@@ -823,6 +825,183 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             await pair.RunTicksSync(5);
 
             await pair.CleanReturnAsync();
+        }
+
+        /// <summary>
+        /// The impound lot at the console. An impounded ship is listed above the berths with its fee
+        /// and the berths it fits; Reclaim charges the fee and seats it, and gives the money back on
+        /// a refusal; Abandon needs the ship's exact name and pays nothing; a locked impound refuses
+        /// both; and somebody else's impounded hull is refused and written down whatever was typed.
+        /// </summary>
+        [Test]
+        public async Task AnImpoundedShipIsReclaimedOrAbandonedFromTheConsole()
+        {
+            await using var pair = await PoolManager.GetServerClient(new PoolSettings { Connected = true });
+            var server = pair.Server;
+            var entMan = server.EntMan;
+
+            var playerMan = server.ResolveDependency<IPlayerManager>();
+            var store = server.ResolveDependency<DrydockStore>();
+            var shipyard = server.System<ShipyardSystem>();
+            var bank = server.System<BankSystem>();
+
+            var session = playerMan.Sessions.First();
+            var me = session.UserId.UserId;
+            var admin = Guid.NewGuid();
+            var (station, stationGrid, ship, console, consoleComp, card, operatorEnt) = await BuildConsoleAndShip(pair, session.UserId);
+
+            var stored = await RunOnServer(pair,
+                () => shipyard.TryDrydockStore(console, consoleComp, operatorEnt, ShipyardConsoleUiKey.Shipyard));
+            Assert.That(stored?.Result, Is.EqualTo(DrydockStoreResult.Success));
+            var shipId = stored!.Value.ShipId!.Value;
+            await pair.RunTicksSync(5);
+
+            // A revision with a known appraisal, so the fee is a figure this test can hold against
+            // the balance; the harness hull appraises at whatever nine floor tiles are worth.
+            await store.FileRevision(Revision(shipId, me, "Kestrel", appraisal: 24000), new byte[] { 1 }, 3);
+
+            var (taken, fee) = await store.TryImpoundStored(shipId, new DrydockImpound(50, "ticket #94", Redeemable: true, ActorUserId: admin), null);
+            Assert.Multiple(() =>
+            {
+                Assert.That(taken, Is.EqualTo(DrydockBerthResult.Success));
+                Assert.That(fee, Is.EqualTo(12000), "Control: half the appraisal just filed.");
+            });
+
+            await RefreshTab(pair, shipyard, console, consoleComp, operatorEnt);
+            var defaultBerth = 0;
+            await server.WaitAssertion(() =>
+            {
+                var impounded = consoleComp.CachedImpounded.SingleOrDefault(i => i.ShipId == shipId);
+                Assert.That(impounded, Is.Not.Null, "An impounded ship is listed above the berths.");
+                Assert.Multiple(() =>
+                {
+                    Assert.That(impounded!.Fee, Is.EqualTo(12000));
+                    Assert.That(impounded.Appraisal, Is.EqualTo(24000));
+                    Assert.That(impounded.Redeemable, Is.True);
+                    Assert.That(impounded.Reason, Is.EqualTo("ticket #94"));
+                    Assert.That(impounded.DefaultBerthId, Is.Not.Null, "A free berth that fits is offered as the default.");
+                    Assert.That(impounded.FittingBerthIds, Does.Contain(impounded.DefaultBerthId!.Value));
+                });
+                defaultBerth = impounded!.DefaultBerthId!.Value;
+            });
+
+            // Money to pay with, and the balance before anything moves.
+            var deposited = false;
+            await server.WaitPost(() =>
+            {
+                entMan.EnsureComponent<BankAccountComponent>(operatorEnt);
+                deposited = bank.TryBankDeposit(operatorEnt, 20000, null);
+            });
+            Assert.That(deposited, Is.True, "Control: the account takes a deposit, so it can pay.");
+            var before = 0;
+            await server.WaitAssertion(() => before = entMan.GetComponent<BankAccountComponent>(operatorEnt).Balance);
+
+            // A refused reclaim gives the money back: the berth named has a ship in it.
+            var occupied = await store.AddBerth(me, ShipSizeClass.SuperCapital, DrydockBerthKind.Granted, 0, null, null);
+            var squatter = Guid.NewGuid();
+            var squat = await store.FileRevision(Revision(squatter, me, "Pelican", appraisal: 1000, berthId: occupied), new byte[] { 1 }, 3);
+            Assert.That(squat.BerthId, Is.EqualTo(occupied), "Control: the berth about to be named is taken.");
+
+            var refused = await RunOnServer(pair,
+                () => shipyard.TryRedeemImpound(console, consoleComp, operatorEnt, shipId, occupied, ShipyardConsoleUiKey.Shipyard));
+            Assert.That(refused, Is.False);
+            await server.WaitAssertion(() =>
+                Assert.That(entMan.GetComponent<BankAccountComponent>(operatorEnt).Balance, Is.EqualTo(before), "A refusal gives the fee back."));
+            Assert.That((await store.GetShipHeader(shipId))!.State, Is.EqualTo(DrydockShipState.Impounded));
+
+            // Reclaimed into the default berth: the fee leaves the account once and the row is stored there.
+            var reclaimed = await RunOnServer(pair,
+                () => shipyard.TryRedeemImpound(console, consoleComp, operatorEnt, shipId, defaultBerth, ShipyardConsoleUiKey.Shipyard));
+            Assert.That(reclaimed, Is.True);
+            await server.WaitAssertion(() =>
+                Assert.That(entMan.GetComponent<BankAccountComponent>(operatorEnt).Balance, Is.EqualTo(before - 12000), "The fee was charged once."));
+            var header = (await store.GetShipHeader(shipId))!;
+            Assert.Multiple(() =>
+            {
+                Assert.That(header.State, Is.EqualTo(DrydockShipState.Stored));
+                Assert.That(header.BerthId, Is.EqualTo(defaultBerth));
+            });
+
+            // Locked: neither verb works, and the row does not move.
+            Assert.That((await store.TryImpoundStored(shipId, new DrydockImpound(0, "held", Redeemable: false, ActorUserId: admin), null)).Outcome,
+                Is.EqualTo(DrydockBerthResult.Success));
+            await RefreshTab(pair, shipyard, console, consoleComp, operatorEnt);
+            await server.WaitAssertion(() =>
+                Assert.That(consoleComp.CachedImpounded.Single(i => i.ShipId == shipId).Redeemable, Is.False, "The card says an admin holds it."));
+            Assert.That(await RunOnServer(pair,
+                () => shipyard.TryRedeemImpound(console, consoleComp, operatorEnt, shipId, defaultBerth, ShipyardConsoleUiKey.Shipyard)), Is.False);
+            Assert.That(await RunOnServer(pair,
+                () => shipyard.TryAbandonShip(console, consoleComp, operatorEnt, shipId, "Kestrel", ShipyardConsoleUiKey.Shipyard)), Is.False);
+            Assert.That((await store.GetShipHeader(shipId))!.State, Is.EqualTo(DrydockShipState.Impounded));
+
+            // Released by the admin and taken again on open terms, then given up: the name is the safety.
+            Assert.That((await store.TryReleaseImpound(shipId, null, admin, null, "cleared")).Outcome, Is.EqualTo(DrydockBerthResult.Success));
+            Assert.That((await store.TryImpoundStored(shipId, new DrydockImpound(50, "left out", Redeemable: true, ActorUserId: admin), null)).Outcome,
+                Is.EqualTo(DrydockBerthResult.Success));
+            Assert.That(await RunOnServer(pair,
+                () => shipyard.TryAbandonShip(console, consoleComp, operatorEnt, shipId, "Falcon", ShipyardConsoleUiKey.Shipyard)), Is.False, "The wrong name is refused.");
+            Assert.That((await store.GetShipHeader(shipId))!.State, Is.EqualTo(DrydockShipState.Impounded));
+            Assert.That(await RunOnServer(pair,
+                () => shipyard.TryAbandonShip(console, consoleComp, operatorEnt, shipId, "Kestrel", ShipyardConsoleUiKey.Shipyard)), Is.True);
+            Assert.That((await store.GetShipHeader(shipId))!.State, Is.EqualTo(DrydockShipState.Abandoned));
+            await server.WaitAssertion(() =>
+                Assert.That(entMan.GetComponent<BankAccountComponent>(operatorEnt).Balance, Is.EqualTo(before - 12000), "Abandoning pays nothing and costs nothing."));
+
+            // Somebody else's impounded hull: refused and written down, whatever was typed.
+            var stranger = Guid.NewGuid();
+            var theirs = Guid.NewGuid();
+            await DrydockStoreTest.InsertPlayer(server.ResolveDependency<IServerDbManager>(), stranger);
+            await store.AddBerth(stranger, ShipSizeClass.SuperCapital, DrydockBerthKind.Granted, 0, null, null);
+            await store.FileRevision(Revision(theirs, stranger, "NotYours", appraisal: 1000), new byte[] { 1 }, 3);
+            Assert.That((await store.TryImpoundStored(theirs, new DrydockImpound(50, "left out", Redeemable: true, ActorUserId: admin), null)).Outcome,
+                Is.EqualTo(DrydockBerthResult.Success));
+
+            Assert.That(await RunOnServer(pair,
+                () => shipyard.TryRedeemImpound(console, consoleComp, operatorEnt, theirs, defaultBerth, ShipyardConsoleUiKey.Shipyard)), Is.False);
+            Assert.That(await RunOnServer(pair,
+                () => shipyard.TryAbandonShip(console, consoleComp, operatorEnt, theirs, "NotYours", ShipyardConsoleUiKey.Shipyard)), Is.False);
+
+            var refusals = await RunOnServer(pair, () => store.GetAuditByActor(me, 30));
+            Assert.Multiple(() =>
+            {
+                Assert.That(refusals.Any(a => a.Action == DrydockAuditAction.AccessRefused && a.ShipGuid == theirs && a.Reason == "reclaim"),
+                    "A forged reclaim is the stolen-card signal and goes on the timeline.");
+                Assert.That(refusals.Any(a => a.Action == DrydockAuditAction.AccessRefused && a.ShipGuid == theirs && a.Reason == "abandon"),
+                    "So is a forged abandon.");
+            });
+            Assert.That((await store.GetShipHeader(theirs))!.State, Is.EqualTo(DrydockShipState.Impounded), "Refused means untouched.");
+
+            await pair.CleanReturnAsync();
+        }
+
+        /// <summary>A revision request with only what the impound tests read back: the name, the class, and an appraisal.</summary>
+        private static DrydockRevisionRequest Revision(Guid shipId, Guid owner, string name, int appraisal, int? berthId = null) => new()
+        {
+            ShipGuid = shipId,
+            OwnerUserId = owner,
+            ShipName = name,
+            SizeClass = nameof(ShipSizeClass.Cutter),
+            BerthId = berthId,
+            MarkStored = true,
+            Kind = DrydockRevisionKind.PlayerStore,
+            ActorUserId = owner,
+            EngineFormatVer = 7,
+            ProtoFingerprint = new byte[] { 1 },
+            CapturedKeyHash = new byte[] { 1 },
+            Checksum = new byte[] { 1 },
+            SizeBytes = 1,
+            Manifest = "{}",
+            AppraisedValue = appraisal,
+        };
+
+        /// <summary>Re-reads the drydock tab the way a console handler does after acting.</summary>
+        private static Task RefreshTab(TestPair pair, ShipyardSystem shipyard, EntityUid console, ShipyardConsoleComponent consoleComp, EntityUid operatorEnt)
+        {
+            return RunOnServer(pair, async () =>
+            {
+                await shipyard.RefreshDrydockState(console, consoleComp, operatorEnt, ShipyardConsoleUiKey.Shipyard);
+                return true;
+            });
         }
 
         private const string ShuttleAirlockProtoId = "AirlockShuttle";

@@ -141,3 +141,39 @@ public sealed class ShipyardConsoleMoveStoredShipMessage : BoundUserInterfaceMes
         BerthId = berthId;
     }
 }
+
+/// <summary>
+/// The owner pays the fee and takes an impounded ship back into one of their own berths. The
+/// server re-reads the terms, charges the fee it has on the row, checks the berth again, and
+/// refuses a locked impound whatever the client drew.
+/// </summary>
+[Serializable, NetSerializable]
+public sealed class ShipyardConsoleRedeemImpoundMessage : BoundUserInterfaceMessage
+{
+    public readonly Guid ShipId;
+    public readonly int BerthId;
+
+    public ShipyardConsoleRedeemImpoundMessage(Guid shipId, int berthId)
+    {
+        ShipId = shipId;
+        BerthId = berthId;
+    }
+}
+
+/// <summary>
+/// The owner gives an impounded ship up rather than pay for it. Carries the name the player
+/// typed, which the server compares with the ship's own before anything moves, as a sale does.
+/// No money moves in either direction.
+/// </summary>
+[Serializable, NetSerializable]
+public sealed class ShipyardConsoleAbandonShipMessage : BoundUserInterfaceMessage
+{
+    public readonly Guid ShipId;
+    public readonly string TypedName;
+
+    public ShipyardConsoleAbandonShipMessage(Guid shipId, string typedName)
+    {
+        ShipId = shipId;
+        TypedName = typedName;
+    }
+}

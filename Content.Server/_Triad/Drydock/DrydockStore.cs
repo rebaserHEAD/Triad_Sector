@@ -313,6 +313,160 @@ public sealed partial class DrydockStore
         }, ct);
     }
 
+    /// <summary>
+    /// The owner pays the fee and takes an impounded ship back into a berth of theirs. The money
+    /// moved before this was called, so the fee it was charged against comes back in and the move
+    /// refuses as <see cref="DrydockBerthResult.Conflict"/> when the row's fee is any different: an
+    /// admin who re-impounded on new terms between the console's read and the press must not have
+    /// the old price honoured, and the console refunds on every refusal. The berth gets the three
+    /// checks a named berth gets, the impound has to be one the owner may act on, and the move is
+    /// one conditional update from <see cref="DrydockShipState.Impounded"/>. A locked impound refuses
+    /// whatever was paid.
+    ///
+    /// <para>The terms stay on the row on the way out, so a reversal has something to restore to.</para>
+    /// </summary>
+    public Task<DrydockBerthResult> TryRedeemImpound(
+        Guid shipGuid,
+        Guid ownerUserId,
+        int berthId,
+        int paidFee,
+        int? roundId,
+        CancellationToken ct = default)
+    {
+        return _db.RunTriadDbCommand(async (db, token) =>
+        {
+            await using var tx = await db.Database.BeginTransactionAsync(token);
+
+            var ship = await db.DrydockShip.AsNoTracking()
+                .Where(s => s.ShipGuid == shipGuid)
+                .Select(s => new { s.OwnerUserId, s.State, s.SizeClass, s.ShipName, s.CurrentRevision, s.ImpoundFee, s.ImpoundRedeemable })
+                .SingleOrDefaultAsync(token);
+
+            if (ship == null || ship.OwnerUserId != ownerUserId)
+                return DrydockBerthResult.NotFound;
+
+            if (ship.State != DrydockShipState.Impounded || !ship.ImpoundRedeemable)
+                return DrydockBerthResult.WrongState;
+
+            if (ship.ImpoundFee != paidFee)
+                return DrydockBerthResult.Conflict;
+
+            var (fit, _) = await ResolveBerth(db, shipGuid, ownerUserId, ship.SizeClass, berthId, null, new HashSet<int>(), token);
+            if (fit != DrydockBerthResult.Success)
+                return fit;
+
+            var now = DateTime.UtcNow;
+            int moved;
+            try
+            {
+                moved = await db.DrydockShip
+                    .Where(s => s.ShipGuid == shipGuid
+                        && s.State == DrydockShipState.Impounded
+                        && s.OwnerUserId == ownerUserId
+                        && s.ImpoundRedeemable
+                        && s.ImpoundFee == paidFee)
+                    .ExecuteUpdateAsync(set => set
+                        .SetProperty(s => s.State, DrydockShipState.Stored)
+                        .SetProperty(s => s.StateChangedAt, now)
+                        .SetProperty(s => s.CheckedOutRoundId, (int?)null)
+                        .SetProperty(s => s.LastBerthId, s => s.BerthId)
+                        .SetProperty(s => s.BerthId, (int?)berthId)
+                        .SetProperty(s => s.UpdatedAt, now), token);
+            }
+            catch (Exception e) when (IsBerthUniqueViolation(e))
+            {
+                return DrydockBerthResult.BerthOccupied;
+            }
+
+            if (moved == 0)
+                return DrydockBerthResult.WrongState;
+
+            db.DrydockAudit.Add(new DrydockAudit
+            {
+                ShipGuid = shipGuid,
+                ShipName = ship.ShipName,
+                BerthId = berthId,
+                Action = DrydockAuditAction.ImpoundRedeemed,
+                ActorUserId = ownerUserId,
+                SubjectUserId = ownerUserId,
+                Revision = ship.CurrentRevision,
+                RoundId = roundId,
+                Reason = paidFee > 0 ? $"paid {paidFee}" : "no fee",
+                CreatedAt = now,
+            });
+
+            await db.SaveChangesAsync(token);
+            await tx.CommitAsync(token);
+
+            return DrydockBerthResult.Success;
+        }, ct);
+    }
+
+    /// <summary>
+    /// The owner walks away from an impounded ship rather than pay for it. No money moves in
+    /// either direction, which is the whole difference from a sale, and the row goes to a terminal
+    /// state of its own so an admin reads "the owner chose this" rather than inferring it. A locked
+    /// impound refuses: an owner must not be able to end an adjudication from their side. The
+    /// typed-name check is the console's; this is the row, one conditional update from
+    /// <see cref="DrydockShipState.Impounded"/>. Revisions stay, so an admin restore can undo it.
+    /// </summary>
+    /// <returns>The outcome, and on success the name the ship was given up under.</returns>
+    public Task<(DrydockBerthResult Outcome, string? ShipName)> TryAbandonShip(
+        Guid shipGuid,
+        Guid ownerUserId,
+        int? roundId,
+        CancellationToken ct = default)
+    {
+        return _db.RunTriadDbCommand<(DrydockBerthResult, string?)>(async (db, token) =>
+        {
+            await using var tx = await db.Database.BeginTransactionAsync(token);
+
+            var ship = await db.DrydockShip.AsNoTracking()
+                .Where(s => s.ShipGuid == shipGuid)
+                .Select(s => new { s.OwnerUserId, s.State, s.ShipName, s.CurrentRevision, s.ImpoundFee, s.ImpoundRedeemable })
+                .SingleOrDefaultAsync(token);
+
+            if (ship == null || ship.OwnerUserId != ownerUserId)
+                return (DrydockBerthResult.NotFound, null);
+
+            if (ship.State != DrydockShipState.Impounded || !ship.ImpoundRedeemable)
+                return (DrydockBerthResult.WrongState, null);
+
+            var now = DateTime.UtcNow;
+            var moved = await db.DrydockShip
+                .Where(s => s.ShipGuid == shipGuid
+                    && s.State == DrydockShipState.Impounded
+                    && s.OwnerUserId == ownerUserId
+                    && s.ImpoundRedeemable)
+                .ExecuteUpdateAsync(set => set
+                    .SetProperty(s => s.State, DrydockShipState.Abandoned)
+                    .SetProperty(s => s.StateChangedAt, now)
+                    .SetProperty(s => s.CheckedOutRoundId, (int?)null)
+                    .SetProperty(s => s.UpdatedAt, now), token);
+
+            if (moved == 0)
+                return (DrydockBerthResult.WrongState, null);
+
+            db.DrydockAudit.Add(new DrydockAudit
+            {
+                ShipGuid = shipGuid,
+                ShipName = ship.ShipName,
+                Action = DrydockAuditAction.ShipAbandoned,
+                ActorUserId = ownerUserId,
+                SubjectUserId = ownerUserId,
+                Revision = ship.CurrentRevision,
+                RoundId = roundId,
+                Reason = ship.ImpoundFee > 0 ? $"gave up rather than pay {ship.ImpoundFee}" : "gave up",
+                CreatedAt = now,
+            });
+
+            await db.SaveChangesAsync(token);
+            await tx.CommitAsync(token);
+
+            return (DrydockBerthResult.Success, ship.ShipName);
+        }, ct);
+    }
+
     private static async Task<DrydockFileResult> FileRevisionOnce(
         ServerDbContext db,
         DrydockRevisionRequest request,
@@ -1989,7 +2143,9 @@ public sealed partial class DrydockStore
     ///
     /// <para>Out of the impound lot this is a release into a chosen berth, and the timeline says
     /// so: the row is <see cref="DrydockAuditAction.ImpoundReleased"/>, the same as the release that
-    /// picks the berth itself, and never "restored", which is the word for a hull judged lost.</para>
+    /// picks the berth itself, and never "restored", which is the word for a hull judged lost. Out
+    /// of an abandon it is the admin's undo of the owner's decision, and the row is
+    /// <see cref="DrydockAuditAction.AbandonReversed"/> for the same reason.</para>
     ///
     /// <para>A sold hull comes back only through the sale reversal, which decides about the money
     /// before anything else; a plain restore would hand it back with the price left with the
@@ -2032,9 +2188,12 @@ public sealed partial class DrydockStore
 
             var now = DateTime.UtcNow;
             var from = ship.State;
-            var action = from == DrydockShipState.Impounded
-                ? DrydockAuditAction.ImpoundReleased
-                : DrydockAuditAction.Restore;
+            var action = from switch
+            {
+                DrydockShipState.Impounded => DrydockAuditAction.ImpoundReleased,
+                DrydockShipState.Abandoned => DrydockAuditAction.AbandonReversed,
+                _ => DrydockAuditAction.Restore,
+            };
 
             int moved;
             try

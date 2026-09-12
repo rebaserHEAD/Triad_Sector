@@ -941,6 +941,7 @@ public sealed partial class ShipyardSystem : SharedShipyardSystem
         // Triad: legacy import. Set after construction because it is answered by a manifest the
         // client sends, not read from the database with the rest of the drydock state.
         newState.ImportableShips = drydock.Importables;
+        newState.ImpoundedShips = drydock.Impounded; // Triad: drydock tab, the impound lot
 
         // Triad: drydock tab. The live percentage travels to the operator by message; this copy is
         // the reopen path alone, because a console opened mid-store only runs UpdateState and would
