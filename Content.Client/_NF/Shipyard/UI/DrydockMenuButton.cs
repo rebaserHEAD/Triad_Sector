@@ -16,8 +16,8 @@ public sealed class DrydockMenuButton : Button
 {
     /// <summary>
     /// One entry: a label on the left, a detail on the right, and whether it can be taken. A
-    /// disabled entry stays visible with its detail saying why, since a tooltip would not fire on
-    /// it. <paramref name="DividerAbove"/> draws the rule that separates the ship verbs from the
+    /// disabled entry stays visible with its detail saying why, read without hovering.
+    /// <paramref name="DividerAbove"/> draws the rule that separates the ship verbs from the
     /// berth verbs.
     /// </summary>
     public sealed record Item(string Label, string? Detail, bool Enabled, Action? OnPressed, bool DividerAbove = false);

@@ -29,13 +29,10 @@
                 <BoxContainer Orientation="Horizontal" Margin="8 6" VerticalAlignment="Center">
                     <LineEdit Name="SearchInput"
                               MinWidth="360"
-                              PlaceHolder="{Loc 'drydock-admin-search-placeholder'}"
                               ToolTip="{Loc 'drydock-admin-search-tooltip'}" />
-                    <Button Name="SearchButton"
-                            Text="{Loc 'drydock-admin-search-button'}"
-                            StyleClasses="ButtonSquare"
-                            MinWidth="70"
-                            Margin="4 0 10 0" />
+                    <!-- The hint sits beside the box, as the canvas draws it: inside, a placeholder
+                         this long clips. Enter searches; there is no button. -->
+                    <Label Text="{Loc 'drydock-admin-search-hint'}" Modulate="#8d8d8d" Margin="8 0 8 0" VerticalAlignment="Center" />
                     <BoxContainer Name="ChipRow" Orientation="Horizontal" VerticalAlignment="Center" />
                     <Control HorizontalExpand="True" />
                     <Label Name="CountLabel" Modulate="#8d8d8d" />
@@ -112,7 +109,9 @@
                             </PanelContainer.PanelOverride>
                             <BoxContainer Orientation="Vertical" Margin="8" VerticalExpand="True">
                                 <BoxContainer Orientation="Horizontal" VerticalAlignment="Center">
-                                    <Label Name="BerthsTitle" HorizontalExpand="True" />
+                                    <Label Name="BerthsTitle" />
+                                    <!-- The free count in the dim colour and body weight, as the canvas draws it. -->
+                                    <Label Name="BerthsCount" Modulate="#8d8d8d" Margin="4 0 0 0" HorizontalExpand="True" />
                                     <ui:DrydockMenuButton Name="GrantBerthButton"
                                                           Text="{Loc 'drydock-admin-grant-berth'}"
                                                           StyleClasses="ButtonSquare"
@@ -128,7 +127,15 @@
                                 </ScrollContainer>
                                 <Label Name="BerthsHint" Text="{Loc 'drydock-admin-berths-hint'}" StyleClasses="LabelSubText" Margin="0 4 0 0" />
                                 <Label Name="NotesTitle" Text="{Loc 'drydock-admin-notes-title'}" Margin="0 6 0 3" />
-                                <LineEdit Name="NotesInput" HorizontalExpand="True" PlaceHolder="{Loc 'drydock-admin-notes-placeholder'}" />
+                                <!-- A box a few lines tall, as the canvas draws it. TextEdit paints no frame of
+                                     its own (the stylesheet only colours its placeholder), so the panel around it
+                                     gives it the input look. -->
+                                <PanelContainer HorizontalExpand="True" MinHeight="52">
+                                    <PanelContainer.PanelOverride>
+                                        <gfx:StyleBoxFlat BackgroundColor="#111214" BorderColor="#3a3a3e" BorderThickness="1"/>
+                                    </PanelContainer.PanelOverride>
+                                    <TextEdit Name="NotesInput" HorizontalExpand="True" VerticalExpand="True" Margin="4 2" />
+                                </PanelContainer>
                             </BoxContainer>
                         </PanelContainer>
 

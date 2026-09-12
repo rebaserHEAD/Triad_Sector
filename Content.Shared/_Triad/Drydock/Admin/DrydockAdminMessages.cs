@@ -58,7 +58,10 @@ public sealed record DrydockAdminShipDto(
     // the last impound's residue, which the row deliberately keeps.
     int ImpoundFee = 0,
     string? ImpoundReason = null,
-    bool ImpoundRedeemable = false);
+    bool ImpoundRedeemable = false,
+    // What the last sale paid, so a Sold row can carry the figure the canvas draws on it. Null when
+    // the ship has never been sold; kept on any state, like the impound residue above.
+    int? LastSalePrice = null);
 
 [Serializable, NetSerializable]
 public sealed record DrydockAdminRevisionDto(

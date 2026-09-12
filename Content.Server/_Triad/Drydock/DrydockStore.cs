@@ -1590,6 +1590,41 @@ public sealed partial class DrydockStore
     }
 
     /// <summary>
+    /// The last sale price of each ship in a set that has one, keyed by ship: the figure on the
+    /// admin panel's Sold rows. Read the way <see cref="GetLastSale"/> reads, from the newest
+    /// ShipSold timeline row, so a row and the detail beneath it never disagree.
+    /// </summary>
+    public Task<Dictionary<Guid, int>> GetLastSalePrices(IEnumerable<Guid> shipGuids, CancellationToken ct = default)
+    {
+        var ids = shipGuids.Distinct().ToList();
+        if (ids.Count == 0)
+            return Task.FromResult(new Dictionary<Guid, int>());
+
+        return _db.RunTriadDbCommand(async (db, token) =>
+        {
+            var rows = await db.DrydockAudit.AsNoTracking()
+                .Where(a => a.ShipGuid != null && ids.Contains(a.ShipGuid.Value) && a.Action == DrydockAuditAction.ShipSold)
+                .OrderByDescending(a => a.CreatedAt)
+                .Select(a => new { a.ShipGuid, a.Reason })
+                .ToListAsync(token);
+
+            // Newest first, so the first row seen for a ship is its last sale.
+            var prices = new Dictionary<Guid, int>();
+            foreach (var row in rows)
+            {
+                if (row.ShipGuid is not { } ship || prices.ContainsKey(ship) || row.Reason == null)
+                    continue;
+
+                var match = SoldForPattern.Match(row.Reason);
+                if (match.Success && int.TryParse(match.Groups[1].Value, out var price))
+                    prices[ship] = price;
+            }
+
+            return prices;
+        }, ct);
+    }
+
+    /// <summary>
     /// The recipient takes the ship: owner and berth move in one transaction, the offer resolves,
     /// and the ship is stored again under its new owner. The berth is picked now, not when the
     /// offer was made, because the recipient's garage may have changed in the meantime; a

@@ -17,6 +17,7 @@ using Robust.Client.UserInterface;
 using Robust.Client.UserInterface.Controls;
 using Robust.Client.UserInterface.XAML;
 using Robust.Shared.Maths;
+using Robust.Shared.Timing;
 using Robust.Shared.Utility;
 
 namespace Content.Client._Triad.Drydock.Admin;
@@ -26,10 +27,11 @@ namespace Content.Client._Triad.Drydock.Admin;
 /// timeline; the berths beside it are the same rows the player sees on their console, so both
 /// sides of a dispute are looking at the same picture.
 ///
-/// <para>The verbs a state offers are built fresh for that state rather than greyed in a fixed
-/// row, so what is on screen is what will work. Every button sends a message and the server pushes
-/// the whole state back; the server checks each choice again on receipt, so a list that went stale
-/// between the state and the click is a refusal rather than a wrong result.</para>
+/// <para>The verb row is one fixed set, rebuilt on every state: a verb the state refuses is greyed
+/// with its reason as the tooltip, so an admin can see everything the panel can do. Every button
+/// sends a message and the server pushes the whole state back; the server checks each choice again
+/// on receipt, so a row that went stale between the state and the click is a refusal rather than a
+/// wrong result.</para>
 ///
 /// <para>Strings are built with interpolation, never string.Format, for the same sandbox reason
 /// the tamper window records: the multi-arg string.Format overload fails ILVerify in a Release
@@ -97,13 +99,14 @@ public sealed partial class DrydockAdminWindow : FancyWindow
     /// <summary>
     /// The canvas draws four sizes and nothing else: the hull's name, the section headings, body,
     /// and the small print on state tags, timestamps, counts and hints. Body is the stylesheet's
-    /// default and needs no font of its own; these three are the rest, and every label this window
-    /// builds or names is set to one of them, so nothing inherits a size from a style class that
-    /// happens to be nearby.
+    /// default and needs no font of its own; these three are the rest, plus body in bold for a
+    /// hull's name on a list row, and every label this window builds or names is set to one of
+    /// them, so nothing inherits a size from a style class that happens to be nearby.
     /// </summary>
     private readonly Font _title;
     private readonly Font _heading;
     private readonly Font _small;
+    private readonly Font _bold;
 
     private DrydockAdminEuiState? _lastState;
     private string? _chip;
@@ -118,6 +121,7 @@ public sealed partial class DrydockAdminWindow : FancyWindow
         _title = fonts.GetFont("/Fonts/NotoSans/NotoSans-Bold.ttf", 15);
         _heading = fonts.GetFont("/Fonts/NotoSans/NotoSans-Bold.ttf", 13);
         _small = fonts.GetFont("/Fonts/NotoSans/NotoSans-Regular.ttf", 11);
+        _bold = fonts.GetFont("/Fonts/NotoSans/NotoSans-Bold.ttf", 12);
 
         BerthsTitle.FontOverride = _heading;
         NotesTitle.FontOverride = _heading;
@@ -134,14 +138,29 @@ public sealed partial class DrydockAdminWindow : FancyWindow
 
         BuildChips();
 
-        SearchButton.OnPressed += _ => RequestPage(0);
+        // Enter searches; the canvas draws no button.
         SearchInput.OnTextEntered += _ => RequestPage(0);
         PrevPageButton.OnPressed += _ => RequestPage(Math.Max(0, (_lastState?.Page ?? 0) - 1));
         NextPageButton.OnPressed += _ => RequestPage(Math.Min(LastPageIndex(), (_lastState?.Page ?? 0) + 1));
 
-        // The canvas gives notes no Save button, so they commit on Enter and on leaving the box.
-        NotesInput.OnTextEntered += _ => SaveNotes();
-        NotesInput.OnFocusExit += _ => SaveNotes();
+        // The canvas gives notes no Save button, so they commit on leaving the box; Enter is a
+        // newline there, the box being a few lines tall. TextEdit is sealed and raises no
+        // focus-exit event, so FrameUpdate below watches for the loss of focus, and a close with
+        // the cursor still in the box commits on the way out.
+        NotesInput.Placeholder = new Rope.Leaf(Loc.GetString("drydock-admin-notes-placeholder"));
+        OnClose += SaveNotes;
+    }
+
+    private bool _notesFocused;
+
+    protected override void FrameUpdate(FrameEventArgs args)
+    {
+        base.FrameUpdate(args);
+
+        var focused = NotesInput.HasKeyboardFocus();
+        if (_notesFocused && !focused)
+            SaveNotes();
+        _notesFocused = focused;
     }
 
     public void UpdateState(DrydockAdminEuiState state)
@@ -220,10 +239,11 @@ public sealed partial class DrydockAdminWindow : FancyWindow
             return;
 
         // Only when it actually changed: focus leaves this box on every click elsewhere.
-        if ((detail.AdminNotes ?? string.Empty) == NotesInput.Text)
+        var notes = Rope.Collapse(NotesInput.TextRope);
+        if ((detail.AdminNotes ?? string.Empty) == notes)
             return;
 
-        _eui.Send(new DrydockAdminNotesMessage { ShipGuid = id, Notes = NotesInput.Text });
+        _eui.Send(new DrydockAdminNotesMessage { ShipGuid = id, Notes = notes });
     }
 
     // ---------------------------------------------------------------- The hulls that matched
@@ -235,13 +255,19 @@ public sealed partial class DrydockAdminWindow : FancyWindow
 
         foreach (var ship in state.Ships)
         {
-            var name = new RichTextLabel { HorizontalExpand = true, VerticalAlignment = VAlignment.Center };
-            var msg = new FormattedMessage();
-            msg.AddText(ship.Name);
-            msg.PushColor(Key);
-            msg.AddText($" · {ship.SizeClass ?? "?"} · {ship.OwnerName ?? Short(ship.OwnerUserId)}");
-            msg.Pop();
-            name.SetMessage(msg);
+            // The name keeps its full width and the class and owner behind it clip. A horizontal
+            // box never shrinks a child below what it measured, and a clipped Label is the one text
+            // control that measures to nothing, so this is what keeps the state tag and the berth
+            // column inside the row on a long name.
+            var name = new Label { Text = ship.Name, FontOverride = _bold, VerticalAlignment = VAlignment.Center };
+            var key = new Label
+            {
+                Text = $" · {ship.SizeClass ?? "?"} · {ship.OwnerName ?? Short(ship.OwnerUserId)}",
+                Modulate = Key,
+                ClipText = true,
+                HorizontalExpand = true,
+                VerticalAlignment = VAlignment.Center,
+            };
 
             var line = new BoxContainer
             {
@@ -250,6 +276,7 @@ public sealed partial class DrydockAdminWindow : FancyWindow
                 Margin = new Thickness(8, 0),
             };
             line.AddChild(name);
+            line.AddChild(key);
             line.AddChild(StatePill(ship));
 
             // The berth sits in its own right-hand column so the numbers line up down the list.
@@ -297,7 +324,10 @@ public sealed partial class DrydockAdminWindow : FancyWindow
         {
             "CheckedOut" => (Loc.GetString("drydock-admin-row-out", ("round", ship.CheckedOutRoundId ?? 0)), Out),
             "InEscrow" => (Loc.GetString("drydock-admin-row-escrow", ("left", TimeLeft(ship.EscrowExpiresAt))), Escrow),
-            "Sold" => (Loc.GetString("drydock-admin-chip-Sold"), Sold),
+            // The price on the row, as the canvas draws it; a sale with no price on record keeps the bare word.
+            "Sold" => (ship.LastSalePrice is { } price
+                ? Loc.GetString("drydock-admin-row-sold", ("price", BankSystemExtensions.ToSpesoString(price)))
+                : Loc.GetString("drydock-admin-chip-Sold"), Sold),
             // The fee on the row, as the canvas draws it, and a locked one says so: the two are the
             // same state at the same number of credits and read very differently to an admin.
             "Impounded" => (Loc.GetString(ship.ImpoundRedeemable ? "drydock-admin-row-impounded" : "drydock-admin-row-impounded-locked",
@@ -343,6 +373,9 @@ public sealed partial class DrydockAdminWindow : FancyWindow
         var detail = state.Selected;
         EscrowPanel.Visible = detail?.Escrow != null;
         ImpoundPanel.Visible = detail?.Impound != null;
+        // The reason box belongs to a selected hull's verbs; with nothing selected the canvas draws
+        // no header at all.
+        ReasonInput.Visible = detail != null;
         GrantBerthButton.Disabled = detail == null;
         NotesInput.Editable = detail != null;
 
@@ -350,7 +383,8 @@ public sealed partial class DrydockAdminWindow : FancyWindow
         {
             HeaderRow.AddChild(new Label { Text = Loc.GetString("drydock-admin-no-selection"), Modulate = Dim });
             BerthsTitle.Text = Loc.GetString("drydock-admin-berths-title-empty");
-            NotesInput.Text = string.Empty;
+            BerthsCount.Text = string.Empty;
+            NotesInput.TextRope = new Rope.Leaf(string.Empty);
             GrantBerthButton.SetItems(Array.Empty<DrydockMenuButton.Item>());
             return;
         }
@@ -362,7 +396,10 @@ public sealed partial class DrydockAdminWindow : FancyWindow
         BuildImpoundCard(detail);
         BuildVerbs(state, detail);
 
-        NotesInput.Text = detail.AdminNotes ?? string.Empty;
+        // Every verb pushes a fresh state; a push that lands while the admin is typing a note must
+        // not overwrite what they have typed, so the box is only reset when it is not theirs.
+        if (!NotesInput.HasKeyboardFocus())
+            NotesInput.TextRope = new Rope.Leaf(detail.AdminNotes ?? string.Empty);
 
         BuildGrantMenu(ship.OwnerUserId);
         BuildBerths(state, ship);
@@ -466,69 +503,84 @@ public sealed partial class DrydockAdminWindow : FancyWindow
     }
 
     /// <summary>
-    /// The verbs this state actually offers, in the order it offers them: the one that answers the
-    /// state comes first. A verb that cannot apply is absent rather than greyed; where the reason
-    /// is worth reading it goes in a menu's detail text, since a tooltip will not fire on a
-    /// disabled control.
+    /// Every verb, every time, in one fixed order, so an admin learns the row once and can see the
+    /// whole set of things the panel can do (user, 2026-09-12). A verb the state refuses is greyed
+    /// rather than absent and its tooltip says why: the engine's hover path never reads
+    /// <c>Disabled</c>, so a greyed button still shows one. The server checks each choice again on
+    /// receipt regardless.
     /// </summary>
     private void BuildVerbs(DrydockAdminEuiState state, DrydockAdminShipDetailDto detail)
     {
         var ship = detail.Ship;
 
-        if (detail.Escrow is { } escrow)
+        // Impound takes a hull that is somewhere: berthed or in the world. On a terminal row the
+        // state IS the verdict and the verb would overwrite it (on a sale it would also take
+        // restore-from-sale with it, since that button reads State); in escrow the server refuses
+        // until the offer is withdrawn; in the lot it has already happened.
+        var impoundWhy = ship.State switch
         {
-            var cancel = Verb("drydock-admin-cancel-offer", "drydock-admin-cancel-offer-tooltip", "ButtonCaution");
-            cancel.OnPressed += _ => _eui.Send(new DrydockAdminCancelOfferMessage { TransferId = escrow.TransferId, Reason = Reason() });
-            VerbRow.AddChild(cancel);
-        }
+            "Impounded" => "drydock-admin-impound-why-impounded",
+            "InEscrow" => "drydock-admin-impound-why-escrow",
+            "Sold" or "Destroyed" or "Abandoned" => "drydock-admin-impound-why-terminal",
+            _ => null,
+        };
+        var impound = Verb("drydock-admin-impound", "drydock-admin-impound-tooltip", "ButtonCaution", impoundWhy);
+        impound.OnPressed += _ => OpenImpoundDialog(detail);
+        VerbRow.AddChild(impound);
 
-        if (ship.State == "Sold" && detail.LastSale is { } sale)
-        {
-            var restore = Verb("drydock-admin-restore-from-sale", "drydock-admin-restore-from-sale-tooltip");
-            restore.OnPressed += _ => OpenRestoreSaleDialog(state, ship, sale);
-            VerbRow.AddChild(restore);
-        }
-
-        // An impounded hull leads with Release, one press into its last berth; Restore to… below is
-        // the same exit with the berth chosen. Impound takes a hull that is somewhere: berthed or in
-        // the world. It is absent on a terminal row, where the state IS the verdict and the verb
-        // would overwrite it (on a sale it would also take restore-from-sale with it, since that
-        // button reads State), and absent in escrow, where the server refuses until the offer is
-        // withdrawn and Cancel offer is already first in the row.
-        if (ship.State == "Impounded")
-        {
-            var release = Verb("drydock-admin-release", "drydock-admin-release-tooltip", StyleNano.ButtonPrimary);
-            release.OnPressed += _ => _eui.Send(new DrydockAdminReleaseImpoundMessage { ShipGuid = ship.ShipGuid, Reason = Reason() });
-            VerbRow.AddChild(release);
-        }
-        else if (ship.State is not ("Sold" or "Destroyed" or "Abandoned" or "InEscrow"))
-        {
-            var impound = Verb("drydock-admin-impound", "drydock-admin-impound-tooltip", "ButtonCaution");
-            impound.OnPressed += _ => OpenImpoundDialog(detail);
-            VerbRow.AddChild(impound);
-        }
+        // Release is one press out of the lot into the hull's last berth; Restore to… below is the
+        // same exit with the berth chosen.
+        var release = Verb("drydock-admin-release", "drydock-admin-release-tooltip", StyleNano.ButtonPrimary,
+            ship.State == "Impounded" ? null : "drydock-admin-release-why");
+        release.OnPressed += _ => _eui.Send(new DrydockAdminReleaseImpoundMessage { ShipGuid = ship.ShipGuid, Reason = Reason() });
+        VerbRow.AddChild(release);
 
         // Restore puts a hull that is out, impounded, written off or abandoned back into a berth; a
         // stored one is home, an escrow one is spoken for, and a sold one comes back only through
-        // the sale reversal above, which decides about the money before anything else.
-        if (ship.State is not ("Stored" or "InEscrow" or "Sold"))
+        // the sale reversal, which decides about the money before anything else.
+        var restoreWhy = ship.State switch
         {
-            var restoreTo = new DrydockMenuButton
-            {
-                Text = Loc.GetString("drydock-admin-restore-to"),
-                StyleClasses = { "ButtonSquare" },
-                MinWidth = 130,
-                Margin = new Thickness(0, 0, 4, 0),
-                ToolTip = Loc.GetString("drydock-admin-restore-to-tooltip"),
-            };
-            restoreTo.SetItems(BerthTargets(state, ship, berthId => _eui.Send(new DrydockAdminRestoreMessage
+            "Stored" => "drydock-admin-restore-to-why-stored",
+            "InEscrow" => "drydock-admin-restore-to-why-escrow",
+            "Sold" => "drydock-admin-restore-to-why-sold",
+            _ => null,
+        };
+        var restoreTo = new DrydockMenuButton
+        {
+            Text = Loc.GetString("drydock-admin-restore-to"),
+            StyleClasses = { "ButtonSquare" },
+            MinWidth = 130,
+            Margin = new Thickness(0, 0, 4, 0),
+        };
+        restoreTo.SetItems(restoreWhy == null
+            ? BerthTargets(state, ship, berthId => _eui.Send(new DrydockAdminRestoreMessage
             {
                 ShipGuid = ship.ShipGuid,
                 BerthId = berthId,
                 Reason = Reason(),
-            })));
-            VerbRow.AddChild(restoreTo);
-        }
+            }))
+            : Array.Empty<DrydockMenuButton.Item>());
+        // SetItems greys a menu with nothing to list, which is also an owner with no berths at all.
+        if (restoreWhy == null && restoreTo.Disabled)
+            restoreWhy = "drydock-admin-restore-to-why-no-berths";
+        restoreTo.ToolTip = Loc.GetString(restoreWhy ?? "drydock-admin-restore-to-tooltip");
+        VerbRow.AddChild(restoreTo);
+
+        var sale = ship.State == "Sold" ? detail.LastSale : null;
+        var restoreSale = Verb("drydock-admin-restore-from-sale", "drydock-admin-restore-from-sale-tooltip", StyleNano.ButtonPrimary,
+            sale != null ? null
+            : ship.State == "Sold" ? "drydock-admin-restore-from-sale-why-no-record"
+            : "drydock-admin-restore-from-sale-why");
+        if (sale != null)
+            restoreSale.OnPressed += _ => OpenRestoreSaleDialog(state, ship, sale);
+        VerbRow.AddChild(restoreSale);
+
+        var escrow = detail.Escrow;
+        var cancel = Verb("drydock-admin-cancel-offer", "drydock-admin-cancel-offer-tooltip", "ButtonCaution",
+            escrow != null ? null : "drydock-admin-cancel-offer-why");
+        if (escrow != null)
+            cancel.OnPressed += _ => _eui.Send(new DrydockAdminCancelOfferMessage { TransferId = escrow.TransferId, Reason = Reason() });
+        VerbRow.AddChild(cancel);
 
         var more = new DrydockMenuButton
         {
@@ -603,13 +655,15 @@ public sealed partial class DrydockAdminWindow : FancyWindow
         };
     }
 
-    private static Button Verb(string label, string tooltip, string? extraClass = null)
+    /// <summary>A verb button; greyed when <paramref name="why"/> names a reason, which then replaces its tooltip.</summary>
+    private static Button Verb(string label, string tooltip, string? extraClass, string? why)
     {
         var button = new Button
         {
             Text = Loc.GetString(label),
             Margin = new Thickness(0, 0, 4, 0),
-            ToolTip = Loc.GetString(tooltip),
+            ToolTip = Loc.GetString(why ?? tooltip),
+            Disabled = why != null,
         };
         button.StyleClasses.Add("ButtonSquare");
         if (extraClass != null)
@@ -656,10 +710,8 @@ public sealed partial class DrydockAdminWindow : FancyWindow
     private void BuildBerths(DrydockAdminEuiState state, DrydockAdminShipDto ship)
     {
         var free = state.OwnerBerths.Count(b => b.OccupantShipGuid == null);
-        BerthsTitle.Text = Loc.GetString("drydock-admin-berths-title",
-            ("owner", ship.OwnerName ?? Short(ship.OwnerUserId)),
-            ("free", free),
-            ("total", state.OwnerBerths.Count));
+        BerthsTitle.Text = Loc.GetString("drydock-admin-berths-title", ("owner", ship.OwnerName ?? Short(ship.OwnerUserId)));
+        BerthsCount.Text = Loc.GetString("drydock-admin-berths-count", ("free", free), ("total", state.OwnerBerths.Count));
 
         foreach (var berth in state.OwnerBerths)
         {

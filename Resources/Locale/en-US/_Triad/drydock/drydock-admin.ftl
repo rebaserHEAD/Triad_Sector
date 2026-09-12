@@ -6,9 +6,8 @@ drydock-admin-flavor-left = SKR-OS Drydock Administration
 # The button on the Admin menu's Admin tab that opens the panel.
 drydock-admin-button = Drydock
 
-drydock-admin-search-placeholder = Player, ship (any name it has had), ship id, or account id
-drydock-admin-search-tooltip = One box. A player name, a ship name including any past name from its timeline, a ship id, or an account id.
-drydock-admin-search-button = Search
+drydock-admin-search-hint = player, ship name (any it ever had), ship id, or account
+drydock-admin-search-tooltip = One box. A player name, a ship name including any past name from its timeline, a ship id, or an account id. Enter searches.
 
 drydock-admin-chip-All = All
 drydock-admin-chip-Stored = Stored
@@ -22,7 +21,7 @@ drydock-admin-chip-Stranded = Stranded
 drydock-admin-chip-Stranded-tooltip = Checked out in a round that is over. Each one is a decision.
 
 drydock-admin-count = {$total} match
-drydock-admin-page = Page {$page} / {$pages}
+drydock-admin-page = Page {$page} of {$pages}
 drydock-admin-prev = Prev
 drydock-admin-next = Next
 
@@ -33,6 +32,7 @@ drydock-admin-row-out = out · round {$round}
 drydock-admin-row-escrow = escrow · {$left}
 drydock-admin-row-impounded = impounded · {$fee}
 drydock-admin-row-impounded-locked = impounded · {$fee} · locked
+drydock-admin-row-sold = sold · {$price}
 
 drydock-admin-no-selection = Select a ship.
 drydock-admin-header = {$class} · id {$id} · revision {$revision} · {$owner} (account {$account})
@@ -62,12 +62,26 @@ drydock-admin-reason-tooltip = Written on the timeline row of the next action. R
 drydock-admin-notes-placeholder = Notes
 drydock-admin-save-notes = Save
 
+# Every verb is always in the row (2026-09-12); a greyed one carries the reason as its tooltip.
+drydock-admin-impound-why-impounded = Already in the impound lot. Release or Restore to… take it out.
+drydock-admin-impound-why-escrow = An offer is standing on it. Cancel the offer first.
+drydock-admin-impound-why-terminal = The state is the verdict: a sold, written-off or abandoned ship is not impounded.
+drydock-admin-release-why = Not in the impound lot.
+drydock-admin-restore-to-why-stored = Already in its berth. Move it from the berth row's menu.
+drydock-admin-restore-to-why-escrow = An offer is standing on it and holds its berth. Cancel the offer first.
+drydock-admin-restore-to-why-sold = A sold ship comes back only through Restore from sale…, which decides about the money first.
+drydock-admin-restore-to-why-no-berths = The owner has no berth. Grant one first.
+drydock-admin-restore-from-sale-why = Not sold.
+drydock-admin-restore-from-sale-why-no-record = Sold, but no sale is on record to reverse.
+drydock-admin-cancel-offer-why = No offer is standing on this ship.
+
 drydock-admin-escrow-title = In escrow
 drydock-admin-escrow-body = Offered to {$to} (account {$toAccount}) at {$made}.
 drydock-admin-escrow-lands = Lands in their Berth {$berth}
 drydock-admin-escrow-no-room = No berth of theirs fits it now
 
-drydock-admin-berths-title = {$owner}'s berths · {$free} of {$total} free
+drydock-admin-berths-title = {$owner}'s berths
+drydock-admin-berths-count = · {$free} of {$total} free
 drydock-admin-grant-berth = Grant berth
 drydock-admin-grant-berth-tooltip = Add a berth of this class to the owner's drydock at no charge. A granted berth refunds nothing if sold.
 drydock-admin-berth-delete = Delete berth

@@ -487,6 +487,7 @@ public sealed partial class DrydockAdminEui : BaseEui
         var filter = new DrydockShipFilter(null, null, null, _stateFilter, _strandedOnly, round, _search);
         var (rows, total) = await _store.QueryShips(filter, _page, _pageSize);
         var offers = await _store.GetPendingOffersForShips(rows.Select(r => r.ShipGuid));
+        var sales = await _store.GetLastSalePrices(rows.Where(r => r.State == DrydockShipState.Sold).Select(r => r.ShipGuid));
 
         var detail = _selected is { } selected ? await _store.GetShipDetail(selected) : null;
         if (_selected != null && detail == null)
@@ -553,7 +554,7 @@ public sealed partial class DrydockAdminEui : BaseEui
         };
 
         foreach (var row in rows)
-            state.Ships.Add(ToDto(row, names, live, offers.GetValueOrDefault(row.ShipGuid)));
+            state.Ships.Add(ToDto(row, names, live, offers.GetValueOrDefault(row.ShipGuid), sales.TryGetValue(row.ShipGuid, out var price) ? price : null));
 
         if (detail != null)
         {
@@ -648,7 +649,7 @@ public sealed partial class DrydockAdminEui : BaseEui
             }
 
             state.Selected = new DrydockAdminShipDetailDto(
-                ToDto(detail.Ship, names, live, escrow),
+                ToDto(detail.Ship, names, live, escrow, lastSale?.Price),
                 detail.Ship.AdminNotes,
                 revisions,
                 timeline,
@@ -674,7 +675,7 @@ public sealed partial class DrydockAdminEui : BaseEui
         StateDirty();
     }
 
-    private static DrydockAdminShipDto ToDto(DrydockShip ship, Dictionary<Guid, string> names, HashSet<Guid> live, DrydockTransfer? escrow)
+    private static DrydockAdminShipDto ToDto(DrydockShip ship, Dictionary<Guid, string> names, HashSet<Guid> live, DrydockTransfer? escrow, int? lastSalePrice)
     {
         return new DrydockAdminShipDto(
             ship.ShipGuid,
@@ -693,7 +694,8 @@ public sealed partial class DrydockAdminEui : BaseEui
             escrow?.ExpiresAt,
             ship.ImpoundFee,
             ship.ImpoundReason,
-            ship.ImpoundRedeemable);
+            ship.ImpoundRedeemable,
+            lastSalePrice);
     }
 
     private async Task<Dictionary<Guid, string>> ResolveNames(HashSet<Guid> ids)
