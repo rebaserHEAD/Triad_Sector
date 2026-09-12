@@ -616,6 +616,13 @@ public sealed partial class ShipyardSystem : SharedShipyardSystem
             if (deed!.ShuttleUid == null || !_entityManager.EntityExists(deed.ShuttleUid.Value) || Deleted(deed.ShuttleUid.Value))
             {
                 RemComp<ShuttleDeedComponent>(targetId!.Value);
+                // Triad: drydock tab. This return publishes no state, so the open that strips a
+                // dangling deed leaves the tab drawing whatever the client last had. An impound is
+                // exactly that case: the forced store despawns the hull and never touches the card,
+                // so the impound lot went missing for one open and appeared on the next. The refresh
+                // re-reads the deed and the voucher too, so the sell and rename labels stop lying in
+                // the same case.
+                KickDrydockRefresh(uid, component, player, (ShipyardConsoleUiKey)args.UiKey);
                 return;
             }
         }
@@ -717,6 +724,9 @@ public sealed partial class ShipyardSystem : SharedShipyardSystem
                 if (deed!.ShuttleUid == null || !_entityManager.EntityExists(deed.ShuttleUid.Value) || Deleted(deed.ShuttleUid.Value))
                 {
                     RemComp<ShuttleDeedComponent>(targetId!.Value);
+                    // Triad: drydock tab. Same skipped publish as the open handler above, one card
+                    // movement instead of one open.
+                    KickDrydockRefresh(uid, component, player, (ShipyardConsoleUiKey)uiComp.Key);
                     continue;
                 }
             }
