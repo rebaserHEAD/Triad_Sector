@@ -8,7 +8,6 @@ using Content.Shared._NF.Shipyard.Components;
 using Content.Shared._Triad.CCVar;
 using Content.Shared._Triad.Drydock;
 using Content.Shared.GameTicking;
-using Robust.Server.Player;
 using Robust.Shared.Timing;
 
 namespace Content.Server._Triad.Drydock;
@@ -34,8 +33,9 @@ namespace Content.Server._Triad.Drydock;
 /// </summary>
 public sealed partial class DrydockSystem
 {
+    // The player manager is injected on another partial as _player; RA0032 forbids a second field
+    // of the type, and this is the landmine the tracker names twice.
     [Dependency] private IChatManager _chat = default!;
-    [Dependency] private IPlayerManager _players = default!;
     [Dependency] private RoundEndSystem _roundEnd = default!;
 
     /// <summary>The round the sweep last started for, so a restart that follows an end does not run it twice.</summary>
@@ -88,7 +88,7 @@ public sealed partial class DrydockSystem
             if (identity.ShipId == Guid.Empty || TerminatingOrDeleted(grid))
                 continue;
 
-            if (!_players.TryGetSessionById(ownership.OwnerUserId, out var session))
+            if (!_player.TryGetSessionById(ownership.OwnerUserId, out var session))
                 continue;
 
             _chat.DispatchServerMessage(session, Loc.GetString("drydock-sweep-warning", ("ship", Name(grid)), ("percent", percent)));
