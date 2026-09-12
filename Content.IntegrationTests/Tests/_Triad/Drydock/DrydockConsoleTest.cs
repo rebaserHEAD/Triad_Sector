@@ -343,6 +343,167 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
         }
 
         /// <summary>
+        /// The radar half of an imported hull. The ship-save exporter strips <c>IFF</c>, and the
+        /// import path used to put back a bare one: the component's factory gold, no flags. That
+        /// rode every store after it, so an imported hull drew amber on the mass scanner for good
+        /// while a purchased one of the same class drew the white its vessel grants. The retrieve
+        /// now applies the vessel's grant, and has to displace that blank to do it, since the grant
+        /// is additive and would otherwise skip a component already present.
+        /// </summary>
+        [Test]
+        public async Task ABlankIffIsReplacedByItsVesselsGrant()
+        {
+            await using var pair = await PoolManager.GetServerClient(new PoolSettings { Connected = true });
+            using var _ = ExpectDockJointLog(pair);
+            var server = pair.Server;
+            var entMan = server.EntMan;
+
+            var playerMan = server.ResolveDependency<IPlayerManager>();
+            var protoMan = server.ResolveDependency<IPrototypeManager>();
+            var shipyard = server.System<ShipyardSystem>();
+
+            var session = playerMan.Sessions.First();
+            var (_, _, ship, console, consoleComp, _, operatorEnt) = await BuildConsoleAndShip(pair, session.UserId);
+
+            var vesselId = string.Empty;
+            IFFComponent? granted = null;
+            await server.WaitAssertion(() => (vesselId, granted) = VesselGrantingAnIff(protoMan));
+
+            await server.WaitPost(() =>
+            {
+                entMan.EnsureComponent<VesselComponent>(ship).VesselId = vesselId;
+                entMan.RemoveComponent<IFFComponent>(ship);
+                entMan.AddComponent<IFFComponent>(ship);
+            });
+
+            await server.WaitAssertion(() =>
+            {
+                var blank = entMan.GetComponent<IFFComponent>(ship);
+                Assert.That(blank.Flags & IFFFlags.IsPlayerShuttle, Is.EqualTo(IFFFlags.None),
+                    "The control: the blank the old import minted carries no flags, which is what marks it as not the shipyard's.");
+                Assert.That(blank.Color, Is.EqualTo(IFFComponent.IFFColor), "The control: the blank is the factory gold.");
+            });
+
+            var stored = await RunOnServer(pair,
+                () => shipyard.TryDrydockStore(console, consoleComp, operatorEnt, ShipyardConsoleUiKey.Shipyard));
+
+            Assert.That(stored, Is.Not.Null);
+            Assert.That(stored!.Value.Result, Is.EqualTo(DrydockStoreResult.Success));
+
+            await pair.RunTicksSync(5);
+
+            var retrieved = await RunOnServer(pair,
+                () => shipyard.TryDrydockRetrieve(console, consoleComp, operatorEnt, stored.Value.ShipId!.Value, ShipyardConsoleUiKey.Shipyard));
+
+            Assert.That(retrieved, Is.Not.Null);
+
+            await pair.RunTicksSync(5);
+
+            await server.WaitAssertion(() =>
+            {
+                Assert.That(entMan.TryGetComponent<IFFComponent>(retrieved!.Value, out var iff), Is.True,
+                    "The vessel grants an IFF, so the hull has to come back carrying one.");
+                Assert.That(iff!.Flags & granted!.Flags, Is.EqualTo(granted.Flags),
+                    "The vessel's flags have to land, IsPlayerShuttle above all: without it the radar's shuttle filter does not count the hull as a shuttle.");
+                Assert.That(iff.Color, Is.EqualTo(granted.Color),
+                    "The mass scanner draws this colour, so a blank left in place is the amber hull a player sees.");
+            });
+
+            await pair.CleanReturnAsync();
+        }
+
+        /// <summary>
+        /// The other side of the displacement above: a crew's own IFF is not a blank and must not be
+        /// treated as one. A player who recoloured their ship at the IFF console carries the
+        /// <c>IsPlayerShuttle</c> flag the purchase granted, and a grant that re-applied the vessel's
+        /// white over that on every retrieve would undo their work each time they docked.
+        /// </summary>
+        [Test]
+        public async Task ACrewsOwnIffSurvivesTheVesselsGrant()
+        {
+            await using var pair = await PoolManager.GetServerClient(new PoolSettings { Connected = true });
+            using var _ = ExpectDockJointLog(pair);
+            var server = pair.Server;
+            var entMan = server.EntMan;
+
+            var playerMan = server.ResolveDependency<IPlayerManager>();
+            var protoMan = server.ResolveDependency<IPrototypeManager>();
+            var shipyard = server.System<ShipyardSystem>();
+            var shuttles = server.System<ShuttleSystem>();
+
+            var session = playerMan.Sessions.First();
+            var (_, _, ship, console, consoleComp, _, operatorEnt) = await BuildConsoleAndShip(pair, session.UserId);
+
+            var crewColor = Color.Firebrick;
+            var vesselId = string.Empty;
+            IFFComponent? granted = null;
+            await server.WaitAssertion(() =>
+            {
+                (vesselId, granted) = VesselGrantingAnIff(protoMan);
+                Assert.That(granted!.Color, Is.Not.EqualTo(crewColor),
+                    "The control: a crew colour equal to the vessel's cannot tell a kept IFF from an overwritten one.");
+            });
+
+            await server.WaitPost(() =>
+            {
+                entMan.EnsureComponent<VesselComponent>(ship).VesselId = vesselId;
+                shuttles.AddIFFFlag(ship, IFFFlags.IsPlayerShuttle);
+                shuttles.SetIFFColor(ship, crewColor);
+            });
+
+            var stored = await RunOnServer(pair,
+                () => shipyard.TryDrydockStore(console, consoleComp, operatorEnt, ShipyardConsoleUiKey.Shipyard));
+
+            Assert.That(stored, Is.Not.Null);
+            Assert.That(stored!.Value.Result, Is.EqualTo(DrydockStoreResult.Success));
+
+            await pair.RunTicksSync(5);
+
+            var retrieved = await RunOnServer(pair,
+                () => shipyard.TryDrydockRetrieve(console, consoleComp, operatorEnt, stored.Value.ShipId!.Value, ShipyardConsoleUiKey.Shipyard));
+
+            Assert.That(retrieved, Is.Not.Null);
+
+            await pair.RunTicksSync(5);
+
+            await server.WaitAssertion(() =>
+            {
+                Assert.That(entMan.TryGetComponent<IFFComponent>(retrieved!.Value, out var iff), Is.True);
+                Assert.That(iff!.Color, Is.EqualTo(crewColor),
+                    "An IFF carrying IsPlayerShuttle came from the shipyard and was then made the crew's own; the grant is additive and leaves it.");
+            });
+
+            await pair.CleanReturnAsync();
+        }
+
+        /// <summary>
+        /// A vessel whose composed grant carries an IFF in a colour other than the factory gold, read
+        /// out of live data rather than named. The colour filter is what keeps the assertions honest:
+        /// the antagonist base grants an IFF at the default gold, and a test picking that vessel
+        /// could not tell a replaced blank from one left in place.
+        /// </summary>
+        private static (string Id, IFFComponent Granted) VesselGrantingAnIff(IPrototypeManager protoMan)
+        {
+            foreach (var vessel in protoMan.EnumeratePrototypes<VesselPrototype>().OrderBy(v => v.ID))
+            {
+                foreach (var entry in vessel.AddComponents.Values)
+                {
+                    if (entry.Component is not IFFComponent iff)
+                        continue;
+
+                    // Copied out first: IFFComponent is access-restricted to the shuttle system, and
+                    // calling a method on its field in place is an execute the analyzer refuses.
+                    var color = iff.Color;
+                    if (!color.Equals(IFFComponent.IFFColor))
+                        return (vessel.ID, iff);
+                }
+            }
+
+            Assert.Fail("No vessel grants an IFF in a colour of its own, so there is no grant for a retrieve to apply.");
+            return default;
+        }
+
+        /// <summary>
         /// The duplicate gate, which is the one thing here that must never come loose.
         ///
         /// <para>A retrieved ship's row moves to <see cref="DrydockShipState.CheckedOut"/> and

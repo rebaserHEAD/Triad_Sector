@@ -131,6 +131,12 @@ public sealed partial class ShipyardSystem : SharedShipyardSystem
         // Ensure required components for docking and identification
         EnsureComp<PhysicsComponent>(grid);
         EnsureComp<ShuttleComponent>(grid);
+
+        // Triad: the vessel's grant first. The bare component alone is the factory gold with no
+        // flags, so an imported hull read as an unidentified contact on every mass scanner while a
+        // purchased one of the same class read as white. The EnsureComp below is the import's own
+        // floor for a hull that resolves to no vessel, and a no-op when the grant supplied one.
+        GrantVesselComponents(grid, null);
         EnsureComp<IFFComponent>(grid);
 
         // Reset use delays on objects with the component so delays from previous rounds don't carry over

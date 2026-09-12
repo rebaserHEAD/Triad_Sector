@@ -26,6 +26,7 @@ using Content.Shared._Triad.ShipSize;
 using Content.Shared.Database;
 using Content.Shared.Forensics.Components;
 using Content.Shared.Preferences;
+using Content.Shared.Shuttles.Components;
 using Content.Shared.StationRecords;
 using Content.Server.StationEvents.Components;
 using Content.Server.StationRecords;
@@ -2082,6 +2083,46 @@ public sealed partial class ShipyardSystem
         // blank because the card it pointed at did not survive the store.
         gridDeed.DeedHolder = targetId;
         Dirty(shuttleUid, gridDeed);
+    }
+
+    /// <summary>
+    /// Applies what the vessel prototype grants a hull, through the same call the purchase makes
+    /// (<c>EntityManager.AddComponents(shuttleUid, vessel.AddComponents)</c> in
+    /// ShipyardSystem.Consoles.cs, which until now was the only site in the server that applied it).
+    /// The grant belongs to the shipyard, not to the document: a ship file never carried it, because
+    /// the ship-save exporter strips <c>IFF</c> the same way it strips the deed and the station
+    /// membership, and a retrieve is a purchase's worth of paperwork done again from a row.
+    ///
+    /// <para>Additive, so a crew's own work survives a round trip. <paramref name="vesselProto"/>
+    /// is the caller's resolution where it has one - the drydock prefers the row - and falls back
+    /// to the id the purchase wrote onto the grid, which rides both kinds of document.</para>
+    ///
+    /// <para>One exception to additive, and it is the whole reason this exists. Every vessel base
+    /// grants <c>IsPlayerShuttle</c>, so an <c>IFF</c> without that flag was minted by something
+    /// that is not the shipyard: the import path used to <c>EnsureComp</c> a bare one, which is the
+    /// component's factory gold. Such a hull draws amber on every mass scanner where its purchased
+    /// sister draws BaseVessel's white, and the radar's shuttle filter does not count it as a
+    /// shuttle at all (ShuttleNavControl.xaml.cs:689). It is wrong on its own terms, so it is
+    /// dropped to let the grant land. A customised IFF still carries the flag and is left alone.</para>
+    /// </summary>
+    internal void GrantVesselComponents(EntityUid grid, string? vesselProto)
+    {
+        if (string.IsNullOrEmpty(vesselProto) && TryComp<VesselComponent>(grid, out var vessel))
+            vesselProto = vessel.VesselId.Id;
+
+        if (!string.IsNullOrEmpty(vesselProto)
+            && _prototypeManager.TryIndex<VesselPrototype>(vesselProto, out var proto))
+        {
+            if (TryComp<IFFComponent>(grid, out var iff) && (iff.Flags & IFFFlags.IsPlayerShuttle) == 0x0)
+                RemComp<IFFComponent>(grid);
+
+            EntityManager.AddComponents(grid, proto.AddComponents, removeExisting: false);
+        }
+
+        // Deliberately no IFF floor here for a hull that resolves to no vessel. The import sets
+        // its own, and a retrieve has to hand back what the document holds: a floor in this shared
+        // path mints a gold IFF on every stored hull that never had one, which the round-trip
+        // oracle reads as state appearing out of nowhere.
     }
 
     /// <summary>

@@ -734,6 +734,13 @@ public sealed partial class DrydockSystem
         // takes its name from the grid.
         _shipyard.StampStoredName(grid, record.ShipName);
         RefreshShipOwnership(grid, record);
+
+        // The vessel's own component grant, which the purchase applies and no load ever has. Mostly
+        // a no-op on a document that came from a purchased hull, since what the shipyard granted
+        // then rode the store; it is the hulls imported from a ship file that arrive without it, and
+        // the ones already sitting in the database with the blank IFF the old import minted.
+        _shipyard.GrantVesselComponents(grid, ResolveVesselProto(grid, record));
+
         RecreateStation(grid, record);
 
         timer?.Mark("station");
