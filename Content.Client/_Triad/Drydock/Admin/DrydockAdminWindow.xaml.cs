@@ -41,7 +41,8 @@ public sealed partial class DrydockAdminWindow : FancyWindow
     private const int PageSize = 50;
 
     private static readonly Color Dim = Color.FromHex("#8d8d8d");
-    private static readonly Color Key = Color.FromHex("#999999");
+    private const string KeyHex = "#999999";
+    private static readonly Color Key = Color.FromHex(KeyHex);
     private static readonly Color Empty = Color.FromHex("#777777");
     private static readonly Color Escrow = Color.FromHex("#d9a441");
     private static readonly Color Out = Color.FromHex("#d9d941");
@@ -126,6 +127,8 @@ public sealed partial class DrydockAdminWindow : FancyWindow
         CountLabel.FontOverride = _small;
         PageLabel.FontOverride = _small;
         NoticeLabel.FontOverride = _small;
+        ImpoundFeeLabel.FontOverride = _title;
+        ImpoundFeeNote.FontOverride = _small;
 
         Title = Loc.GetString("drydock-admin-title");
 
@@ -339,6 +342,7 @@ public sealed partial class DrydockAdminWindow : FancyWindow
 
         var detail = state.Selected;
         EscrowPanel.Visible = detail?.Escrow != null;
+        ImpoundPanel.Visible = detail?.Impound != null;
         GrantBerthButton.Disabled = detail == null;
         NotesInput.Editable = detail != null;
 
@@ -355,6 +359,7 @@ public sealed partial class DrydockAdminWindow : FancyWindow
 
         BuildHeader(ship);
         BuildEscrowCard(detail);
+        BuildImpoundCard(detail);
         BuildVerbs(state, detail);
 
         NotesInput.Text = detail.AdminNotes ?? string.Empty;
@@ -420,6 +425,44 @@ public sealed partial class DrydockAdminWindow : FancyWindow
             ("left", TimeLeft(escrow.ExpiresAt))));
         second.Pop();
         EscrowLandsLabel.SetMessage(second);
+    }
+
+    /// <summary>
+    /// The impound card, to the AdminImpounded artboard: who took the hull and when, the share and
+    /// appraisal the fee was cut from, whether the owner may act on it, and where Release would seat
+    /// it, with the frozen fee large beside it. An admin's own words go on the first line; the sweep
+    /// has none worth repeating, since its reason is the sentence the line already says.
+    /// </summary>
+    private void BuildImpoundCard(DrydockAdminShipDetailDto detail)
+    {
+        if (detail.Impound is not { } impound)
+            return;
+
+        var by = impound.TakenByName ?? (impound.TakenByUserId is { } id ? Short(id) : Loc.GetString("drydock-admin-impound-card-sweep"));
+        var at = $"{impound.TakenAt:HH:mm}";
+        var taken = impound.RoundId is { } round
+            ? Loc.GetString("drydock-admin-impound-card-taken", ("by", FormattedMessage.EscapeText(by)), ("at", at), ("round", round))
+            : Loc.GetString("drydock-admin-impound-card-taken-no-round", ("by", FormattedMessage.EscapeText(by)), ("at", at));
+        if (impound.TakenByUserId != null && !string.IsNullOrWhiteSpace(impound.Reason))
+            taken += " " + Loc.GetString("drydock-admin-impound-card-reason", ("reason", FormattedMessage.EscapeText(impound.Reason)));
+
+        var basis = impound.Appraisal is { } appraisal && appraisal > 0
+            ? Loc.GetString("drydock-admin-impound-card-basis",
+                ("percent", (int)Math.Round(impound.Fee * 100.0 / appraisal)),
+                ("appraisal", BankSystemExtensions.ToSpesoString(appraisal)))
+            : Loc.GetString("drydock-admin-impound-card-basis-unknown");
+
+        var owner = Loc.GetString(impound.Redeemable ? "drydock-admin-impound-card-redeemable" : "drydock-admin-impound-card-locked");
+        var seat = impound switch
+        {
+            { LastBerthFree: true, LastBerthId: { } last } => Loc.GetString("drydock-admin-impound-card-seat-last", ("berth", last), ("class", impound.LastBerthClass ?? "?")),
+            { FallbackBerthId: { } other } => Loc.GetString("drydock-admin-impound-card-seat-other", ("berth", other), ("class", impound.FallbackBerthClass ?? "?")),
+            _ => Loc.GetString("drydock-admin-impound-card-seat-none"),
+        };
+
+        ImpoundBodyLabel.SetMessage(FormattedMessage.FromMarkupPermissive(
+            $"{taken}\n[color={KeyHex}]{basis}[/color]\n[color={KeyHex}]{owner} {seat}[/color]"));
+        ImpoundFeeLabel.Text = BankSystemExtensions.ToSpesoString(impound.Fee);
     }
 
     /// <summary>

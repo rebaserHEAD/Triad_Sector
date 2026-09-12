@@ -607,13 +607,53 @@ public sealed partial class DrydockAdminEui : BaseEui
 
             var saleDto = lastSale is { } s ? new DrydockAdminSaleDto(s.Price, s.At, ownerBalance) : null;
 
+            // The impound card. Who took it and when come from the newest Impound row on the
+            // timeline; the fee's basis is the current revision's appraisal, which cannot move while
+            // the hull is in the lot; and where a release would seat it is the same preference the
+            // release applies, read here so the card can say it before the press.
+            DrydockAdminImpoundDto? impoundDto = null;
+            if (detail.Ship.State == DrydockShipState.Impounded)
+            {
+                var taken = detail.Timeline
+                    .Where(a => a.Action == DrydockAuditAction.Impound)
+                    .OrderByDescending(a => a.CreatedAt)
+                    .FirstOrDefault();
+                var appraisal = detail.Revisions.FirstOrDefault(r => r.Revision == detail.Ship.CurrentRevision)?.AppraisedValue;
+
+                var last = berths.FirstOrDefault(b => b.Berth.BerthId == detail.Ship.LastBerthId);
+                var lastFree = last is { Occupant: null } && DrydockStore.Fits(detail.Ship.SizeClass, last.Berth.MaxSizeClass);
+                var fallback = lastFree
+                    ? null
+                    : berths
+                        .Where(b => b.Occupant == null && DrydockStore.Fits(detail.Ship.SizeClass, b.Berth.MaxSizeClass))
+                        .OrderBy(b => DrydockStore.TryParseClass(b.Berth.MaxSizeClass, out var max) ? (int)max : int.MaxValue)
+                        .ThenBy(b => b.Berth.BerthId)
+                        .FirstOrDefault();
+
+                impoundDto = new DrydockAdminImpoundDto(
+                    detail.Ship.ImpoundFee,
+                    appraisal,
+                    detail.Ship.ImpoundRedeemable,
+                    detail.Ship.ImpoundReason,
+                    taken?.CreatedAt ?? detail.Ship.StateChangedAt,
+                    taken?.ActorUserId,
+                    taken?.ActorUserId is { } takenBy ? names.GetValueOrDefault(takenBy) : null,
+                    taken?.RoundId,
+                    last?.Berth.BerthId,
+                    last?.Berth.MaxSizeClass,
+                    lastFree,
+                    fallback?.Berth.BerthId,
+                    fallback?.Berth.MaxSizeClass);
+            }
+
             state.Selected = new DrydockAdminShipDetailDto(
                 ToDto(detail.Ship, names, live, escrow),
                 detail.Ship.AdminNotes,
                 revisions,
                 timeline,
                 escrowDto,
-                saleDto);
+                saleDto,
+                impoundDto);
 
             foreach (var slot in berths)
             {

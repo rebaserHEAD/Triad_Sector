@@ -116,6 +116,32 @@ public sealed record DrydockAdminSaleDto(
     // neither could be read. The dialog unticks "take the money back" when it cannot cover.
     int? OwnerBalance);
 
+/// <summary>
+/// An impounded hull's card: what it was taken for, by whom and when, what it costs to get back,
+/// and where a release would seat it. Drawn only while the hull is in the lot.
+/// </summary>
+[Serializable, NetSerializable]
+public sealed record DrydockAdminImpoundDto(
+    int Fee,
+    // The appraisal the fee was cut from: the current revision's, which cannot change while the
+    // hull is in the lot. Null when the revision recorded none, in which case the fee is zero.
+    int? Appraisal,
+    bool Redeemable,
+    string? Reason,
+    DateTime TakenAt,
+    // Null is the system: the round-end sweep, or an impound whose row predates the actor column.
+    Guid? TakenByUserId,
+    string? TakenByName,
+    int? RoundId,
+    // The berth the hull came from, when it still exists, and whether a release would land there:
+    // free and large enough. When it would not, the berth the release picks instead, or null when
+    // no free berth of the owner's fits.
+    int? LastBerthId,
+    string? LastBerthClass,
+    bool LastBerthFree,
+    int? FallbackBerthId,
+    string? FallbackBerthClass);
+
 [Serializable, NetSerializable]
 public sealed record DrydockAdminShipDetailDto(
     DrydockAdminShipDto Ship,
@@ -123,7 +149,8 @@ public sealed record DrydockAdminShipDetailDto(
     List<DrydockAdminRevisionDto> Revisions,
     List<DrydockAdminAuditDto> Timeline,
     DrydockAdminEscrowDto? Escrow,
-    DrydockAdminSaleDto? LastSale);
+    DrydockAdminSaleDto? LastSale,
+    DrydockAdminImpoundDto? Impound = null);
 
 [Serializable, NetSerializable]
 public sealed class DrydockAdminRequestPageMessage : EuiMessageBase

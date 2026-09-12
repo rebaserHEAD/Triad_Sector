@@ -121,6 +121,55 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             await pair.CleanReturnAsync();
         }
 
+        /// <summary>
+        /// An impounded hull draws the card the AdminImpounded artboard fixes: who took it and when,
+        /// the share and appraisal behind the fee, whether the owner may act, where Release would
+        /// seat it, and the frozen fee. The card does not outlive the impound.
+        /// </summary>
+        [Test]
+        public async Task AnImpoundedHullDrawsTheTermsCard()
+        {
+            await using var pair = await PoolManager.GetServerClient(new PoolSettings { Connected = true });
+
+            await pair.Client.WaitPost(() =>
+            {
+                var window = new DrydockAdminWindow(new DrydockAdminEui());
+
+                // The sweep's taking: no actor, the last berth still free.
+                window.UpdateState(StateWith(Ship("Behir", "Impounded"), impound: SweepImpound()));
+                var body = ((RichTextLabel)Named(window, "ImpoundBodyLabel")).GetMessage();
+                Assert.Multiple(() =>
+                {
+                    Assert.That(Named(window, "ImpoundPanel").Visible, Is.True);
+                    Assert.That(body, Does.Contain("round-end sweep"), "A null actor is the system.");
+                    Assert.That(body, Does.Contain("round 4112"));
+                    Assert.That(body, Does.Contain("50% of the $38,000"), "The share is read back off the fee and the appraisal.");
+                    Assert.That(body, Does.Contain("Owner can reclaim"));
+                    Assert.That(body, Does.Contain("#15 Frigate, its last"), "Release's default, said before the press.");
+                    Assert.That(((Label)Named(window, "ImpoundFeeLabel")).Text, Is.EqualTo("$19,000"));
+                    Assert.That(body, Does.Not.Contain("drydock-admin-"), "No key drawn as text.");
+                });
+
+                // An admin's taking, locked, with the last berth gone: the card names them, repeats
+                // their words, says the hull is held, and names the berth a release would pick.
+                window.UpdateState(StateWith(Ship("Behir", "Impounded"), impound: AdminImpound()));
+                body = ((RichTextLabel)Named(window, "ImpoundBodyLabel")).GetMessage();
+                Assert.Multiple(() =>
+                {
+                    Assert.That(body, Does.Contain("Dov Ashkenazi"));
+                    Assert.That(body, Does.Contain("ticket #94"), "An admin's reason is what the owner reads, so the card repeats it.");
+                    Assert.That(body, Does.Contain("Held for adjudication"));
+                    Assert.That(body, Does.Contain("release picks #31 Cutter"));
+                });
+
+                // Out of the lot, the card goes.
+                window.UpdateState(StateWith(Ship("Behir", "Stored")));
+                Assert.That(Named(window, "ImpoundPanel").Visible, Is.False, "The card does not outlive the impound.");
+            });
+
+            await pair.CleanReturnAsync();
+        }
+
         [Test]
         public async Task TheListsDrawOneRowPerThingTheyWereGiven()
         {
@@ -266,10 +315,22 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             DateTime.UtcNow, CurrentRevision: 7, LiveThisRound: false,
             EscrowExpiresAt: state == "InEscrow" ? DateTime.UtcNow.AddMinutes(27) : null);
 
-        private static DrydockAdminEuiState StateWith(DrydockAdminShipDto selected, params DrydockAdminShipDto[] others)
-            => StateWith(selected, false, false, others);
+        /// <summary>The sweep took it at 50% of a $38,000 appraisal; the owner may reclaim it; its last berth is free.</summary>
+        private static DrydockAdminImpoundDto SweepImpound() => new(
+            Fee: 19000, Appraisal: 38000, Redeemable: true, Reason: "Still in the world at the end of round 4112.",
+            TakenAt: DateTime.UtcNow, TakenByUserId: null, TakenByName: null, RoundId: 4112,
+            LastBerthId: 15, LastBerthClass: "Frigate", LastBerthFree: true, FallbackBerthId: null, FallbackBerthClass: null);
 
-        private static DrydockAdminEuiState StateWith(DrydockAdminShipDto selected, bool escrow = false, bool sold = false, params DrydockAdminShipDto[] others)
+        /// <summary>An admin took it and locked it; its last berth is taken, so a release would pick another.</summary>
+        private static DrydockAdminImpoundDto AdminImpound() => new(
+            Fee: 0, Appraisal: 38000, Redeemable: false, Reason: "ticket #94",
+            TakenAt: DateTime.UtcNow, TakenByUserId: Guid.NewGuid(), TakenByName: "Dov Ashkenazi", RoundId: 4112,
+            LastBerthId: 15, LastBerthClass: "Frigate", LastBerthFree: false, FallbackBerthId: 31, FallbackBerthClass: "Cutter");
+
+        private static DrydockAdminEuiState StateWith(DrydockAdminShipDto selected, params DrydockAdminShipDto[] others)
+            => StateWith(selected, false, false, null, others);
+
+        private static DrydockAdminEuiState StateWith(DrydockAdminShipDto selected, bool escrow = false, bool sold = false, DrydockAdminImpoundDto? impound = null, params DrydockAdminShipDto[] others)
         {
             var ships = new List<DrydockAdminShipDto> { selected };
             ships.AddRange(others);
@@ -302,7 +363,8 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                         ? new DrydockAdminEscrowDto(1, selected.OwnerUserId, "Mara Voss", Guid.NewGuid(), "Tomas Reyes",
                             DateTime.UtcNow, DateTime.UtcNow.AddMinutes(27), 40)
                         : null,
-                    sold ? new DrydockAdminSaleDto(8400, DateTime.UtcNow, 12300) : null),
+                    sold ? new DrydockAdminSaleDto(8400, DateTime.UtcNow, 12300) : null,
+                    impound),
             };
         }
     }

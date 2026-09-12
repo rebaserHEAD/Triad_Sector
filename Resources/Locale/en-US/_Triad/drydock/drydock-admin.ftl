@@ -115,6 +115,21 @@ drydock-admin-impound-redeemable-note = Untick to hold the hull through an adjud
 drydock-admin-impound-confirm = Impound
 drydock-admin-impound-cancel = Cancel
 
+# The impound card on the detail panel (AdminImpounded artboard): who took the hull and when, the
+# fee's basis, whether the owner may act on it, and where a release would seat it.
+drydock-admin-impound-card-sweep = the round-end sweep
+drydock-admin-impound-card-taken = Taken by [bold]{$by}[/bold] at {$at}, round {$round}.
+drydock-admin-impound-card-taken-no-round = Taken by [bold]{$by}[/bold] at {$at}.
+drydock-admin-impound-card-reason = Reason given: {$reason}
+drydock-admin-impound-card-basis = {$percent}% of the {$appraisal} it appraised at.
+drydock-admin-impound-card-basis-unknown = No appraisal was on file, so the fee came to nothing.
+drydock-admin-impound-card-redeemable = Owner can reclaim or abandon it.
+drydock-admin-impound-card-locked = Held for adjudication: the owner can neither reclaim nor abandon it.
+drydock-admin-impound-card-seat-last = Holds no berth; release defaults to #{$berth} {$class}, its last.
+drydock-admin-impound-card-seat-other = Holds no berth; its last is taken, so release picks #{$berth} {$class}.
+drydock-admin-impound-card-seat-none = Holds no berth, and no free berth of the owner's fits it. Grant one before releasing.
+drydock-admin-impound-card-fee-note = fee, frozen
+
 drydock-admin-minutes-left = {$minutes} min left
 drydock-admin-expired = expired
 

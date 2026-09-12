@@ -87,6 +87,22 @@
                         </BoxContainer>
                     </PanelContainer>
 
+                    <!-- The impound terms (AdminImpounded artboard). Only drawn while the hull is in the
+                         lot: who took it and when, the fee's basis, whether the owner may act, and where
+                         a release would seat it, with the frozen fee large on the right. -->
+                    <PanelContainer Name="ImpoundPanel" Visible="False" HorizontalExpand="True" Margin="0 4 0 0">
+                        <PanelContainer.PanelOverride>
+                            <gfx:StyleBoxFlat BackgroundColor="#261a1a" BorderColor="#7a3f3f" BorderThickness="1"/>
+                        </PanelContainer.PanelOverride>
+                        <BoxContainer Orientation="Horizontal" Margin="8" VerticalAlignment="Center">
+                            <RichTextLabel Name="ImpoundBodyLabel" HorizontalExpand="True" VerticalAlignment="Center" />
+                            <BoxContainer Orientation="Vertical" MinWidth="100" Margin="12 0 0 0" VerticalAlignment="Center">
+                                <Label Name="ImpoundFeeLabel" Align="Right" Modulate="#cf4f4f" />
+                                <Label Name="ImpoundFeeNote" Align="Right" Text="{Loc 'drydock-admin-impound-card-fee-note'}" Modulate="#999999" />
+                            </BoxContainer>
+                        </BoxContainer>
+                    </PanelContainer>
+
                     <BoxContainer Orientation="Horizontal" VerticalExpand="True" Margin="0 4 0 0">
 
                         <!-- Berths, then notes under them. -->
