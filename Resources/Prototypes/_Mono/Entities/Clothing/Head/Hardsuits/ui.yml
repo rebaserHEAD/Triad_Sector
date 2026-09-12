@@ -2,7 +2,7 @@
   parent: ClothingHeadHardsuitBase
   id: ClothingHelmetHardsuitUIEnforcer
   name: U.I. ENFORCER MKI helmet
-  description: Flash-proof lining, in built night vision system, and looks good as hell. Other than information display port being snapped, what's more to ask for?
+  description: Built-in night vision system and looks good as hell. Other than information display port being snapped, what's more to ask for?
   categories: [ HideSpawnMenu ]
   components:
   - type: Sprite
@@ -12,7 +12,6 @@
   - type: PressureProtection
     highPressureMultiplier: 0.02
     lowPressureMultiplier: 1000
-  - type: FlashImmunity
   - type: NightVision # Gen 2
     relayOverlay: true
     goggleEffect: true
@@ -43,7 +42,7 @@
   parent: [ClothingHeadHardsuitBase, ShowMedicalIcons]
   id: ClothingHelmetHardsuitUIEnforcerMKII
   name: U.I. ENFORCER MKII Combat helmet
-  description: This top of the line helmet comes with flashproof lining, a mass scanner and an inbuilt medical diagnostic system.
+  description: This top of the line helmet comes with a mass scanner and an inbuilt medical diagnostic system.
   categories: [ HideSpawnMenu ]
   components:
   - type: Sprite
@@ -63,7 +62,6 @@
     interfaces:
       enum.RadarConsoleUiKey.Key:
         type: RadarConsoleBoundUserInterface
-  - type: FlashImmunity
   - type: NightVision # Gen 2 quadtube
     relayOverlay: true
     goggleEffect: true
@@ -197,7 +195,6 @@
     interfaces:
       enum.RadarConsoleUiKey.Key:
         type: RadarConsoleBoundUserInterface
-  - type: FlashImmunity
   - type: NightVision # Gen 4
     relayOverlay: true
     goggleEffect: true
@@ -215,12 +212,3 @@
         Piercing: 0.9
         Heat: 0.9
         Radiation: 0.9
-  - type: HideLayerClothing
-    slots:
-    - Hair
-    - Special
-    - FacialHair
-    - Snout
-    - Head
-    - HeadTop
-    - HeadSide

@@ -4676,3 +4676,147 @@ Entries:
   id: 2588
   time: '2026-09-05T21:03:07.0000000+00:00'
   url: https://github.com/Triad-Sector/Triad_Sector/pull/612
+- author: TheRealMasterChief117
+  changes:
+    - type: Tweak
+      message: Recolored TDF airlock sprites
+  id: 2589
+  time: '2026-09-06T13:41:13.0000000+00:00'
+  url: https://github.com/Triad-Sector/Triad_Sector/pull/614
+- author: Minerva
+  changes:
+    - type: Add
+      message: >-
+        Tape recorders have been ported from Frontier for recording speech. They
+        can be printed in Autolathes or selected in loadout under Tools. They
+        can also be signal-controlled by using four signal ports corresponding
+        to their buttons.
+  id: 2590
+  time: '2026-09-06T13:44:59.0000000+00:00'
+  url: https://github.com/Triad-Sector/Triad_Sector/pull/565
+- author: TheRealMasterChief117
+  changes:
+    - type: Add
+      message: >-
+        LORE: Added faction relation charts to each major faction page, showing
+        you their relationship with every other faction in an organized way to
+        the guidebook.
+    - type: Add
+      message: >-
+        LORE: Added minor faction pages to the lore in the guidebook. Current
+        written minor factions are HZD, Holks and Zis Dynamics.
+    - type: Add
+      message: 'LORE: Added a rank structure table to the TDF page.'
+    - type: Add
+      message: 'LORE: Added the TFA logo to the Triad Frontier Association page'
+    - type: Tweak
+      message: >-
+        LORE: Venmar-7C is now the capital planet of the Triad Sector, in the
+        TFA page.
+  id: 2591
+  time: '2026-09-06T19:48:04.0000000+00:00'
+  url: https://github.com/Triad-Sector/Triad_Sector/pull/613
+- author: Nox38
+  changes:
+    - type: Add
+      message: >-
+        TDF high command has updated the TDF uplink inventory to contain much
+        more useful items!
+    - type: Remove
+      message: >-
+        TDF high command has conducted an audit, removing most of the non-TDF
+        equipment from TDF uplinks.
+  id: 2592
+  time: '2026-09-06T20:22:54.0000000+00:00'
+  url: https://github.com/Triad-Sector/Triad_Sector/pull/600
+- author: nanbyt
+  changes:
+    - type: Add
+      message: Added the Bloodstone Strategic Solutions as a player faction.
+  id: 2593
+  time: '2026-09-06T21:17:22.0000000+00:00'
+  url: https://github.com/Triad-Sector/Triad_Sector/pull/620
+- author: Minerva
+  changes:
+    - type: Tweak
+      message: The militarized backpacks are now lower in the loadout list.
+  id: 2594
+  time: '2026-09-07T03:59:16.0000000+00:00'
+  url: https://github.com/Triad-Sector/Triad_Sector/pull/623
+- author: Nox38
+  changes:
+    - type: Remove
+      message: >-
+        A new motion by Triad Command requires safety fuses on hand grenades,
+        preventing chain reactions. Fragile canister gas grenades and EMP
+        grenades can still chain react.
+  id: 2595
+  time: '2026-09-07T04:07:26.0000000+00:00'
+  url: https://github.com/Triad-Sector/Triad_Sector/pull/615
+- author: Eillyrea
+  changes:
+    - type: Remove
+      message: Rules referencing PR557
+  id: 2596
+  time: '2026-09-07T16:40:09.0000000+00:00'
+  url: https://github.com/Triad-Sector/Triad_Sector/pull/625
+- author: Jakumba
+  changes:
+    - type: Add
+      message: Added the AAC Tablet from DeltaV
+  id: 2597
+  time: '2026-09-09T14:51:50.0000000+00:00'
+  url: https://github.com/Triad-Sector/Triad_Sector/pull/618
+- author: BoiWab
+  changes:
+    - type: Add
+      message: 4 new researchable hardsuits for mercs, of RMT brand.
+    - type: Tweak
+      message: >-
+        UI hardsuits and weapons have been moved on the research tree. Advanced
+        energy weapons are now near the advanced mercenary weapons, while the
+        Enforcer hardsuits have been moved to Specialized Armored Hardsuits.
+    - type: Add
+      message: >-
+        3 new researchable hardsuits for TDF: The TA-82 hazmat suit, good for
+        lasers and biological threats. The TA-67 'Brick', a juggernaut-type
+        suit, and the TA-99x, a very high end suit with a built-in shield
+        generator.
+    - type: Fix
+      message: Removed minor grammatical fixes for TDF tech tree nodes
+  id: 2598
+  time: '2026-09-09T16:40:43.0000000+00:00'
+  url: https://github.com/Triad-Sector/Triad_Sector/pull/547
+- author: BoskiYourk
+  changes:
+    - type: Add
+      message: Added stairs to the construction menu!
+  id: 2599
+  time: '2026-09-11T01:50:04.0000000+00:00'
+  url: https://github.com/Triad-Sector/Triad_Sector/pull/630
+- author: runicguardian
+  changes:
+    - type: Add
+      message: Added Shackford Heavy Industries player faction. Awoooo~!
+  id: 2600
+  time: '2026-09-11T15:52:04.0000000+00:00'
+  url: https://github.com/Triad-Sector/Triad_Sector/pull/631
+- author: Skybailey-dev
+  changes:
+    - type: Fix
+      message: Co2 now absorbs neutron in a reactor before plasma.
+    - type: Fix
+      message: >-
+        Plasma in a reactor's gas loop will now actually form tritium in the
+        outlet line, instead of sacrificing it to the god of floating point
+        errors.
+  id: 2601
+  time: '2026-09-11T16:07:35.0000000+00:00'
+  url: https://github.com/Triad-Sector/Triad_Sector/pull/632
+- author: Frontier
+  changes:
+    - type: Add
+      message: Added 21 more hair customization options. Mostly mohawks and emo stuff.
+  id: 2602
+  time: '2026-09-11T19:49:34.0000000+00:00'
+  url: https://github.com/Triad-Sector/Triad_Sector/pull/633

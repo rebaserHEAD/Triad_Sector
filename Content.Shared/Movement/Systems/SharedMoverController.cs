@@ -554,6 +554,15 @@ public abstract partial class SharedMoverController : VirtualController
             return sound != null;
         }
 
+        // Triad
+        if (_inventory.TryGetSlotEntity(uid, "outerClothing", out var outerClothing) &&
+            FootstepModifierQuery.TryComp(outerClothing, out var outerModifier))
+        {
+            sound = outerModifier.FootstepSoundCollection;
+            return sound != null;
+        }
+        // End Triad
+
         if (_inventory.TryGetSlotEntity(uid, "shoes", out var shoes) &&
             FootstepModifierQuery.TryComp(shoes, out var modifier))
         {
@@ -608,15 +617,6 @@ public abstract partial class SharedMoverController : VirtualController
                 return sound != null;
             }
         }
-
-        // Frontier
-        if (_inventory.TryGetSlotEntity(uid, "outerClothing", out var outerClothing) &&
-            TryComp<FootstepModifierComponent>(outerClothing, out var outerModifier))
-        {
-            sound = outerModifier.FootstepSoundCollection;
-            return sound != null;
-        }
-        // End Frontier
 
         // Delta V
         if (_entities.TryGetComponent(uid, out NoShoesSilentFootstepsComponent? _) &&
