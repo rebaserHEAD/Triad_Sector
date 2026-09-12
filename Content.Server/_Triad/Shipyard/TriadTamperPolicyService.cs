@@ -321,10 +321,11 @@ public sealed partial class TriadTamperPolicyService : EntitySystem
     }
 
     /// <summary>
-    /// Whether the tamper check is enforcing. This is what decides whether an import has
-    /// consequences: only an enforcing server burns the save's hash, spends the account's import
-    /// budget and retires the local file. Off and notify run the same import and leave the player's
-    /// disk alone, so a test box can rehearse without eating a save that has to work elsewhere.
+    /// Whether the tamper check is enforcing. On import it gates two things: capping the offered list
+    /// at the account's remaining budget, and retiring the player's local file to backup, which off
+    /// and notify skip so a test box can rehearse without eating a save that has to work elsewhere.
+    /// The hash burn and the budget refusal themselves are the consume ledger's, and answer in every
+    /// mode.
     /// </summary>
     public bool IsEnforcing() => ResolveMode() == TamperMode.Enforce;
 

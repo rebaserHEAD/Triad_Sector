@@ -3,9 +3,12 @@
 // server says which of those it will accept, and the payload for the one ship being imported crosses
 // the wire only when the player presses the button.
 //
-// The mode decides consequences, not mechanics. Under enforce the hash is burned, the account's
-// import budget is spent and the file is retired to backup; off and notify run the identical import
-// and leave the player's disk untouched, so a non-enforcing server can rehearse the real path without
+// Two authorities, and only one follows the tamper mode. The tamper policy decides whether a document
+// is trusted enough to load: under enforce a file not signed by our key is refused unless the player
+// holds a permit, notify lets it through with an audit row, off lets it through silently. The consume
+// ledger decides whether a file has already bought a ship and whether the account has import
+// allowance left, and it answers in every mode. The one step that reaches the player's disk, retiring
+// the file to backup, is enforce-only, so a non-enforcing server can rehearse the real path without
 // eating a save that still has to work somewhere else.
 
 using System.Linq;
@@ -101,8 +104,9 @@ public sealed partial class ShipyardSystem
                 continue;
 
             // An already-spent file cannot be filtered out here, because that needs its hash and the
-            // manifest carries none. It is refused at import instead, and in practice never reaches
-            // that: an enforcing server retires the file to backup, which takes it off this list.
+            // manifest carries none. It is refused at import instead. An enforcing server retires the
+            // file to backup, which takes it off this list; a permissive one leaves it on the
+            // player's disk, so there it stays listed and the refusal is what a second press meets.
             accepted[candidate.FileId] = candidate;
             offered.Add(new DrydockImportShipInfo(candidate.FileId, candidate.Name, candidate.Appraisal));
         }
@@ -303,9 +307,11 @@ public sealed partial class ShipyardSystem
         }
 
         // Retire the local copy the way the old load path did, so the menu stops offering a file
-        // that can no longer be imported. The ledger above is the authority and refuses a replay on
-        // its own; this only keeps the player from being shown a file that would now be refused.
-        if (!TerminatingOrDeleted(player))
+        // that can no longer be imported. Enforcing only, unlike the ledger above: this is the one
+        // step that reaches the player's disk, and the same file still has to load on a server that
+        // is not draining saves yet. On a permissive server the file stays listed and a second press
+        // is refused by the ledger, which is the authority either way.
+        if (enforcing && !TerminatingOrDeleted(player))
             RaiseNetworkEvent(new DeleteLocalShipFileMessage(fileId), session);
 
         _ = _tamperPolicy.RecordLoadAsync(
