@@ -45,15 +45,6 @@ internal static class DrydockText
             : Loc.GetString("shipyard-console-transfer-seconds-left", ("seconds", Math.Max(0, seconds)));
     }
 
-    /// <summary>How long a ship has been out: "48 m" under an hour, "1 h 05 m" past it.</summary>
-    public static string Out(int minutes)
-    {
-        minutes = Math.Max(0, minutes);
-        return minutes < 60
-            ? Loc.GetString("shipyard-console-time-minutes", ("minutes", minutes))
-            : Loc.GetString("shipyard-console-time-hours", ("hours", minutes / 60), ("minutes", (minutes % 60).ToString("00")));
-    }
-
     /// <summary>
     /// A size class as a label: the stored text with a space before each inner capital, so the
     /// enum's SuperCapital reads as Super Capital. Anything unparseable is shown as it came, since a

@@ -613,12 +613,14 @@ public sealed partial class ShipyardConsoleMenu : FancyWindow
         if (ship == null)
             return;
 
-        // The hull's name carries the weight, a size up from everything else on the tab; its
-        // class and how long it has been out sit behind it in the dim colour.
+        // The hull's name carries the weight, a size up from everything else on the tab; its class
+        // sits behind it in the dim colour, and a hull that has never been stored says so. How long
+        // it has been out is not drawn (user 2026-09-12, "extraneous information that just visually
+        // clutters things"); the server still sends MinutesOut.
         var deed = new FormattedMessage();
         deed.AddBoldSized(ship.Name, 14);
-        deed.AddColored(" " + (ship.MinutesOut is { } minutes
-            ? Loc.GetString("shipyard-console-deed-ship-out", ("class", DrydockText.Class(ship.SizeClass)), ("time", DrydockText.Out(minutes)))
+        deed.AddColored(" " + (ship.MinutesOut != null
+            ? Loc.GetString("shipyard-console-deed-ship", ("class", DrydockText.Class(ship.SizeClass)))
             : Loc.GetString("shipyard-console-deed-ship-new", ("class", DrydockText.Class(ship.SizeClass)))), DrydockText.Dim);
         DeedShipLabel.SetMessage(deed);
 
@@ -974,10 +976,10 @@ public sealed partial class ShipyardConsoleMenu : FancyWindow
 
     /// <summary>
     /// Triad: one card per ship of the operator's in the impound lot, to the Impound artboard: the
-    /// name, class and tag, the reason it was taken, what reclaiming it costs and against what, and
+    /// name, class and tag, then the reason it was taken and the fee on two labelled lines, and
     /// beside them a picker opening on the berth the server would choose, Reclaim, and Abandon…
-    /// behind a name-typed prompt. Reclaim greys on a fee the balance cannot cover and says why in
-    /// the small print. A locked card draws the reason, says an admin holds it, and offers neither,
+    /// behind a name-typed prompt. Reclaim greys on a fee the balance cannot cover and a warning
+    /// line says why. A locked card draws the reason, says an admin holds it, and offers neither,
     /// to the ImpoundLocked artboard.
     /// </summary>
     private void PopulateImpounds()
@@ -1008,39 +1010,51 @@ public sealed partial class ShipyardConsoleMenu : FancyWindow
             headlineLabel.SetMessage(headline);
             text.AddChild(headlineLabel);
 
+            // Two labelled lines under the headline, as the artboard draws them (user 2026-09-12):
+            // the reason, in the body colour on a card the owner can act on and red on a locked
+            // one, then the fee. The appraisal share and the no-deadline note are not drawn.
             if (!string.IsNullOrWhiteSpace(ship.Reason))
-                text.AddChild(new Label { Text = ship.Reason, Modulate = ship.Redeemable ? DrydockText.Dim : DrydockText.ImpoundReason });
+            {
+                var markup = Loc.GetString("shipyard-console-impound-reason", ("reason", FormattedMessage.EscapeText(ship.Reason)));
+                if (!ship.Redeemable)
+                    markup = $"[color={DrydockText.ImpoundReason.ToHexNoAlpha()}]{markup}[/color]";
+                var reason = new RichTextLabel();
+                reason.SetMessage(FormattedMessage.FromMarkupPermissive(markup));
+                text.AddChild(reason);
+            }
 
             if (ship.Redeemable)
             {
-                var terms = new RichTextLabel();
-                terms.SetMessage(FormattedMessage.FromMarkupPermissive(ship.Fee > 0 && ship.Appraisal is { } appraisal && appraisal > 0
-                    ? Loc.GetString("shipyard-console-impound-reclaim-for",
-                        ("fee", BankSystemExtensions.ToSpesoString(ship.Fee)),
-                        ("percent", (int)Math.Round(ship.Fee * 100.0 / appraisal)),
-                        ("appraisal", BankSystemExtensions.ToSpesoString(appraisal)))
-                    : Loc.GetString("shipyard-console-impound-reclaim-free")));
-                text.AddChild(terms);
+                var fee = new RichTextLabel();
+                fee.SetMessage(FormattedMessage.FromMarkupPermissive(ship.Fee > 0
+                    ? Loc.GetString("shipyard-console-impound-fee", ("fee", BankSystemExtensions.ToSpesoString(ship.Fee)))
+                    : Loc.GetString("shipyard-console-impound-fee-free")));
+                text.AddChild(fee);
 
+                // Only when it applies; the card carries no standing small print.
                 var unaffordable = ship.Fee > _lastBalance;
-                text.AddChild(new Label
+                if (unaffordable)
                 {
-                    Text = unaffordable
-                        ? Loc.GetString("shipyard-console-impound-unaffordable-note", ("fee", BankSystemExtensions.ToSpesoString(ship.Fee)))
-                        : Loc.GetString("shipyard-console-impound-no-deadline"),
-                    Modulate = unaffordable ? DrydockText.Warning : DrydockText.Sub,
-                });
+                    text.AddChild(new Label
+                    {
+                        Text = Loc.GetString("shipyard-console-impound-unaffordable-note", ("fee", BankSystemExtensions.ToSpesoString(ship.Fee))),
+                        Modulate = DrydockText.Warning,
+                    });
+                }
                 line.AddChild(text);
 
                 // The picker opens on the berth the server would choose and lists every free berth,
                 // the ones too small greyed with the reason; picking only changes where Reclaim lands.
                 var target = ship.DefaultBerthId;
+                // The three buttons sit centred beside the four lines of text, as the artboard draws
+                // them; a horizontal box stretches its children to the row's height unless told not to.
                 var into = new DrydockMenuButton
                 {
                     StyleClasses = { "ButtonSquare" },
                     MinWidth = 130,
                     AlignRight = true,
                     Margin = new Thickness(12, 0, 8, 0),
+                    VerticalAlignment = VAlignment.Center,
                     Text = IntoText(target),
                 };
                 var free = _lastBerths.Where(b => b.OccupantShipId == null).OrderBy(b => b.BerthId).ToList();
@@ -1065,6 +1079,7 @@ public sealed partial class ShipyardConsoleMenu : FancyWindow
                     Text = Loc.GetString("shipyard-console-impound-reclaim-button"),
                     StyleClasses = { "ButtonSquare", StyleNano.ButtonPrimary },
                     MinWidth = 96,
+                    VerticalAlignment = VAlignment.Center,
                     Disabled = !_validId || target == null || unaffordable,
                 };
                 var abandon = new Button
@@ -1073,6 +1088,7 @@ public sealed partial class ShipyardConsoleMenu : FancyWindow
                     StyleClasses = { "ButtonSquare" },
                     MinWidth = 96,
                     Margin = new Thickness(8, 0, 0, 0),
+                    VerticalAlignment = VAlignment.Center,
                     Disabled = !_validId,
                 };
                 line.AddChild(reclaim);
@@ -1196,6 +1212,7 @@ public sealed partial class ShipyardConsoleMenu : FancyWindow
                 Text = Loc.GetString("shipyard-console-transfer-accept-button"),
                 StyleClasses = { "ButtonSquare", StyleNano.ButtonPrimary },
                 MinWidth = 84,
+                VerticalAlignment = VAlignment.Center,
                 Disabled = !_validId || offer.LandsInBerthId == null,
             };
             var decline = new Button
@@ -1204,6 +1221,7 @@ public sealed partial class ShipyardConsoleMenu : FancyWindow
                 StyleClasses = { "ButtonSquare" },
                 MinWidth = 84,
                 Margin = new Thickness(8, 0, 0, 0),
+                VerticalAlignment = VAlignment.Center,
                 Disabled = !_validId,
             };
             line.AddChild(accept);

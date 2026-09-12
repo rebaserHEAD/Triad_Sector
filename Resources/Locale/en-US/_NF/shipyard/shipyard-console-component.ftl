@@ -134,12 +134,10 @@ shipyard-console-store-voucher-ship = A ship issued on a voucher cannot be store
 # A store is a hand-over at a berth: the ship has to be docked to the station this console is on.
 shipyard-console-store-not-docked = Dock the ship at this station first. A ship is stored from its berth, not from open space.
 shipyard-console-store-not-docked-note = Not docked at this station.
-# The name is drawn on its own so it can carry the weight the class and the clock do not.
-shipyard-console-deed-ship-out = · {$class} · out {$time}
+# The name is drawn on its own so it can carry the weight the class does not. How long the ship
+# has been out is not drawn (2026-09-12).
+shipyard-console-deed-ship = · {$class}
 shipyard-console-deed-ship-new = · {$class} · never stored
-# How long a ship has been out: minutes alone under an hour, then hours and two-digit minutes.
-shipyard-console-time-minutes = {$minutes} m
-shipyard-console-time-hours = {$hours} h {$minutes} m
 shipyard-console-berths-free = {$free} of {$total} berths free
 # Shown while the server works. It reports its own progress by message, so the button carries a
 # real percentage; the plain strings cover the gap before the first report arrives.
@@ -253,11 +251,12 @@ shipyard-console-retrieve-voucher-card = A voucher cannot call in a stored ship.
 
 # Triad: the impound lot. A ship taken from the world at round end, or by an admin, sits on a card
 # above the berth list until its owner reclaims it for the fee or gives it up. A locked one offers
-# neither; the reason line is what the admin or the sweep wrote.
+# neither; the reason line is what the admin or the sweep wrote. Two labelled lines, reason then fee
+# (2026-09-12); the appraisal share and the no-deadline note are not drawn.
 shipyard-console-impound-tag = impounded
-shipyard-console-impound-reclaim-for = Reclaim for [bold]{$fee}[/bold], frozen at {$percent}% of its {$appraisal} appraisal.
-shipyard-console-impound-reclaim-free = Free to reclaim.
-shipyard-console-impound-no-deadline = No deadline. It sits here until you reclaim or abandon it.
+shipyard-console-impound-reason = [bold]Reason[/bold]: {$reason}
+shipyard-console-impound-fee = [bold]Reclamation fee[/bold]: [bold]{$fee}[/bold]
+shipyard-console-impound-fee-free = [bold]Reclamation fee[/bold]: none
 shipyard-console-impound-unaffordable-note = Not enough credits: reclaiming it costs {$fee}.
 shipyard-console-impound-locked-note = Neither reclaim nor abandon is available until an admin unlocks it. No deadline. Ahelp to ask about it.
 shipyard-console-impound-locked-pill = LOCKED
