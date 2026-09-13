@@ -721,6 +721,8 @@ public sealed partial class DrydockSystem
         await ReviveNpcsSliced(grid, slice);
         await ReviveWiresSliced(grid, slice);
         await ReviveDeviceNetworkSliced(grid, slice);
+        // Before the clients register, so a lathe syncing from its server copies the empty database.
+        await ResetResearchSliced(grid, slice);
         await ReviveResearchClientsSliced(grid, slice);
         await ReviveConsoleLocksSliced(grid, slice);
         await ReviveGeneratorsSliced(grid, slice);
@@ -879,6 +881,31 @@ public sealed partial class DrydockSystem
             var uid = targets[i];
             if (TryComp<DeviceNetworkComponent>(uid, out var device))
                 _deviceNetwork.ConnectDevice(uid, device);
+
+            await SweepStep(grid, slice, i);
+        }
+    }
+
+    /// <summary>
+    /// Research points and unlocked technology stay with the round, not the ship: the legacy ship
+    /// save stripped them from the file, and live still does. The drydock stores the full document,
+    /// so the reset happens here instead, which also covers every ship already filed with research in
+    /// it. Every database aboard is reset, lathes and consoles included, since a lathe with no server
+    /// keeps whatever recipes it last synced.
+    /// </summary>
+    private async Task ResetResearchSliced(EntityUid grid, IDrydockSlice slice)
+    {
+        var targets = SnapshotOnGrid<TechnologyDatabaseComponent>(grid);
+        await ReviveBegin(grid, slice, DrydockPhase.Sweeps, targets.Count);
+
+        for (var i = 0; i < targets.Count; i++)
+        {
+            var uid = targets[i];
+            if (TryComp<TechnologyDatabaseComponent>(uid, out var database))
+                _research.ResetDatabase((uid, database));
+
+            if (TryComp<ResearchServerComponent>(uid, out var server))
+                _research.ModifyServerPoints(uid, -server.Points, server);
 
             await SweepStep(grid, slice, i);
         }
