@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
 using Robust.Shared.CPUJob.JobQueues;
@@ -6,19 +7,39 @@ using Robust.Shared.CPUJob.JobQueues;
 namespace Content.Server._Triad.Drydock;
 
 /// <summary>
-/// The store pipeline, run a few milliseconds at a time on the main thread. The fork's first
+/// The non-generic surface of <see cref="DrydockPipelineJob{TContext,TOutcome}"/>: the members a
+/// caller can read without knowing which pipeline is running.
+/// </summary>
+public interface IDrydockPipelineJob
+{
+    /// <summary>The id <see cref="DrydockSystem.RegisterJob"/> stamped on this job, or zero until then.</summary>
+    int JobId { get; }
+
+    double SecondsSinceProgress { get; }
+
+    /// <summary>Worst single run span in milliseconds, a lower bound on the worst tick. Sampled at each suspension.</summary>
+    double WorstSliceMs { get; }
+
+    int Slices { get; }
+}
+
+/// <summary>
+/// A drydock pipeline, run a few milliseconds at a time on the main thread. The fork's first
 /// <see cref="Job{T}"/>: the engine's pathfinder and the dungeon generator use the same machinery to
-/// spread expensive work over ticks, and a drydock store is the same shape of problem - a couple of
-/// seconds of main-thread work that nobody but the captain who asked for it should ever feel.
+/// spread expensive work over ticks, and a drydock store or retrieve is the same shape of problem - a
+/// couple of seconds of main-thread work that nobody but the captain who asked for it should ever feel.
 ///
 /// <para>The job is also the pipeline's <see cref="IDrydockSlice"/>. That pairing is deliberate: the
 /// only way to suspend is through methods on this object, so a pipeline written against the
 /// interface cannot accidentally take a bare await, which would leave <see cref="Job{T}"/> with no
 /// resume handle and hang the job forever in release.</para>
 /// </summary>
-public sealed class DrydockStoreJob : Job<DrydockStoreOutcome>, IDrydockSlice
+public sealed class DrydockPipelineJob<TContext, TOutcome> : Job<TOutcome>, IDrydockSlice, IDrydockPipelineJob
 {
     private readonly DrydockSystem _system;
+
+    /// <summary>The pipeline this job drives: <c>RunStorePipeline</c> or <c>RunRetrievePipeline</c>.</summary>
+    private readonly Func<TContext, IDrydockSlice, Task<TOutcome>> _pipeline;
 
     /// <summary>How many items pass between stopwatch reads. Never less than one.</summary>
     private readonly int _stride;
@@ -30,29 +51,35 @@ public sealed class DrydockStoreJob : Job<DrydockStoreOutcome>, IDrydockSlice
     /// </summary>
     private readonly System.Diagnostics.Stopwatch _sinceProgress = System.Diagnostics.Stopwatch.StartNew();
 
-    public DrydockStoreJob(
+    public DrydockPipelineJob(
         DrydockSystem system,
-        DrydockStoreContext context,
+        TContext context,
         double maxTime,
         int stride,
         DrydockProgressCallback? onProgress,
-        CancellationToken cancellation)
+        CancellationToken cancellation,
+        IReadOnlyList<DrydockPhase> phases,
+        Func<TContext, IDrydockSlice, Task<TOutcome>> pipeline)
         : base(maxTime, cancellation)
     {
         _system = system;
         _stride = Math.Max(1, stride);
+        _pipeline = pipeline;
         Context = context;
-        Progress = new DrydockProgress(DrydockPhases.Store, onProgress);
+        Progress = new DrydockProgress(phases, onProgress);
     }
 
-    public DrydockStoreContext Context { get; }
+    public TContext Context { get; }
 
     public DrydockProgress Progress { get; }
 
+    /// <summary>The id <see cref="DrydockSystem.RegisterJob"/> returned for this job. Set right after registration.</summary>
+    public int JobId { get; set; }
+
     /// <summary>
     /// Whether this job can suspend at all. A budget of zero would make the engine's own
-    /// out-of-time check a no-op, so rather than run a whole store inside one tick under a name that
-    /// says otherwise, the caller is expected to skip the job entirely at that setting.
+    /// out-of-time check a no-op, so rather than run the whole pipeline inside one tick under a name
+    /// that says otherwise, the caller is expected to skip the job entirely at that setting.
     /// </summary>
     public bool Slicing => MaxTime > 0.0;
 
@@ -65,8 +92,8 @@ public sealed class DrydockStoreJob : Job<DrydockStoreOutcome>, IDrydockSlice
     /// The phase that owns the span currently being timed: whichever one was open when this run
     /// started, not whichever one is open when it ends. <c>Begin</c> calls
     /// <c>Progress.BeginPhase</c> before it suspends, so reading the phase off Progress at a
-    /// suspension would file every phase's tail under the phase that follows it, and the serialize
-    /// would land in Validate. Null until the first phase opens.
+    /// suspension would file every phase's tail under the phase that follows it, misattributing an
+    /// expensive phase's cost to its neighbour. Null until the first phase opens.
     /// </summary>
     private DrydockPhase? _spanPhase;
 
@@ -140,20 +167,20 @@ public sealed class DrydockStoreJob : Job<DrydockStoreOutcome>, IDrydockSlice
         _sinceProgress.Restart();
     }
 
-    protected override async Task<DrydockStoreOutcome?> Process()
+    protected override async Task<TOutcome?> Process()
     {
         try
         {
-            return await _system.RunStorePipeline(Context, this);
+            return await _pipeline(Context, this);
         }
         finally
         {
             // The last run of a pipeline ends at its return, and nothing suspends there, so without
-            // this the tail of the store is never sampled. The guard is the engine's own
-            // (Job.cs:193-200): a job still Waiting reached here because an awaited task faulted,
-            // which means WaitAsyncTask never got to its resume park and the stopwatch is still
-            // holding a span that contains the whole off-thread wait. The fault path's own
-            // main-thread work is simply not measured; there is no restart to price it against.
+            // this the tail is never sampled. The guard is the engine's own (Job.cs:193-200): a job
+            // still Waiting reached here because an awaited task faulted, which means WaitAsyncTask
+            // never got to its resume park and the stopwatch is still holding a span that contains
+            // the whole off-thread wait. The fault path's own main-thread work is simply not
+            // measured; there is no restart to price it against.
             if (Status != JobStatus.Waiting)
                 Sample(suspending: false);
 

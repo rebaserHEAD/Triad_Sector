@@ -212,7 +212,7 @@ public sealed partial class DrydockSystem : EntitySystem
         CancellationTokenSource? cancellation = null;
 
         // Hoisted so the finally can record its meter on every path, the rollback lever included.
-        DrydockStoreJob? job = null;
+        DrydockPipelineJob<DrydockStoreContext, DrydockStoreOutcome>? job = null;
 
         try
         {
@@ -228,8 +228,11 @@ public sealed partial class DrydockSystem : EntitySystem
             }
 
             cancellation = new CancellationTokenSource();
-            job = new DrydockStoreJob(this, ctx, TickBudgetSeconds, SliceStride, onProgress, cancellation.Token);
+            job = new DrydockPipelineJob<DrydockStoreContext, DrydockStoreOutcome>(
+                this, ctx, TickBudgetSeconds, SliceStride, onProgress, cancellation.Token,
+                DrydockPhases.Store, RunStorePipeline);
             jobId = RegisterJob(job, cancellation);
+            job.JobId = jobId;
             EnqueueJob(job);
 
             DrydockStoreOutcome? outcome;
@@ -278,8 +281,8 @@ public sealed partial class DrydockSystem : EntitySystem
 
     /// <summary>
     /// The store itself, from the identity stamp through the despawn, written against a tick budget.
-    /// Driven either by <see cref="DrydockStoreJob"/> or, when the budget cvar is off, by
-    /// <see cref="DrydockSyncSlice"/> on the caller's own async path.
+    /// Driven either by <see cref="DrydockPipelineJob{TContext,TOutcome}"/> or, when the budget cvar
+    /// is off, by <see cref="DrydockSyncSlice"/> on the caller's own async path.
     /// </summary>
     /// <remarks>
     /// <para>The only legal awaits in here are on the slice. A bare await leaves the job with no
@@ -718,7 +721,7 @@ public sealed partial class DrydockSystem : EntitySystem
             // The per-phase figures are wall clock and always were, but under slicing that stops
             // being a footnote: a phase spanning fifty ticks reads as fifty ticks. The worst slice
             // beside them is the number that says whether anyone else felt it.
-            var (worstSliceMs, slices) = slice is DrydockStoreJob job
+            var (worstSliceMs, slices) = slice is IDrydockPipelineJob job
                 ? (job.WorstSliceMs, job.Slices)
                 : (0d, 0);
 
@@ -800,25 +803,17 @@ public sealed partial class DrydockSystem : EntitySystem
     /// <summary>
     /// Which registered job is driving this slice, or zero for the synchronous path. The id is
     /// stamped on every private map the pipeline creates, so a map left behind names an owner the
-    /// sweep can ask whether it is still alive.
+    /// sweep can ask whether it is still alive. The wrapper stamps it onto the job right after
+    /// <see cref="RegisterJob"/>, before the job is enqueued.
     ///
     /// <para>Zero makes a synchronous store's staging maps look ownerless to that sweep. That is the
     /// honest answer - there is no job to ask - and it costs nothing in practice, because the sweep
     /// only runs at a round boundary and a store still in flight across a round boundary was already
     /// the pre-slicing code's problem.</para>
     /// </summary>
-    private int JobIdOf(IDrydockSlice slice)
+    private static int JobIdOf(IDrydockSlice slice)
     {
-        if (slice is not IJob job)
-            return 0;
-
-        foreach (var (id, entry) in _liveJobs)
-        {
-            if (ReferenceEquals(entry.Job, job))
-                return id;
-        }
-
-        return 0;
+        return slice is IDrydockPipelineJob job ? job.JobId : 0;
     }
 
     /// <summary>

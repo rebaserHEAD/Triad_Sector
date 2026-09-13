@@ -228,24 +228,19 @@ public sealed partial class DrydockSystem
     }
 
     /// <summary>
-    /// How long since a job last advanced. There are exactly two job types and both are ours, so this
-    /// is a type test rather than another interface on top of the slice one; anything else in the
-    /// queue simply has no watchdog.
+    /// How long since a job last advanced. Only drydock pipeline jobs report it; anything else in the
+    /// queue has no watchdog.
     /// </summary>
     private static bool TryGetProgressAge(IJob job, out double seconds)
     {
-        switch (job)
+        if (job is IDrydockPipelineJob pipeline)
         {
-            case DrydockStoreJob store:
-                seconds = store.SecondsSinceProgress;
-                return true;
-            case DrydockRetrieveJob retrieve:
-                seconds = retrieve.SecondsSinceProgress;
-                return true;
-            default:
-                seconds = 0;
-                return false;
+            seconds = pipeline.SecondsSinceProgress;
+            return true;
         }
+
+        seconds = 0;
+        return false;
     }
 
     /// <summary>Whether a staging map's owner is still running. An id of zero never is.</summary>

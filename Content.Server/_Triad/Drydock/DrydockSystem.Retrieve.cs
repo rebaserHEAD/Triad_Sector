@@ -186,7 +186,7 @@ public sealed partial class DrydockSystem
         var budget = TickBudgetSeconds;
         var jobId = 0;
         CancellationTokenSource? cancellation = null;
-        DrydockRetrieveJob? job = null;
+        DrydockPipelineJob<DrydockRetrieveContext, DrydockRetrieveOutcome>? job = null;
         DrydockProgress? progress = null;
         var outcome = DrydockRetrieve.Refused(DrydockRetrieveResult.Cancelled);
 
@@ -204,9 +204,12 @@ public sealed partial class DrydockSystem
             else
             {
                 cancellation = new CancellationTokenSource();
-                job = new DrydockRetrieveJob(this, ctx, budget, SliceStride, onProgress, cancellation.Token);
+                job = new DrydockPipelineJob<DrydockRetrieveContext, DrydockRetrieveOutcome>(
+                    this, ctx, budget, SliceStride, onProgress, cancellation.Token,
+                    DrydockPhases.Retrieve, RunRetrievePipeline);
                 progress = job.Progress;
                 jobId = RegisterJob(job, cancellation);
+                job.JobId = jobId;
                 EnqueueJob(job);
 
                 var result = await job.AsTask;
@@ -294,6 +297,11 @@ public sealed partial class DrydockSystem
     /// The retrieve itself, from the first blob read to the dock. Driven either by a job, a few
     /// milliseconds of main-thread time per tick, or by <see cref="DrydockSyncSlice"/> straight
     /// through.
+    ///
+    /// <para>The inbound leg has a harder floor than the outbound one. The store can drive the
+    /// engine's serializer one entity at a time from content, but every per-entity loop inside the
+    /// deserializer is private, so the grid load is one bulk call and the slicing starts at the
+    /// revive epilogue after it.</para>
     ///
     /// <para>The database claim is neither taken nor released here. The wrapper owns it, because a
     /// job that observes its cancellation can never finish another await, and the release is the one
@@ -498,7 +506,11 @@ public sealed partial class DrydockSystem
 
                 // Nothing may await between the dock above and the return below. The ship is docked
                 // and the claim has been handed over, so a cancellation observed here would report a
-                // failed retrieve about a ship that is visibly parked at the station.
+                // failed retrieve about a ship that is visibly parked at the station. It is also why
+                // the job's own finally has to sample this tail explicitly: from Begin(Dock) - holding
+                // TryFTLDock, one of the four calls content cannot interrupt - to here there is no
+                // Await, Begin or Step, so nothing else would ever price it and every retrieve timing
+                // line would under-report its own worst span without that last sample.
                 ScrapRetrieveStaging(ctx);
 
                 return new DrydockRetrieveOutcome(new DrydockRetrieve(DrydockRetrieveResult.Success, grid));
