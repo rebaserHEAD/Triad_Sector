@@ -367,7 +367,8 @@ public enum DrydockShipState
 
     /// <summary>
     /// Scrapped by its owner for credits, and the berth is freed. Terminal, and pruning only runs
-    /// inside a store or a promote, so a terminal ship's remaining blobs are frozen rather than
+    /// inside a store, a promote or a re-bake (which refuses anything not stored), so a terminal
+    /// ship's remaining blobs are frozen rather than
     /// decaying: an admin can undo a sale made in anger for as long as the row exists.
     /// </summary>
     Sold = 4,
@@ -404,11 +405,26 @@ public sealed class DrydockRevision
 
     public DrydockRevisionKind Kind { get; set; }
 
-    /// <summary>Which revision a re-bake was derived from. Null for a player store.</summary>
+    /// <summary>
+    /// Which revision a re-bake or an admin promote was derived from. Null for a player store and an
+    /// import.
+    /// </summary>
     public int? DerivedFromRevision { get; set; }
 
-    /// <summary>Which generation of the re-bake ladder produced this. Zero for a player store.</summary>
+    /// <summary>
+    /// Which generation of the re-bake ladder produced this. Zero for a player store; a promote
+    /// carries its source's.
+    /// </summary>
     public int RebakeVersion { get; set; }
+
+    /// <summary>
+    /// Excluded from blob pruning while set: keep-N and the two-blob floor both step around a pinned
+    /// revision's document, however far behind the current revision it falls. Set and cleared only
+    /// through <c>DrydockStore.TryPinRevision</c> and <c>TryUnpinRevision</c>, each of which writes a
+    /// timeline row. A pin protects the document, never a promise that it still loads: content can
+    /// have moved since.
+    /// </summary>
+    public bool Pinned { get; set; }
 
     /// <summary>
     /// Who stored it, null for the system. Owners change hands, so this is what makes a year-old
@@ -419,7 +435,8 @@ public sealed class DrydockRevision
     public Player? Actor { get; set; }
 
     /// <summary>
-    /// Nullable because the re-bake ladder runs between rounds, when there is no round to point at.
+    /// Nullable because a re-bake is filed without a round: the ladder is designed to run between
+    /// rounds, when there is no round to point at.
     /// </summary>
     public int? CreatedRoundId { get; set; }
 
@@ -427,15 +444,15 @@ public sealed class DrydockRevision
 
     public DateTime CreatedAt { get; set; }
 
-    /// <summary>The engine's map document format version, so the ladder knows what it is holding.</summary>
+    /// <summary>The engine's map document format version, so a re-bake knows what it is holding.</summary>
     public int EngineFormatVer { get; set; }
 
-    /// <summary>Our own sidecar and manifest encoding version, migrated the same way.</summary>
+    /// <summary>Our own sidecar and manifest encoding version, for a re-bake to migrate the same way.</summary>
     public int DrydockFormatVer { get; set; }
 
     /// <summary>
     /// Hash over the set of prototype ids the blob references. One of the two drift classes, and
-    /// the one the ladder heals.
+    /// the one the re-bake ladder is designed to heal; no worker files re-bakes yet.
     /// </summary>
     public byte[] ProtoFingerprint { get; set; } = Array.Empty<byte>();
 
@@ -456,8 +473,10 @@ public sealed class DrydockRevision
 
     /// <summary>
     /// What the shipyard appraised the hull at when this revision was filed, captured while the
-    /// grid was still live because a stored ship has nothing left to appraise. Null on a re-bake
-    /// and on rows filed before the column existed; a sale quotes from the current revision.
+    /// grid was still live because a stored ship has nothing left to appraise. A re-bake and a
+    /// promote copy their source revision's, since neither has a live grid either. Null when nothing
+    /// appraised it, and on rows filed before the column existed; a sale quotes from the current
+    /// revision.
     /// </summary>
     public int? AppraisedValue { get; set; }
 
@@ -570,6 +589,11 @@ public enum DrydockAuditAction
 
     Transfer = 3,
     Delete = 4,
+
+    /// <summary>
+    /// A system re-bake was filed as the ship's new current revision. The actor is null, the
+    /// revision is the one filed, and the reason names the revision it was derived from.
+    /// </summary>
     Rebake = 5,
 
     /// <summary>
@@ -671,4 +695,30 @@ public enum DrydockAuditAction
     /// document a retrieve reads, never where the hull is.
     /// </summary>
     RevisionPromoted = 32,
+
+    /// <summary>
+    /// A revision's document was excluded from pruning. The revision is the one pinned, the actor
+    /// is whoever pinned it (null for the system), and the reason says why.
+    /// </summary>
+    RevisionPinned = 33,
+
+    /// <summary>
+    /// A pin was cleared, typically once the document has been re-baked or judged unrecoverable. The
+    /// next store, promote or re-bake prunes the document if keep-N and the floor no longer cover it.
+    /// </summary>
+    RevisionUnpinned = 34,
+
+    /// <summary>
+    /// For the retrieve's drift gate: a retrieve refused because the document references content that
+    /// no longer resolves after the migration mappings are applied. The reason lists the ids. No code
+    /// writes this row yet.
+    /// </summary>
+    DriftRefused = 35,
+
+    /// <summary>
+    /// For the retrieve's fidelity report: a retrieve restored the hull with captured-state or
+    /// appearance keys skipped, because nothing on the live entity answers to them any more. The
+    /// reason lists the keys. No code writes this row yet.
+    /// </summary>
+    StateSkipped = 36,
 }

@@ -16,7 +16,7 @@ using NpgsqlTypes;
 namespace Content.Server.Database.Migrations.Postgres
 {
     [DbContext(typeof(PostgresServerDbContext))]
-    [Migration("20260913032946_AddTriadDrydock")]
+    [Migration("20260913213806_AddTriadDrydock")]
     partial class AddTriadDrydock
     {
         /// <inheritdoc />
@@ -1167,6 +1167,10 @@ namespace Content.Server.Database.Migrations.Postgres
                         .IsRequired()
                         .HasColumnType("text")
                         .HasColumnName("manifest");
+
+                    b.Property<bool>("Pinned")
+                        .HasColumnType("boolean")
+                        .HasColumnName("pinned");
 
                     b.Property<byte[]>("ProtoFingerprint")
                         .IsRequired()

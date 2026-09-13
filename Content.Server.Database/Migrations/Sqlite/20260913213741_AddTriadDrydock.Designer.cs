@@ -11,7 +11,7 @@ using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 namespace Content.Server.Database.Migrations.Sqlite
 {
     [DbContext(typeof(SqliteServerDbContext))]
-    [Migration("20260913032942_AddTriadDrydock")]
+    [Migration("20260913213741_AddTriadDrydock")]
     partial class AddTriadDrydock
     {
         /// <inheritdoc />
@@ -1106,6 +1106,10 @@ namespace Content.Server.Database.Migrations.Sqlite
                         .IsRequired()
                         .HasColumnType("TEXT")
                         .HasColumnName("manifest");
+
+                    b.Property<bool>("Pinned")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("pinned");
 
                     b.Property<byte[]>("ProtoFingerprint")
                         .IsRequired()

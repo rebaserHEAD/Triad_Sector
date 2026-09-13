@@ -80,27 +80,88 @@ public sealed partial class DrydockStore
     }
 
     /// <summary>
-    /// Deletes every blob for this ship below the keep-N floor, never revisions. The floor is the
-    /// revision just filed or promoted, which survives whatever <paramref name="keepBlobs"/> says.
-    /// Zero or less prunes nothing.
+    /// The fewest documents a prune ever leaves a ship holding, counting the one just filed: the
+    /// current revision and one step back for the retrieve ladder to fall to. A floor rather than a
+    /// pin, because it promises only that a second document exists, not that it still loads.
+    /// </summary>
+    private const int MinimumKeptBlobs = 2;
+
+    /// <summary>
+    /// Deletes this ship's blobs that fall outside retention, never revisions. Three rules, all of
+    /// which have to agree before a document goes:
+    ///
+    /// <list type="bullet">
+    /// <item>Keep-N: the newest <paramref name="keepBlobs"/> documents stay, counting
+    /// <paramref name="keptRevision"/>, the one just filed or promoted, which is always the newest.</item>
+    /// <item>The floor: never fewer than <see cref="MinimumKeptBlobs"/>, so <paramref name="keepBlobs"/>
+    /// of 1 behaves exactly as 2, and a ship holding only its new document prunes nothing.</item>
+    /// <item>Pins: a <see cref="DrydockRevision.Pinned"/> revision's document is never deleted, however
+    /// far outside the window it falls. A pinned document inside the window still counts toward it.</item>
+    /// </list>
+    ///
+    /// <para>Zero or less prunes nothing, rather than keeping nothing: of the two readings, only this
+    /// one costs disk when it is misconfigured.</para>
+    ///
+    /// <para>The window is counted over the documents that exist rather than by revision arithmetic,
+    /// so a gap in a ship's documents (a prune from before the floor existed, a hand repair) cannot
+    /// pull the edge past the only one left.
+    /// <paramref name="keptRevision"/> is still unsaved when this runs (every caller adds it to the
+    /// tracker first and saves after), which is why the count reads the table below it and reserves
+    /// one place for it.</para>
     ///
     /// <para>Set-based rather than load-then-remove: a <see cref="DrydockBlob"/> row carries the
-    /// compressed document, multiple megabytes each, and nothing here ever wants the bytes back.
-    /// <c>ExecuteDeleteAsync</c> runs on the context's current transaction like any other write in
-    /// this file, so it commits or rolls back with the revision it is pruning around. Safe against
-    /// the row this same call just added: the new revision is never below its own floor, and a row
-    /// added earlier in the same context is still unsaved, so the delete has nothing tracked to
-    /// collide with.</para>
+    /// compressed document, multiple megabytes each, and nothing here ever wants the bytes back. The
+    /// window's edge is one integer read off the primary key; the delete is one statement with the
+    /// pin exclusion inside it. Both run on the context's current transaction, so they commit or roll
+    /// back with the revision being pruned around.</para>
+    ///
+    /// <para>Takes the ship row first (<see cref="LockShipRow"/>), the same row a pin takes before it
+    /// moves the flag, so on Postgres a pin and a prune of the same ship serialize: a pin committed
+    /// first is seen by the delete, and a pin arriving second waits for this commit and then sees what
+    /// it left, refusing a document it deleted rather than reporting success on it. Reasoned from
+    /// read-committed row locking, not exercised by a test: the integration suite runs on SQLite.</para>
     /// </summary>
-    private static Task PruneBlobs(ServerDbContext db, Guid shipGuid, int keptRevision, int keepBlobs, CancellationToken token)
+    private static async Task PruneBlobs(ServerDbContext db, Guid shipGuid, int keptRevision, int keepBlobs, CancellationToken token)
     {
         if (keepBlobs <= 0)
-            return Task.CompletedTask;
+            return;
 
-        var floor = keptRevision - keepBlobs + 1;
-        return db.DrydockBlob
-            .Where(b => b.ShipGuid == shipGuid && b.Revision < floor)
+        await LockShipRow(db, shipGuid, token);
+
+        var keep = Math.Max(keepBlobs, MinimumKeptBlobs);
+
+        // The oldest already-saved document that stays: the (keep - 1)th newest below the one just
+        // filed. Null when fewer than that exist, which is the floor refusing to prune at all.
+        var oldestKept = await db.DrydockBlob.AsNoTracking()
+            .Where(b => b.ShipGuid == shipGuid && b.Revision < keptRevision)
+            .OrderByDescending(b => b.Revision)
+            .Select(b => (int?) b.Revision)
+            .Skip(keep - 2)
+            .FirstOrDefaultAsync(token);
+
+        if (oldestKept is not { } edge)
+            return;
+
+        await db.DrydockBlob
+            .Where(b => b.ShipGuid == shipGuid
+                && b.Revision < edge
+                && !db.DrydockRevision.Any(r => r.ShipGuid == b.ShipGuid && r.Revision == b.Revision && r.Pinned))
             .ExecuteDeleteAsync(token);
+    }
+
+    /// <summary>
+    /// Takes the ship row's write lock for the rest of the transaction without changing anything, by
+    /// assigning a column to itself. The ordering point between a prune and a pin of the same ship;
+    /// SQLite serializes writers anyway, so this matters on Postgres. Every caller reaches it before
+    /// writing any revision or blob row, so ship-then-revision is the one lock order and a pin and a
+    /// prune cannot deadlock each other.
+    /// </summary>
+    /// <returns>The number of rows matched: zero means the ship does not exist (yet, for a first store).</returns>
+    private static Task<int> LockShipRow(ServerDbContext db, Guid shipGuid, CancellationToken token)
+    {
+        return db.DrydockShip
+            .Where(s => s.ShipGuid == shipGuid)
+            .ExecuteUpdateAsync(set => set.SetProperty(s => s.CurrentRevision, s => s.CurrentRevision), token);
     }
 
     /// <summary>
@@ -158,14 +219,23 @@ public sealed partial class DrydockStore
     /// ship row and incremented, so a race produces the same number twice, and the composite primary
     /// key on (ship_guid, revision) makes the second transaction fail loudly rather than overwrite.
     /// Failing loudly is the point: the caller still holds a live grid and can refuse.</para>
+    ///
+    /// <para>Not the way to file a re-bake, and refuses one by throwing: this path reads the pointer
+    /// off a tracked row and refreshes the display cache from the request, where a re-bake has to
+    /// advance the pointer only if the ship is still stored and still on the revision it was derived
+    /// from. That is <see cref="FileRebakeRevision"/>.</para>
     /// </summary>
     /// <param name="keepBlobs">
-    /// How many revisions keep their document. Zero or less prunes nothing. The revision just filed
-    /// is never pruned, whatever this says.
+    /// How many revisions keep their document, never fewer than two once two exist, plus any that
+    /// are pinned. Zero or less prunes nothing. The revision just filed is never pruned, whatever
+    /// this says. See <see cref="PruneBlobs"/>.
     /// </param>
     /// <returns>The outcome, the revision number filed, and the berth the ship now sits in.</returns>
     public Task<DrydockFileResult> FileRevision(DrydockRevisionRequest request, byte[] blob, int keepBlobs, CancellationToken ct = default)
     {
+        if (request.Kind == DrydockRevisionKind.SystemRebake)
+            throw new ArgumentException($"A re-bake is filed through {nameof(FileRebakeRevision)}, which checks the ship is still on its source revision.", nameof(request));
+
         return _db.RunTriadDbCommand(async (db, token) =>
         {
             // A store that picks a berth can lose it to another store committing in the same
@@ -650,10 +720,9 @@ public sealed partial class DrydockStore
         ship.SizeClass = request.SizeClass;
         ship.UpdatedAt = now;
 
-        // A player store needs somewhere to put the hull. A system re-bake, filed by the planned
-        // ladder that is not built yet, would rewrite a document and must never touch the berth,
-        // because the ship may be out flying while it runs. Refusing here rolls the whole
-        // transaction back: nothing is filed for a ship with nowhere to go.
+        // A player store or an import needs somewhere to put the hull. Refusing here rolls the whole
+        // transaction back: nothing is filed for a ship with nowhere to go. (A re-bake never reaches
+        // this method; FileRevision refuses the kind before it opens a transaction.)
         //
         // An impound is the third case: it has somewhere to go that is not a berth, so it vacates
         // instead of seating. LastBerthId keeps where the hull came from, which is what a release
@@ -687,8 +756,6 @@ public sealed partial class DrydockStore
             ShipGuid = request.ShipGuid,
             Revision = revision,
             Kind = request.Kind,
-            DerivedFromRevision = request.DerivedFromRevision,
-            RebakeVersion = request.RebakeVersion,
             ActorUserId = request.ActorUserId,
             CreatedRoundId = request.CreatedRoundId,
             CreatedAt = now,
@@ -713,8 +780,7 @@ public sealed partial class DrydockStore
 
         // An import has no live grid, so it is stored the moment it is filed. A player store is
         // marked stored by the pipeline after the grid is gone, unless the caller asks for it
-        // here. A system re-bake must leave the state alone: the planned ladder (not built yet)
-        // would rewrite an older revision while the ship may be checked out and flying.
+        // here. Any other kind leaves the state alone.
         if (request.Kind == DrydockRevisionKind.LegacyImport
             || (request.Kind == DrydockRevisionKind.PlayerStore && request.MarkStored))
         {
@@ -723,10 +789,8 @@ public sealed partial class DrydockStore
             ship.CheckedOutRoundId = null;
         }
 
-        // Prune blobs, never revisions. The floor is the revision we just filed, which is the
-        // one a retrieve reads, so it survives whatever keepBlobs says. Zero or less means no
-        // pruning rather than keep nothing: of the two readings, only this one costs disk when
-        // it is misconfigured.
+        // Prune blobs, never revisions. The revision we just filed is the one a retrieve reads, so
+        // it survives whatever keepBlobs says; PruneBlobs carries the floor and the pin exclusion.
         await PruneBlobs(db, request.ShipGuid, revision, keepBlobs, token);
 
         // An impound's row says which berth was vacated, who took the hull and from whom, and what
@@ -734,9 +798,7 @@ public sealed partial class DrydockStore
         AddAudit(db,
             request.Impound != null
                 ? DrydockAuditAction.Impound
-                : request.Kind == DrydockRevisionKind.SystemRebake
-                    ? DrydockAuditAction.Rebake
-                    : DrydockAuditAction.Store,
+                : DrydockAuditAction.Store,
             now,
             shipGuid: request.ShipGuid,
             berthId: request.Impound != null ? impoundVacated : ship.BerthId,
@@ -2131,7 +2193,8 @@ public sealed partial class DrydockStore
     /// <summary>
     /// Admin: promotes an older revision to current by filing it again as a new one, kind
     /// AdminRestore, derived from the original. History stays append-only; the promoted document
-    /// is copied, never moved, and the usual keep-N pruning runs with the new revision as floor.
+    /// is copied, never moved, along with the source's appraisal, and the usual pruning
+    /// (<see cref="PruneBlobs"/>) runs around the new revision.
     /// </summary>
     public Task<(DrydockBerthResult Outcome, int Revision)> TryPromoteRevision(
         Guid shipGuid,
@@ -2214,6 +2277,240 @@ public sealed partial class DrydockStore
             await db.SaveChangesAsync(token);
             await tx.CommitAsync(token);
             return (DrydockBerthResult.Success, next);
+        }, ct);
+    }
+
+    /// <summary>
+    /// Excludes a revision's document from pruning, whatever keep-N and the floor say, until
+    /// <see cref="TryUnpinRevision"/> clears it. Meant for a checksum-valid document a retrieve had to
+    /// step past, so that ordinary stores after a fallback cannot prune the newest state the player
+    /// ever filed; also an admin's to set by hand. Refuses a revision whose document is already gone,
+    /// since there is nothing left to protect.
+    ///
+    /// <para>One conditional update on the flag as it was read (and, for a pin, on the document still
+    /// existing) plus a <see cref="DrydockAuditAction.RevisionPinned"/> row, in one transaction. The
+    /// ship row is locked first, so the pin serializes with any prune of the same ship; see
+    /// <see cref="PruneBlobs"/>.</para>
+    /// </summary>
+    /// <param name="actorUserId">Who pinned it; null for the system.</param>
+    /// <param name="reason">Why, for the timeline. Appended to "pinned revision N" when given.</param>
+    public Task<DrydockPinResult> TryPinRevision(
+        Guid shipGuid,
+        int revision,
+        Guid? actorUserId,
+        int? roundId,
+        string? reason,
+        CancellationToken ct = default)
+    {
+        return SetRevisionPinned(shipGuid, revision, pinned: true, actorUserId, roundId, reason, ct);
+    }
+
+    /// <summary>
+    /// Clears a pin, handing the document back to ordinary retention: the next store, promote or
+    /// re-bake prunes it if keep-N and the floor no longer cover it. Works on a revision whose document
+    /// is already gone, so a stale flag can always be cleared. One conditional update plus a
+    /// <see cref="DrydockAuditAction.RevisionUnpinned"/> row, in one transaction.
+    /// </summary>
+    /// <param name="actorUserId">Who unpinned it; null for the system.</param>
+    /// <param name="reason">Why, for the timeline. Appended to "unpinned revision N" when given.</param>
+    public Task<DrydockPinResult> TryUnpinRevision(
+        Guid shipGuid,
+        int revision,
+        Guid? actorUserId,
+        int? roundId,
+        string? reason,
+        CancellationToken ct = default)
+    {
+        return SetRevisionPinned(shipGuid, revision, pinned: false, actorUserId, roundId, reason, ct);
+    }
+
+    private Task<DrydockPinResult> SetRevisionPinned(
+        Guid shipGuid,
+        int revision,
+        bool pinned,
+        Guid? actorUserId,
+        int? roundId,
+        string? reason,
+        CancellationToken ct)
+    {
+        return _db.RunTriadDbCommand(async (db, token) =>
+        {
+            await using var tx = await db.Database.BeginTransactionAsync(token);
+
+            // The ship row before the revision row, the order a prune takes them in.
+            if (await LockShipRow(db, shipGuid, token) == 0)
+                return DrydockPinResult.NotFound;
+
+            var ship = await db.DrydockShip.AsNoTracking()
+                .Where(s => s.ShipGuid == shipGuid)
+                .Select(s => new { s.ShipName, s.BerthId, s.OwnerUserId })
+                .SingleAsync(token);
+
+            var query = db.DrydockRevision
+                .Where(r => r.ShipGuid == shipGuid && r.Revision == revision && r.Pinned != pinned);
+
+            if (pinned)
+                query = query.Where(r => db.DrydockBlob.Any(b => b.ShipGuid == r.ShipGuid && b.Revision == r.Revision));
+
+            var moved = await query.ExecuteUpdateAsync(set => set.SetProperty(r => r.Pinned, pinned), token);
+
+            if (moved == 0)
+            {
+                // Classification only; nothing is written on this branch.
+                var current = await db.DrydockRevision.AsNoTracking()
+                    .Where(r => r.ShipGuid == shipGuid && r.Revision == revision)
+                    .Select(r => (bool?) r.Pinned)
+                    .SingleOrDefaultAsync(token);
+
+                return current == pinned ? DrydockPinResult.AlreadyInState : DrydockPinResult.NotFound;
+            }
+
+            var verb = pinned ? "pinned" : "unpinned";
+            AddAudit(db, pinned ? DrydockAuditAction.RevisionPinned : DrydockAuditAction.RevisionUnpinned, DateTime.UtcNow,
+                shipGuid: shipGuid,
+                berthId: ship.BerthId,
+                shipName: ship.ShipName,
+                actorUserId: actorUserId,
+                subjectUserId: ship.OwnerUserId,
+                revision: revision,
+                roundId: roundId,
+                reason: string.IsNullOrWhiteSpace(reason) ? $"{verb} revision {revision}" : $"{verb} revision {revision}: {reason}");
+
+            await db.SaveChangesAsync(token);
+            await tx.CommitAsync(token);
+            return DrydockPinResult.Success;
+        }, ct);
+    }
+
+    /// <summary>
+    /// The revisions of a ship that still hold a document, newest first, whether retention or a pin
+    /// kept them. Revision numbers only, read off the blob table's primary key without touching the
+    /// document bytes. This is the honest lower bound for a retrieve's fallback walk: counting down
+    /// <c>keepBlobs</c> from the current revision misses pinned documents below the window, and walks
+    /// revisions whose documents are already gone. Empty for an unknown ship.
+    /// </summary>
+    public Task<List<int>> ListRetrievableRevisions(Guid shipGuid, CancellationToken ct = default)
+    {
+        return _db.RunTriadDbCommand(async (db, token) => await db.DrydockBlob.AsNoTracking()
+            .Where(b => b.ShipGuid == shipGuid)
+            .OrderByDescending(b => b.Revision)
+            .Select(b => b.Revision)
+            .ToListAsync(token), ct);
+    }
+
+    /// <summary>
+    /// Files a system re-bake: a new <see cref="DrydockRevisionKind.SystemRebake"/> revision derived
+    /// from <see cref="DrydockRebakeRequest.SourceRevision"/>, carrying the re-baked document, with a
+    /// null actor and a null round, and the source's appraisal copied forward since a stored hull has
+    /// nothing left to appraise. It becomes current only if the ship is still
+    /// <see cref="DrydockShipState.Stored"/> and still on the source revision.
+    ///
+    /// <para>That condition is one <c>ExecuteUpdate</c> that also advances the pointer, so a player
+    /// store, a promote or a retrieve's claim landing between the worker's read and this write cannot
+    /// be overwritten by a document derived from what the ship used to be. When it matches nothing the
+    /// transaction is rolled back before the revision or its blob is added, and the outcome says
+    /// which condition failed. The revision row, the blob, the prune around it and a
+    /// <see cref="DrydockAuditAction.Rebake"/> row naming the source share the transaction.</para>
+    ///
+    /// <para>Not <see cref="FileRevision"/> with a different kind. That path reads the pointer off a
+    /// tracked row and relies on the primary key to fail a race, which would let a re-bake land on a
+    /// ship that moved underneath it as long as the numbers did not collide; it refreshes the display
+    /// cache from the request, which a re-bake has no business setting; and it seats berths and carries
+    /// impound terms that mean nothing here. The shared parts are the audit writer and the prune.</para>
+    /// </summary>
+    /// <param name="keepBlobs">As for <see cref="FileRevision"/>; see <see cref="PruneBlobs"/>.</param>
+    public Task<DrydockRebakeFileResult> FileRebakeRevision(DrydockRebakeRequest request, byte[] blob, int keepBlobs, CancellationToken ct = default)
+    {
+        return _db.RunTriadDbCommand(async (db, token) =>
+        {
+            await using var tx = await db.Database.BeginTransactionAsync(token);
+
+            var shipGuid = request.ShipGuid;
+            var sourceRevision = request.SourceRevision;
+
+            var source = await db.DrydockRevision.AsNoTracking()
+                .Where(r => r.ShipGuid == shipGuid && r.Revision == sourceRevision)
+                .Select(r => new { r.AppraisedValue })
+                .SingleOrDefaultAsync(token);
+
+            if (source == null)
+                return new DrydockRebakeFileResult(DrydockRebakeResult.NotFound, 0);
+
+            var now = DateTime.UtcNow;
+            var next = sourceRevision + 1;
+
+            var moved = await db.DrydockShip
+                .Where(s => s.ShipGuid == shipGuid
+                    && s.State == DrydockShipState.Stored
+                    && s.CurrentRevision == sourceRevision)
+                .ExecuteUpdateAsync(set => set
+                    .SetProperty(s => s.CurrentRevision, next)
+                    .SetProperty(s => s.UpdatedAt, now), token);
+
+            if (moved == 0)
+            {
+                // Classification only. The transaction is disposed uncommitted, so nothing lands.
+                var state = await db.DrydockShip.AsNoTracking()
+                    .Where(s => s.ShipGuid == shipGuid)
+                    .Select(s => (DrydockShipState?) s.State)
+                    .SingleOrDefaultAsync(token);
+
+                var outcome = state switch
+                {
+                    null => DrydockRebakeResult.NotFound,
+                    not DrydockShipState.Stored => DrydockRebakeResult.WrongState,
+                    _ => DrydockRebakeResult.StaleSource,
+                };
+
+                return new DrydockRebakeFileResult(outcome, 0);
+            }
+
+            // Read after the update, so the snapshot is the row this transaction now holds.
+            var ship = await db.DrydockShip.AsNoTracking()
+                .Where(s => s.ShipGuid == shipGuid)
+                .Select(s => new { s.ShipName, s.BerthId, s.OwnerUserId })
+                .SingleAsync(token);
+
+            db.DrydockRevision.Add(new DrydockRevision
+            {
+                ShipGuid = shipGuid,
+                Revision = next,
+                Kind = DrydockRevisionKind.SystemRebake,
+                DerivedFromRevision = sourceRevision,
+                RebakeVersion = request.RebakeVersion,
+                ActorUserId = null,
+                CreatedRoundId = null,
+                CreatedAt = now,
+                EngineFormatVer = request.EngineFormatVer,
+                DrydockFormatVer = request.DrydockFormatVer,
+                ProtoFingerprint = request.ProtoFingerprint,
+                CapturedKeyHash = request.CapturedKeyHash,
+                Checksum = request.Checksum,
+                SizeBytes = request.SizeBytes,
+                AppraisedValue = source.AppraisedValue,
+                Manifest = request.Manifest,
+            });
+
+            db.DrydockBlob.Add(new DrydockBlob
+            {
+                ShipGuid = shipGuid,
+                Revision = next,
+                Blob = blob,
+            });
+
+            await PruneBlobs(db, shipGuid, next, keepBlobs, token);
+
+            AddAudit(db, DrydockAuditAction.Rebake, now,
+                shipGuid: shipGuid,
+                berthId: ship.BerthId,
+                shipName: ship.ShipName,
+                subjectUserId: ship.OwnerUserId,
+                revision: next,
+                reason: $"re-baked revision {sourceRevision} at ladder version {request.RebakeVersion}");
+
+            await db.SaveChangesAsync(token);
+            await tx.CommitAsync(token);
+            return new DrydockRebakeFileResult(DrydockRebakeResult.Success, next);
         }, ct);
     }
 
@@ -2374,16 +2671,17 @@ public sealed class DrydockRevisionRequest
     /// </summary>
     public bool MarkStored { get; init; }
 
+    /// <summary>
+    /// A player store or an import. <see cref="DrydockRevisionKind.SystemRebake"/> is refused: a
+    /// re-bake goes through <see cref="DrydockRebakeRequest"/>, which is why this request carries no
+    /// provenance fields.
+    /// </summary>
     public required DrydockRevisionKind Kind { get; init; }
 
-    public int? DerivedFromRevision { get; init; }
-
-    public int RebakeVersion { get; init; }
-
-    /// <summary>Null for the system.</summary>
+    /// <summary>Null for the system, which is how the round-end sweep's impound files.</summary>
     public Guid? ActorUserId { get; init; }
 
-    /// <summary>Null outside a round, which is when the planned re-bake ladder (not built yet) would file.</summary>
+    /// <summary>Null when no round is running.</summary>
     public int? CreatedRoundId { get; init; }
 
     public required int EngineFormatVer { get; init; }
@@ -2417,6 +2715,41 @@ public sealed class DrydockRevisionRequest
     /// people on it.
     /// </summary>
     public int Evicted { get; init; }
+}
+
+/// <summary>
+/// Everything <see cref="DrydockStore.FileRebakeRevision"/> needs from the re-bake worker: the
+/// revision the new document was derived from and the new document's own columns. What a re-bake
+/// does not know (who, which round, what the hull appraised at, which berth) is not asked for: the
+/// actor and round are null by definition and the appraisal is copied from the source revision.
+/// </summary>
+public sealed class DrydockRebakeRequest
+{
+    public required Guid ShipGuid { get; init; }
+
+    /// <summary>
+    /// The revision the document was re-baked from. The filing advances the pointer only while the
+    /// ship's current revision is still this one.
+    /// </summary>
+    public required int SourceRevision { get; init; }
+
+    /// <summary>Which generation of the re-bake ladder produced the document.</summary>
+    public required int RebakeVersion { get; init; }
+
+    public required int EngineFormatVer { get; init; }
+
+    public int DrydockFormatVer { get; init; } = DrydockFormat.Current;
+
+    public required byte[] ProtoFingerprint { get; init; }
+
+    public required byte[] CapturedKeyHash { get; init; }
+
+    /// <summary>Over the uncompressed re-baked document, the same as a store's.</summary>
+    public required byte[] Checksum { get; init; }
+
+    public required int SizeBytes { get; init; }
+
+    public required string Manifest { get; init; }
 }
 
 /// <summary>What a retrieve reads: the hull row, the revision it is about to rebuild, and the document.</summary>

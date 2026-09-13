@@ -24,9 +24,8 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
     /// <para>Everything is scoped to a freshly minted ship id, so the rows this leaves behind in a
     /// pooled server's database cannot be seen by any other test.</para>
     ///
-    /// <para>Round ids are null throughout, which is the between-rounds case the re-bake ladder
-    /// runs in. The foreign key to the round table is exercised by the migration rather than
-    /// here.</para>
+    /// <para>Round ids are null in the filing tests, which is the between-rounds case. The ones that
+    /// check a ship out create a real round, because that column is a foreign key.</para>
     /// </summary>
     [TestFixture]
     public sealed class DrydockStoreTest
@@ -94,22 +93,23 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                 Assert.That(blobRevisions, Is.EquivalentTo(new[] { 2, 3 }), "Pruning takes blobs, oldest first, and never history.");
             });
 
-            // Keep exactly one, which is the tightest setting that prunes: everything below the
-            // revision just filed goes, and the one a retrieve is about to read stays. This is the
-            // floor, and it is the case where an off-by-one would delete the live document.
+            // Keep exactly one, which is the tightest setting that prunes: the floor raises it to two,
+            // so the one a retrieve is about to read stays along with one step back to fall to. The
+            // case where an off-by-one would delete the live document. The floor's own tests, with
+            // controls, are in DrydockDurabilityStoreTest.
             await store.FileRevision(Request(shipId, owner, "Kestrel IV"), firstBlob, keepBlobs: 1);
             loaded = await store.LoadCurrent(shipId);
             Assert.That(loaded, Is.Not.Null, "Pruning must never take the blob the current revision points at.");
             Assert.That(loaded!.Blob, Is.EqualTo(firstBlob));
 
             var (_, afterTightPrune) = await ReadRevisionShape(db, shipId);
-            Assert.That(afterTightPrune, Is.EquivalentTo(new[] { 4 }), "Keeping one leaves exactly the current blob.");
+            Assert.That(afterTightPrune, Is.EquivalentTo(new[] { 3, 4 }), "Keeping one is floored at two: the current blob and the one before it.");
 
             // Zero or less means no pruning at all rather than keep nothing, which is the only
             // reading that is safe to misconfigure: the wrong guess costs disk, not ships.
             await store.FileRevision(Request(shipId, owner, "Kestrel V"), secondBlob, keepBlobs: 0);
             var (_, afterNoPrune) = await ReadRevisionShape(db, shipId);
-            Assert.That(afterNoPrune, Is.EquivalentTo(new[] { 4, 5 }), "A keep count of zero prunes nothing.");
+            Assert.That(afterNoPrune, Is.EquivalentTo(new[] { 3, 4, 5 }), "A keep count of zero prunes nothing.");
 
             var audit = await store.GetAudit(shipId);
             Assert.That(audit.Select(a => a.Action), Is.All.EqualTo(DrydockAuditAction.Store));
