@@ -2,7 +2,7 @@ using System;
 using System.Threading.Tasks;
 using Content.Server.Chat.Managers;
 using Content.Server.Database;
-using Content.Server.RoundEnd;
+using Content.Server._Triad.RoundEnd;
 using Content.Server.Shuttles.Components;
 using Content.Shared._NF.Shipyard.Components;
 using Content.Shared._Triad.CCVar;
@@ -36,7 +36,6 @@ public sealed partial class DrydockSystem
     // The player manager is injected on another partial as _player; RA0032 forbids a second field
     // of the type, and this is the landmine the tracker names twice.
     [Dependency] private IChatManager _chat = default!;
-    [Dependency] private RoundEndSystem _roundEnd = default!;
 
     /// <summary>The round the sweep last started for, so a restart that follows an end does not run it twice.</summary>
     private int _sweptRound;
@@ -50,13 +49,10 @@ public sealed partial class DrydockSystem
     /// </summary>
     private bool _sweepCeilingPassed;
 
-    /// <summary>Whether the countdown warning went out this round. Reset at the round boundary.</summary>
-    private bool _warnedThisRound;
-
     private void InitializeSweep()
     {
         SubscribeLocalEvent<RoundEndedEvent>(OnRoundEnded);
-        SubscribeLocalEvent<RoundEndSystemChangedEvent>(OnRoundEndSystemChanged);
+        SubscribeLocalEvent<RoundEndWarningEvent>(OnRoundEndWarning);
     }
 
     /// <summary>True while a sweep is still filing hulls.</summary>
@@ -67,20 +63,19 @@ public sealed partial class DrydockSystem
         => DrydockImpoundFee.ClampPercent((int)Math.Round(_cfg.GetCVar(TriadCCVars.DrydockImpoundRoundEndFraction) * 100f));
 
     /// <summary>
-    /// The warning, on the clock players already watch: when the round-end countdown starts, every
-    /// owner online with a drydock hull still out is told it will be impounded, once. Sent to the
-    /// owner's session rather than announced to the sector, since it is their ship and their fee.
+    /// The warning, on the round-end warning schedule players already hear: at the countdown's call and at
+    /// each warning mark, every owner online with a drydock hull still out is told how many minutes
+    /// are left to store it before it is impounded. The schedule belongs to
+    /// <see cref="RoundEndWarningSystem"/>, so a recall and a new call warn again from the top. Sent
+    /// to the owner's session rather than announced to the sector, since it is their ship and their fee.
     /// </summary>
-    private void OnRoundEndSystemChanged(RoundEndSystemChangedEvent ev)
+    private void OnRoundEndWarning(ref RoundEndWarningEvent ev)
     {
-        if (_warnedThisRound || _roundEnd.ExpectedCountdownEnd == null)
-            return;
-
         if (!DrydockWritable)
             return;
 
-        _warnedThisRound = true;
         var percent = RoundEndFeePercent;
+        var minutes = (int)Math.Round(ev.Remaining.TotalMinutes);
 
         var query = AllEntityQuery<DrydockIdentityComponent, ShipOwnershipComponent>();
         while (query.MoveNext(out var grid, out var identity, out var ownership))
@@ -91,7 +86,7 @@ public sealed partial class DrydockSystem
             if (!_player.TryGetSessionById(ownership.OwnerUserId, out var session))
                 continue;
 
-            _chat.DispatchServerMessage(session, Loc.GetString("drydock-sweep-warning", ("ship", Name(grid)), ("percent", percent)));
+            _chat.DispatchServerMessage(session, Loc.GetString("drydock-sweep-warning", ("ship", Name(grid)), ("minutes", minutes), ("percent", percent)));
         }
     }
 

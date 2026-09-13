@@ -88,7 +88,6 @@ public sealed partial class DrydockSystem
     {
         CancelAllJobs("round restart");
         SweepOrphanStagingMaps();
-        _warnedThisRound = false;
     }
 
     private async Task SweepExpiredTransfers()

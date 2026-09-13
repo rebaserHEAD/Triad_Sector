@@ -262,4 +262,13 @@ public sealed class TriadCCVars
     /// </summary>
     public static readonly CVarDef<int> MarketDataRetentionDays =
         CVarDef.Create("triad.market.retention_days", 90, CVar.SERVERONLY);
+
+    // Triad: round end
+    /// <summary>
+    /// How many minutes the round-end countdown runs when nothing supplies its own length, which is
+    /// the auto call. A call from a comms console still takes the alert level's shuttle time. The
+    /// default matches upstream's ten minutes; values below one are read as one.
+    /// </summary>
+    public static readonly CVarDef<int> RoundEndCountdownMinutes =
+        CVarDef.Create("triad.round_end.countdown_minutes", 10, CVar.SERVERONLY);
 }
