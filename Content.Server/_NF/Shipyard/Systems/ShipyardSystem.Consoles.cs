@@ -223,7 +223,10 @@ public sealed partial class ShipyardSystem : SharedShipyardSystem
         {
             // Triad: drydock. A berth for the hull's class is part of every purchase and is charged
             // after the vessel by the purchase event handler, so the whole amount is required here.
-            var berthPrice = _configManager.GetCVar(TriadCCVars.DrydockEnabled) ? DrydockBerthPriceFor(shuttleUid) : 0;
+            // The class comes from the vessel's drydockVesselClass row, the same one the listing
+            // quotes, and a hull whose addComponents blacklist it from saving is quoted no berth.
+            // var berthPrice = _configManager.GetCVar(TriadCCVars.DrydockEnabled) ? DrydockBerthPriceFor(shuttleUid) : 0;
+            var berthPrice = DrydockPurchaseBerthPrice(vessel, shuttleUid); // Triad: drydock, quote == charge
             // if (bank.Balance <= vessel.Price)
             if (bank.Balance <= vessel.Price + berthPrice) // Triad: drydock, berth included
             {

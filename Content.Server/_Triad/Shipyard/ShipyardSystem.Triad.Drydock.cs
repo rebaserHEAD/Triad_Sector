@@ -55,13 +55,54 @@ public sealed partial class ShipyardSystem
     /// <summary>The berth price for a hull class, from the prototype ladder. Zero when the ladder has no entry, which disables the charge rather than refusing the purchase.</summary>
     public int DrydockBerthPrice(ShipSizeClass sizeClass)
     {
-        return _prototypeManager.TryIndex<DrydockBerthClassPrototype>(sizeClass.ToString(), out var proto) ? proto.Price : 0;
+        return DrydockVesselBerths.BerthPrice(_prototypeManager, sizeClass);
     }
 
-    /// <summary>The berth price for a live grid, read from its built tile count, never from any cache.</summary>
-    public int DrydockBerthPriceFor(EntityUid grid)
+    /// <summary>
+    /// The berth class a newly bought hull is sold with: the vessel's row in the
+    /// <c>drydockVesselClass</c> table, so the listing's quote and the charge agree, or the live
+    /// grid's measured class when the vessel has no row. False when neither is available.
+    /// </summary>
+    public bool TryGetPurchaseBerthClass(string? vesselId, EntityUid grid, out ShipSizeClass sizeClass)
     {
-        return TryComp<MapGridComponent>(grid, out var map) ? DrydockBerthPrice(_drydockSizes.GetSizeClass((grid, map))) : 0;
+        if (!string.IsNullOrEmpty(vesselId) && DrydockVesselBerths.TryGetClass(_prototypeManager, vesselId, out sizeClass))
+            return true;
+
+        if (TryComp<MapGridComponent>(grid, out var map))
+        {
+            sizeClass = _drydockSizes.GetSizeClass((grid, map));
+            return true;
+        }
+
+        sizeClass = default;
+        return false;
+    }
+
+    /// <summary>
+    /// The berth price the purchase handler requires on top of the vessel price before it charges
+    /// anything. Zero with the drydock off, and zero for a hull that will carry
+    /// <see cref="ShipSavingBlacklistComponent"/>: that component arrives through the vessel's
+    /// <c>addComponents</c> after this check, and <see cref="OnShuttlePurchased"/> charges no berth
+    /// for such a hull.
+    /// </summary>
+    internal int DrydockPurchaseBerthPrice(VesselPrototype vessel, EntityUid grid)
+    {
+        if (!_configManager.GetCVar(TriadCCVars.DrydockEnabled))
+            return 0;
+
+        if (vessel.AddComponents.ContainsKey(Factory.GetComponentName<ShipSavingBlacklistComponent>()))
+            return 0;
+
+        return TryGetPurchaseBerthClass(vessel.ID, grid, out var sizeClass) ? DrydockBerthPrice(sizeClass) : 0;
+    }
+
+    /// <summary>
+    /// Drydock fees are owed to the Triad Frontier Administration account, which does not exist yet;
+    /// the economy update fills this in. Called after every successful drydock withdrawal and before
+    /// every drydock refund deposit. A negative amount is money the TFA pays back (refunds).
+    /// </summary>
+    private void RouteDrydockFeeToTfa(int credits, MarketTransactionKind kind)
+    {
     }
 
     private Dictionary<string, int> DrydockBerthPrices()
@@ -85,11 +126,8 @@ public sealed partial class ShipyardSystem
         if (!_configManager.GetCVar(TriadCCVars.DrydockEnabled))
             return;
 
-        if (!TryComp<ShipOwnershipComponent>(ev.Shuttle, out var ownership)
-            || !TryComp<MapGridComponent>(ev.Shuttle, out var map))
-        {
+        if (!TryComp<ShipOwnershipComponent>(ev.Shuttle, out var ownership))
             return;
-        }
 
         // A vessel issued on a voucher, or one its faction has blacklisted from saving, can never
         // be stored, so it brings no berth with it. Faction crews are not drydock customers.
@@ -99,8 +137,14 @@ public sealed partial class ShipyardSystem
             return;
         }
 
+        // The class the listing quoted and the purchase handler required: the vessel's table row,
+        // falling back to the grid only for a vessel with none. The purchase stamps the vessel id
+        // before raising this event.
+        var vesselId = TryComp<VesselComponent>(ev.Shuttle, out var vessel) ? vessel.VesselId.Id : null;
+        if (!TryGetPurchaseBerthClass(vesselId, ev.Shuttle, out var sizeClass))
+            return;
+
         var owner = ownership.OwnerUserId.UserId;
-        var sizeClass = _drydockSizes.GetSizeClass((ev.Shuttle, map));
         var price = DrydockBerthPrice(sizeClass);
 
         var paid = 0;
@@ -109,6 +153,7 @@ public sealed partial class ShipyardSystem
         {
             if (_bank.TryBankWithdraw(ev.Purchaser, price, new MarketRecord { Kind = MarketTransactionKind.DrydockBerth }))
             {
+                RouteDrydockFeeToTfa(price, MarketTransactionKind.DrydockBerth);
                 paid = price;
                 kind = DrydockBerthKind.Purchased;
             }
@@ -131,7 +176,10 @@ public sealed partial class ShipyardSystem
         {
             Log.Error($"Drydock: berth for a purchased {sizeClass} could not be created for {owner}: {e.Message}");
             if (paid > 0 && !TerminatingOrDeleted(purchaser))
+            {
+                RouteDrydockFeeToTfa(-paid, MarketTransactionKind.DrydockBerth);
                 _bank.TryBankDeposit(purchaser, paid, new MarketRecord { Kind = MarketTransactionKind.DrydockBerth });
+            }
         }
 
         // The purchase handler refreshes the tab in the same tick it raises the purchase, which is
@@ -1359,6 +1407,8 @@ public sealed partial class ShipyardSystem
             return false;
         }
 
+        RouteDrydockFeeToTfa(price, MarketTransactionKind.DrydockBerth);
+
         var owner = actor.PlayerSession.UserId.UserId;
         try
         {
@@ -1368,7 +1418,10 @@ public sealed partial class ShipyardSystem
         {
             Log.Error($"Drydock: berth purchase for {owner} failed after payment: {e.Message}");
             if (!TerminatingOrDeleted(player))
+            {
+                RouteDrydockFeeToTfa(-price, MarketTransactionKind.DrydockBerth);
                 _bank.TryBankDeposit(player, price, new MarketRecord { Kind = MarketTransactionKind.DrydockBerth });
+            }
 
             return false;
         }
@@ -1404,7 +1457,10 @@ public sealed partial class ShipyardSystem
 
         var refund = (int)(berth.PricePaid * _configManager.GetCVar(TriadCCVars.DrydockBerthRefund));
         if (refund > 0)
+        {
+            RouteDrydockFeeToTfa(-refund, MarketTransactionKind.DrydockBerth);
             _bank.TryBankDeposit(player, refund, new MarketRecord { Kind = MarketTransactionKind.DrydockBerth });
+        }
 
         PlayConfirmSound(player, uid, component);
         await RefreshDrydockState(uid, component, player, uiKey);
@@ -1442,11 +1498,17 @@ public sealed partial class ShipyardSystem
             return false;
         }
 
+        if (delta > 0)
+            RouteDrydockFeeToTfa(delta, MarketTransactionKind.DrydockBerth);
+
         var outcome = await _drydockStore.TryUpgradeBerth(berthId, owner, next, delta, owner, DrydockRoundId);
         return await FinishVerb(uid, component, player, uiKey, outcome == DrydockBerthResult.Success, onDeny: () =>
         {
             if (delta > 0)
+            {
+                RouteDrydockFeeToTfa(-delta, MarketTransactionKind.DrydockBerth);
                 _bank.TryBankDeposit(player, delta, new MarketRecord { Kind = MarketTransactionKind.DrydockBerth });
+            }
         });
     }
 
@@ -1839,9 +1901,8 @@ public sealed partial class ShipyardSystem
             return false;
         }
 
-        // The fee goes nowhere for now. It is owed to the Triad Frontier Administration, which has
-        // no account to receive it until the economy update; the transaction kind is the seam that
-        // work attaches to, so the withdrawals it has to credit are findable rather than searched for.
+        // The fee is owed to the Triad Frontier Administration, which has no account to receive it
+        // until the economy update; RouteDrydockFeeToTfa is the seam that work fills in.
         var fee = header.ImpoundFee;
         if (fee > 0 && !_bank.TryBankWithdraw(player, fee, new MarketRecord { Kind = MarketTransactionKind.DrydockImpound }))
         {
@@ -1849,15 +1910,19 @@ public sealed partial class ShipyardSystem
             return false;
         }
 
+        if (fee > 0)
+            RouteDrydockFeeToTfa(fee, MarketTransactionKind.DrydockImpound);
+
         var outcome = await _drydockStore.TryRedeemImpound(shipId, owner, berthId, fee, DrydockRoundId);
 
         if (outcome != DrydockBerthResult.Success)
         {
             // Nothing moved, so the money goes back to whoever is still standing there.
-            if (fee > 0 && !TerminatingOrDeleted(player)
-                && !_bank.TryBankDeposit(player, fee, new MarketRecord { Kind = MarketTransactionKind.DrydockImpound }))
+            if (fee > 0 && !TerminatingOrDeleted(player))
             {
-                Log.Error($"Drydock: reclaim of {shipId} by {owner} was refused ({outcome}) and the {fee} taken could not be returned to {ToPrettyString(player)}.");
+                RouteDrydockFeeToTfa(-fee, MarketTransactionKind.DrydockImpound);
+                if (!_bank.TryBankDeposit(player, fee, new MarketRecord { Kind = MarketTransactionKind.DrydockImpound }))
+                    Log.Error($"Drydock: reclaim of {shipId} by {owner} was refused ({outcome}) and the {fee} taken could not be returned to {ToPrettyString(player)}.");
             }
 
             if (TerminatingOrDeleted(uid) || TerminatingOrDeleted(player))
