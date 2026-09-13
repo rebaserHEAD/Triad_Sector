@@ -407,13 +407,13 @@ public sealed partial class DrydockSystem
                 {
                     await ReviveSliced(grid, stored.Ship, slice, timer);
 
-                    // The dock is one bulk call and must not be split: it sets the coordinates,
-                    // snaps the translation, and welds a joint for every dock pair, all in one go.
-                    // Docking a frozen ship is fine, because the dock finder walks the transform
-                    // tree rather than a paused-skipping query, so the last revive slice and the
-                    // dock can share a tick.
+                    // The dock is two atomic calls, not one: the config search, then the move.
+                    // Each gets its own timer mark below, so a hitch here says which half it belongs
+                    // to instead of blaming "dock" as a whole. Docking a frozen ship is fine either
+                    // way, because the dock finder walks the transform tree rather than a
+                    // paused-skipping query, so the last revive slice and the dock can share a tick.
                     //
-                    // The dock is also the thaw. Moving the grid onto the station's unpaused map
+                    // The move is also the thaw. Moving the grid onto the station's unpaused map
                     // unpauses the whole subtree inside that same engine walk, carrying the
                     // residency the ship actually spent on the staging map. Thawing first would pay
                     // for a second full-tree walk and buy a window of ticks with the ship live,
@@ -450,16 +450,30 @@ public sealed partial class DrydockSystem
                         dockTag = vesselProto.PriorityDockTag;
                     }
 
-                    if (!_shuttle.TryFTLDock(grid, shuttle, dockTarget, priorityTag: dockTag))
+                    // TryFTLDock's own first guard, kept: a target with no valid map goes straight
+                    // to proximity, since the search reads the target's grid and transform bare.
+                    var config = Transform(dockTarget).MapUid is { } targetMap && targetMap.IsValid()
+                        ? _docking.GetDockingConfig(grid, dockTarget, dockTag, DockType.Airlock)
+                        : null;
+                    timer.Mark("dock_config");
+
+                    if (config != null)
+                    {
+                        _shuttle.FTLDock((grid, Transform(grid)), config);
+                    }
+                    else
+                    {
+                        _shuttle.TryFTLProximity(grid, dockTarget);
                         Log.Warning($"Drydock: {ctx.ShipId} found no docking config at {ToPrettyString(ctx.StationUid)}; presented by proximity.");
+                    }
 
                     timer.Mark("dock");
 
-                    // TryFTLDock returns false both when proximity placed the ship and when its
-                    // first guard moved nothing (ShuttleSystem.FasterThanLight.cs:1185-1203), so the
-                    // bool cannot say where the ship is. ScrapRetrieveStaging deletes what is still
-                    // on the staging map, so trusting it scraps the hull and reports Success.
-                    // Refusing is safe here: the grid is a copy and the revision is untouched.
+                    // Neither call above says where the ship ended up: FTLDock is void, and
+                    // TryFTLProximity's bool only reports whether it moved anything, not where.
+                    // ScrapRetrieveStaging deletes what is still on the staging map, so trusting
+                    // either return scraps the hull and reports Success. Refusing is safe here: the
+                    // grid is a copy and the revision is untouched.
                     if (ctx.StagingMap is { } stillStaged
                         && Exists(stillStaged)
                         && Transform(grid).MapUid == stillStaged)
