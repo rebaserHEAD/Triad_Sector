@@ -485,15 +485,29 @@ public sealed partial class DrydockAdminEui : BaseEui
         var round = CurrentRoundId();
 
         var filter = new DrydockShipFilter(null, null, null, _stateFilter, _strandedOnly, round, _search);
-        var (rows, total) = await _store.QueryShips(filter, _page, _pageSize);
-        var offers = await _store.GetPendingOffersForShips(rows.Select(r => r.ShipGuid));
-        var sales = await _store.GetLastSalePrices(rows.Where(r => r.State == DrydockShipState.Sold).Select(r => r.ShipGuid));
 
-        var detail = _selected is { } selected ? await _store.GetShipDetail(selected) : null;
+        // The list page and the selected hull's detail don't depend on each other, and each store
+        // call opens its own database context (see IServerDbManager.RunTriadDbCommand), so there
+        // is nothing to serialize them on. Fired together rather than awaited one at a time.
+        var shipsTask = _store.QueryShips(filter, _page, _pageSize);
+        var detailTask = _selected is { } selected ? _store.GetShipDetail(selected) : Task.FromResult<DrydockShipDetail?>(null);
+        await Task.WhenAll(shipsTask, detailTask);
+
+        var (rows, total) = shipsTask.Result;
+        var detail = detailTask.Result;
         if (_selected != null && detail == null)
             _selected = null;
 
-        var berths = detail != null ? await _store.GetBerths(detail.Ship.OwnerUserId) : new List<DrydockBerthSlot>();
+        // Three more reads that don't depend on each other: the list's offers and sale prices,
+        // and the selected hull's berths.
+        var offersTask = _store.GetPendingOffersForShips(rows.Select(r => r.ShipGuid));
+        var salesTask = _store.GetLastSalePrices(rows.Where(r => r.State == DrydockShipState.Sold).Select(r => r.ShipGuid));
+        var berthsTask = detail != null ? _store.GetBerths(detail.Ship.OwnerUserId) : Task.FromResult(new List<DrydockBerthSlot>());
+        await Task.WhenAll(offersTask, salesTask, berthsTask);
+
+        var offers = offersTask.Result;
+        var sales = salesTask.Result;
+        var berths = berthsTask.Result;
 
         DrydockTransfer? escrow = null;
         List<DrydockBerthSlot> recipientBerths = new();
@@ -510,8 +524,12 @@ public sealed partial class DrydockAdminEui : BaseEui
 
             if (detail.Ship.State == DrydockShipState.Sold)
             {
-                lastSale = await _store.GetLastSale(detail.Ship.ShipGuid);
-                ownerBalance = await OwnerBalance(detail.Ship.OwnerUserId);
+                // The sale price and the owner's live balance are independent reads too.
+                var saleTask = _store.GetLastSale(detail.Ship.ShipGuid);
+                var balanceTask = OwnerBalance(detail.Ship.OwnerUserId);
+                await Task.WhenAll(saleTask, balanceTask);
+                lastSale = saleTask.Result;
+                ownerBalance = balanceTask.Result;
             }
         }
 

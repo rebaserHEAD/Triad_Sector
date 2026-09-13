@@ -1,12 +1,14 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Linq.Expressions;
 using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 using Content.Server.Database;
 using Content.Shared._Triad.ShipSize;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Query;
 using Robust.Shared.IoC;
 
 namespace Content.Server._Triad.Drydock;
@@ -27,6 +29,120 @@ public sealed partial class DrydockStore
     /// the admin panel and the restore-from-sale dialog.
     /// </summary>
     private static readonly Regex SoldForPattern = new(@"sold for (\d+)", RegexOptions.Compiled);
+
+    /// <summary>
+    /// Reads the sale price back out of a ShipSold audit row's reason text, the one place
+    /// <see cref="SoldForPattern"/> is applied. Null when the row carries no reason or the reason
+    /// does not match, which "sold for N" always does for a row this store wrote.
+    /// </summary>
+    private static int? ParseSoldPrice(string? reason)
+    {
+        if (reason == null)
+            return null;
+
+        var match = SoldForPattern.Match(reason);
+        return match.Success && int.TryParse(match.Groups[1].Value, out var price) ? price : null;
+    }
+
+    /// <summary>
+    /// Appends one timeline row. Every audit insert in this file goes through here so the set of
+    /// columns a row can carry, and their null-ness when a call site has nothing for one, stays in
+    /// one place. <paramref name="createdAt"/> is required rather than defaulted to
+    /// <see cref="DateTime.UtcNow"/> because every call site already has a <c>now</c> local shared
+    /// with the state write in the same transaction, and the audit row has to agree with it.
+    /// </summary>
+    private static void AddAudit(
+        ServerDbContext db,
+        DrydockAuditAction action,
+        DateTime createdAt,
+        Guid? shipGuid = null,
+        int? berthId = null,
+        string? shipName = null,
+        Guid? actorUserId = null,
+        Guid? subjectUserId = null,
+        int? revision = null,
+        int? roundId = null,
+        string? reason = null)
+    {
+        db.DrydockAudit.Add(new DrydockAudit
+        {
+            ShipGuid = shipGuid,
+            BerthId = berthId,
+            ShipName = shipName,
+            Action = action,
+            ActorUserId = actorUserId,
+            SubjectUserId = subjectUserId,
+            Revision = revision,
+            RoundId = roundId,
+            Reason = reason,
+            CreatedAt = createdAt,
+        });
+    }
+
+    /// <summary>
+    /// Deletes every blob for this ship below the keep-N floor, never revisions. The floor is the
+    /// revision just filed or promoted, which survives whatever <paramref name="keepBlobs"/> says.
+    /// Zero or less prunes nothing.
+    ///
+    /// <para>Set-based rather than load-then-remove: a <see cref="DrydockBlob"/> row carries the
+    /// compressed document, multiple megabytes each, and nothing here ever wants the bytes back.
+    /// <c>ExecuteDeleteAsync</c> runs on the context's current transaction like any other write in
+    /// this file, so it commits or rolls back with the revision it is pruning around. Safe against
+    /// the row this same call just added: the new revision is never below its own floor, and a row
+    /// added earlier in the same context is still unsaved, so the delete has nothing tracked to
+    /// collide with.</para>
+    /// </summary>
+    private static Task PruneBlobs(ServerDbContext db, Guid shipGuid, int keptRevision, int keepBlobs, CancellationToken token)
+    {
+        if (keepBlobs <= 0)
+            return Task.CompletedTask;
+
+        var floor = keptRevision - keepBlobs + 1;
+        return db.DrydockBlob
+            .Where(b => b.ShipGuid == shipGuid && b.Revision < floor)
+            .ExecuteDeleteAsync(token);
+    }
+
+    /// <summary>
+    /// The seat-from-state move every path back into a berth applies: state to
+    /// <see cref="DrydockShipState.Stored"/>, the round cleared, the old berth remembered, the new
+    /// one taken. One conditional <c>ExecuteUpdate</c> on <paramref name="predicate"/>, which each
+    /// caller writes to include whatever else has to be true of the row (its current state, and
+    /// for a redemption the owner and the paid fee), so the WHERE stays exactly what that caller
+    /// needs. The unique index on the berth column is still the arbiter of a race for the same
+    /// slot; callers catch <see cref="IsBerthUniqueViolation"/> around this themselves, because
+    /// what they return on that fault differs by caller.
+    /// </summary>
+    /// <returns>The number of rows moved: zero means the predicate matched nothing.</returns>
+    private static Task<int> SeatFromState(
+        ServerDbContext db,
+        Expression<Func<DrydockShip, bool>> predicate,
+        int? newBerthId,
+        DateTime now,
+        CancellationToken token)
+    {
+        return db.DrydockShip
+            .Where(predicate)
+            .ExecuteUpdateAsync(set => set
+                .SetState(DrydockShipState.Stored, now)
+                .SetProperty(s => s.CheckedOutRoundId, (int?)null)
+                .SetProperty(s => s.LastBerthId, s => s.BerthId)
+                .SetProperty(s => s.BerthId, newBerthId), token);
+    }
+
+    /// <summary>
+    /// Whether a hull already sitting in <paramref name="heldBerthId"/> may stay there: the berth
+    /// still exists and is large enough. Shared by the tracked seat a filing does and by the
+    /// advisory check a store makes before it touches anything, so both answer "would the current
+    /// berth still work" the same way.
+    /// </summary>
+    private static async Task<bool> HeldBerthStillFits(ServerDbContext db, int heldBerthId, string? hullClass, CancellationToken token)
+    {
+        var current = await db.DrydockBerth.AsNoTracking()
+            .SingleOrDefaultAsync(b => b.BerthId == heldBerthId, token);
+
+        return current != null && ShipSizeRules.Fits(hullClass, current.MaxSizeClass);
+    }
 
     /// <summary>
     /// Files a new revision against a ship, creating the hull row if this is its first store.
@@ -111,10 +227,8 @@ public sealed partial class DrydockStore
             var moved = await db.DrydockShip
                 .Where(s => s.ShipGuid == shipGuid && s.State == DrydockShipState.CheckedOut)
                 .ExecuteUpdateAsync(set => set
-                    .SetProperty(s => s.State, DrydockShipState.Stored)
-                    .SetProperty(s => s.StateChangedAt, now)
-                    .SetProperty(s => s.CheckedOutRoundId, (int?)null)
-                    .SetProperty(s => s.UpdatedAt, now), token);
+                    .SetState(DrydockShipState.Stored, now)
+                    .SetProperty(s => s.CheckedOutRoundId, (int?)null), token);
 
             return moved > 0;
         }, ct);
@@ -169,9 +283,7 @@ public sealed partial class DrydockStore
             var moved = await db.DrydockShip
                 .Where(s => s.ShipGuid == shipGuid && s.State == DrydockShipState.Stored)
                 .ExecuteUpdateAsync(set => set
-                    .SetProperty(s => s.State, DrydockShipState.Impounded)
-                    .SetProperty(s => s.StateChangedAt, now)
-                    .SetProperty(s => s.UpdatedAt, now)
+                    .SetState(DrydockShipState.Impounded, now)
                     .SetProperty(s => s.ImpoundFee, fee)
                     .SetProperty(s => s.ImpoundReason, impound.Reason)
                     .SetProperty(s => s.ImpoundRedeemable, impound.Redeemable)
@@ -181,19 +293,15 @@ public sealed partial class DrydockStore
             if (moved == 0)
                 return (DrydockBerthResult.WrongState, 0);
 
-            db.DrydockAudit.Add(new DrydockAudit
-            {
-                ShipGuid = shipGuid,
-                BerthId = snapshot.BerthId,
-                ShipName = snapshot.ShipName,
-                Action = DrydockAuditAction.Impound,
-                ActorUserId = impound.ActorUserId,
-                SubjectUserId = snapshot.OwnerUserId,
-                Revision = snapshot.CurrentRevision,
-                RoundId = roundId,
-                Reason = impound.AuditReason(fee, appraisal, evicted: 0),
-                CreatedAt = now,
-            });
+            AddAudit(db, DrydockAuditAction.Impound, now,
+                shipGuid: shipGuid,
+                berthId: snapshot.BerthId,
+                shipName: snapshot.ShipName,
+                actorUserId: impound.ActorUserId,
+                subjectUserId: snapshot.OwnerUserId,
+                revision: snapshot.CurrentRevision,
+                roundId: roundId,
+                reason: impound.AuditReason(fee, appraisal, evicted: 0));
 
             await db.SaveChangesAsync(token);
             await tx.CommitAsync(token);
@@ -221,10 +329,8 @@ public sealed partial class DrydockStore
             var moved = await db.DrydockShip
                 .Where(s => s.ShipGuid == shipGuid && s.State != DrydockShipState.Impounded)
                 .ExecuteUpdateAsync(set => set
-                    .SetProperty(s => s.State, DrydockShipState.Impounded)
-                    .SetProperty(s => s.StateChangedAt, now)
-                    .SetProperty(s => s.CheckedOutRoundId, (int?)null)
-                    .SetProperty(s => s.UpdatedAt, now), token);
+                    .SetState(DrydockShipState.Impounded, now)
+                    .SetProperty(s => s.CheckedOutRoundId, (int?)null), token);
 
             return moved > 0;
         }, ct);
@@ -270,29 +376,22 @@ public sealed partial class DrydockStore
             var moved = await db.DrydockShip
                 .Where(s => s.ShipGuid == shipGuid && s.State == DrydockShipState.CheckedOut)
                 .ExecuteUpdateAsync(set => set
-                    .SetProperty(s => s.State, DrydockShipState.Destroyed)
-                    .SetProperty(s => s.StateChangedAt, now)
+                    .SetState(DrydockShipState.Destroyed, now)
                     .SetProperty(s => s.CheckedOutRoundId, (int?)null)
                     .SetProperty(s => s.LastBerthId, s => s.BerthId ?? s.LastBerthId)
-                    .SetProperty(s => s.BerthId, (int?)null)
-                    .SetProperty(s => s.UpdatedAt, now), token);
+                    .SetProperty(s => s.BerthId, (int?)null), token);
 
             if (moved == 0)
                 return false;
 
-            db.DrydockAudit.Add(new DrydockAudit
-            {
-                ShipGuid = shipGuid,
-                BerthId = snapshot.BerthId,
-                ShipName = snapshot.ShipName,
-                Action = DrydockAuditAction.ShipDestroyed,
-                ActorUserId = null,
-                SubjectUserId = snapshot.OwnerUserId,
-                Revision = snapshot.CurrentRevision,
-                RoundId = roundId,
-                Reason = reason,
-                CreatedAt = now,
-            });
+            AddAudit(db, DrydockAuditAction.ShipDestroyed, now,
+                shipGuid: shipGuid,
+                berthId: snapshot.BerthId,
+                shipName: snapshot.ShipName,
+                subjectUserId: snapshot.OwnerUserId,
+                revision: snapshot.CurrentRevision,
+                roundId: roundId,
+                reason: reason);
 
             await db.SaveChangesAsync(token);
             await tx.CommitAsync(token);
@@ -345,15 +444,7 @@ public sealed partial class DrydockStore
             int moved;
             try
             {
-                moved = await db.DrydockShip
-                    .Where(s => s.ShipGuid == shipGuid && s.State == DrydockShipState.Impounded)
-                    .ExecuteUpdateAsync(set => set
-                        .SetProperty(s => s.State, DrydockShipState.Stored)
-                        .SetProperty(s => s.StateChangedAt, now)
-                        .SetProperty(s => s.CheckedOutRoundId, (int?)null)
-                        .SetProperty(s => s.LastBerthId, s => s.BerthId)
-                        .SetProperty(s => s.BerthId, pick)
-                        .SetProperty(s => s.UpdatedAt, now), token);
+                moved = await SeatFromState(db, s => s.ShipGuid == shipGuid && s.State == DrydockShipState.Impounded, pick, now, token);
             }
             catch (Exception e) when (IsBerthUniqueViolation(e))
             {
@@ -363,19 +454,15 @@ public sealed partial class DrydockStore
             if (moved == 0)
                 return (DrydockBerthResult.WrongState, null);
 
-            db.DrydockAudit.Add(new DrydockAudit
-            {
-                ShipGuid = shipGuid,
-                BerthId = pick,
-                ShipName = ship.ShipName,
-                Action = DrydockAuditAction.ImpoundReleased,
-                ActorUserId = actorUserId,
-                SubjectUserId = ship.OwnerUserId,
-                Revision = ship.CurrentRevision,
-                RoundId = roundId,
-                Reason = reason,
-                CreatedAt = now,
-            });
+            AddAudit(db, DrydockAuditAction.ImpoundReleased, now,
+                shipGuid: shipGuid,
+                berthId: pick,
+                shipName: ship.ShipName,
+                actorUserId: actorUserId,
+                subjectUserId: ship.OwnerUserId,
+                revision: ship.CurrentRevision,
+                roundId: roundId,
+                reason: reason);
 
             await db.SaveChangesAsync(token);
             await tx.CommitAsync(token);
@@ -430,19 +517,13 @@ public sealed partial class DrydockStore
             int moved;
             try
             {
-                moved = await db.DrydockShip
-                    .Where(s => s.ShipGuid == shipGuid
+                moved = await SeatFromState(db,
+                    s => s.ShipGuid == shipGuid
                         && s.State == DrydockShipState.Impounded
                         && s.OwnerUserId == ownerUserId
                         && s.ImpoundRedeemable
-                        && s.ImpoundFee == paidFee)
-                    .ExecuteUpdateAsync(set => set
-                        .SetProperty(s => s.State, DrydockShipState.Stored)
-                        .SetProperty(s => s.StateChangedAt, now)
-                        .SetProperty(s => s.CheckedOutRoundId, (int?)null)
-                        .SetProperty(s => s.LastBerthId, s => s.BerthId)
-                        .SetProperty(s => s.BerthId, (int?)berthId)
-                        .SetProperty(s => s.UpdatedAt, now), token);
+                        && s.ImpoundFee == paidFee,
+                    berthId, now, token);
             }
             catch (Exception e) when (IsBerthUniqueViolation(e))
             {
@@ -452,19 +533,15 @@ public sealed partial class DrydockStore
             if (moved == 0)
                 return DrydockBerthResult.WrongState;
 
-            db.DrydockAudit.Add(new DrydockAudit
-            {
-                ShipGuid = shipGuid,
-                ShipName = ship.ShipName,
-                BerthId = berthId,
-                Action = DrydockAuditAction.ImpoundRedeemed,
-                ActorUserId = ownerUserId,
-                SubjectUserId = ownerUserId,
-                Revision = ship.CurrentRevision,
-                RoundId = roundId,
-                Reason = paidFee > 0 ? $"paid {paidFee}" : "no fee",
-                CreatedAt = now,
-            });
+            AddAudit(db, DrydockAuditAction.ImpoundRedeemed, now,
+                shipGuid: shipGuid,
+                berthId: berthId,
+                shipName: ship.ShipName,
+                actorUserId: ownerUserId,
+                subjectUserId: ownerUserId,
+                revision: ship.CurrentRevision,
+                roundId: roundId,
+                reason: paidFee > 0 ? $"paid {paidFee}" : "no fee");
 
             await db.SaveChangesAsync(token);
             await tx.CommitAsync(token);
@@ -510,26 +587,20 @@ public sealed partial class DrydockStore
                     && s.OwnerUserId == ownerUserId
                     && s.ImpoundRedeemable)
                 .ExecuteUpdateAsync(set => set
-                    .SetProperty(s => s.State, DrydockShipState.Abandoned)
-                    .SetProperty(s => s.StateChangedAt, now)
-                    .SetProperty(s => s.CheckedOutRoundId, (int?)null)
-                    .SetProperty(s => s.UpdatedAt, now), token);
+                    .SetState(DrydockShipState.Abandoned, now)
+                    .SetProperty(s => s.CheckedOutRoundId, (int?)null), token);
 
             if (moved == 0)
                 return (DrydockBerthResult.WrongState, null);
 
-            db.DrydockAudit.Add(new DrydockAudit
-            {
-                ShipGuid = shipGuid,
-                ShipName = ship.ShipName,
-                Action = DrydockAuditAction.ShipAbandoned,
-                ActorUserId = ownerUserId,
-                SubjectUserId = ownerUserId,
-                Revision = ship.CurrentRevision,
-                RoundId = roundId,
-                Reason = ship.ImpoundFee > 0 ? $"gave up rather than pay {ship.ImpoundFee}" : "gave up",
-                CreatedAt = now,
-            });
+            AddAudit(db, DrydockAuditAction.ShipAbandoned, now,
+                shipGuid: shipGuid,
+                shipName: ship.ShipName,
+                actorUserId: ownerUserId,
+                subjectUserId: ownerUserId,
+                revision: ship.CurrentRevision,
+                roundId: roundId,
+                reason: ship.ImpoundFee > 0 ? $"gave up rather than pay {ship.ImpoundFee}" : "gave up");
 
             await db.SaveChangesAsync(token);
             await tx.CommitAsync(token);
@@ -654,35 +725,25 @@ public sealed partial class DrydockStore
         // one a retrieve reads, so it survives whatever keepBlobs says. Zero or less means no
         // pruning rather than keep nothing: of the two readings, only this one costs disk when
         // it is misconfigured.
-        if (keepBlobs > 0)
-        {
-            var floor = revision - keepBlobs + 1;
-            var stale = await db.DrydockBlob
-                .Where(b => b.ShipGuid == request.ShipGuid && b.Revision < floor)
-                .ToListAsync(token);
-
-            db.DrydockBlob.RemoveRange(stale);
-        }
+        await PruneBlobs(db, request.ShipGuid, revision, keepBlobs, token);
 
         // An impound's row says which berth was vacated, who took the hull and from whom, and what
         // it cost; a store's says where the hull was seated and who put it there.
-        db.DrydockAudit.Add(new DrydockAudit
-        {
-            ShipGuid = request.ShipGuid,
-            BerthId = request.Impound != null ? impoundVacated : ship.BerthId,
-            ShipName = request.ShipName,
-            Action = request.Impound != null
+        AddAudit(db,
+            request.Impound != null
                 ? DrydockAuditAction.Impound
                 : request.Kind == DrydockRevisionKind.SystemRebake
                     ? DrydockAuditAction.Rebake
                     : DrydockAuditAction.Store,
-            ActorUserId = request.ActorUserId,
-            SubjectUserId = request.Impound != null ? ship.OwnerUserId : null,
-            Revision = revision,
-            RoundId = request.CreatedRoundId,
-            Reason = request.Impound?.AuditReason(ship.ImpoundFee, request.AppraisedValue ?? 0, request.Evicted),
-            CreatedAt = now,
-        });
+            now,
+            shipGuid: request.ShipGuid,
+            berthId: request.Impound != null ? impoundVacated : ship.BerthId,
+            shipName: request.ShipName,
+            actorUserId: request.ActorUserId,
+            subjectUserId: request.Impound != null ? ship.OwnerUserId : null,
+            revision: revision,
+            roundId: request.CreatedRoundId,
+            reason: request.Impound?.AuditReason(ship.ImpoundFee, request.AppraisedValue ?? 0, request.Evicted));
 
         await db.SaveChangesAsync(token);
         await tx.CommitAsync(token);
@@ -707,14 +768,8 @@ public sealed partial class DrydockStore
         Action<int> berthPicked,
         CancellationToken token)
     {
-        if (ship.BerthId is { } held && (requestedBerth == null || requestedBerth == held))
-        {
-            var current = await db.DrydockBerth.AsNoTracking()
-                .SingleOrDefaultAsync(b => b.BerthId == held, token);
-
-            if (current != null && ShipSizeRules.Fits(hullClass, current.MaxSizeClass))
-                return DrydockBerthResult.Success;
-        }
+        if (ship.BerthId is { } held && (requestedBerth == null || requestedBerth == held) && await HeldBerthStillFits(db, held, hullClass, token))
+            return DrydockBerthResult.Success;
 
         var (outcome, pick) = await ResolveBerth(db, ship.ShipGuid, ship.OwnerUserId, hullClass, requestedBerth, ship.LastBerthId, excludedBerths, token);
         if (outcome != DrydockBerthResult.Success)
@@ -834,34 +889,12 @@ public sealed partial class DrydockStore
             // The row's owner, not the caller's: a store never moves a ship between garages.
             var owner = ship?.OwnerUserId ?? ownerUserId;
 
-            if (ship?.BerthId is { } held && (requestedBerth == null || requestedBerth == held))
-            {
-                var current = await db.DrydockBerth.AsNoTracking()
-                    .SingleOrDefaultAsync(b => b.BerthId == held, token);
+            if (ship?.BerthId is { } held && (requestedBerth == null || requestedBerth == held) && await HeldBerthStillFits(db, held, hullClass, token))
+                return DrydockBerthResult.Success;
 
-                if (current != null && ShipSizeRules.Fits(hullClass, current.MaxSizeClass))
-                    return DrydockBerthResult.Success;
-            }
-
-            // The same three checks the filing transaction makes for a named berth, so the
+            // The same checks the filing transaction makes for a named or a picked berth, so the
             // player hears "too small" or "occupied" before anything aboard is touched.
-            if (requestedBerth is { } wanted)
-            {
-                var named = await db.DrydockBerth.AsNoTracking()
-                    .SingleOrDefaultAsync(b => b.BerthId == wanted && b.OwnerUserId == owner, token);
-
-                if (named == null)
-                    return DrydockBerthResult.NotFound;
-
-                if (!ShipSizeRules.Fits(hullClass, named.MaxSizeClass))
-                    return DrydockBerthResult.BerthTooSmall;
-
-                return await db.DrydockShip.AnyAsync(s => s.BerthId == wanted && s.ShipGuid != shipGuid, token)
-                    ? DrydockBerthResult.BerthOccupied
-                    : DrydockBerthResult.Success;
-            }
-
-            var (outcome, _) = await PickFreeBerth(db, owner, hullClass, ship?.LastBerthId, new HashSet<int>(), token);
+            var (outcome, _) = await ResolveBerth(db, shipGuid, owner, hullClass, requestedBerth, ship?.LastBerthId, new HashSet<int>(), token);
             return outcome;
         }, ct);
     }
@@ -875,28 +908,21 @@ public sealed partial class DrydockStore
     {
         return _db.RunTriadDbCommand(async (db, token) =>
         {
-            var ship = await db.DrydockShip
-                .AsNoTracking()
-                .SingleOrDefaultAsync(s => s.ShipGuid == shipGuid, token);
-
-            if (ship == null)
-                return null;
-
-            var revision = await db.DrydockRevision
-                .AsNoTracking()
-                .SingleOrDefaultAsync(r => r.ShipGuid == shipGuid && r.Revision == ship.CurrentRevision, token);
-
-            if (revision == null)
-                return null;
-
-            var blob = await db.DrydockBlob
-                .AsNoTracking()
-                .SingleOrDefaultAsync(b => b.ShipGuid == shipGuid && b.Revision == ship.CurrentRevision, token);
-
-            if (blob == null)
-                return null;
-
-            return new DrydockLoad(ship, revision, blob.Blob);
+            // One query, two joins keyed off CurrentRevision, rather than the three round trips a
+            // header read followed by a revision read followed by a blob read would cost. An
+            // INNER JOIN drops out exactly where each of those used to return null: no ship, no
+            // revision row at that number, or no blob left for it.
+            return await db.DrydockShip.AsNoTracking()
+                .Where(s => s.ShipGuid == shipGuid)
+                .Join(db.DrydockRevision.AsNoTracking(),
+                    s => new { s.ShipGuid, Revision = s.CurrentRevision },
+                    r => new { r.ShipGuid, r.Revision },
+                    (s, r) => new { Ship = s, Revision = r })
+                .Join(db.DrydockBlob.AsNoTracking(),
+                    sr => new { sr.Ship.ShipGuid, Revision = sr.Ship.CurrentRevision },
+                    b => new { b.ShipGuid, b.Revision },
+                    (sr, b) => new DrydockLoad(sr.Ship, sr.Revision, b.Blob))
+                .SingleOrDefaultAsync(token);
         }, ct);
     }
 
@@ -1005,26 +1031,20 @@ public sealed partial class DrydockStore
                 query = query.Where(s => s.State == required);
 
             var moved = await query.ExecuteUpdateAsync(setters => setters
-                .SetProperty(s => s.State, state)
-                .SetProperty(s => s.StateChangedAt, now)
-                .SetProperty(s => s.UpdatedAt, now)
+                .SetState(state, now)
                 .SetProperty(s => s.CheckedOutRoundId, checkedOutRound), token);
 
             if (moved == 0)
                 return false;
 
-            db.DrydockAudit.Add(new DrydockAudit
-            {
-                ShipGuid = shipGuid,
-                BerthId = snapshot.BerthId,
-                ShipName = snapshot.ShipName,
-                Action = action,
-                ActorUserId = actorUserId,
-                Revision = snapshot.CurrentRevision,
-                RoundId = roundId,
-                Reason = reason,
-                CreatedAt = now,
-            });
+            AddAudit(db, action, now,
+                shipGuid: shipGuid,
+                berthId: snapshot.BerthId,
+                shipName: snapshot.ShipName,
+                actorUserId: actorUserId,
+                revision: snapshot.CurrentRevision,
+                roundId: roundId,
+                reason: reason);
 
             await db.SaveChangesAsync(token);
             await tx.CommitAsync(token);
@@ -1124,16 +1144,12 @@ public sealed partial class DrydockStore
             db.DrydockBerth.Add(berth);
             await db.SaveChangesAsync(token);
 
-            db.DrydockAudit.Add(new DrydockAudit
-            {
-                BerthId = berth.BerthId,
-                Action = kind == DrydockBerthKind.Granted ? DrydockAuditAction.BerthGrant : DrydockAuditAction.BerthPurchase,
-                ActorUserId = actorUserId,
-                SubjectUserId = ownerUserId,
-                RoundId = roundId,
-                Reason = $"{maxSizeClass} berth, {berth.PricePaid} paid",
-                CreatedAt = now,
-            });
+            AddAudit(db, kind == DrydockBerthKind.Granted ? DrydockAuditAction.BerthGrant : DrydockAuditAction.BerthPurchase, now,
+                berthId: berth.BerthId,
+                actorUserId: actorUserId,
+                subjectUserId: ownerUserId,
+                roundId: roundId,
+                reason: $"{maxSizeClass} berth, {berth.PricePaid} paid");
 
             await db.SaveChangesAsync(token);
             await tx.CommitAsync(token);
@@ -1171,16 +1187,12 @@ public sealed partial class DrydockStore
 
             db.DrydockBerth.Remove(berth);
 
-            db.DrydockAudit.Add(new DrydockAudit
-            {
-                BerthId = berthId,
-                Action = action,
-                ActorUserId = actorUserId,
-                SubjectUserId = berth.OwnerUserId,
-                RoundId = roundId,
-                Reason = $"{berth.Kind} {berth.MaxSizeClass} berth, {berth.PricePaid} paid",
-                CreatedAt = DateTime.UtcNow,
-            });
+            AddAudit(db, action, DateTime.UtcNow,
+                berthId: berthId,
+                actorUserId: actorUserId,
+                subjectUserId: berth.OwnerUserId,
+                roundId: roundId,
+                reason: $"{berth.Kind} {berth.MaxSizeClass} berth, {berth.PricePaid} paid");
 
             try
             {
@@ -1228,16 +1240,12 @@ public sealed partial class DrydockStore
             if (berth.PricePaid > 0)
                 berth.Kind = DrydockBerthKind.Purchased;
 
-            db.DrydockAudit.Add(new DrydockAudit
-            {
-                BerthId = berthId,
-                Action = DrydockAuditAction.BerthUpgrade,
-                ActorUserId = actorUserId,
-                SubjectUserId = ownerUserId,
-                RoundId = roundId,
-                Reason = $"{current} to {newClass}, {priceDelta} paid",
-                CreatedAt = DateTime.UtcNow,
-            });
+            AddAudit(db, DrydockAuditAction.BerthUpgrade, DateTime.UtcNow,
+                berthId: berthId,
+                actorUserId: actorUserId,
+                subjectUserId: ownerUserId,
+                roundId: roundId,
+                reason: $"{current} to {newClass}, {priceDelta} paid");
 
             await db.SaveChangesAsync(token);
             await tx.CommitAsync(token);
@@ -1327,19 +1335,15 @@ public sealed partial class DrydockStore
             if (moved == 0)
                 return DrydockBerthResult.WrongState;
 
-            db.DrydockAudit.Add(new DrydockAudit
-            {
-                ShipGuid = shipGuid,
-                ShipName = ship.ShipName,
-                BerthId = targetBerthId ?? ship.BerthId,
-                Action = DrydockAuditAction.BerthMove,
-                ActorUserId = actorUserId,
-                SubjectUserId = ship.OwnerUserId,
-                Revision = ship.CurrentRevision,
-                RoundId = roundId,
-                Reason = reason,
-                CreatedAt = now,
-            });
+            AddAudit(db, DrydockAuditAction.BerthMove, now,
+                shipGuid: shipGuid,
+                berthId: targetBerthId ?? ship.BerthId,
+                shipName: ship.ShipName,
+                actorUserId: actorUserId,
+                subjectUserId: ship.OwnerUserId,
+                revision: ship.CurrentRevision,
+                roundId: roundId,
+                reason: reason);
 
             await db.SaveChangesAsync(token);
             await tx.CommitAsync(token);
@@ -1390,10 +1394,7 @@ public sealed partial class DrydockStore
             var now = DateTime.UtcNow;
             var moved = await db.DrydockShip
                 .Where(s => s.ShipGuid == shipGuid && s.State == DrydockShipState.Stored && s.OwnerUserId == fromUserId)
-                .ExecuteUpdateAsync(set => set
-                    .SetProperty(s => s.State, DrydockShipState.InEscrow)
-                    .SetProperty(s => s.StateChangedAt, now)
-                    .SetProperty(s => s.UpdatedAt, now), token);
+                .ExecuteUpdateAsync(set => set.SetState(DrydockShipState.InEscrow, now), token);
 
             if (moved == 0)
                 return (DrydockBerthResult.WrongState, null);
@@ -1410,19 +1411,15 @@ public sealed partial class DrydockStore
             };
             db.DrydockTransfer.Add(transfer);
 
-            db.DrydockAudit.Add(new DrydockAudit
-            {
-                ShipGuid = shipGuid,
-                ShipName = ship.ShipName,
-                BerthId = ship.BerthId,
-                Action = DrydockAuditAction.TransferOffered,
-                ActorUserId = fromUserId,
-                SubjectUserId = toUserId,
-                Revision = ship.CurrentRevision,
-                RoundId = roundId,
-                Reason = $"expires {transfer.ExpiresAt:u}",
-                CreatedAt = now,
-            });
+            AddAudit(db, DrydockAuditAction.TransferOffered, now,
+                shipGuid: shipGuid,
+                berthId: ship.BerthId,
+                shipName: ship.ShipName,
+                actorUserId: fromUserId,
+                subjectUserId: toUserId,
+                revision: ship.CurrentRevision,
+                roundId: roundId,
+                reason: $"expires {transfer.ExpiresAt:u}");
 
             try
             {
@@ -1492,34 +1489,29 @@ public sealed partial class DrydockStore
 
             await db.DrydockShip
                 .Where(s => s.ShipGuid == transfer.ShipGuid && s.State == DrydockShipState.InEscrow)
-                .ExecuteUpdateAsync(set => set
-                    .SetProperty(s => s.State, DrydockShipState.Stored)
-                    .SetProperty(s => s.StateChangedAt, now)
-                    .SetProperty(s => s.UpdatedAt, now), token);
+                .ExecuteUpdateAsync(set => set.SetState(DrydockShipState.Stored, now), token);
 
             var ship = await db.DrydockShip.AsNoTracking()
                 .Where(s => s.ShipGuid == transfer.ShipGuid)
                 .Select(s => new { s.ShipName, s.BerthId, s.CurrentRevision })
                 .SingleOrDefaultAsync(token);
 
-            db.DrydockAudit.Add(new DrydockAudit
-            {
-                ShipGuid = transfer.ShipGuid,
-                ShipName = ship?.ShipName,
-                BerthId = ship?.BerthId,
-                Action = resolution switch
+            AddAudit(db,
+                resolution switch
                 {
                     DrydockTransferResolution.Declined => DrydockAuditAction.TransferDeclined,
                     DrydockTransferResolution.Cancelled => DrydockAuditAction.TransferCancelled,
                     _ => DrydockAuditAction.TransferExpired,
                 },
-                ActorUserId = actorUserId,
-                SubjectUserId = resolution == DrydockTransferResolution.Cancelled ? transfer.ToUserId : transfer.FromUserId,
-                Revision = ship?.CurrentRevision,
-                RoundId = roundId,
-                Reason = reason,
-                CreatedAt = now,
-            });
+                now,
+                shipGuid: transfer.ShipGuid,
+                berthId: ship?.BerthId,
+                shipName: ship?.ShipName,
+                actorUserId: actorUserId,
+                subjectUserId: resolution == DrydockTransferResolution.Cancelled ? transfer.ToUserId : transfer.FromUserId,
+                revision: ship?.CurrentRevision,
+                roundId: roundId,
+                reason: reason);
 
             await db.SaveChangesAsync(token);
             await tx.CommitAsync(token);
@@ -1562,11 +1554,10 @@ public sealed partial class DrydockStore
                 .OrderByDescending(a => a.CreatedAt)
                 .FirstOrDefaultAsync(token);
 
-            if (row?.Reason == null)
+            if (row == null)
                 return null;
 
-            var match = SoldForPattern.Match(row.Reason);
-            return match.Success && int.TryParse(match.Groups[1].Value, out var price) ? (price, row.CreatedAt) : null;
+            return ParseSoldPrice(row.Reason) is { } price ? (price, row.CreatedAt) : null;
         }, ct);
     }
 
@@ -1593,11 +1584,10 @@ public sealed partial class DrydockStore
             var prices = new Dictionary<Guid, int>();
             foreach (var row in rows)
             {
-                if (row.ShipGuid is not { } ship || prices.ContainsKey(ship) || row.Reason == null)
+                if (row.ShipGuid is not { } ship || prices.ContainsKey(ship))
                     continue;
 
-                var match = SoldForPattern.Match(row.Reason);
-                if (match.Success && int.TryParse(match.Groups[1].Value, out var price))
+                if (ParseSoldPrice(row.Reason) is { } price)
                     prices[ship] = price;
             }
 
@@ -1667,9 +1657,7 @@ public sealed partial class DrydockStore
                         .SetProperty(s => s.OwnerUserId, toUserId)
                         .SetProperty(s => s.BerthId, pick)
                         .SetProperty(s => s.LastBerthId, (int?)null)
-                        .SetProperty(s => s.State, DrydockShipState.Stored)
-                        .SetProperty(s => s.StateChangedAt, now)
-                        .SetProperty(s => s.UpdatedAt, now), token);
+                        .SetState(DrydockShipState.Stored, now), token);
             }
             catch (Exception e) when (IsBerthUniqueViolation(e))
             {
@@ -1679,19 +1667,15 @@ public sealed partial class DrydockStore
             if (moved == 0)
                 return (DrydockBerthResult.WrongState, null, null);
 
-            db.DrydockAudit.Add(new DrydockAudit
-            {
-                ShipGuid = transfer.ShipGuid,
-                ShipName = ship.ShipName,
-                BerthId = pick,
-                Action = DrydockAuditAction.Transfer,
-                ActorUserId = transfer.FromUserId,
-                SubjectUserId = toUserId,
-                Revision = ship.CurrentRevision,
-                RoundId = roundId,
-                Reason = "offer accepted",
-                CreatedAt = now,
-            });
+            AddAudit(db, DrydockAuditAction.Transfer, now,
+                shipGuid: transfer.ShipGuid,
+                berthId: pick,
+                shipName: ship.ShipName,
+                actorUserId: transfer.FromUserId,
+                subjectUserId: toUserId,
+                revision: ship.CurrentRevision,
+                roundId: roundId,
+                reason: "offer accepted");
 
             await db.SaveChangesAsync(token);
             await tx.CommitAsync(token);
@@ -1853,9 +1837,7 @@ public sealed partial class DrydockStore
             var moved = await db.DrydockShip
                 .Where(s => s.ShipGuid == shipGuid && s.State == from)
                 .ExecuteUpdateAsync(set => set
-                    .SetProperty(s => s.State, DrydockShipState.Sold)
-                    .SetProperty(s => s.StateChangedAt, now)
-                    .SetProperty(s => s.UpdatedAt, now)
+                    .SetState(DrydockShipState.Sold, now)
                     .SetProperty(s => s.CheckedOutRoundId, (int?)null)
                     .SetProperty(s => s.LastBerthId, s => s.BerthId ?? s.LastBerthId)
                     .SetProperty(s => s.BerthId, (int?)null), token);
@@ -1863,21 +1845,17 @@ public sealed partial class DrydockStore
             if (moved == 0)
                 return (DrydockBerthResult.WrongState, null);
 
-            db.DrydockAudit.Add(new DrydockAudit
-            {
-                ShipGuid = shipGuid,
-                ShipName = ship.ShipName,
-                BerthId = ship.BerthId,
-                Action = DrydockAuditAction.ShipSold,
-                ActorUserId = actorUserId,
-                SubjectUserId = ship.OwnerUserId,
-                Revision = ship.CurrentRevision,
-                RoundId = roundId,
-                Reason = live
+            AddAudit(db, DrydockAuditAction.ShipSold, now,
+                shipGuid: shipGuid,
+                berthId: ship.BerthId,
+                shipName: ship.ShipName,
+                actorUserId: actorUserId,
+                subjectUserId: ship.OwnerUserId,
+                revision: ship.CurrentRevision,
+                roundId: roundId,
+                reason: live
                     ? $"sold for {price} (appraisal {appraisal}), live at the shipyard"
-                    : $"sold for {price} (appraisal {appraisal})",
-                CreatedAt = now,
-            });
+                    : $"sold for {price} (appraisal {appraisal})");
 
             await db.SaveChangesAsync(token);
             await tx.CommitAsync(token);
@@ -1924,19 +1902,15 @@ public sealed partial class DrydockStore
                 return DrydockBerthResult.WrongState;
 
             var oldName = ship.ShipName;
-            db.DrydockAudit.Add(new DrydockAudit
-            {
-                ShipGuid = shipGuid,
-                ShipName = oldName,
-                BerthId = ship.BerthId,
-                Action = DrydockAuditAction.Renamed,
-                ActorUserId = ownerUserId,
-                SubjectUserId = ownerUserId,
-                Revision = ship.CurrentRevision,
-                RoundId = roundId,
-                Reason = $"{oldName} -> {newName}",
-                CreatedAt = now,
-            });
+            AddAudit(db, DrydockAuditAction.Renamed, now,
+                shipGuid: shipGuid,
+                berthId: ship.BerthId,
+                shipName: oldName,
+                actorUserId: ownerUserId,
+                subjectUserId: ownerUserId,
+                revision: ship.CurrentRevision,
+                roundId: roundId,
+                reason: $"{oldName} -> {newName}");
 
             await db.SaveChangesAsync(token);
             await tx.CommitAsync(token);
@@ -2207,28 +2181,17 @@ public sealed partial class DrydockStore
             ship.CurrentRevision = next;
             ship.UpdatedAt = now;
 
-            if (keepBlobs > 0)
-            {
-                var floor = next - keepBlobs + 1;
-                var stale = await db.DrydockBlob
-                    .Where(b => b.ShipGuid == shipGuid && b.Revision < floor)
-                    .ToListAsync(token);
-                db.DrydockBlob.RemoveRange(stale);
-            }
+            await PruneBlobs(db, shipGuid, next, keepBlobs, token);
 
-            db.DrydockAudit.Add(new DrydockAudit
-            {
-                ShipGuid = shipGuid,
-                ShipName = ship.ShipName,
-                BerthId = ship.BerthId,
-                Action = DrydockAuditAction.RevisionPromoted,
-                ActorUserId = actorUserId,
-                SubjectUserId = ship.OwnerUserId,
-                Revision = next,
-                RoundId = roundId,
-                Reason = string.IsNullOrWhiteSpace(reason) ? $"promoted revision {revision}" : $"promoted revision {revision}: {reason}",
-                CreatedAt = now,
-            });
+            AddAudit(db, DrydockAuditAction.RevisionPromoted, now,
+                shipGuid: shipGuid,
+                berthId: ship.BerthId,
+                shipName: ship.ShipName,
+                actorUserId: actorUserId,
+                subjectUserId: ship.OwnerUserId,
+                revision: next,
+                roundId: roundId,
+                reason: string.IsNullOrWhiteSpace(reason) ? $"promoted revision {revision}" : $"promoted revision {revision}: {reason}");
 
             await db.SaveChangesAsync(token);
             await tx.CommitAsync(token);
@@ -2251,19 +2214,15 @@ public sealed partial class DrydockStore
             if (ship == null)
                 return DrydockBerthResult.NotFound;
 
-            db.DrydockAudit.Add(new DrydockAudit
-            {
-                ShipGuid = shipGuid,
-                ShipName = ship.ShipName,
-                BerthId = ship.BerthId,
-                Action = DrydockAuditAction.Delete,
-                ActorUserId = actorUserId,
-                SubjectUserId = ship.OwnerUserId,
-                Revision = ship.CurrentRevision,
-                RoundId = roundId,
-                Reason = reason,
-                CreatedAt = DateTime.UtcNow,
-            });
+            AddAudit(db, DrydockAuditAction.Delete, DateTime.UtcNow,
+                shipGuid: shipGuid,
+                berthId: ship.BerthId,
+                shipName: ship.ShipName,
+                actorUserId: actorUserId,
+                subjectUserId: ship.OwnerUserId,
+                revision: ship.CurrentRevision,
+                roundId: roundId,
+                reason: reason);
 
             db.DrydockShip.Remove(ship);
 
@@ -2335,15 +2294,7 @@ public sealed partial class DrydockStore
             int moved;
             try
             {
-                moved = await db.DrydockShip
-                    .Where(s => s.ShipGuid == shipGuid && s.State == from)
-                    .ExecuteUpdateAsync(set => set
-                        .SetProperty(s => s.State, DrydockShipState.Stored)
-                        .SetProperty(s => s.StateChangedAt, now)
-                        .SetProperty(s => s.CheckedOutRoundId, (int?)null)
-                        .SetProperty(s => s.LastBerthId, s => s.BerthId)
-                        .SetProperty(s => s.BerthId, (int?)berthId)
-                        .SetProperty(s => s.UpdatedAt, now), token);
+                moved = await SeatFromState(db, s => s.ShipGuid == shipGuid && s.State == from, berthId, now, token);
             }
             catch (Exception e) when (IsBerthUniqueViolation(e))
             {
@@ -2353,19 +2304,15 @@ public sealed partial class DrydockStore
             if (moved == 0)
                 return DrydockBerthResult.WrongState;
 
-            db.DrydockAudit.Add(new DrydockAudit
-            {
-                ShipGuid = shipGuid,
-                ShipName = ship.ShipName,
-                BerthId = berthId,
-                Action = action,
-                ActorUserId = actorUserId,
-                SubjectUserId = ship.OwnerUserId,
-                Revision = ship.CurrentRevision,
-                RoundId = roundId,
-                Reason = reason,
-                CreatedAt = now,
-            });
+            AddAudit(db, action, now,
+                shipGuid: shipGuid,
+                berthId: berthId,
+                shipName: ship.ShipName,
+                actorUserId: actorUserId,
+                subjectUserId: ship.OwnerUserId,
+                revision: ship.CurrentRevision,
+                roundId: roundId,
+                reason: reason);
 
             await db.SaveChangesAsync(token);
             await tx.CommitAsync(token);
@@ -2455,6 +2402,28 @@ public sealed class DrydockRevisionRequest
 
 /// <summary>What a retrieve reads: the hull row, the revision it is about to rebuild, and the document.</summary>
 public sealed record DrydockLoad(DrydockShip Ship, DrydockRevision Revision, byte[] Blob);
+
+/// <summary>
+/// The <c>State</c> / <c>StateChangedAt</c> / <c>UpdatedAt</c> triple almost every state move in
+/// <see cref="DrydockStore"/> sets together, factored so each call site chains it with whatever
+/// else that move touches. EF composes <see cref="UpdateSettersBuilder{TSource}"/> into one SQL
+/// SET clause; every assignment reads the row's pre-update values regardless of chain order, so
+/// where this sits among a caller's other <c>SetProperty</c> calls changes nothing about what
+/// lands.
+/// </summary>
+internal static class DrydockShipUpdateExtensions
+{
+    public static UpdateSettersBuilder<DrydockShip> SetState(
+        this UpdateSettersBuilder<DrydockShip> set,
+        DrydockShipState state,
+        DateTime now)
+    {
+        return set
+            .SetProperty(s => s.State, state)
+            .SetProperty(s => s.StateChangedAt, now)
+            .SetProperty(s => s.UpdatedAt, now);
+    }
+}
 
 /// <summary>The admin panel's list filter. Every field null or false means "any".</summary>
 public sealed record DrydockShipFilter(
