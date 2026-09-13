@@ -483,15 +483,10 @@ public sealed partial class DrydockSystem
         if (!Exists(gridUid))
             return null;
 
-        var children = Transform(gridUid).ChildEnumerator;
-        while (children.MoveNext(out var child))
+        foreach (var dock in _docking.GetDocks(gridUid))
         {
-            if (!TryComp<DockingComponent>(child, out var dock)
-                || dock.DockedWith is not { } partner
-                || !Exists(partner))
-            {
+            if (dock.Comp.DockedWith is not { } partner || !Exists(partner))
                 continue;
-            }
 
             if (Transform(partner).GridUid is { } partnerGrid && partnerGrid != gridUid)
                 return partnerGrid;

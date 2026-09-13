@@ -96,17 +96,13 @@ public sealed partial class DrydockSystem
         // One sweep in flight at a time. A slow database must not stack sweeps that then race each
         // other over the same rows; the resolve is conditional on Pending so a lost race is
         // harmless, but it is still wasted work.
-        if (_transferSweepRunning
-            || !_cfg.GetCVar(TriadCCVars.DrydockEnabled)
-            || _cfg.GetCVar(TriadCCVars.DrydockReadOnly))
-        {
+        if (_transferSweepRunning || !DrydockWritable)
             return;
-        }
 
         _transferSweepRunning = true;
         try
         {
-            var roundId = _ticker.RoundId > 0 ? _ticker.RoundId : (int?)null;
+            var roundId = _ticker.RoundIdOrNull;
             var released = await _store.ExpireTransfers(DateTime.UtcNow, roundId);
             if (released.Count == 0)
                 return;

@@ -80,8 +80,7 @@ public sealed partial class DrydockAdminEui : BaseEui
 
     private int? RoundForAudit()
     {
-        var round = CurrentRoundId();
-        return round > 0 ? round : null;
+        return _entMan.System<GameTicker>().RoundIdOrNull;
     }
 
     private Guid AdminId => Player.UserId.UserId;

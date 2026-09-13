@@ -89,35 +89,7 @@ public sealed partial class DrydockSystem
         var doomed = new List<EntityUid>();
         var disarm = new List<EntityUid>();
 
-        var nukes = AllEntityQuery<NukeComponent, TransformComponent>();
-        while (nukes.MoveNext(out var uid, out var nuke, out var xform))
-        {
-            if (xform.GridUid == gridUid && nuke.Status == NukeStatus.ARMED)
-                doomed.Add(uid);
-        }
-
-        var timers = AllEntityQuery<ActiveTimerTriggerComponent, TransformComponent>();
-        while (timers.MoveNext(out var uid, out _, out var xform))
-        {
-            if (xform.GridUid == gridUid)
-                disarm.Add(uid);
-        }
-
-        var singularities = AllEntityQuery<SingularityComponent, TransformComponent>();
-        while (singularities.MoveNext(out var uid, out _, out var xform))
-        {
-            if (xform.GridUid == gridUid)
-                doomed.Add(uid);
-        }
-
-        var anomalies = AllEntityQuery<AnomalyComponent, TransformComponent>();
-        while (anomalies.MoveNext(out var uid, out _, out var xform))
-        {
-            if (xform.GridUid == gridUid)
-                doomed.Add(uid);
-        }
-
-        if (doomed.Count == 0 && disarm.Count == 0)
+        if (!CollectHazards(gridUid, doomed, disarm))
             return;
 
         foreach (var uid in disarm)

@@ -35,6 +35,23 @@ public sealed partial class DrydockSystem
     }
 
     /// <summary>
+    /// Same walk as <see cref="TryGetLiveShipGrid"/>, taken once for a caller judging many rows. A
+    /// snapshot: a caller that awaits between rows re-checks each grid before trusting it.
+    /// </summary>
+    public Dictionary<Guid, EntityUid> LiveShipGridMap()
+    {
+        var live = new Dictionary<Guid, EntityUid>();
+        var query = AllEntityQuery<DrydockIdentityComponent>();
+        while (query.MoveNext(out var uid, out var identity))
+        {
+            if (identity.ShipId != Guid.Empty && !TerminatingOrDeleted(uid))
+                live[identity.ShipId] = uid;
+        }
+
+        return live;
+    }
+
+    /// <summary>
     /// The grid carrying a hull this round, for the callers that need to act on it rather than
     /// merely refuse because of it. Same walk as <see cref="IsShipLive"/>, which now asks this.
     /// </summary>

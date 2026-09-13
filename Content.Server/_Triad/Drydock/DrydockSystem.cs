@@ -101,6 +101,12 @@ public sealed partial class DrydockSystem : EntitySystem
     };
 
     /// <summary>
+    /// Whether the drydock is on and not read-only, the gate every write path checks before it
+    /// touches a row or a grid.
+    /// </summary>
+    private bool DrydockWritable => _cfg.GetCVar(TriadCCVars.DrydockEnabled) && !_cfg.GetCVar(TriadCCVars.DrydockReadOnly);
+
+    /// <summary>
     /// Stores <paramref name="gridUid"/> for <paramref name="ownerUserId"/>. The order is gate,
     /// depart, freeze, prepare, serialize, validate, commit, despawn, and the grid is only removed
     /// once the document is filed.
@@ -159,7 +165,7 @@ public sealed partial class DrydockSystem : EntitySystem
         bool inline = false,
         EntityUid? permitHolderMind = null)
     {
-        if (!_cfg.GetCVar(TriadCCVars.DrydockEnabled) || _cfg.GetCVar(TriadCCVars.DrydockReadOnly))
+        if (!DrydockWritable)
             return (DrydockStoreResult.Disabled, null);
 
         // The sentinel, before anything yields. A second store request for the same grid while this
@@ -339,10 +345,7 @@ public sealed partial class DrydockSystem : EntitySystem
             // A mind must never be serialized, and a living mob does not round-trip cleanly. A
             // store refuses, which is the safe direction to be stricter in; an impound moves them
             // off and passes the same gate, for the same reason it purges rather than refuses.
-            if (ctx.Impound != null)
-                ctx.Evicted += EvictOrganicsAboard(ctx);
-
-            if (_shipyard.FoundOrganics(gridUid, mobQuery, xformQuery) is not null)
+            if (GateOrganics(ctx, gridUid, mobQuery, xformQuery))
                 return new DrydockStoreOutcome(DrydockStoreResult.OrganicsAboard, null);
 
             EnsureComp<DrydockIdentityComponent>(gridUid).ShipId = shipId;
@@ -394,10 +397,7 @@ public sealed partial class DrydockSystem : EntitySystem
             // to refuse for. The old post-database counterpart of this check is gone with it: nobody
             // can walk aboard a ship on a private map, and the reparent that puts it there stays on
             // this side of the next suspension (see FreezeOntoStagingMap).
-            if (ctx.Impound != null)
-                ctx.Evicted += EvictOrganicsAboard(ctx);
-
-            if (_shipyard.FoundOrganics(gridUid, mobQuery, xformQuery) is not null)
+            if (GateOrganics(ctx, gridUid, mobQuery, xformQuery))
                 return new DrydockStoreOutcome(DrydockStoreResult.OrganicsAboard, null);
 
             // Hoisted above the reparent, which is where upstream's own jump setup puts it. A stored
@@ -424,10 +424,7 @@ public sealed partial class DrydockSystem : EntitySystem
             // them on it, which is the answer the gate would have given. An impound has already
             // deleted hazards and moved occupants by here and puts neither back on any later
             // refusal; that trade is stated on DrydockSystem.Impound.cs.
-            if (ctx.Impound != null)
-                ctx.Evicted += EvictOrganicsAboard(ctx);
-
-            if (_shipyard.FoundOrganics(gridUid, mobQuery, xformQuery) is not null)
+            if (GateOrganics(ctx, gridUid, mobQuery, xformQuery))
                 return new DrydockStoreOutcome(DrydockStoreResult.OrganicsAboard, null);
 
             MarkPhase(DrydockPhase.Freeze);
@@ -586,6 +583,9 @@ public sealed partial class DrydockSystem : EntitySystem
             GuardStoreResume(ctx);
             MarkPhase(DrydockPhase.Drift);
 
+            // Its last read: the async state machine would otherwise pin the document to the commit.
+            yaml = null!;
+
             // The last walk of the live tree, and it has to finish before the despawn below.
             var manifest = new DrydockManifest();
             await BuildManifestSliced(ctx, slice, manifest);
@@ -623,6 +623,9 @@ public sealed partial class DrydockSystem : EntitySystem
             var payload = await slice.Await(Task.Run(() => CompressZstd(hashed.Bytes)));
             GuardStoreResume(ctx);
             MarkPhase(DrydockPhase.Compress);
+
+            // Likewise: checksum and size are already on the request.
+            hashed = default;
 
             await slice.Begin(DrydockPhase.Commit, 0);
             GuardStoreResume(ctx);
@@ -1417,46 +1420,73 @@ public sealed partial class DrydockSystem : EntitySystem
     }
 
     /// <summary>
-    /// Whether an armed nuke, an active countdown, a singularity, or an anomaly is aboard. Each is a
+    /// The organics gate, run three times across the freeze pipeline because occupancy can change
+    /// between database awaits. An impound evicts first and folds the count into <see
+    /// cref="DrydockStoreContext.Evicted"/>; either path then refuses if anyone board-able is still
+    /// found. Each call site's own comment says why that particular point still needs asking.
+    /// </summary>
+    private bool GateOrganics(
+        DrydockStoreContext ctx,
+        EntityUid gridUid,
+        EntityQuery<MobStateComponent> mobQuery,
+        EntityQuery<TransformComponent> xformQuery)
+    {
+        if (ctx.Impound != null)
+            ctx.Evicted += EvictOrganicsAboard(ctx);
+
+        return _shipyard.FoundOrganics(gridUid, mobQuery, xformQuery) is not null;
+    }
+
+    /// <summary>
+    /// Whether an armed nuke, an active countdown, a singularity, or an anomaly is aboard.
+    /// </summary>
+    private bool HasHazardAboard(EntityUid gridUid) => CollectHazards(gridUid, new List<EntityUid>(), new List<EntityUid>());
+
+    /// <summary>
+    /// Walks the four rare-component world queries that define a hazard aboard <paramref
+    /// name="gridUid"/>: an armed nuke, an active countdown, a singularity, or an anomaly. Each is a
     /// world query filtered by grid rather than a child walk, because hazards are rare and the
     /// transform's grid resolves through container nesting: a nuke stashed in a crate still reports
     /// the ship.
     ///
-    /// <para>An anomaly is refused for the same reason as a live countdown: its pulse and
-    /// supercritical timers are ordinary data fields that resume on thaw, and it does not come back
-    /// from a document the way it went in.</para>
+    /// <para>An anomaly counts for the same reason as a live countdown: its pulse and supercritical
+    /// timers are ordinary data fields that resume on thaw, and it does not come back from a
+    /// document the way it went in.</para>
+    ///
+    /// <para>Countdown carriers go to <paramref name="disarm"/>; the rest go to <paramref
+    /// name="doomed"/>. Returns whether anything was found.</para>
     /// </summary>
-    private bool HasHazardAboard(EntityUid gridUid)
+    private bool CollectHazards(EntityUid gridUid, List<EntityUid> doomed, List<EntityUid> disarm)
     {
         var nukes = AllEntityQuery<NukeComponent, TransformComponent>();
-        while (nukes.MoveNext(out _, out var nuke, out var xform))
+        while (nukes.MoveNext(out var uid, out var nuke, out var xform))
         {
             if (xform.GridUid == gridUid && nuke.Status == NukeStatus.ARMED)
-                return true;
+                doomed.Add(uid);
         }
 
         var timers = AllEntityQuery<ActiveTimerTriggerComponent, TransformComponent>();
-        while (timers.MoveNext(out _, out _, out var xform))
+        while (timers.MoveNext(out var uid, out _, out var xform))
         {
             if (xform.GridUid == gridUid)
-                return true;
+                disarm.Add(uid);
         }
 
         var singularities = AllEntityQuery<SingularityComponent, TransformComponent>();
-        while (singularities.MoveNext(out _, out _, out var xform))
+        while (singularities.MoveNext(out var uid, out _, out var xform))
         {
             if (xform.GridUid == gridUid)
-                return true;
+                doomed.Add(uid);
         }
 
         var anomalies = AllEntityQuery<AnomalyComponent, TransformComponent>();
-        while (anomalies.MoveNext(out _, out _, out var xform))
+        while (anomalies.MoveNext(out var uid, out _, out var xform))
         {
             if (xform.GridUid == gridUid)
-                return true;
+                doomed.Add(uid);
         }
 
-        return false;
+        return doomed.Count > 0 || disarm.Count > 0;
     }
 
     /// <summary>

@@ -76,7 +76,7 @@ public sealed partial class DrydockSystem
         if (_warnedThisRound || _roundEnd.ExpectedCountdownEnd == null)
             return;
 
-        if (!_cfg.GetCVar(TriadCCVars.DrydockEnabled) || _cfg.GetCVar(TriadCCVars.DrydockReadOnly))
+        if (!DrydockWritable)
             return;
 
         _warnedThisRound = true;
@@ -110,7 +110,7 @@ public sealed partial class DrydockSystem
     /// </summary>
     public bool HoldRestartForSweep(Action resume)
     {
-        if (!_cfg.GetCVar(TriadCCVars.DrydockEnabled) || _cfg.GetCVar(TriadCCVars.DrydockReadOnly))
+        if (!DrydockWritable)
             return false;
 
         var round = _ticker.RoundId;
@@ -149,7 +149,7 @@ public sealed partial class DrydockSystem
         _sweptRound = round;
         _sweepCeilingPassed = false;
 
-        if (!_cfg.GetCVar(TriadCCVars.DrydockEnabled) || _cfg.GetCVar(TriadCCVars.DrydockReadOnly))
+        if (!DrydockWritable)
         {
             Log.Info("Drydock: round-end sweep skipped, the drydock is off or read-only.");
             return;
@@ -184,6 +184,9 @@ public sealed partial class DrydockSystem
 
         Log.Info($"Drydock: round-end sweep judging {rows.Count} hull(s) still out in round {round}.");
 
+        // One world scan for the whole sweep; each row re-checks its grid, since the loop awaits.
+        var liveGrids = LiveShipGridMap();
+
         var percent = RoundEndFeePercent;
         var reason = Loc.GetString("drydock-sweep-impound-reason", ("round", round));
         int impounded = 0, destroyed = 0, stranded = 0, moved = 0;
@@ -204,7 +207,7 @@ public sealed partial class DrydockSystem
                 continue;
             }
 
-            if (!TryGetLiveShipGrid(row.ShipGuid, out var grid))
+            if (!liveGrids.TryGetValue(row.ShipGuid, out var grid) || TerminatingOrDeleted(grid))
             {
                 // Blown apart, deleted, or its identity lost with a split: whatever it carried, no
                 // hull was there to bring home.
