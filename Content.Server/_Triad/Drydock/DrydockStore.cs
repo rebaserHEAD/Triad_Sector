@@ -2056,6 +2056,53 @@ public sealed partial class DrydockStore
         }, ct);
     }
 
+    /// <summary>
+    /// A page of the drydock registry, newest activity first. The search matches the recorded
+    /// captain and the ship's current name, callsign included, and never the account, which is not
+    /// something a dock clerk knows.
+    /// </summary>
+    public Task<(List<DrydockShip> Rows, int Total)> QueryRegistry(string? search, DrydockShipState[]? states, int page, int pageSize, CancellationToken ct = default)
+    {
+        return _db.RunTriadDbCommand(async (db, token) =>
+        {
+            var query = db.DrydockShip.AsNoTracking().AsQueryable();
+
+            if (!string.IsNullOrWhiteSpace(search))
+            {
+                var needle = search.Trim().ToLowerInvariant();
+                query = query.Where(s => s.ShipName.ToLower().Contains(needle)
+                    || s.CaptainName != null && s.CaptainName.ToLower().Contains(needle));
+            }
+
+            if (states is { Length: > 0 })
+                query = query.Where(s => states.Contains(s.State));
+
+            var total = await query.CountAsync(token);
+            var rows = await query
+                .OrderByDescending(s => s.UpdatedAt)
+                .Skip(Math.Max(0, page) * pageSize)
+                .Take(pageSize)
+                .ToListAsync(token);
+
+            return (rows, total);
+        }, ct);
+    }
+
+    /// <summary>
+    /// Records the character who is the hull's captain for the registry. Display only, so it moves
+    /// nothing else on the row, not even its activity stamp.
+    /// </summary>
+    public Task SetCaptainName(Guid shipGuid, string captainName, CancellationToken ct = default)
+    {
+        return _db.RunTriadDbCommand(async (db, token) =>
+        {
+            await db.DrydockShip
+                .Where(s => s.ShipGuid == shipGuid)
+                .ExecuteUpdateAsync(set => set.SetProperty(s => s.CaptainName, captainName), token);
+            return true;
+        }, ct);
+    }
+
     /// <summary>One hull with its whole history and timeline, for the admin panel's detail view.</summary>
     public Task<DrydockShipDetail?> GetShipDetail(Guid shipGuid, CancellationToken ct = default)
     {

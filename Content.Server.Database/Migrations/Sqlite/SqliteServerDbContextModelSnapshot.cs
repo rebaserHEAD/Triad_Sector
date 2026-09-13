@@ -1143,6 +1143,10 @@ namespace Content.Server.Database.Migrations.Sqlite
                         .HasColumnType("INTEGER")
                         .HasColumnName("berth_id");
 
+                    b.Property<string>("CaptainName")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("captain_name");
+
                     b.Property<int?>("CheckedOutRoundId")
                         .HasColumnType("INTEGER")
                         .HasColumnName("checked_out_round_id");

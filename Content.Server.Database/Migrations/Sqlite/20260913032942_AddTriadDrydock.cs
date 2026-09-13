@@ -93,6 +93,7 @@ namespace Content.Server.Database.Migrations.Sqlite
                     ship_guid = table.Column<Guid>(type: "TEXT", nullable: false),
                     owner_user_id = table.Column<Guid>(type: "TEXT", nullable: false),
                     ship_name = table.Column<string>(type: "TEXT", nullable: false),
+                    captain_name = table.Column<string>(type: "TEXT", nullable: true),
                     vessel_proto = table.Column<string>(type: "TEXT", nullable: true),
                     size_class = table.Column<string>(type: "TEXT", nullable: true),
                     state = table.Column<int>(type: "INTEGER", nullable: false),

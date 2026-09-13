@@ -11,7 +11,7 @@ using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 namespace Content.Server.Database.Migrations.Sqlite
 {
     [DbContext(typeof(SqliteServerDbContext))]
-    [Migration("20260910183437_AddTriadDrydock")]
+    [Migration("20260913032942_AddTriadDrydock")]
     partial class AddTriadDrydock
     {
         /// <inheritdoc />
@@ -1145,6 +1145,10 @@ namespace Content.Server.Database.Migrations.Sqlite
                     b.Property<int?>("BerthId")
                         .HasColumnType("INTEGER")
                         .HasColumnName("berth_id");
+
+                    b.Property<string>("CaptainName")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("captain_name");
 
                     b.Property<int?>("CheckedOutRoundId")
                         .HasColumnType("INTEGER")

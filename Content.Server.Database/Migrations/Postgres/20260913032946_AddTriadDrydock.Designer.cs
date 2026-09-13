@@ -16,7 +16,7 @@ using NpgsqlTypes;
 namespace Content.Server.Database.Migrations.Postgres
 {
     [DbContext(typeof(PostgresServerDbContext))]
-    [Migration("20260910183423_AddTriadDrydock")]
+    [Migration("20260913032946_AddTriadDrydock")]
     partial class AddTriadDrydock
     {
         /// <inheritdoc />
@@ -1206,6 +1206,10 @@ namespace Content.Server.Database.Migrations.Postgres
                     b.Property<int?>("BerthId")
                         .HasColumnType("integer")
                         .HasColumnName("berth_id");
+
+                    b.Property<string>("CaptainName")
+                        .HasColumnType("text")
+                        .HasColumnName("captain_name");
 
                     b.Property<int?>("CheckedOutRoundId")
                         .HasColumnType("integer")

@@ -94,6 +94,7 @@ namespace Content.Server.Database.Migrations.Postgres
                     ship_guid = table.Column<Guid>(type: "uuid", nullable: false),
                     owner_user_id = table.Column<Guid>(type: "uuid", nullable: false),
                     ship_name = table.Column<string>(type: "text", nullable: false),
+                    captain_name = table.Column<string>(type: "text", nullable: true),
                     vessel_proto = table.Column<string>(type: "text", nullable: true),
                     size_class = table.Column<string>(type: "text", nullable: true),
                     state = table.Column<int>(type: "integer", nullable: false),

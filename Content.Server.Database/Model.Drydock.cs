@@ -214,6 +214,14 @@ public sealed class DrydockShip
     public string ShipName { get; set; } = default!;
 
     /// <summary>
+    /// The character recorded as the hull's captain, for the drydock registry. The owner is an
+    /// account and nothing else here names a character; this is written by the console when a
+    /// character of the owning account stores, retrieves, imports, or accepts the hull, and is
+    /// display only. Null on a hull no console has written it for yet.
+    /// </summary>
+    public string? CaptainName { get; set; }
+
+    /// <summary>
     /// Informational only, and deliberately not load-bearing: a vessel prototype can be renamed or
     /// removed upstream, and a stored ship must not stop being retrievable because of it.
     /// </summary>

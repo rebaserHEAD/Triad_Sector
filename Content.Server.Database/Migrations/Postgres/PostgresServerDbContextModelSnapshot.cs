@@ -1204,6 +1204,10 @@ namespace Content.Server.Database.Migrations.Postgres
                         .HasColumnType("integer")
                         .HasColumnName("berth_id");
 
+                    b.Property<string>("CaptainName")
+                        .HasColumnType("text")
+                        .HasColumnName("captain_name");
+
                     b.Property<int?>("CheckedOutRoundId")
                         .HasColumnType("integer")
                         .HasColumnName("checked_out_round_id");
