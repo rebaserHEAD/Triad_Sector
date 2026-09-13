@@ -74,6 +74,13 @@ public sealed partial class DrydockFidelitySystem : EntitySystem
     /// </remarks>
     private readonly HashSet<Type> _emptyWritable = new();
 
+    /// <summary>
+    /// Component types whose every [DataField] member type is already proven serializable in
+    /// <see cref="_serializable"/>, so the capture walk skips them without reflecting over their
+    /// fields; filled as the walk learns, process-lifetime like the caches it derives from.
+    /// </summary>
+    private readonly HashSet<Type> _nothingToCapture = new();
+
     public override void Initialize()
     {
         base.Initialize();
@@ -147,7 +154,12 @@ public sealed partial class DrydockFidelitySystem : EntitySystem
                 continue;
 
             var compType = comp.GetType();
-            foreach (var member in DataFields(compType))
+            // Every member type already proven; nothing here can need capturing.
+            if (_nothingToCapture.Contains(compType))
+                continue;
+
+            var fields = DataFields(compType);
+            foreach (var member in fields)
             {
                 var value = GetMember(comp, member);
                 if (value == null)
@@ -183,6 +195,9 @@ public sealed partial class DrydockFidelitySystem : EntitySystem
                 ClearMember(comp, member, memberType);
                 DirtyIfNetworked(uid, comp);
             }
+
+            if (fields.Length == 0 || fields.All(m => _serializable.TryGetValue(MemberType(m), out var proven) && proven))
+                _nothingToCapture.Add(compType);
         }
     }
 
