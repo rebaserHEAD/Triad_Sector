@@ -709,16 +709,19 @@ public enum DrydockAuditAction
     RevisionUnpinned = 34,
 
     /// <summary>
-    /// For the retrieve's drift gate: a retrieve refused because the document references content that
-    /// no longer resolves after the migration mappings are applied. The reason lists the ids. No code
-    /// writes this row yet.
+    /// Written by the retrieve's drift gate (<c>DrydockSystem.RefuseForDrift</c>): a retrieve refused
+    /// because the document references content that no longer resolves after the migration mappings
+    /// are applied, or a format outside its reader's window. The actor is the retrieving owner, the
+    /// revision is the one refused, and the reason lists up to ten unresolved ids and any format out
+    /// of window.
     /// </summary>
     DriftRefused = 35,
 
     /// <summary>
-    /// For the retrieve's fidelity report: a retrieve restored the hull with captured-state or
-    /// appearance keys skipped, because nothing on the live entity answers to them any more. The
-    /// reason lists the keys. No code writes this row yet.
+    /// Written by the retrieve wrapper once the ship is presented (<c>DrydockSystem.WriteSkippedState</c>):
+    /// the hull came back with captured-state or appearance keys skipped, because nothing on the live
+    /// entity answers to them any more. One row per sidecar; the reason opens with <c>captured:</c>
+    /// or <c>appearance:</c> and lists up to twenty keys with why each was skipped.
     /// </summary>
     StateSkipped = 36,
 }

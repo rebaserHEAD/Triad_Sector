@@ -259,6 +259,20 @@ public sealed partial class DrydockSystem
                 {
                     Log.Error($"Drydock: {shipId} is out but its berth could not be vacated: {e.Message}");
                 }
+
+                // The skipped state goes on the timeline here rather than inside the pipeline.
+                // The pipeline's tail from the dock to its return may not await, and a job that is
+                // cancelled can never finish an await it did reach; out here nothing cancels this.
+                // It also records only what a player actually received: a retrieve refused after its
+                // revive scrapped that grid, and its retry would log the same skips a second time.
+                try
+                {
+                    await WriteSkippedState(ctx, header);
+                }
+                catch (Exception e)
+                {
+                    Log.Error($"Drydock: {shipId} is out but its skipped state could not be recorded: {e.Message}");
+                }
             }
         }
 
@@ -302,17 +316,28 @@ public sealed partial class DrydockSystem
             if (current == null)
                 return new DrydockRetrieveOutcome(DrydockRetrieve.Refused(DrydockRetrieveResult.NotFound));
 
-            var keepBlobs = _cfg.GetCVar(TriadCCVars.DrydockKeepBlobs);
-            var oldest = keepBlobs > 0 ? Math.Max(1, current.Ship.CurrentRevision - keepBlobs + 1) : 1;
+            // The ladder walks the documents that exist rather than counting keep-N down from
+            // the current revision. The count missed a pinned document below the window, which is
+            // the one a pin exists to keep reachable, and walked revisions already pruned.
+            var revisions = await slice.Await(_store.ListRetrievableRevisions(ctx.ShipId));
+            GuardRetrieveResume(ctx);
 
-            for (var revision = current.Ship.CurrentRevision; revision >= oldest; revision--)
+            // Built here, on the main thread, before the first off-thread drift read touches it.
+            _ = MigrationTable;
+
+            // The newest revision the drift gate refused, for the refusal when the ladder runs out.
+            (int Revision, DrydockDriftVerdict Verdict)? driftRefused = null;
+
+            foreach (var revision in revisions)
             {
+                var isCurrent = revision == current.Ship.CurrentRevision;
+
                 // Re-opened per revision, so a fallback reads as a retry rather than as a stall. The
                 // percentage is clamped monotonic, so re-entering a phase never walks the bar back.
                 await slice.Begin(DrydockPhase.Fetch, 0);
                 GuardRetrieveResume(ctx);
 
-                var stored = revision == current.Ship.CurrentRevision
+                var stored = isCurrent
                     ? current
                     : await slice.Await(_store.LoadRevision(ctx.ShipId, revision));
 
@@ -338,24 +363,43 @@ public sealed partial class DrydockSystem
 
                 timer.Mark("fetch");
 
-                // A fallback is a retrieve of an older state than the one the player last put
-                // away, and the newer state is still on disk for now. It goes on the timeline so
-                // an admin can see it before pruning takes the skipped document, because a
-                // fallback followed by a few ordinary stores is how a latest state disappears.
-                if (revision != current.Ship.CurrentRevision)
+                // The drift gate. After the checksum, so a verdict is only ever taken on the
+                // bytes that were filed, and before the load, so a document naming content that no
+                // longer exists is refused with that reason instead of failing somewhere inside the
+                // loader. Off the main thread for the same reason the parse is: it reads the whole
+                // document. A throw here is a document the parser cannot read either, and the load
+                // below is what decides about that, so it is logged and the gate stands aside.
+                DrydockDriftVerdict? verdict = null;
+                try
                 {
-                    Log.Warning($"Drydock: {ctx.ShipId} retrieved from fallback revision {revision}; revision {current.Ship.CurrentRevision} is unreadable.");
-                    await slice.Await(_store.WriteAudit(new DrydockAudit
-                    {
-                        ShipGuid = ctx.ShipId,
-                        ShipName = current.Ship.ShipName,
-                        BerthId = current.Ship.BerthId,
-                        Action = DrydockAuditAction.Fallback,
-                        ActorUserId = ctx.OwnerUserId,
-                        Revision = revision,
-                        RoundId = ctx.RoundId,
-                        Reason = $"revision {current.Ship.CurrentRevision} would not load; retrieved from {revision}",
-                    }));
+                    var formatVer = stored.Revision.DrydockFormatVer;
+                    verdict = await slice.Await(Task.Run(() => DetectDrift(Encoding.UTF8.GetString(yamlBytes), formatVer)));
+                }
+                catch (Exception e) when (e is not OperationCanceledException)
+                {
+                    Log.Error($"Drydock: {ctx.ShipId} revision {revision} could not be read for drift: {e.Message}");
+                }
+
+                GuardRetrieveResume(ctx);
+                timer.Mark("drift");
+
+                if (verdict is { IsRefusal: true })
+                {
+                    var driftReason = DescribeDriftRefusal(verdict);
+                    Log.Warning($"Drydock: {ctx.ShipId} revision {revision} references content that no longer resolves: {driftReason}");
+
+                    // The current document is refused outright. An older one is older state, and it
+                    // almost certainly references the same content, so falling back would trade a
+                    // clear refusal for a ship that is both stale and likely just as broken.
+                    if (isCurrent)
+                        return await RefuseForDrift(ctx, slice, current.Ship, revision, driftReason);
+
+                    // An older document reached only because newer ones were corrupt. Stepped past
+                    // like one that would not load, and pinned the same way: it is a newer state than
+                    // whatever this ladder ends up handing out, and a re-bake can still heal it.
+                    driftRefused ??= (revision, verdict);
+                    await PinSteppedPast(ctx, slice, revision, "references content that no longer exists");
+                    continue;
                 }
 
                 // The parse half can leave the main thread, mirroring the store's validate split; the
@@ -369,7 +413,10 @@ public sealed partial class DrydockSystem
                 GuardRetrieveResume(ctx);
 
                 if (!await TryLoadOntoStagingMap(ctx, slice, revision, yamlBytes))
+                {
+                    await PinSteppedPast(ctx, slice, revision, "it passed its checksum and would not load");
                     continue;
+                }
 
                 var grid = ctx.Grid!.Value;
                 timer.Mark("load");
@@ -388,12 +435,40 @@ public sealed partial class DrydockSystem
                 {
                     ScrapRetrieveStaging(ctx);
                     Log.Error($"Drydock: {ctx.ShipId} revision {revision} has no shuttle component, falling back.");
+                    await PinSteppedPast(ctx, slice, revision, "it loaded with no shuttle component");
                     continue;
                 }
 
+                ctx.LoadedRevision = revision;
+
                 try
                 {
-                    await ReviveSliced(grid, stored.Ship, slice, timer);
+                    // A fallback is a retrieve of an older state than the one the player last put
+                    // away, and the newer state is still on disk for now. It goes on the timeline so
+                    // an admin can see it before pruning takes the skipped document, because a
+                    // fallback followed by a few ordinary stores is how a latest state disappears.
+                    // Written once the older document has actually loaded, so the row never
+                    // names a revision the ladder then stepped past as well, and inside this try so a
+                    // failed write scraps the loaded grid on its way out like any other throw.
+                    if (!isCurrent)
+                    {
+                        Log.Warning($"Drydock: {ctx.ShipId} retrieved from fallback revision {revision}; revision {current.Ship.CurrentRevision} could not be used.");
+                        DrydockMetrics.RetrieveFallbacks.Inc();
+                        await slice.Await(_store.WriteAudit(new DrydockAudit
+                        {
+                            ShipGuid = ctx.ShipId,
+                            ShipName = current.Ship.ShipName,
+                            BerthId = current.Ship.BerthId,
+                            Action = DrydockAuditAction.Fallback,
+                            ActorUserId = ctx.OwnerUserId,
+                            Revision = revision,
+                            RoundId = ctx.RoundId,
+                            Reason = $"revision {current.Ship.CurrentRevision} could not be used; retrieved from {revision}",
+                        }));
+                        GuardRetrieveResume(ctx);
+                    }
+
+                    await ReviveSliced(grid, stored.Ship, slice, timer, ctx);
 
                     // The dock is two atomic calls, not one: the config search, then the move.
                     // Each gets its own timer mark below, so a hitch here says which half it belongs
@@ -491,6 +566,14 @@ public sealed partial class DrydockSystem
                 ScrapRetrieveStaging(ctx);
 
                 return new DrydockRetrieveOutcome(new DrydockRetrieve(DrydockRetrieveResult.Success, grid));
+            }
+
+            // A ladder that ran out having refused a document for drift says so, since the
+            // re-bake that could heal that document is a different remedy from an unreadable one.
+            if (driftRefused is { } refused)
+            {
+                return await RefuseForDrift(ctx, slice, current.Ship, refused.Revision,
+                    $"no newer revision was readable; {DescribeDriftRefusal(refused.Verdict)}");
             }
 
             Log.Error($"Drydock: {ctx.ShipId} has no revision that verifies; retrieve refused.");
@@ -602,6 +685,113 @@ public sealed partial class DrydockSystem
             throw new DrydockAbortedException($"the loaded grid for {ctx.ShipId} was deleted");
     }
 
+    /// <summary>How many unresolved ids a drift refusal names before it summarises the rest.</summary>
+    private const int DriftReasonIdCap = 10;
+
+    /// <summary>How many skipped keys one skip row names before it summarises the rest.</summary>
+    private const int SkipReasonKeyCap = 20;
+
+    /// <summary>
+    /// Refuses the whole retrieve for content drift: one <see cref="DrydockAuditAction.DriftRefused"/>
+    /// row naming the revision and what would not resolve, and the counter. The claim is released by
+    /// the wrapper, as for every other refusal.
+    /// </summary>
+    private async Task<DrydockRetrieveOutcome> RefuseForDrift(
+        DrydockRetrieveContext ctx, IDrydockSlice slice, DrydockShip ship, int revision, string reason)
+    {
+        DrydockMetrics.DriftRefusals.Inc();
+        await slice.Await(_store.WriteAudit(new DrydockAudit
+        {
+            ShipGuid = ctx.ShipId,
+            ShipName = ship.ShipName,
+            BerthId = ship.BerthId,
+            Action = DrydockAuditAction.DriftRefused,
+            ActorUserId = ctx.OwnerUserId,
+            Revision = revision,
+            RoundId = ctx.RoundId,
+            Reason = reason,
+        }));
+
+        return new DrydockRetrieveOutcome(DrydockRetrieve.Refused(DrydockRetrieveResult.ContentDrift));
+    }
+
+    /// <summary>
+    /// The ids that no longer resolve, capped, then whichever format sits outside its reader's window.
+    /// Renames and deletions are left out: the loader heals both.
+    /// </summary>
+    internal static string DescribeDriftRefusal(DrydockDriftVerdict verdict)
+    {
+        var parts = new List<string>();
+
+        if (verdict.Unresolved.Count > 0)
+            parts.Add("unresolved " + CapList(verdict.Unresolved, DriftReasonIdCap));
+
+        if (verdict.EngineFormatOutOfWindow)
+            parts.Add($"engine format {verdict.EngineFormatVer} outside {verdict.EngineWindow.Minimum}-{verdict.EngineWindow.Maximum}");
+
+        if (verdict.DrydockFormatOutOfWindow)
+            parts.Add($"drydock format {verdict.DrydockFormatVer} outside {verdict.DrydockWindow.Minimum}-{verdict.DrydockWindow.Maximum}");
+
+        return string.Join("; ", parts);
+    }
+
+    /// <summary>
+    /// Pins a checksum-valid revision the ladder stepped past, so ordinary stores after this retrieve
+    /// cannot prune a newer state than the one it hands out. A pin that does not land is logged and
+    /// never refuses the retrieve; a cancellation still travels.
+    /// </summary>
+    private async Task PinSteppedPast(DrydockRetrieveContext ctx, IDrydockSlice slice, int revision, string why)
+    {
+        try
+        {
+            var pinned = await slice.Await(_store.TryPinRevision(ctx.ShipId, revision, null, ctx.RoundId,
+                $"a retrieve stepped past it: {why}"));
+
+            if (pinned is not (DrydockPinResult.Success or DrydockPinResult.AlreadyInState))
+                Log.Error($"Drydock: {ctx.ShipId} revision {revision} was stepped past and could not be pinned: {pinned}.");
+        }
+        catch (Exception e) when (e is not OperationCanceledException)
+        {
+            Log.Error($"Drydock: {ctx.ShipId} revision {revision} was stepped past and could not be pinned: {e.Message}");
+        }
+
+        GuardRetrieveResume(ctx);
+    }
+
+    /// <summary>
+    /// One <see cref="DrydockAuditAction.StateSkipped"/> row per sidecar whose restore skipped keys,
+    /// each naming the keys and why, and the counter by sidecar. Nothing when neither skipped.
+    /// </summary>
+    private async Task WriteSkippedState(DrydockRetrieveContext ctx, DrydockShip header)
+    {
+        foreach (var (sidecar, report) in new[] { ("captured", ctx.CapturedRestore), ("appearance", ctx.AppearanceRestore) })
+        {
+            if (report is not { Skipped.Count: > 0 })
+                continue;
+
+            DrydockMetrics.SkippedStateKeys.WithLabels(sidecar).Inc(report.Skipped.Count);
+
+            await _store.WriteAudit(new DrydockAudit
+            {
+                ShipGuid = ctx.ShipId,
+                ShipName = header.ShipName,
+                BerthId = header.BerthId,
+                Action = DrydockAuditAction.StateSkipped,
+                ActorUserId = ctx.OwnerUserId,
+                Revision = ctx.LoadedRevision,
+                RoundId = ctx.RoundId,
+                Reason = $"{sidecar}: " + CapList(report.Skipped.Select(s => $"{s.Key} ({s.Reason})").ToList(), SkipReasonKeyCap, "; "),
+            });
+        }
+    }
+
+    /// <summary>The first <paramref name="cap"/> entries joined, then "and N more".</summary>
+    private static string CapList(IReadOnlyList<string> items, int cap, string separator = ", ")
+    {
+        var shown = string.Join(separator, items.Take(cap));
+        return items.Count > cap ? $"{shown}{separator}and {items.Count - cap} more" : shown;
+    }
+
     /// <summary>
     /// Step and guard, the pair every sliced sweep in the revive epilogue calls.
     ///
@@ -674,13 +864,18 @@ public sealed partial class DrydockSystem
     /// slicing every one of these phases is wall clock rather than main-thread time, which is why
     /// the timing line carries a worst-slice figure beside them.
     /// </param>
-    private async Task ReviveSliced(EntityUid grid, DrydockShip record, IDrydockSlice slice, DrydockPhaseTimer timer)
+    /// <param name="ctx">
+    /// Where the two restore reports are left. The skips they name are written to the timeline by
+    /// the wrapper once the ship is presented, not here; see <see cref="WriteSkippedState"/>.
+    /// </param>
+    private async Task ReviveSliced(EntityUid grid, DrydockShip record, IDrydockSlice slice, DrydockPhaseTimer timer, DrydockRetrieveContext ctx)
     {
         await ReviveBegin(grid, slice, DrydockPhase.Fidelity, 0);
 
         // The general fidelity net first: everything captured into a sidecar goes back before
         // anything else reads component state.
         var restore = await _fidelity.RestoreCapturedSliced(grid, slice);
+        ctx.CapturedRestore = restore;
         if (restore.Skipped.Count > 0)
             Log.Warning($"Drydock: {record.ShipGuid} restored with {restore.Skipped.Count} captured field(s) skipped.");
 
@@ -690,6 +885,7 @@ public sealed partial class DrydockSystem
         // made the animation true. Restoring appearance after them would reinstate exactly the
         // frozen animations this is here to end.
         var appearance = await _fidelity.RestoreAppearanceSliced(grid, slice);
+        ctx.AppearanceRestore = appearance;
         if (appearance.Skipped.Count > 0)
             Log.Warning($"Drydock: {record.ShipGuid} restored with {appearance.Skipped.Count} appearance key(s) skipped.");
 

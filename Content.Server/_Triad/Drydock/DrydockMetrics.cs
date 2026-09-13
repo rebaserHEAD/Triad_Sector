@@ -9,10 +9,13 @@ namespace Content.Server._Triad.Drydock;
 /// </summary>
 public static class DrydockMetrics
 {
-    /// <summary>A retrieve stepped past a checksum-valid revision that would not load and used an older one.</summary>
+    /// <summary>
+    /// A retrieve handed out an older revision than the current one: the current document was corrupt,
+    /// would not load, or was stepped past, and an older one loaded.
+    /// </summary>
     public static readonly Counter RetrieveFallbacks = Metrics.CreateCounter(
         "drydock_retrieve_fallbacks",
-        "Retrieves that used an older revision because a newer one would not load.");
+        "Retrieves that used an older revision because a newer one could not be used.");
 
     /// <summary>A retrieve refused because the document references content that no longer resolves.</summary>
     public static readonly Counter DriftRefusals = Metrics.CreateCounter(

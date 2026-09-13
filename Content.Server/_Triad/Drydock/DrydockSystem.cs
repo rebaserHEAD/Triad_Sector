@@ -533,7 +533,10 @@ public sealed partial class DrydockSystem : EntitySystem
 
             var (mismatch, liveEntities) = await DetectRoundTripMismatch(ctx, slice, yaml);
             if (mismatch)
+            {
+                DrydockMetrics.ValidationMismatches.Inc();
                 return new DrydockStoreOutcome(DrydockStoreResult.ValidationFailed, null);
+            }
 
             MarkPhase(DrydockPhase.Validate);
 

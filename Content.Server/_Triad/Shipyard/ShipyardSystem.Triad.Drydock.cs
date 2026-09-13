@@ -2210,6 +2210,7 @@ public sealed partial class ShipyardSystem
             DrydockRetrieveResult.Cancelled => "drydock-error-interrupted",
             DrydockRetrieveResult.Destroyed => "drydock-error-retrieve-destroyed",
             DrydockRetrieveResult.Abandoned => "drydock-error-retrieve-abandoned",
+            DrydockRetrieveResult.ContentDrift => "drydock-error-retrieve-content-drift",
             DrydockRetrieveResult.Success => throw new ArgumentOutOfRangeException(nameof(result), result, "A successful retrieve has no error line."),
             _ => throw new ArgumentOutOfRangeException(nameof(result), result, null),
         };

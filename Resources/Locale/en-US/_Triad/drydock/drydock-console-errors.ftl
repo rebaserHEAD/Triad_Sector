@@ -95,6 +95,7 @@ drydock-error-retrieve-unreadable = {$verb} failed: no saved copy of that ship w
 drydock-error-retrieve-station-lost = {$verb} failed: the station was lost while the ship was loading.
 drydock-error-retrieve-destroyed = {$verb} failed: that ship was written off.
 drydock-error-retrieve-abandoned = {$verb} failed: that ship was abandoned.
+drydock-error-retrieve-content-drift = {$verb} failed: that ship references content that no longer exists. It has been logged.
 
 ## Berths
 

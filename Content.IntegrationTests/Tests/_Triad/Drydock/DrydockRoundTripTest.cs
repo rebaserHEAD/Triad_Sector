@@ -280,7 +280,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
         }
 
         /// <summary>How many drydock staging maps exist right now, of every kind.</summary>
-        private static int CountStagingMaps(IEntityManager entMan)
+        internal static int CountStagingMaps(IEntityManager entMan)
         {
             var count = 0;
             var query = entMan.AllEntityQueryEnumerator<DrydockStagingMapComponent>();
@@ -2838,7 +2838,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
         /// that are not on a set tile silently reparents to the map, and a grid census then reads
         /// the wrong parent.
         /// </summary>
-        private static async Task<(EntityUid Station, EntityUid ShipGrid, EntityUid Airlock)> BuildShipAndStation(TestPair pair)
+        internal static async Task<(EntityUid Station, EntityUid ShipGrid, EntityUid Airlock)> BuildShipAndStation(TestPair pair)
         {
             var server = pair.Server;
             var entMan = server.EntMan;
@@ -2916,7 +2916,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
         /// idle pair and then calls a store that is merely parked "never completed". Anything that
         /// deliberately exercises slicing pumps its own loop rather than borrowing this one.</para>
         /// </summary>
-        private static async Task<T> RunOnServer<T>(TestPair pair, Func<Task<T>> start)
+        internal static async Task<T> RunOnServer<T>(TestPair pair, Func<Task<T>> start)
         {
             Task<T>? task = null;
             await pair.Server.WaitPost(() => task = start());

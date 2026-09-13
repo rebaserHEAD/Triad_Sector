@@ -69,6 +69,15 @@ public enum DrydockRetrieveResult : byte
 
     /// <summary>Its owner gave the ship up rather than reclaim it out of the lot.</summary>
     Abandoned,
+
+    /// <summary>
+    /// The current document references content that no longer resolves after the migration mappings,
+    /// or a format outside its reader's window; or the ladder ran out having refused an older document
+    /// for the same reason. Never answered by falling back, since an older document is older state
+    /// naming the same content. A <c>DriftRefused</c> row names what would not resolve. Appended for
+    /// the reason <see cref="NoStagingMap"/> gives.
+    /// </summary>
+    ContentDrift,
 }
 
 /// <summary>

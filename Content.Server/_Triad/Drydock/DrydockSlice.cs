@@ -617,5 +617,17 @@ public sealed class DrydockRetrieveContext
     /// <summary>True once the ship is docked; the wrapper then also owns vacating the berth.</summary>
     public bool Presented;
 
+    /// <summary>
+    /// The revision that loaded, and the two fidelity restore reports from its revive. Left here for
+    /// the wrapper, which writes their skips to the timeline once the ship is presented.
+    /// </summary>
+    public int? LoadedRevision;
+
+    /// <inheritdoc cref="LoadedRevision"/>
+    public DrydockFidelityRestore? CapturedRestore;
+
+    /// <inheritdoc cref="LoadedRevision"/>
+    public DrydockFidelityRestore? AppearanceRestore;
+
     public readonly DrydockPhaseTimer Timer = new();
 }
