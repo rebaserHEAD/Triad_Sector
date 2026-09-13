@@ -34,6 +34,7 @@ using Content.Shared.Damage;
 using Content.Shared.Mobs;
 using Content.Shared.Mobs.Components;
 using Content.Shared.FixedPoint;
+using Content.Shared._Triad.CCVar; // Triad: lobby start without players
 
 namespace Content.Server.GameTicking
 {
@@ -987,7 +988,9 @@ namespace Content.Server.GameTicking
             }
             else
             {
-                if (_playerManager.PlayerCount == 0)
+                // Triad: triad.lobby.start_without_players runs the countdown on an empty server too.
+                // if (_playerManager.PlayerCount == 0)
+                if (_playerManager.PlayerCount == 0 && !_cfg.GetCVar(TriadCCVars.LobbyStartWithoutPlayers))
                     _roundStartCountdownHasNotStartedYetDueToNoPlayers = true;
                 else
                     _roundStartTime = _gameTiming.CurTime + LobbyDuration;

@@ -271,4 +271,13 @@ public sealed class TriadCCVars
     /// </summary>
     public static readonly CVarDef<int> RoundEndCountdownMinutes =
         CVarDef.Create("triad.round_end.countdown_minutes", 10, CVar.SERVERONLY);
+
+    // Triad: lobby
+    /// <summary>
+    /// When the lobby is on, start its round countdown at boot and after every restart even with
+    /// nobody connected, so the round starts and the sector sims on its own. Players who arrive still
+    /// land in the lobby and late-join. Off keeps upstream's wait for the first player.
+    /// </summary>
+    public static readonly CVarDef<bool> LobbyStartWithoutPlayers =
+        CVarDef.Create("triad.lobby.start_without_players", false, CVar.SERVERONLY);
 }
