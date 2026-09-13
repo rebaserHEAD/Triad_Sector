@@ -1,5 +1,10 @@
 // Triad: drydock tab.
 using System.Text;
+using Content.Client.Stylesheets;
+using Content.Shared._Triad.Drydock;
+using Robust.Client.Graphics;
+using Robust.Client.UserInterface;
+using Robust.Client.UserInterface.Controls;
 using Robust.Shared.Maths;
 using Robust.Shared.Utility;
 
@@ -7,7 +12,8 @@ namespace Content.Client._NF.Shipyard.UI;
 
 /// <summary>
 /// The one place the drydock tab writes a clock, a class name or a weighted name, so the card, the
-/// rows, the alerts and the prompts all agree on the shape of the same fact.
+/// rows, the alerts and the prompts all agree on the shape of the same fact, plus the small widgets
+/// the drydock windows share.
 /// </summary>
 internal static class DrydockText
 {
@@ -89,5 +95,67 @@ internal static class DrydockText
         message.PushTag(new MarkupNode("font", null, new Dictionary<string, MarkupParameter> { ["size"] = new MarkupParameter((long)size) }));
         message.AddBold(text);
         message.Pop();
+    }
+
+    // ---------------------------------------------------------------- Filter chips and cards
+
+    /// <summary>A filter chip's label colour when it is not the active one.</summary>
+    public static readonly Color ChipText = Color.FromHex("#b0b0b0");
+
+    /// <summary>A filter chip's fill: the primary button blue when active, the panel's own grey otherwise.</summary>
+    public static StyleBoxFlat ChipBox(bool on) => new()
+    {
+        BackgroundColor = on ? StyleNano.ButtonColorPrimaryDefault : Color.FromHex("#222226"),
+        BorderColor = on ? BlueBorder : Color.FromHex("#3a3a3e"),
+        BorderThickness = new Thickness(1),
+    };
+
+    /// <summary>Repaints one chip cell for whether it is the active filter.</summary>
+    public static void RepaintChip(PanelContainer panel, Label label, bool on)
+    {
+        panel.PanelOverride = ChipBox(on);
+        label.FontColorOverride = on ? Color.White : ChipText;
+    }
+
+    /// <summary>A 1px rule panel in the given colour: the row divider both the menu button and the list picker draw.</summary>
+    public static PanelContainer RulePanel(Color color)
+    {
+        return new PanelContainer
+        {
+            PanelOverride = new StyleBoxFlat { BackgroundColor = color },
+            MinHeight = 1,
+            HorizontalExpand = true,
+        };
+    }
+
+    /// <summary>The label and detail colours for one enabled/disabled row, shared by the menu button and the list picker.</summary>
+    public static (Color Text, Color Detail) RowColors(bool enabled)
+    {
+        return (enabled ? Color.White : Disabled, enabled ? Dim : Disabled);
+    }
+
+    /// <summary>One labelled line of a card: the label in the key colour, the value clipped.</summary>
+    public static Control CardLine(string key, string value, Color? colour)
+    {
+        var line = new BoxContainer { Orientation = BoxContainer.LayoutOrientation.Horizontal };
+        line.AddChild(new Label { Text = Loc.GetString(key), FontColorOverride = Dim });
+        line.AddChild(new Label
+        {
+            Text = value,
+            FontColorOverride = colour,
+            ClipText = true,
+            HorizontalExpand = true,
+            Margin = new Thickness(4, 0, 0, 0),
+        });
+        return line;
+    }
+
+    /// <summary>The callsign first, then the name, by the deed's own split rule, as a ship card titles itself.</summary>
+    public static string CardTitle(string fullName)
+    {
+        var (name, suffix) = DrydockNameRules.SplitShuttleName(fullName);
+        return suffix == null
+            ? fullName
+            : Loc.GetString("drydock-admin-card-title", ("callsign", suffix), ("name", name));
     }
 }

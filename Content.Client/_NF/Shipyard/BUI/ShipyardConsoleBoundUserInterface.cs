@@ -18,7 +18,8 @@ public sealed partial class ShipyardConsoleBoundUserInterface : BoundUserInterfa
 {
     [Dependency] private IPlayerManager _player = default!; // Triad
     [Dependency] private ShipFileManagementSystem _shipFileManagementSystem = default!;
-    [Dependency] private IConfigurationManager _configManager = default!; // Triad
+    // Triad: removed, never read.
+    // [Dependency] private IConfigurationManager _configManager = default!; // Triad
 
     private ISawmill _sawmill = default!;
 
@@ -29,14 +30,12 @@ public sealed partial class ShipyardConsoleBoundUserInterface : BoundUserInterfa
 
     public int? ShipSellValue { get; private set; }
 
-
-
-    private readonly EntityWhitelistSystem _whitelist; // Triad
-
+    // Triad: removed, never read since the legacy save list went.
+    // private readonly EntityWhitelistSystem _whitelist; // Triad
 
     public ShipyardConsoleBoundUserInterface(EntityUid owner, Enum uiKey) : base(owner, uiKey)
     {
-        _whitelist = EntMan.System<EntityWhitelistSystem>(); // Triad
+        // _whitelist = EntMan.System<EntityWhitelistSystem>(); // Triad
         _sawmill = Logger.GetSawmill("shipyard_console_bui"); // Triad
     }
 
@@ -123,20 +122,21 @@ public sealed partial class ShipyardConsoleBoundUserInterface : BoundUserInterfa
         prompt.OpenCentered();
     }
 
-    private static string ExtractFileNameWithoutExtension(string filePath)
-    {
-        var fileName = filePath;
-        var lastSlash = filePath.LastIndexOf('/');
-        if (lastSlash >= 0)
-            fileName = filePath.Substring(lastSlash + 1);
-        var lastBackslash = fileName.LastIndexOf('\\');
-        if (lastBackslash >= 0)
-            fileName = fileName.Substring(lastBackslash + 1);
-        var lastDot = fileName.LastIndexOf('.');
-        if (lastDot >= 0)
-            fileName = fileName.Substring(0, lastDot);
-        return fileName;
-    }
+    // Triad: removed, no callers since the legacy save list went.
+    // private static string ExtractFileNameWithoutExtension(string filePath)
+    // {
+    //     var fileName = filePath;
+    //     var lastSlash = filePath.LastIndexOf('/');
+    //     if (lastSlash >= 0)
+    //         fileName = filePath.Substring(lastSlash + 1);
+    //     var lastBackslash = fileName.LastIndexOf('\\');
+    //     if (lastBackslash >= 0)
+    //         fileName = fileName.Substring(lastBackslash + 1);
+    //     var lastDot = fileName.LastIndexOf('.');
+    //     if (lastDot >= 0)
+    //         fileName = fileName.Substring(0, lastDot);
+    //     return fileName;
+    // }
 
     private void Populate(List<string> availablePrototypes, List<string> unavailablePrototypes, bool freeListings, bool validId)
     {

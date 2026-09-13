@@ -66,14 +66,13 @@ public sealed class DrydockListPicker : FancyWindow
         {
             var fill = new PanelContainer { PanelOverride = new StyleBoxFlat { BackgroundColor = Color.Transparent }, HorizontalExpand = true };
             var line = new BoxContainer { Orientation = BoxContainer.LayoutOrientation.Horizontal, Margin = new Thickness(10, 7), HorizontalExpand = true };
-            var text = item.Enabled ? Color.White : DrydockText.Disabled;
-            var detail = item.Enabled ? DrydockText.Dim : DrydockText.Disabled;
+            var (text, detail) = DrydockText.RowColors(item.Enabled);
             line.AddChild(new Label { Text = item.Label, HorizontalExpand = true, Modulate = text });
             if (item.Detail != null)
                 line.AddChild(new Label { Text = item.Detail, Modulate = detail, Margin = new Thickness(12, 0, 0, 0) });
             fill.AddChild(line);
 
-            var rule = new PanelContainer { PanelOverride = new StyleBoxFlat { BackgroundColor = RowRule }, MinHeight = 1, HorizontalExpand = true };
+            var rule = DrydockText.RulePanel(RowRule);
             var cell = new BoxContainer { Orientation = BoxContainer.LayoutOrientation.Vertical, HorizontalExpand = true };
             cell.AddChild(fill);
             cell.AddChild(rule);

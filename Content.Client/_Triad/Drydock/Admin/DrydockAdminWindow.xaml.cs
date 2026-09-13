@@ -45,31 +45,20 @@ public sealed partial class DrydockAdminWindow : FancyWindow
     private const int PageSize = 50;
 
     private static readonly Color Dim = Color.FromHex("#8d8d8d");
-    private static readonly Color Key = Color.FromHex("#999999");
-    private static readonly Color ChipText = Color.FromHex("#b0b0b0");
-    private static readonly Color Escrow = Color.FromHex("#d9a441");
     private static readonly Color Out = Color.FromHex("#d9d941");
     private static readonly Color Sold = Color.FromHex("#ff8080");
-    private static readonly Color Impounded = Color.FromHex("#cf4f4f");
     private static readonly Color Destroyed = Color.FromHex("#8b3a3a");
     private static readonly Color Abandoned = Color.FromHex("#a08c72");
 
     /// <summary>The faint caution stripes on a berth whose ship is in escrow: a white tile, tinted.</summary>
     private const string StripesTexture = "/Textures/_Triad/Interface/drydock_caution_stripes.png";
-    private static readonly Color StripesTint = Escrow.WithAlpha(0.22f);
+    private static readonly Color StripesTint = DrydockText.Warning.WithAlpha(0.22f);
 
     private static StyleBoxFlat RowBox(bool selected) => new()
     {
         BackgroundColor = Color.FromHex("#2b2b2e"),
         BorderColor = selected ? Color.FromHex("#5b86b8") : Color.FromHex("#1b1b1e"),
         BorderThickness = new Thickness(2),
-    };
-
-    private static StyleBoxFlat ChipBox(bool on) => new()
-    {
-        BackgroundColor = on ? Color.FromHex("#2f4c6f") : Color.FromHex("#222226"),
-        BorderColor = on ? Color.FromHex("#5b86b8") : Color.FromHex("#3a3a3e"),
-        BorderThickness = new Thickness(1),
     };
 
     private static StyleBoxFlat TimelineRule() => new()
@@ -140,9 +129,9 @@ public sealed partial class DrydockAdminWindow : FancyWindow
         _eui = eui;
 
         var fonts = IoCManager.Resolve<IResourceCache>();
-        _heading = fonts.GetFont("/Fonts/NotoSans/NotoSans-Bold.ttf", 13);
-        _small = fonts.GetFont("/Fonts/NotoSans/NotoSans-Regular.ttf", 11);
-        _bold = fonts.GetFont("/Fonts/NotoSans/NotoSans-Bold.ttf", 12);
+        _heading = fonts.NotoStack("Bold", 13);
+        _small = fonts.NotoStack(size: 11);
+        _bold = fonts.NotoStack("Bold", 12);
         _stripes = new StyleBoxTexture
         {
             Texture = fonts.GetTexture(StripesTexture),
@@ -208,10 +197,10 @@ public sealed partial class DrydockAdminWindow : FancyWindow
                 Margin = new Thickness(8, 2),
                 Align = Label.AlignMode.Center,
                 HorizontalExpand = true,
-                FontColorOverride = chip == null ? Color.White : ChipText,
+                FontColorOverride = chip == null ? Color.White : DrydockText.ChipText,
             };
 
-            var panel = new PanelContainer { PanelOverride = ChipBox(chip == null), HorizontalExpand = true };
+            var panel = new PanelContainer { PanelOverride = DrydockText.ChipBox(chip == null), HorizontalExpand = true };
             panel.AddChild(label);
 
             // Every cell of the grid expands, so the three columns share the width equally.
@@ -237,11 +226,7 @@ public sealed partial class DrydockAdminWindow : FancyWindow
     private void RequestPage(int page)
     {
         foreach (var (panel, label, chip) in _chips)
-        {
-            var on = chip == _chip;
-            panel.PanelOverride = ChipBox(on);
-            label.FontColorOverride = on ? Color.White : ChipText;
-        }
+            DrydockText.RepaintChip(panel, label, chip == _chip);
 
         _eui.Send(new DrydockAdminRequestPageMessage
         {
@@ -288,10 +273,10 @@ public sealed partial class DrydockAdminWindow : FancyWindow
             };
             // Every line clips rather than widening the card: a clipped Label measures to nothing,
             // so a long name cannot push the card past the column.
-            lines.AddChild(new Label { Text = CardTitle(ship.Name), FontOverride = _bold, ClipText = true });
-            lines.AddChild(CardLine("drydock-admin-card-class", DrydockText.Class(ship.SizeClass), null));
-            lines.AddChild(CardLine("drydock-admin-card-owner", ship.OwnerName ?? Short(ship.OwnerUserId), null));
-            lines.AddChild(CardLine("drydock-admin-card-status", status, colour));
+            lines.AddChild(new Label { Text = DrydockText.CardTitle(ship.Name), FontOverride = _bold, ClipText = true });
+            lines.AddChild(DrydockText.CardLine("drydock-admin-card-class", DrydockText.Class(ship.SizeClass), null));
+            lines.AddChild(DrydockText.CardLine("drydock-admin-card-owner", ship.OwnerName ?? Short(ship.OwnerUserId), null));
+            lines.AddChild(DrydockText.CardLine("drydock-admin-card-status", status, colour));
 
             var panel = new PanelContainer
             {
@@ -322,36 +307,6 @@ public sealed partial class DrydockAdminWindow : FancyWindow
         ShipScroll.SetScrollValue(scroll);
     }
 
-    /// <summary>One labelled line of a card: the label in the key colour, the value clipped.</summary>
-    private static Control CardLine(string key, string value, Color? colour)
-    {
-        var line = new BoxContainer { Orientation = BoxContainer.LayoutOrientation.Horizontal };
-        line.AddChild(new Label { Text = Loc.GetString(key), FontColorOverride = Key });
-        line.AddChild(new Label
-        {
-            Text = value,
-            FontColorOverride = colour,
-            ClipText = true,
-            HorizontalExpand = true,
-            Margin = new Thickness(4, 0, 0, 0),
-        });
-        return line;
-    }
-
-    /// <summary>
-    /// The callsign first, then the name, when the ship's name ends in one; otherwise the name as it
-    /// is. The split is the deed's own rule (<c>TryParseShuttleName</c>): the last word is the
-    /// callsign when it holds a dash and is shorter than the deed's suffix limit, so a hull whose
-    /// template makes a longer one simply has none.
-    /// </summary>
-    private static string CardTitle(string fullName)
-    {
-        var (name, suffix) = DrydockNameRules.SplitShuttleName(fullName);
-        return suffix == null
-            ? fullName
-            : Loc.GetString("drydock-admin-card-title", ("callsign", suffix), ("name", name));
-    }
-
     /// <summary>
     /// A hull's status as the card writes it: the state, the berth when it holds one, then the
     /// state's own figure (the round it went out in, when an offer runs out, the fee and whether it
@@ -376,13 +331,13 @@ public sealed partial class DrydockAdminWindow : FancyWindow
                 break;
             case "InEscrow":
                 parts.Add(ExpiresIn(ship.EscrowExpiresAt));
-                colour = Escrow;
+                colour = DrydockText.Warning;
                 break;
             case "Impounded":
                 parts.Add(BankSystemExtensions.ToSpesoString(ship.ImpoundFee));
                 if (!ship.ImpoundRedeemable)
                     parts.Add(Loc.GetString("drydock-admin-status-locked"));
-                colour = Impounded;
+                colour = DrydockText.Impound;
                 break;
             case "Sold":
                 // A sale with no price on record keeps the bare word.
@@ -750,7 +705,7 @@ public sealed partial class DrydockAdminWindow : FancyWindow
 
         if (berth.OccupantName != null)
         {
-            msg.AddText(CardTitle(berth.OccupantName));
+            msg.AddText(DrydockText.CardTitle(berth.OccupantName));
             return msg;
         }
 
@@ -816,7 +771,7 @@ public sealed partial class DrydockAdminWindow : FancyWindow
             if (entry.SubjectUserId is { } subject && entry.SubjectUserId != entry.ActorUserId)
                 msg.AddText($" → {entry.SubjectName ?? Short(subject)}");
 
-            msg.PushColor(Key);
+            msg.PushColor(DrydockText.Dim);
             if (entry.BerthId is { } berth)
                 msg.AddText($" · #{berth}");
             if (entry.Revision is { } rev)

@@ -159,10 +159,8 @@ public sealed partial class ShipyardConsoleMenu : FancyWindow
         Tabs.SetTabTitle(1, Loc.GetString("shipyard-console-tab-drydock"));
         BuyBerthButton.Text = Loc.GetString("shipyard-console-berth-buy-button") + DrydockText.Caret;
         // The lockout's two big lines at the sizes they were designed at; Nano names no face that large.
-        var bold = _resourceCache.GetResource<FontResource>("/Fonts/NotoSans/NotoSans-Bold.ttf");
-        var regular = _resourceCache.GetResource<FontResource>("/Fonts/NotoSans/NotoSans-Regular.ttf");
-        LockoutTitle.FontOverride = new VectorFont(bold, 44);
-        LockoutSubtitle.FontOverride = new VectorFont(regular, 14);
+        LockoutTitle.FontOverride = _resourceCache.NotoStack("Bold", 44);
+        LockoutSubtitle.FontOverride = _resourceCache.NotoStack(size: 14);
         // The stripes tile through a style box: TextureRect's Tile mode is unimplemented in the
         // engine and draws the texture once in the top-left corner.
         LockoutStripes.PanelOverride = new StyleBoxTexture
@@ -770,12 +768,6 @@ public sealed partial class ShipyardConsoleMenu : FancyWindow
     }
 
     /// <summary>
-    /// Triad: one row per berth. Retrieve is the row's one button, shown only when it would work;
-    /// the rarer verbs sit in the row's menu, ship verbs above a rule and berth verbs below it,
-    /// with a disabled entry saying why. The berth an offer on the tab would land in says what is
-    /// coming in place of "empty".
-    /// </summary>
-    /// <summary>
     /// Triad: legacy import. Old saves sit above the berths, because they are not in one yet: the
     /// import grants the berth. Drawn only when the server has agreed to take them, so an empty list
     /// is the whole of the feature being off, out of budget, or nothing importable on this machine.
@@ -810,6 +802,12 @@ public sealed partial class ShipyardConsoleMenu : FancyWindow
         }
     }
 
+    /// <summary>
+    /// Triad: one row per berth. Retrieve is the row's one button, shown only when it would work;
+    /// the rarer verbs sit in the row's menu, ship verbs above a rule and berth verbs below it,
+    /// with a disabled entry saying why. The berth an offer on the tab would land in says what is
+    /// coming in place of "empty".
+    /// </summary>
     private void PopulateBerths(List<DrydockBerthInfo> berths, bool canRetrieve)
     {
         Berths.RemoveAllChildren();

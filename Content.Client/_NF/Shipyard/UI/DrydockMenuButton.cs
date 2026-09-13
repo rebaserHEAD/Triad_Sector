@@ -78,7 +78,7 @@ public sealed class DrydockMenuButton : Button
 
             // A rule between entries; the section rule is heavier and stands in for the row one.
             if (i > 0)
-                list.AddChild(Rule(item.DividerAbove ? SectionRule : RowRule));
+                list.AddChild(DrydockText.RulePanel(item.DividerAbove ? SectionRule : RowRule));
 
             // A flat row, not a button: no style class, so nothing draws a box around it, and
             // the hover fill is painted by hand on the panel inside.
@@ -89,8 +89,7 @@ public sealed class DrydockMenuButton : Button
             };
             var box = new StyleBoxFlat { BackgroundColor = Color.Transparent };
             var fill = new PanelContainer { PanelOverride = box, HorizontalExpand = true };
-            var text = item.Enabled ? Color.White : DrydockText.Disabled;
-            var detail = item.Enabled ? DrydockText.Dim : DrydockText.Disabled;
+            var (text, detail) = DrydockText.RowColors(item.Enabled);
             var line = new BoxContainer { Orientation = BoxContainer.LayoutOrientation.Horizontal, Margin = new Thickness(10, 7), HorizontalExpand = true };
             line.AddChild(new Label { Text = item.Label, HorizontalExpand = true, Modulate = text });
             if (item.Detail != null)
@@ -133,15 +132,5 @@ public sealed class DrydockMenuButton : Button
             ? new Vector2(GlobalPosition.X + Width - width, GlobalPosition.Y + Height)
             : new Vector2(GlobalPosition.X, GlobalPosition.Y + Height);
         popup.Open(UIBox2.FromDimensions(origin, new Vector2(width, 0)));
-    }
-
-    private static PanelContainer Rule(Color color)
-    {
-        return new PanelContainer
-        {
-            PanelOverride = new StyleBoxFlat { BackgroundColor = color },
-            MinHeight = 1,
-            HorizontalExpand = true,
-        };
     }
 }

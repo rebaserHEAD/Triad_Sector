@@ -1,7 +1,9 @@
 // Triad: the drydock admin panel.
 using System;
 using System.Numerics;
+using Content.Client._NF.Shipyard.UI;
 using Content.Client.Resources;
+using Content.Client.Stylesheets;
 using Content.Shared._NF.Bank;
 using Content.Shared._Triad.Drydock;
 using Content.Shared._Triad.Drydock.Admin;
@@ -26,9 +28,6 @@ namespace Content.Client._Triad.Drydock.Admin;
 /// </summary>
 public sealed class DrydockImpoundDialog : DefaultWindow
 {
-    private static readonly Color Key = Color.FromHex("#999999");
-    private static readonly Color Fee = Color.FromHex("#cf4f4f");
-
     private readonly Slider _share;
     private readonly Label _percent;
     private readonly Label _credits;
@@ -55,9 +54,9 @@ public sealed class DrydockImpoundDialog : DefaultWindow
         _appraisal = appraisal;
 
         var fonts = IoCManager.Resolve<IResourceCache>();
-        var bold = fonts.GetFont("/Fonts/NotoSans/NotoSans-Bold.ttf", 12);
-        var boldLarge = fonts.GetFont("/Fonts/NotoSans/NotoSans-Bold.ttf", 14);
-        var small = fonts.GetFont("/Fonts/NotoSans/NotoSans-Regular.ttf", 11);
+        var bold = fonts.NotoStack("Bold", 12);
+        var boldLarge = fonts.NotoStack("Bold", 14);
+        var small = fonts.NotoStack(size: 11);
 
         var column = new BoxContainer { Orientation = BoxContainer.LayoutOrientation.Vertical, Margin = new Thickness(14, 12) };
 
@@ -70,7 +69,7 @@ public sealed class DrydockImpoundDialog : DefaultWindow
             Margin = new Thickness(0, 10, 0, 0),
             VerticalAlignment = VAlignment.Center,
         };
-        feeRow.AddChild(new Label { Text = Loc.GetString("drydock-admin-impound-fee"), MinWidth = 52, Modulate = Key });
+        feeRow.AddChild(new Label { Text = Loc.GetString("drydock-admin-impound-fee"), MinWidth = 52, Modulate = DrydockText.Dim });
 
         _share = new Slider
         {
@@ -86,7 +85,7 @@ public sealed class DrydockImpoundDialog : DefaultWindow
         _percent = new Label { MinWidth = 44, Align = Label.AlignMode.Right, FontOverride = bold };
         feeRow.AddChild(_percent);
 
-        _credits = new Label { MinWidth = 96, Align = Label.AlignMode.Right, FontOverride = boldLarge, Modulate = Fee };
+        _credits = new Label { MinWidth = 96, Align = Label.AlignMode.Right, FontOverride = boldLarge, Modulate = DrydockText.Impound };
         feeRow.AddChild(_credits);
         column.AddChild(feeRow);
 
@@ -94,7 +93,7 @@ public sealed class DrydockImpoundDialog : DefaultWindow
         {
             Text = FeeNote(ship),
             FontOverride = small,
-            Modulate = Key,
+            Modulate = DrydockText.Dim,
             Margin = new Thickness(60, 0, 0, 0),
         });
 
@@ -105,7 +104,7 @@ public sealed class DrydockImpoundDialog : DefaultWindow
             Margin = new Thickness(0, 10, 0, 0),
             VerticalAlignment = VAlignment.Center,
         };
-        reasonRow.AddChild(new Label { Text = Loc.GetString("drydock-admin-impound-reason"), MinWidth = 52, Modulate = Key });
+        reasonRow.AddChild(new Label { Text = Loc.GetString("drydock-admin-impound-reason"), MinWidth = 52, Modulate = DrydockText.Dim });
         _reason = new LineEdit
         {
             PlaceHolder = Loc.GetString("drydock-admin-impound-reason-placeholder"),
@@ -118,7 +117,7 @@ public sealed class DrydockImpoundDialog : DefaultWindow
         {
             Text = Loc.GetString("drydock-admin-impound-reason-note"),
             FontOverride = small,
-            Modulate = Key,
+            Modulate = DrydockText.Dim,
             Margin = new Thickness(60, 0, 0, 0),
         });
 
@@ -146,13 +145,13 @@ public sealed class DrydockImpoundDialog : DefaultWindow
             Pressed = true,
         };
         redeemRow.AddChild(_redeemable);
-        redeemRow.AddChild(new Label { Text = Loc.GetString("drydock-admin-impound-redeemable-detail"), Modulate = Key, Margin = new Thickness(4, 0, 0, 0) });
+        redeemRow.AddChild(new Label { Text = Loc.GetString("drydock-admin-impound-redeemable-detail"), Modulate = DrydockText.Dim, Margin = new Thickness(4, 0, 0, 0) });
         redeemColumn.AddChild(redeemRow);
         redeemColumn.AddChild(new Label
         {
             Text = Loc.GetString("drydock-admin-impound-redeemable-note"),
             FontOverride = small,
-            Modulate = Key,
+            Modulate = DrydockText.Dim,
             Margin = new Thickness(22, 0, 0, 0),
         });
         redeemBox.AddChild(redeemColumn);

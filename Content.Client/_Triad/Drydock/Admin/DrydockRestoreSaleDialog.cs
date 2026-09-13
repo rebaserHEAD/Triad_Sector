@@ -2,6 +2,7 @@
 using System;
 using System.Collections.Generic;
 using System.Numerics;
+using Content.Client._NF.Shipyard.UI;
 using Content.Shared._NF.Bank;
 using Content.Shared._Triad.Drydock.Admin;
 using Robust.Client.UserInterface;
@@ -58,7 +59,7 @@ public sealed class DrydockRestoreSaleDialog : DefaultWindow
             Text = sale.OwnerBalance is { } known
                 ? Loc.GetString("drydock-admin-sale-balance", ("balance", BankSystemExtensions.ToSpesoString(known)))
                 : Loc.GetString("drydock-admin-sale-balance-unknown"),
-            Modulate = _cannotCover ? Color.FromHex("#ff6a6a") : Color.FromHex("#999999"),
+            Modulate = _cannotCover ? Color.FromHex("#ff6a6a") : DrydockText.Dim,
             Margin = new Thickness(0, 2, 0, 8),
         });
 

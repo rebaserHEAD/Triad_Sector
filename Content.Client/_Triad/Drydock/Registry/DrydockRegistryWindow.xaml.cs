@@ -3,6 +3,7 @@ using System;
 using System.Collections.Generic;
 using Content.Client._NF.Shipyard.UI;
 using Content.Client.Resources;
+using Content.Client.Stylesheets;
 using Content.Client.UserInterface.Controls;
 using Content.Shared._NF.Bank;
 using Content.Shared._Triad.Drydock;
@@ -28,24 +29,13 @@ namespace Content.Client._Triad.Drydock.Registry;
 public sealed partial class DrydockRegistryWindow : FancyWindow
 {
     private static readonly Color Dim = Color.FromHex("#8d8d8d");
-    private static readonly Color Key = Color.FromHex("#999999");
-    private static readonly Color ChipText = Color.FromHex("#b0b0b0");
     private static readonly Color Underway = Color.FromHex("#d9d941");
-    private static readonly Color Impounded = Color.FromHex("#cf4f4f");
-    private static readonly Color Transfer = Color.FromHex("#d9a441");
 
     private static StyleBoxFlat CardBox() => new()
     {
         BackgroundColor = Color.FromHex("#2b2b2e"),
         BorderColor = Color.FromHex("#1b1b1e"),
         BorderThickness = new Thickness(2),
-    };
-
-    private static StyleBoxFlat ChipBox(bool on) => new()
-    {
-        BackgroundColor = on ? Color.FromHex("#2f4c6f") : Color.FromHex("#222226"),
-        BorderColor = on ? Color.FromHex("#5b86b8") : Color.FromHex("#3a3a3e"),
-        BorderThickness = new Thickness(1),
     };
 
     /// <summary>The chips in reading order. Null is "All".</summary>
@@ -72,7 +62,7 @@ public sealed partial class DrydockRegistryWindow : FancyWindow
     {
         RobustXamlLoader.Load(this);
 
-        _bold = IoCManager.Resolve<IResourceCache>().GetFont("/Fonts/NotoSans/NotoSans-Bold.ttf", 12);
+        _bold = IoCManager.Resolve<IResourceCache>().NotoStack("Bold", 12);
         Title = Loc.GetString("drydock-registry-title");
 
         BuildChips();
@@ -93,10 +83,10 @@ public sealed partial class DrydockRegistryWindow : FancyWindow
                 Margin = new Thickness(8, 2),
                 Align = Label.AlignMode.Center,
                 HorizontalExpand = true,
-                FontColorOverride = chip == null ? Color.White : ChipText,
+                FontColorOverride = chip == null ? Color.White : DrydockText.ChipText,
             };
 
-            var panel = new PanelContainer { PanelOverride = ChipBox(chip == null), HorizontalExpand = true };
+            var panel = new PanelContainer { PanelOverride = DrydockText.ChipBox(chip == null), HorizontalExpand = true };
             panel.AddChild(label);
 
             // Every cell of the grid expands, so the five columns share the width equally.
@@ -118,11 +108,7 @@ public sealed partial class DrydockRegistryWindow : FancyWindow
     public void RequestPage(int page)
     {
         foreach (var (panel, label, chip) in _chips)
-        {
-            var on = chip == _chip;
-            panel.PanelOverride = ChipBox(on);
-            label.FontColorOverride = on ? Color.White : ChipText;
-        }
+            DrydockText.RepaintChip(panel, label, chip == _chip);
 
         OnRequestPage?.Invoke(string.IsNullOrWhiteSpace(SearchInput.Text) ? null : SearchInput.Text, _chip, page);
     }
@@ -160,17 +146,17 @@ public sealed partial class DrydockRegistryWindow : FancyWindow
         };
 
         // Every line clips rather than widening the card, as the admin panel's do.
-        lines.AddChild(new Label { Text = CardTitle(ship.Name), FontOverride = _bold, ClipText = true });
-        lines.AddChild(CardLine("drydock-admin-card-class", DrydockText.Class(ship.SizeClass), null));
+        lines.AddChild(new Label { Text = DrydockText.CardTitle(ship.Name), FontOverride = _bold, ClipText = true });
+        lines.AddChild(DrydockText.CardLine("drydock-admin-card-class", DrydockText.Class(ship.SizeClass), null));
         lines.AddChild(ship.CaptainName is { } captain
-            ? CardLine("drydock-admin-card-owner", captain, null)
-            : CardLine("drydock-admin-card-owner", Loc.GetString("drydock-registry-owner-unrecorded"), Dim));
+            ? DrydockText.CardLine("drydock-admin-card-owner", captain, null)
+            : DrydockText.CardLine("drydock-admin-card-owner", Loc.GetString("drydock-registry-owner-unrecorded"), Dim));
 
         var (status, colour) = Status(ship);
-        lines.AddChild(CardLine("drydock-admin-card-status", status, colour));
+        lines.AddChild(DrydockText.CardLine("drydock-admin-card-status", status, colour));
 
         if (ship.Status == DrydockRegistryStatus.Impounded && !string.IsNullOrWhiteSpace(ship.ImpoundReason))
-            lines.AddChild(CardLine("drydock-registry-card-reason", ship.ImpoundReason, null));
+            lines.AddChild(DrydockText.CardLine("drydock-registry-card-reason", ship.ImpoundReason, null));
 
         var panel = new PanelContainer
         {
@@ -179,22 +165,6 @@ public sealed partial class DrydockRegistryWindow : FancyWindow
         };
         panel.AddChild(lines);
         return panel;
-    }
-
-    /// <summary>One labelled line of a card: the label in the key colour, the value clipped.</summary>
-    private static Control CardLine(string key, string value, Color? colour)
-    {
-        var line = new BoxContainer { Orientation = BoxContainer.LayoutOrientation.Horizontal };
-        line.AddChild(new Label { Text = Loc.GetString(key), FontColorOverride = Key });
-        line.AddChild(new Label
-        {
-            Text = value,
-            FontColorOverride = colour,
-            ClipText = true,
-            HorizontalExpand = true,
-            Margin = new Thickness(4, 0, 0, 0),
-        });
-        return line;
     }
 
     /// <summary>
@@ -212,22 +182,13 @@ public sealed partial class DrydockRegistryWindow : FancyWindow
                     text = $"{text}, {Loc.GetString("drydock-admin-status-berth", ("berth", berth))}";
                 if (!ship.TransferPending)
                     return (text, null);
-                return ($"{text}, {Loc.GetString("drydock-registry-status-transfer")}", Transfer);
+                return ($"{text}, {Loc.GetString("drydock-registry-status-transfer")}", DrydockText.Warning);
             case DrydockRegistryStatus.Underway:
                 return (text, Underway);
             case DrydockRegistryStatus.Impounded:
-                return ($"{text}, {BankSystemExtensions.ToSpesoString(ship.ImpoundFee)}", Impounded);
+                return ($"{text}, {BankSystemExtensions.ToSpesoString(ship.ImpoundFee)}", DrydockText.Impound);
             default:
                 return (text, Dim);
         }
-    }
-
-    /// <summary>The callsign first, then the name, by the deed's own split rule, as the admin panel titles its cards.</summary>
-    private static string CardTitle(string fullName)
-    {
-        var (name, suffix) = DrydockNameRules.SplitShuttleName(fullName);
-        return suffix == null
-            ? fullName
-            : Loc.GetString("drydock-admin-card-title", ("callsign", suffix), ("name", name));
     }
 }

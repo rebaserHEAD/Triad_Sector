@@ -26,25 +26,11 @@ public sealed partial class ShipFileManagementSystem : EntitySystem
     private static readonly List<string> DeletableShipPaths = new();
 
     private static readonly List<string> AvailableShips = new();
-    private static event Action? ShipsUpdated;
-    private static event Action<string>? ShipLoaded;
-    private static bool _indexUpdateNeeded = false;
-    private static DateTime _lastIndexUpdate = DateTime.MinValue;
-    private static readonly TimeSpan IndexUpdateCooldown = TimeSpan.FromSeconds(1);
+
+    // Triad: the import manifest's parsed header per path, with the text it was parsed from.
+    private static readonly Dictionary<string, (string Text, DrydockImportCandidate Candidate)> ImportHeaderCache = new();
 
     private ISawmill _sawmill = default!;
-
-    public event Action? OnShipsUpdated
-    {
-        add => ShipsUpdated += value;
-        remove => ShipsUpdated -= value;
-    }
-
-    public event Action<string>? OnShipLoaded
-    {
-        add => ShipLoaded += value;
-        remove => ShipLoaded -= value;
-    }
 
     private static int _instanceCounter = 0;
     private readonly int _instanceId;
@@ -126,19 +112,33 @@ public sealed partial class ShipFileManagementSystem : EntitySystem
         {
             try
             {
-                using var reader = _resourceManager.UserData.OpenText(new ResPath(path));
+                // The file is read every time but parsed only when its text changed: the Exports
+                // folder is shared with other clients, which can re-save a ship over the same path.
+                string text;
+                using (var reader = _resourceManager.UserData.OpenText(new ResPath(path)))
+                    text = reader.ReadToEnd();
+
+                if (ImportHeaderCache.TryGetValue(path, out var cached) && cached.Text == text)
+                {
+                    manifest.Add(cached.Candidate);
+                    continue;
+                }
+
                 var node = new YamlStream();
-                node.Load(reader);
+                node.Load(new System.IO.StringReader(text));
 
                 if (node.Documents.Count == 0 || node.Documents[0].RootNode is not YamlMappingNode root)
                     continue;
 
-                manifest.Add(new DrydockImportCandidate(
+                var candidate = new DrydockImportCandidate(
                     path,
                     ExtractFileNameWithoutExtension(path),
                     int.TryParse(Scalar(root, "appraisal"), out var appraisal) ? appraisal : null,
                     B64(root, "signature"),
-                    B64(root, "signaturePublicKey")));
+                    B64(root, "signaturePublicKey"));
+
+                ImportHeaderCache[path] = (text, candidate);
+                manifest.Add(candidate);
             }
             catch (Exception ex)
             {
@@ -240,9 +240,6 @@ public sealed partial class ShipFileManagementSystem : EntitySystem
             }
 
             _sawmill.Debug($"Instance #{_instanceId}: Final result: Loaded {AvailableShips.Count} saved ships from Exports directory");
-
-            // Trigger UI update
-            ShipsUpdated?.Invoke();
         }
         catch (NotImplementedException)
         {
@@ -256,63 +253,9 @@ public sealed partial class ShipFileManagementSystem : EntitySystem
         }
     }
 
-    private void UpdateShipIndex()
-    {
-        try
-        {
-            // Rate limit index updates
-            var now = DateTime.Now;
-            if (!_indexUpdateNeeded || (now - _lastIndexUpdate) < IndexUpdateCooldown)
-                return;
-
-            var indexContent = string.Join('\n', AvailableShips);
-            using var writer = _resourceManager.UserData.OpenWriteText(new("/Exports/ship_index.txt"));
-            writer.Write(indexContent);
-
-            _indexUpdateNeeded = false;
-            _lastIndexUpdate = now;
-        }
-        catch (Exception ex)
-        {
-            _sawmill.Error($"Failed to update ship index: {ex.Message}");
-        }
-    }
-
-    // Useful for gathering fields inside of a ship YML file, like the stored appraisal value
-    public string GetKeyValueFromPath(string filePath, string key)
-    {
-        using var reader = _resourceManager.UserData.OpenText(new(filePath));
-        var content = reader.ReadToEnd();
-
-        // lazy loading
-        var lines = content.Split('\n');
-        var val = lines.FirstOrDefault(l => l.Trim().StartsWith($"{key}:"))?.Split(':')[1].Trim() ?? "Unknown";
-
-        return val;
-    }
-
-    // Update ship index periodically instead of on every change
-    public void FlushPendingIndexUpdates()
-    {
-        if (_indexUpdateNeeded)
-        {
-            UpdateShipIndex();
-        }
-    }
-
     public List<string> GetSavedShipFiles()
     {
         return new List<string>(AvailableShips);
-    }
-
-    public static bool HasShipData(string shipName)
-    {
-        return CachedShipData.ContainsKey(shipName);
-    }
-
-    public static string? GetShipData(string shipName)
-    {
-        return CachedShipData.TryGetValue(shipName, out var data) ? data : null;
     }
 
     /// <summary>
@@ -379,11 +322,8 @@ public sealed partial class ShipFileManagementSystem : EntitySystem
 
             // Remove original entry from caches and list (do not add backup to menu)
             CachedShipData.Remove(message.FilePath);
+            ImportHeaderCache.Remove(message.FilePath);
             AvailableShips.Remove(message.FilePath);
-
-            // Mark index update and notify UI
-            _indexUpdateNeeded = true;
-            ShipsUpdated?.Invoke();
         }
         catch (Exception ex)
         {
