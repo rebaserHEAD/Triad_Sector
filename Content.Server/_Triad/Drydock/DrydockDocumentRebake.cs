@@ -19,7 +19,7 @@ namespace Content.Server._Triad.Drydock;
 /// <param name="AppliedRenames">Group ids rewritten, ordinal sorted by the id as written.</param>
 /// <param name="AppliedSteps">Names of the format steps run and the repairs that changed something, in run order.</param>
 /// <param name="DrydockFormatVer">The drydock format the document now satisfies.</param>
-public sealed record DrydockRebakeResult(
+public sealed record DrydockDocumentRebakeResult(
     string Yaml,
     bool Changed,
     IReadOnlyList<DrydockRename> AppliedRenames,
@@ -78,7 +78,7 @@ public static class DrydockDocumentRebake
     // it lists is declared further down.
     public static IReadOnlyList<Repair> Repairs => RepairList;
 
-    public static DrydockRebakeResult Transform(string yaml, DrydockMigrationTable table, int drydockFormatVer)
+    public static DrydockDocumentRebakeResult Transform(string yaml, DrydockMigrationTable table, int drydockFormatVer)
     {
         return Transform(yaml, table, drydockFormatVer, FormatSteps, Repairs);
     }
@@ -88,7 +88,7 @@ public static class DrydockDocumentRebake
     /// parameters, so the ladder can be tested before it has a real step.
     /// </summary>
     /// <param name="drydockFormatVer">The revision's stored drydock format.</param>
-    public static DrydockRebakeResult Transform(
+    public static DrydockDocumentRebakeResult Transform(
         string yaml,
         DrydockMigrationTable table,
         int drydockFormatVer,
@@ -111,7 +111,7 @@ public static class DrydockDocumentRebake
         var hinted = repairs.Where(r => yaml.Contains(r.TextHint, StringComparison.Ordinal)).ToList();
 
         if (!needsRename && ladder.Count == 0 && hinted.Count == 0)
-            return new DrydockRebakeResult(yaml, false, Array.Empty<DrydockRename>(), Array.Empty<string>(), drydockFormatVer);
+            return new DrydockDocumentRebakeResult(yaml, false, Array.Empty<DrydockRename>(), Array.Empty<string>(), drydockFormatVer);
 
         var root = Parse(yaml);
         var treeChanged = false;
@@ -142,7 +142,7 @@ public static class DrydockDocumentRebake
         var output = treeChanged
             ? DrydockSystem.EmitDocument(root, yaml.Contains("\r\n", StringComparison.Ordinal) ? "\r\n" : "\n")
             : yaml;
-        return new DrydockRebakeResult(output, treeChanged || formatVer != drydockFormatVer, renames, applied, formatVer);
+        return new DrydockDocumentRebakeResult(output, treeChanged || formatVer != drydockFormatVer, renames, applied, formatVer);
     }
 
     /// <summary>
