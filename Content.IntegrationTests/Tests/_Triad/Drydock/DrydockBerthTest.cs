@@ -123,7 +123,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             var owner = Guid.NewGuid();
             var stranger = Guid.NewGuid();
             await DrydockTestHelpers.InsertPlayer(db, owner);
-            await InsertPlayer(db, stranger);
+            await DrydockTestHelpers.InsertPlayer(db, stranger);
 
             var ownBerth = await store.AddBerth(owner, ShipSizeClass.Cutter, DrydockBerthKind.Granted, 0, null, null);
             var spare = await store.AddBerth(owner, ShipSizeClass.Cutter, DrydockBerthKind.Granted, 0, null, null);
@@ -176,9 +176,9 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             var seller = Guid.NewGuid();
             var buyer = Guid.NewGuid();
             var pauper = Guid.NewGuid();
-            await InsertPlayer(db, seller);
-            await InsertPlayer(db, buyer);
-            await InsertPlayer(db, pauper);
+            await DrydockTestHelpers.InsertPlayer(db, seller);
+            await DrydockTestHelpers.InsertPlayer(db, buyer);
+            await DrydockTestHelpers.InsertPlayer(db, pauper);
 
             var sellersBerth = await store.AddBerth(seller, ShipSizeClass.Cutter, DrydockBerthKind.Granted, 0, null, null);
             var buyersBerth = await store.AddBerth(buyer, ShipSizeClass.Corvette, DrydockBerthKind.Granted, 0, null, null);
@@ -302,7 +302,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             var owner = Guid.NewGuid();
             var admin = Guid.NewGuid();
             await DrydockTestHelpers.InsertPlayer(db, owner);
-            await InsertPlayer(db, admin);
+            await DrydockTestHelpers.InsertPlayer(db, admin);
 
             var corvetteSlot = await store.AddBerth(owner, ShipSizeClass.Corvette, DrydockBerthKind.Granted, 0, null, null);
             var cutterSlot = await store.AddBerth(owner, ShipSizeClass.Cutter, DrydockBerthKind.Granted, 0, null, null);

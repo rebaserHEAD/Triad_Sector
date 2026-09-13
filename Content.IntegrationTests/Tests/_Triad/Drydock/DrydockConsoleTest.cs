@@ -1332,7 +1332,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             // player row fails that INSERT rather than any assertion here, which is scaffolding
             // rather than a fork problem: a real admin has connected. The berthed impound at the
             // test above needs none of this, because it writes an audit row and no revision.
-            await DrydockStoreTest.InsertPlayer(server.ResolveDependency<IServerDbManager>(), admin);
+            await DrydockTestHelpers.InsertPlayer(server.ResolveDependency<IServerDbManager>(), admin);
 
             // The open handler needs an account to price the deed against, and a key to publish on.
             // The key goes on before the component does: its ComponentStartup logs an error on a

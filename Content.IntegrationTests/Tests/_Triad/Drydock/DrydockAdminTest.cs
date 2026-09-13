@@ -32,7 +32,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             var owner = Guid.NewGuid();
             var admin = Guid.NewGuid();
             await DrydockTestHelpers.InsertPlayer(db, owner);
-            await InsertPlayer(db, admin);
+            await DrydockTestHelpers.InsertPlayer(db, admin);
             await store.AddBerth(owner, ShipSizeClass.Cutter, DrydockBerthKind.Granted, 0, null, null);
 
             var ship = Guid.NewGuid();
@@ -92,7 +92,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             var owner = Guid.NewGuid();
             var admin = Guid.NewGuid();
             await DrydockTestHelpers.InsertPlayer(db, owner);
-            await InsertPlayer(db, admin);
+            await DrydockTestHelpers.InsertPlayer(db, admin);
             var berth = await store.AddBerth(owner, ShipSizeClass.Cutter, DrydockBerthKind.Granted, 0, null, null);
 
             var ship = Guid.NewGuid();
@@ -134,7 +134,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             var owner = Guid.NewGuid();
             var admin = Guid.NewGuid();
             await DrydockTestHelpers.InsertPlayer(db, owner);
-            await InsertPlayer(db, admin);
+            await DrydockTestHelpers.InsertPlayer(db, admin);
             var berth = await store.AddBerth(owner, ShipSizeClass.Cutter, DrydockBerthKind.Granted, 0, null, null);
 
             var ship = Guid.NewGuid();
@@ -170,7 +170,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             var owner = Guid.NewGuid();
             var admin = Guid.NewGuid();
             await DrydockTestHelpers.InsertPlayer(db, owner);
-            await InsertPlayer(db, admin);
+            await DrydockTestHelpers.InsertPlayer(db, admin);
             await store.AddBerth(owner, ShipSizeClass.Cutter, DrydockBerthKind.Granted, 0, null, null);
             await store.AddBerth(owner, ShipSizeClass.Cutter, DrydockBerthKind.Granted, 0, null, null);
 
@@ -217,8 +217,8 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             var recipient = Guid.NewGuid();
             var admin = Guid.NewGuid();
             await DrydockTestHelpers.InsertPlayer(db, owner);
-            await InsertPlayer(db, recipient);
-            await InsertPlayer(db, admin);
+            await DrydockTestHelpers.InsertPlayer(db, recipient);
+            await DrydockTestHelpers.InsertPlayer(db, admin);
 
             await store.AddBerth(owner, ShipSizeClass.Cutter, DrydockBerthKind.Granted, 0, null, null);
             // The offer is refused outright unless the recipient has somewhere to put it.
@@ -321,7 +321,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             var owner = Guid.NewGuid();
             var stranger = Guid.NewGuid();
             await DrydockTestHelpers.InsertPlayer(db, owner);
-            await InsertPlayer(db, stranger);
+            await DrydockTestHelpers.InsertPlayer(db, stranger);
             await store.AddBerth(owner, ShipSizeClass.Cutter, DrydockBerthKind.Granted, 0, null, null);
             await store.AddBerth(stranger, ShipSizeClass.Cutter, DrydockBerthKind.Granted, 0, null, null);
 

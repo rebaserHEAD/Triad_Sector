@@ -893,8 +893,8 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
 
             var seller = Guid.NewGuid();
             var buyer = Guid.NewGuid();
-            await InsertPlayer(db, seller);
-            await InsertPlayer(db, buyer);
+            await DrydockTestHelpers.InsertPlayer(db, seller);
+            await DrydockTestHelpers.InsertPlayer(db, buyer);
             await store.AddBerth(seller, ShipSizeClass.SuperCapital, DrydockBerthKind.Granted, 0, null, null);
             await store.AddBerth(buyer, ShipSizeClass.SuperCapital, DrydockBerthKind.Granted, 0, null, null);
 
@@ -947,7 +947,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             var owner = Guid.NewGuid();
             var admin = Guid.NewGuid();
             await DrydockTestHelpers.InsertPlayer(db, owner);
-            await InsertPlayer(db, admin);
+            await DrydockTestHelpers.InsertPlayer(db, admin);
             var berth = await store.AddBerth(owner, ShipSizeClass.SuperCapital, DrydockBerthKind.Granted, 0, null, null);
 
             var (station, shipGrid, _) = await BuildShipAndStation(pair);

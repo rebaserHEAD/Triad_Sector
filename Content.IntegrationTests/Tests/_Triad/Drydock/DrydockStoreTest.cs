@@ -78,7 +78,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
 
             // The ownership rule: a store never moves the ship to whoever filed it.
             var otherOwner = Guid.NewGuid();
-            await InsertPlayer(db, otherOwner);
+            await DrydockTestHelpers.InsertPlayer(db, otherOwner);
             await store.FileRevision(Request(shipId, otherOwner, "Kestrel III"), secondBlob, keepBlobs: 2);
 
             loaded = await store.LoadCurrent(shipId);
@@ -420,7 +420,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             var recipient = Guid.NewGuid();
             var admin = Guid.NewGuid();
             await DrydockTestHelpers.InsertPlayer(db, owner);
-            await InsertPlayer(db, recipient);
+            await DrydockTestHelpers.InsertPlayer(db, recipient);
             var home = await store.AddBerth(owner, ShipSizeClass.Cutter, DrydockBerthKind.Granted, 0, null, null);
             var spare = await store.AddBerth(owner, ShipSizeClass.Cutter, DrydockBerthKind.Granted, 0, null, null);
             await store.AddBerth(recipient, ShipSizeClass.Cutter, DrydockBerthKind.Granted, 0, null, null);
@@ -489,7 +489,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             var stranger = Guid.NewGuid();
             var admin = Guid.NewGuid();
             await DrydockTestHelpers.InsertPlayer(db, owner);
-            await InsertPlayer(db, stranger);
+            await DrydockTestHelpers.InsertPlayer(db, stranger);
             var home = await store.AddBerth(owner, ShipSizeClass.Cutter, DrydockBerthKind.Granted, 0, null, null);
             var spare = await store.AddBerth(owner, ShipSizeClass.Cutter, DrydockBerthKind.Granted, 0, null, null);
             var round = await db.AddNewRound(await db.AddOrGetServer("drydock-test"));
