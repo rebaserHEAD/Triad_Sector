@@ -52,8 +52,9 @@ public sealed class DrydockManifestEntry
     public string Proto { get; set; } = string.Empty;
 
     /// <summary>
-    /// Index of the containing entry, null for the grid and anything directly on it. What makes
-    /// "removed from the locker" answerable rather than just "removed".
+    /// Index of the containing entry, null only for the grid itself: anything directly on the grid
+    /// points at the grid's entry, index 0. What makes "removed from the locker" answerable rather
+    /// than just "removed".
     /// </summary>
     [JsonPropertyName("c")]
     public int? Parent { get; set; }
