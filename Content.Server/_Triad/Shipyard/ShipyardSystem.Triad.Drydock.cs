@@ -341,11 +341,11 @@ public sealed partial class ShipyardSystem
         var offersInTask = _drydockStore.GetPendingOffersFor(owner);
         var appraisalsTask = _drydockStore.GetCurrentAppraisals(owner);
         await Task.WhenAll(rowsTask, slotsTask, offersOutTask, offersInTask, appraisalsTask);
-        var rows = rowsTask.Result;
-        var slots = slotsTask.Result;
-        var offersOut = offersOutTask.Result;
-        var offersIn = offersInTask.Result;
-        var appraisals = appraisalsTask.Result;
+        var rows = await rowsTask;
+        var slots = await slotsTask;
+        var offersOut = await offersOutTask;
+        var offersIn = await offersInTask;
+        var appraisals = await appraisalsTask;
 
         // Everyone else online, for the transfer picker, with the classes of their free berths so
         // the picker can grey the captains with nowhere to put the ship. Read in one query, and only
@@ -359,8 +359,8 @@ public sealed partial class ShipyardSystem
         var freeClassesTask = _drydockStore.GetFreeBerthClasses(online.Select(s => s.UserId.UserId));
         var namesTask = _drydockStore.GetPlayerNames(offersOut.Values.Select(t => t.ToUserId).Concat(offersIn.Select(o => o.Transfer.FromUserId)));
         await Task.WhenAll(freeClassesTask, namesTask);
-        var freeClasses = freeClassesTask.Result;
-        var names = namesTask.Result;
+        var freeClasses = await freeClassesTask;
+        var names = await namesTask;
 
         // The console or the operator may have gone during the reads.
         if (TerminatingOrDeleted(uid) || TerminatingOrDeleted(player))

@@ -492,8 +492,8 @@ public sealed partial class DrydockAdminEui : BaseEui
         var detailTask = _selected is { } selected ? _store.GetShipDetail(selected) : Task.FromResult<DrydockShipDetail?>(null);
         await Task.WhenAll(shipsTask, detailTask);
 
-        var (rows, total) = shipsTask.Result;
-        var detail = detailTask.Result;
+        var (rows, total) = await shipsTask;
+        var detail = await detailTask;
         if (_selected != null && detail == null)
             _selected = null;
 
@@ -504,9 +504,9 @@ public sealed partial class DrydockAdminEui : BaseEui
         var berthsTask = detail != null ? _store.GetBerths(detail.Ship.OwnerUserId) : Task.FromResult(new List<DrydockBerthSlot>());
         await Task.WhenAll(offersTask, salesTask, berthsTask);
 
-        var offers = offersTask.Result;
-        var sales = salesTask.Result;
-        var berths = berthsTask.Result;
+        var offers = await offersTask;
+        var sales = await salesTask;
+        var berths = await berthsTask;
 
         DrydockTransfer? escrow = null;
         List<DrydockBerthSlot> recipientBerths = new();
@@ -527,8 +527,8 @@ public sealed partial class DrydockAdminEui : BaseEui
                 var saleTask = _store.GetLastSale(detail.Ship.ShipGuid);
                 var balanceTask = OwnerBalance(detail.Ship.OwnerUserId);
                 await Task.WhenAll(saleTask, balanceTask);
-                lastSale = saleTask.Result;
-                ownerBalance = balanceTask.Result;
+                lastSale = await saleTask;
+                ownerBalance = await balanceTask;
             }
         }
 
