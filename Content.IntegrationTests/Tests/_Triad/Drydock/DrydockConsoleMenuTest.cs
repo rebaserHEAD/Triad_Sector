@@ -47,7 +47,8 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                     Assert.That(Named(menu, "DeedShipPanel").Visible, Is.True);
                     var card = ((RichTextLabel)Named(menu, "DeedShipLabel")).GetMessage();
                     Assert.That(card, Does.Contain("Behir"));
-                    Assert.That(card, Does.Contain("out 1 h 05 m"), "Past an hour the clock says hours and two-digit minutes.");
+                    Assert.That(card, Does.Contain("Corvette"), "The class sits behind the name.");
+                    Assert.That(card, Does.Not.Contain("out "), "How long it has been out is not drawn; the server still sends it.");
                     var store = (Button)Named(menu, "StoreButton");
                     Assert.That(store.Text, Does.StartWith("Store in #31"), "The button names the berth the server would pick.");
                     Assert.That(store.Disabled, Is.False);
@@ -196,10 +197,11 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
 
         /// <summary>
         /// An impounded ship is a card above the berths, to the Impound artboard: name, class and
-        /// tag, the reason it was taken, the fee and what it was cut from, a picker opening on the
-        /// berth the server would choose, Reclaim, and Abandon…; Reclaim greys on a fee the balance
-        /// cannot cover and the small print says why. A locked one draws the reason, says an admin
-        /// holds it, and offers neither, to the ImpoundLocked artboard.
+        /// tag, the reason it was taken, the fee, a picker opening on the berth the server would
+        /// choose, Reclaim, and Abandon…; Reclaim greys on a fee the balance cannot cover and only
+        /// then does small print say why. The appraisal share and the no-deadline note are not
+        /// drawn. A locked one draws the reason, says an admin holds it, and offers neither, to the
+        /// ImpoundLocked artboard.
         /// </summary>
         [Test]
         public async Task AnImpoundedShipDrawsItsCardAboveTheBerths()
@@ -223,8 +225,8 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                     Assert.That(drawn, Has.Some.Contains("impounded"));
                     Assert.That(drawn, Has.Some.Contains("Still in the world at the end of round 4112."));
                     Assert.That(drawn, Has.Some.Contains("$9,000"), "The fee.");
-                    Assert.That(drawn, Has.Some.Contains("50% of its $18,000 appraisal"), "And what it was cut from.");
-                    Assert.That(drawn, Has.Some.EqualTo("No deadline. It sits here until you reclaim or abandon it."));
+                    Assert.That(drawn, Has.None.Contains("appraisal"), "The share it was cut from is not drawn.");
+                    Assert.That(drawn, Has.None.Contains("deadline"), "No standing small print on a card the owner can act on.");
                     Assert.That(buttons.Select(b => b.Text), Is.EqualTo(new[] { "Into #31 ▾", "Reclaim", "Abandon…" }),
                         "The picker opens on the berth the server would choose; Reclaim and Abandon beside it.");
                     Assert.That(buttons[1].Disabled, Is.False, "Affordable, and a berth fits.");
