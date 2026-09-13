@@ -22,21 +22,17 @@ namespace Content.Client._NF.Shipyard.UI;
 /// </summary>
 public sealed class DrydockListPicker : FancyWindow
 {
-    public sealed record Item(string Label, string? Detail, bool Enabled, Action OnPicked);
-
-    private static readonly Color ListBackground = Color.FromHex("#141414");
     private static readonly Color ListBorder = Color.FromHex("#333333");
-    private static readonly Color RowRule = Color.FromHex("#262626");
-    private static readonly Color Selected = Color.FromHex("#2a3a4c");
 
     private readonly LineEdit? _filter;
     private readonly Button _confirm;
-    private readonly List<(Item Item, ContainerButton Row, PanelContainer Fill, PanelContainer Rule)> _rows = new();
-    private Item? _selected;
+    private readonly List<(DrydockMenuButton.Item Item, ContainerButton Row, StyleBoxFlat Fill, PanelContainer Rule)> _rows = new();
+    private DrydockMenuButton.Item? _selected;
 
     /// <param name="filterPlaceholder">Placeholder for the filter box, or null for no box.</param>
     /// <param name="body">A sentence under the list about what the verb does, or null.</param>
-    public DrydockListPicker(string title, string? filterPlaceholder, string? body, string confirmLabel, string emptyText, IReadOnlyList<Item> items)
+    /// <param name="items">The rows, in order. An item's OnPressed runs when the verb commits it; DividerAbove is not drawn here.</param>
+    public DrydockListPicker(string title, string? filterPlaceholder, string? body, string confirmLabel, string emptyText, IReadOnlyList<DrydockMenuButton.Item> items)
     {
         Title = title;
         // A NaN height is "measure the contents"; a zero height is a fixed zero, which the
@@ -54,7 +50,7 @@ public sealed class DrydockListPicker : FancyWindow
 
         var listPanel = new PanelContainer
         {
-            PanelOverride = new StyleBoxFlat { BackgroundColor = ListBackground, BorderColor = ListBorder, BorderThickness = new Thickness(1) },
+            PanelOverride = new StyleBoxFlat { BackgroundColor = DrydockText.ListBackground, BorderColor = ListBorder, BorderThickness = new Thickness(1) },
             HorizontalExpand = true,
         };
         var list = new BoxContainer { Orientation = BoxContainer.LayoutOrientation.Vertical, HorizontalExpand = true };
@@ -64,23 +60,9 @@ public sealed class DrydockListPicker : FancyWindow
 
         foreach (var item in items)
         {
-            var fill = new PanelContainer { PanelOverride = new StyleBoxFlat { BackgroundColor = Color.Transparent }, HorizontalExpand = true };
-            var line = new BoxContainer { Orientation = BoxContainer.LayoutOrientation.Horizontal, Margin = new Thickness(10, 7), HorizontalExpand = true };
-            var (text, detail) = DrydockText.RowColors(item.Enabled);
-            line.AddChild(new Label { Text = item.Label, HorizontalExpand = true, Modulate = text });
-            if (item.Detail != null)
-                line.AddChild(new Label { Text = item.Detail, Modulate = detail, Margin = new Thickness(12, 0, 0, 0) });
-            fill.AddChild(line);
-
-            var rule = DrydockText.RulePanel(RowRule);
-            var cell = new BoxContainer { Orientation = BoxContainer.LayoutOrientation.Vertical, HorizontalExpand = true };
-            cell.AddChild(fill);
-            cell.AddChild(rule);
-
-            // No button style class: the row draws its own fill, so the Nano button box would
-            // only fight it.
-            var row = new ContainerButton { Disabled = !item.Enabled, HorizontalExpand = true };
-            row.AddChild(cell);
+            // The row carries its rule inside it, so a row the filter hides takes its rule along.
+            var rule = DrydockText.RulePanel(DrydockText.RowRule);
+            var row = DrydockText.ItemRow(item, out var fill, rule);
             var picked = item;
             row.OnPressed += _ => Select(picked);
 
@@ -125,7 +107,7 @@ public sealed class DrydockListPicker : FancyWindow
             if (_selected == null)
                 return;
 
-            _selected.OnPicked();
+            _selected.OnPressed?.Invoke();
             Close();
         };
 
@@ -138,12 +120,12 @@ public sealed class DrydockListPicker : FancyWindow
         _filter?.GrabKeyboardFocus();
     }
 
-    private void Select(Item item)
+    private void Select(DrydockMenuButton.Item item)
     {
         _selected = item;
         _confirm.Disabled = !item.Enabled;
         foreach (var (candidate, _, fill, _) in _rows)
-            ((StyleBoxFlat)fill.PanelOverride!).BackgroundColor = ReferenceEquals(candidate, item) ? Selected : Color.Transparent;
+            fill.BackgroundColor = ReferenceEquals(candidate, item) ? DrydockText.RowHighlight : Color.Transparent;
     }
 
     /// <summary>Hides the rows whose label does not contain the text; the selection is dropped if it goes.</summary>
@@ -158,7 +140,7 @@ public sealed class DrydockListPicker : FancyWindow
             _selected = null;
             _confirm.Disabled = true;
             foreach (var (_, _, fill, _) in _rows)
-                ((StyleBoxFlat)fill.PanelOverride!).BackgroundColor = Color.Transparent;
+                fill.BackgroundColor = Color.Transparent;
         }
 
         RedrawRules();

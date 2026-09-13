@@ -1,7 +1,8 @@
-// Triad: drydock tab. The berth, transfer, sale, rename and move messages, beside the store and
-// retrieve ones. Every one names a ship or berth by an id the server sent, and the server checks
-// the sending account owns it before anything else; a message that fails that check is refused
-// and written to the timeline.
+// Triad: drydock tab. The berth, transfer, sale, rename, move, impound and deed messages, beside
+// the store and retrieve ones. Buying a berth names only a size class. Every other message names
+// what it acts on by something the server sent (a ship, berth or transfer id, or the ship entity
+// for a deed reissue), and the server checks the sending account may act on it before anything
+// else; a message that fails that check is refused and written to the timeline.
 using Robust.Shared.Serialization;
 
 namespace Content.Shared._NF.Shipyard.Events;

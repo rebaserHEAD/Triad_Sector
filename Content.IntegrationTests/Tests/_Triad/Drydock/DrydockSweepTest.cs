@@ -101,8 +101,9 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             // Control: the criterion reads each hull the way the sweep will.
             await server.WaitAssertion(() =>
             {
-                Assert.That(drydock.CouldHaveComeHome(able), Is.True, "A helm and a dock: it could have brought itself home.");
-                Assert.That(drydock.CouldHaveComeHome(unable), Is.False, "Neither: it could not.");
+                var (helms, docks) = drydock.GridsWithHelmsAndDocks();
+                Assert.That(drydock.CouldHaveComeHome(able, helms, docks), Is.True, "A helm and a dock: it could have brought itself home.");
+                Assert.That(drydock.CouldHaveComeHome(unable, helms, docks), Is.False, "Neither: it could not.");
             });
 
             await RunSweep(pair, drydock, round);

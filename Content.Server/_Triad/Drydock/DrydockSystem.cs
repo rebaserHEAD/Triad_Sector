@@ -208,10 +208,8 @@ public sealed partial class DrydockSystem : EntitySystem
             HomePosition = _xform.GetWorldPosition(gridUid),
         };
 
-        var jobId = 0;
-        CancellationTokenSource? cancellation = null;
-
-        // Hoisted so the finally can record its meter on every path, the rollback lever included.
+        // Hoisted so the finally can retire the job and record its meter on every path, the rollback
+        // lever included.
         DrydockPipelineJob<DrydockStoreContext, DrydockStoreOutcome>? job = null;
 
         try
@@ -221,19 +219,15 @@ public sealed partial class DrydockSystem : EntitySystem
             // path, in the order it ran before slicing. It is also what the integration fixtures set,
             // because a sliced store outruns their tick pumps, and what the round-end sweep asks for
             // by name, because nobody is left to protect from a hitch.
-            if (TickBudgetSeconds <= 0 || inline)
+            var budget = TickBudgetSeconds;
+            if (budget <= 0 || inline)
             {
                 var direct = await RunStorePipeline(ctx, new DrydockSyncSlice(DrydockPhases.Store, onProgress));
                 return (direct.Result, direct.ShipId);
             }
 
-            cancellation = new CancellationTokenSource();
-            job = new DrydockPipelineJob<DrydockStoreContext, DrydockStoreOutcome>(
-                this, ctx, TickBudgetSeconds, SliceStride, onProgress, cancellation.Token,
-                DrydockPhases.Store, RunStorePipeline);
-            jobId = RegisterJob(job, cancellation);
-            job.JobId = jobId;
-            EnqueueJob(job);
+            job = StartPipelineJob<DrydockStoreContext, DrydockStoreOutcome>(
+                ctx, budget, onProgress, DrydockPhases.Store, RunStorePipeline);
 
             DrydockStoreOutcome? outcome;
             try
@@ -250,26 +244,15 @@ public sealed partial class DrydockSystem : EntitySystem
                 return (DrydockStoreResult.Cancelled, null);
             }
 
-            // Awaiting a faulted job already rethrows, so this is the belt to that braces: the
-            // recorded exception is the job's own failure signal, and a store that threw must never
-            // come back as a silent refusal if those two ever stop being the same thing.
-            if (job.Exception != null)
-                throw job.Exception;
-
+            // A pipeline that threw has already thrown out of the await above: the job wrapper
+            // records the exception and faults the task with it in the same catch.
             return outcome is null
                 ? (DrydockStoreResult.SerializeFailed, null)
                 : (outcome.Result, outcome.ShipId);
         }
         finally
         {
-            if (jobId != 0)
-                RetireJob(jobId);
-            else
-                cancellation?.Dispose();
-
-            // Null on the rollback lever, which clears the table rather than leaving the previous
-            // sliced run's for the next reader to mistake for this one's.
-            RecordPhaseCosts(job?.Meter);
+            EndPipelineJob(job);
 
             // Covers a job cancelled before its body ever ran, as well as every ordinary exit. On
             // success the grid is already queued for deletion and this is a no-op; on any refusal it
@@ -366,21 +349,13 @@ public sealed partial class DrydockSystem : EntitySystem
             // dock tag to hand a refused ship back at the same kind of berth a purchase of it would
             // have picked. Reparenting does not touch station membership - the station system
             // subscribes to no parent change - so this reads the same either side of the freeze.
-            string? vesselProto = null;
-            if (TryComp<StationMemberComponent>(gridUid, out var stationMember)
-                && TryComp<ExtraShuttleInformationComponent>(stationMember.Station, out var vesselInfo)
-                && vesselInfo.Vessel is { } vessel)
-            {
-                vesselProto = vessel.Id;
-            }
-            else if (TryComp<VesselComponent>(gridUid, out var vesselComp)
-                     && !string.IsNullOrEmpty(vesselComp.VesselId.Id))
-            {
-                vesselProto = vesselComp.VesselId.Id;
-            }
+            var vesselProto = TryComp<StationMemberComponent>(gridUid, out var stationMember)
+                              && TryComp<ExtraShuttleInformationComponent>(stationMember.Station, out var vesselInfo)
+                              && vesselInfo.Vessel is { } vessel
+                ? vessel.Id
+                : VesselIdOnGrid(gridUid);
 
-            if (vesselProto != null && _protoMan.TryIndex<VesselPrototype>(vesselProto, out var vesselPrototype))
-                ctx.ReturnDockTag = vesselPrototype.PriorityDockTag;
+            ctx.ReturnDockTag = PriorityDockTagFor(vesselProto);
 
             // The departure. An observer sees what a real jump shows them, because a real jump's
             // vanish is itself a map reparent: the startup sound, then gone. Deliberately not the
@@ -415,9 +390,9 @@ public sealed partial class DrydockSystem : EntitySystem
             // From here the ship is private, frozen and invisible, and every phase below runs on the
             // tick budget. The map is paused while it is still empty, so the engine's own recursive
             // pause walks one entity instead of nine hundred; the reparent onto it is then what
-            // actually freezes the tree, and the walk inside the freeze counts and back-stops.
+            // actually freezes the tree, and the walk inside the freeze drives the bar and back-stops.
             ctx.StagingMap = CreateStagingMap(jobId, DrydockStagingKind.Store, shipId, mapInit: true);
-            ctx.EntityCount = await FreezeOntoStagingMap(gridUid, ctx.StagingMap.Value, slice);
+            await FreezeOntoStagingMap(gridUid, ctx.StagingMap.Value, slice);
             ctx.Frozen = true;
             GuardStoreResume(ctx);
 
@@ -507,8 +482,7 @@ public sealed partial class DrydockSystem : EntitySystem
             // A ship stored during its FTL cooldown still carries the component the jump added. A
             // reborn ship carrying it comes back mid-jump and the shuttle system errors on it every
             // tick, which leaves it stuck.
-            if (HasComp<FTLComponent>(gridUid))
-                RemComp<FTLComponent>(gridUid);
+            RemComp<FTLComponent>(gridUid);
 
             // A ship document is self-contained. The engine default drags any referenced null-space
             // entity into the save, and a ship that is its own station references that station,
@@ -518,13 +492,13 @@ public sealed partial class DrydockSystem : EntitySystem
             var saveOptions = new SerializationOptions { MissingEntityBehaviour = MissingEntityBehaviour.Ignore };
             MarkPhase(DrydockPhase.Prepare);
 
-            // One atomic call, and deliberately not sliced. The engine's per-entity serialize surface
-            // is public, but the wrapper around it is not reproducible from content: the truncate
-            // flag has a private setter and the tile-map initialiser is private, so a content-side
-            // replica logs an orphan error per store, throws on the first save:false child, and
-            // re-encodes every chunk's tile ids. This is therefore one of the calls that set the real
-            // per-tick ceiling - the honest claim is "the budget plus the longest bulk call", not
-            // "the budget" - and the whole phase lands inside one tick.
+            // Two ways to write the document. With DrydockSlicedSerialize on, SerializeGridSliced
+            // drives the engine's public per-entity serializer one entity at a time against the
+            // budget, working around the two private members of the engine's own wrapper (see
+            // DrydockSystem.Serialize.cs). Off, or on an inline store, it is TrySaveGrid: one atomic
+            // call that is then one of the calls setting the real per-tick ceiling - the honest
+            // claim there is "the budget plus the longest bulk call", not "the budget" - with the
+            // whole phase landing inside one tick.
             string yaml;
 
             if (_cfg.GetCVar(TriadCCVars.DrydockSlicedSerialize) && !ctx.Inline)
@@ -557,7 +531,7 @@ public sealed partial class DrydockSystem : EntitySystem
             await slice.Begin(DrydockPhase.Validate, 0);
             GuardStoreResume(ctx);
 
-            var (mismatch, liveEntities) = await DetectRoundTripMismatch(ctx, slice, timer, yaml, jobId, shipId);
+            var (mismatch, liveEntities) = await DetectRoundTripMismatch(ctx, slice, yaml);
             if (mismatch)
                 return new DrydockStoreOutcome(DrydockStoreResult.ValidationFailed, null);
 
@@ -737,7 +711,7 @@ public sealed partial class DrydockSystem : EntitySystem
             Log.Warning($"Drydock: store of {ctx.ShipId} aborted: {e.Reason}.");
 
             return new DrydockStoreOutcome(
-                e.Reason == AbortGridGone ? DrydockStoreResult.SerializeFailed : DrydockStoreResult.Cancelled,
+                e.GridGone ? DrydockStoreResult.SerializeFailed : DrydockStoreResult.Cancelled,
                 null);
         }
         finally
@@ -752,7 +726,7 @@ public sealed partial class DrydockSystem : EntitySystem
         }
     }
 
-    /// <summary>Reason text for the two aborts, so the outcome mapping is not a string guess.</summary>
+    /// <summary>Reason text for the two store aborts, for the log line. The outcome branches on <see cref="DrydockAbortedException.GridGone"/>.</summary>
     private const string AbortGridGone = "the grid was deleted while the pipeline was parked";
 
     /// <inheritdoc cref="AbortGridGone"/>
@@ -770,7 +744,7 @@ public sealed partial class DrydockSystem : EntitySystem
     private void GuardStoreResume(DrydockStoreContext ctx)
     {
         if (TerminatingOrDeleted(ctx.GridUid))
-            throw new DrydockAbortedException(AbortGridGone);
+            throw new DrydockAbortedException(AbortGridGone, gridGone: true);
 
         if (ctx.StagingMap is { } map && TerminatingOrDeleted(map))
             throw new DrydockAbortedException(AbortMapGone);
@@ -789,13 +763,13 @@ public sealed partial class DrydockSystem : EntitySystem
     /// existence and component checks, since which ones apply differs per walk.
     /// </summary>
     private async Task StoreSweep<T>(
-        DrydockStoreContext ctx, IDrydockSlice slice, DrydockPhase phase, IReadOnlyList<T> items, Action<T, int> body)
+        DrydockStoreContext ctx, IDrydockSlice slice, DrydockPhase phase, IReadOnlyList<T> items, Action<T> body)
     {
         await slice.Begin(phase, items.Count);
 
         for (var i = 0; i < items.Count; i++)
         {
-            body(items[i], i);
+            body(items[i]);
             await StoreStep(ctx, slice, i);
         }
     }
@@ -803,8 +777,8 @@ public sealed partial class DrydockSystem : EntitySystem
     /// <summary>
     /// Which registered job is driving this slice, or zero for the synchronous path. The id is
     /// stamped on every private map the pipeline creates, so a map left behind names an owner the
-    /// sweep can ask whether it is still alive. The wrapper stamps it onto the job right after
-    /// <see cref="RegisterJob"/>, before the job is enqueued.
+    /// sweep can ask whether it is still alive. <see cref="StartPipelineJob{TContext,TOutcome}"/>
+    /// stamps it onto the job right after <see cref="RegisterJob"/>, before the job is enqueued.
     ///
     /// <para>Zero makes a synchronous store's staging maps look ownerless to that sweep. That is the
     /// honest answer - there is no job to ask - and it costs nothing in practice, because the sweep
@@ -836,23 +810,9 @@ public sealed partial class DrydockSystem : EntitySystem
 
         if (!TerminatingOrDeleted(gridUid))
         {
-            foreach (var uid in ctx.InjectedGas)
-            {
-                if (!TerminatingOrDeleted(uid))
-                    RemComp<DrydockPipeGasComponent>(uid);
-            }
-
-            foreach (var uid in ctx.InjectedDamage)
-            {
-                if (!TerminatingOrDeleted(uid))
-                    RemComp<DrydockDamageSidecarComponent>(uid);
-            }
-
-            foreach (var uid in ctx.InjectedAppearance)
-            {
-                if (!TerminatingOrDeleted(uid))
-                    RemComp<DrydockAppearanceComponent>(uid);
-            }
+            RemoveInjected<DrydockPipeGasComponent>(ctx.InjectedGas);
+            RemoveInjected<DrydockDamageSidecarComponent>(ctx.InjectedDamage);
+            RemoveInjected<DrydockAppearanceComponent>(ctx.InjectedAppearance);
 
             RestoreStrippedComponents(gridUid, ctx.Stripped);
 
@@ -913,6 +873,16 @@ public sealed partial class DrydockSystem : EntitySystem
 
         Log.Error($"Drydock: the unwind for ship {ctx.ShipId} found nowhere to return {ToPrettyString(gridUid)} to. "
                   + $"It is frozen on staging map {ToPrettyString(staging)}, restored and intact, awaiting an admin.");
+    }
+
+    /// <summary>Takes a sidecar ledger's component back off every entity on it that still exists.</summary>
+    private void RemoveInjected<T>(List<EntityUid> injected) where T : IComponent
+    {
+        foreach (var uid in injected)
+        {
+            if (!TerminatingOrDeleted(uid))
+                RemComp<T>(uid);
+        }
     }
 
     /// <summary>
@@ -984,92 +954,109 @@ public sealed partial class DrydockSystem : EntitySystem
     /// refusing different vessels on identical back-to-back runs.</para>
     /// </summary>
     /// <returns>
-    /// A mismatch flag, true meaning the store must abort, paired with how many entities the live
-    /// grid holds, counted here because this already walks the tree for the comparison. Zero on
-    /// every abort path, since none of them reach the count.
+    /// A mismatch flag, true meaning the store must abort, paired with how many serializable direct
+    /// children the live grid holds: the sum of the per-prototype tally above, which skips
+    /// <c>save: false</c> prototypes and does not descend into containers or grandchildren. It is
+    /// what the store's timing line prints as its entity count. Zero on the two reload-failure
+    /// paths, since neither reaches the tally.
     /// </returns>
     private async Task<(bool Mismatch, int LiveEntities)> DetectRoundTripMismatch(
-        DrydockStoreContext ctx, IDrydockSlice slice, DrydockPhaseTimer timer, string yaml, int jobId, Guid shipId)
+        DrydockStoreContext ctx, IDrydockSlice slice, string yaml)
     {
         var gridUid = ctx.GridUid;
 
         // The parse alone, off-thread: no entity is touched until the data node comes back.
         var data = await slice.Await(Task.Run(() => ParseDocument(yaml)));
         GuardStoreResume(ctx);
-        timer.Mark("validate_parse");
+        ctx.Timer.Mark("validate_parse");
 
-        if (data == null)
+        if (data == null
+            || TryLoadOntoNewPausedMap(data, "drydock/validation", initializeMap: false) is not { } load)
         {
             Log.Warning($"Drydock store validation failed for {ToPrettyString(gridUid)}: the document just written would not reload.");
             return (true, 0);
         }
 
-        var options = new DeserializationOptions
-        {
-            InitializeMaps = false,
-            PauseMaps = true,
-        };
+        var (mapUid, scratchGrid) = load;
 
-        // Replicates the TextReader TryLoadGrid wrapper by hand, because that wrapper parses and
-        // builds in one call and there is no overload that takes an already-parsed document and
-        // still owns creating the target map.
-        var mapUid = _maps.CreateMap(out var mapId, runMapInit: false);
-        _maps.SetPaused(mapUid, true);
-
-        var loadOptions = new MapLoadOptions
-        {
-            MergeMap = mapId,
-            DeserializationOptions = options,
-            ExpectedCategory = FileCategory.Grid,
-        };
-
-        var loaded = _mapLoader.TryLoadGeneric(data, "drydock/validation", out var result, loadOptions);
-
-        if (!loaded || result!.Grids.Count != 1)
-        {
-            if (result != null)
-            {
-                foreach (var uid in result.Entities)
-                {
-                    if (Exists(uid))
-                        Del(uid);
-                }
-            }
-
-            Del(mapUid);
-            Log.Warning($"Drydock store validation failed for {ToPrettyString(gridUid)}: the document just written would not reload.");
-            return (true, 0);
-        }
-
-        var scratchGrid = result.Grids.Single();
-        TagStagingMap(mapUid, jobId, DrydockStagingKind.Validation, shipId);
+        TagStagingMap(mapUid, JobIdOf(slice), DrydockStagingKind.Validation, ctx.ShipId);
 
         try
         {
             var live = CountChildPrototypes(gridUid);
-            var scratch = CountChildPrototypes(scratchGrid.Owner);
+            var scratch = CountChildPrototypes(scratchGrid);
 
             var liveCount = live.Values.Sum();
             var scratchCount = scratch.Values.Sum();
-            var liveEntities = liveCount;
             if (liveCount != scratchCount)
             {
                 Log.Warning($"Drydock store validation failed for {ToPrettyString(gridUid)}: entity count mismatch (live={liveCount}, scratch={scratchCount}).");
-                return (true, liveEntities);
+                return (true, liveCount);
             }
 
             if (!PrototypeCountsMatch(live, scratch, out var detail))
             {
                 Log.Warning($"Drydock store validation failed for {ToPrettyString(gridUid)}: composition mismatch ({detail}).");
-                return (true, liveEntities);
+                return (true, liveCount);
             }
 
-            return (false, liveEntities);
+            return (false, liveCount);
         }
         finally
         {
             Del(mapUid);
         }
+    }
+
+    /// <summary>
+    /// Loads an already-parsed grid document onto a new map of its own, paused while it is still
+    /// empty so the engine's recursive pause walks one entity instead of a whole hull.
+    ///
+    /// <para>Replicates the map-creating <c>TryLoadGrid</c> wrapper by hand, because that wrapper
+    /// parses and builds in one call and there is no overload that takes an already-parsed document
+    /// and still owns creating the target map. Untagged: each caller tags the map for its own
+    /// pipeline once the load has held.</para>
+    /// </summary>
+    /// <param name="initializeMap">
+    /// Whether the map, and so the load, is map-initialised. The validation scratch load is
+    /// deliberately not; a retrieve is.
+    /// </param>
+    /// <returns>
+    /// The map and its one grid, or null when the load failed or produced anything but exactly one
+    /// grid. On null, everything the load created and the map itself are already deleted.
+    /// </returns>
+    private (EntityUid Map, EntityUid Grid)? TryLoadOntoNewPausedMap(MappingDataNode data, string source, bool initializeMap)
+    {
+        var mapUid = _maps.CreateMap(out var mapId, runMapInit: initializeMap);
+        _maps.SetPaused(mapUid, true);
+
+        var loadOptions = new MapLoadOptions
+        {
+            MergeMap = mapId,
+            DeserializationOptions = new DeserializationOptions
+            {
+                InitializeMaps = initializeMap,
+                PauseMaps = true,
+            },
+            ExpectedCategory = FileCategory.Grid,
+        };
+
+        var loaded = _mapLoader.TryLoadGeneric(data, source, out var result, loadOptions);
+
+        if (loaded && result!.Grids.Count == 1)
+            return (mapUid, result.Grids.Single().Owner);
+
+        if (result != null)
+        {
+            foreach (var uid in result.Entities)
+            {
+                if (Exists(uid))
+                    Del(uid);
+            }
+        }
+
+        Del(mapUid);
+        return null;
     }
 
     /// <summary>
@@ -1169,7 +1156,7 @@ public sealed partial class DrydockSystem : EntitySystem
                 stack.Push((child, myIndex));
         }
 
-        await StoreSweep(ctx, slice, DrydockPhase.Manifest, order, (node, _) =>
+        await StoreSweep(ctx, slice, DrydockPhase.Manifest, order, node =>
         {
             var (uid, parent) = node;
             var entry = new DrydockManifestEntry { Parent = parent };
@@ -1251,7 +1238,7 @@ public sealed partial class DrydockSystem : EntitySystem
             }
         }
 
-        await StoreSweep(ctx, slice, DrydockPhase.Sidecars, shares, (item, _) =>
+        await StoreSweep(ctx, slice, DrydockPhase.Sidecars, shares, item =>
         {
             var (owner, name, share) = item;
             if (TerminatingOrDeleted(owner))
@@ -1280,7 +1267,7 @@ public sealed partial class DrydockSystem : EntitySystem
             damaged.Add((uid, new Dictionary<string, FixedPoint2>(damageable.Damage.DamageDict)));
         }
 
-        await StoreSweep(ctx, slice, DrydockPhase.Sidecars, damaged, (item, _) =>
+        await StoreSweep(ctx, slice, DrydockPhase.Sidecars, damaged, item =>
         {
             var (uid, damage) = item;
             if (TerminatingOrDeleted(uid))
@@ -1300,7 +1287,7 @@ public sealed partial class DrydockSystem : EntitySystem
     /// </summary>
     private Task StripListedComponentsSliced(DrydockStoreContext ctx, IDrydockSlice slice)
     {
-        return StoreSweep(ctx, slice, DrydockPhase.Strip, StoreStripList, (type, _) =>
+        return StoreSweep(ctx, slice, DrydockPhase.Strip, StoreStripList, type =>
         {
             if (TerminatingOrDeleted(ctx.GridUid) || !TryComp(ctx.GridUid, type, out var comp))
                 return;
@@ -1362,7 +1349,7 @@ public sealed partial class DrydockSystem : EntitySystem
         }
 
         var count = 0;
-        await StoreSweep(ctx, slice, DrydockPhase.Purge, doomed, (uid, _) =>
+        await StoreSweep(ctx, slice, DrydockPhase.Purge, doomed, uid =>
         {
             // A container purged earlier in the list takes its contents with it.
             if (TerminatingOrDeleted(uid))
@@ -1391,7 +1378,7 @@ public sealed partial class DrydockSystem : EntitySystem
             found.Add((uid, store.StartingMap));
         }
 
-        await StoreSweep(ctx, slice, DrydockPhase.Strip, found, (item, _) =>
+        await StoreSweep(ctx, slice, DrydockPhase.Strip, found, item =>
         {
             var (uid, map) = item;
 
@@ -1440,9 +1427,12 @@ public sealed partial class DrydockSystem : EntitySystem
     /// <summary>
     /// Walks the four rare-component world queries that define a hazard aboard <paramref
     /// name="gridUid"/>: an armed nuke, an active countdown, a singularity, or an anomaly. Each is a
-    /// world query filtered by grid rather than a child walk, because hazards are rare and the
-    /// transform's grid resolves through container nesting: a nuke stashed in a crate still reports
-    /// the ship.
+    /// world query filtered by grid rather than a tree walk, the trade
+    /// <see cref="DrydockFidelitySystem.GridTreeList"/> warns against taken deliberately: these four
+    /// components are rare, so each query visits a handful of entities where a walk would visit the
+    /// whole hull, and its cost grows with how many of them the sector holds rather than with the
+    /// round's entity count. The transform's grid resolves through container nesting, so a nuke
+    /// stashed in a crate still reports the ship.
     ///
     /// <para>An anomaly counts for the same reason as a live countdown: its pulse and supercritical
     /// timers are ordinary data fields that resume on thaw, and it does not come back from a
@@ -1486,7 +1476,8 @@ public sealed partial class DrydockSystem : EntitySystem
 
     /// <summary>
     /// The document's format version, and a hash over the sorted set of prototype ids it references.
-    /// That id set is the drift key: a change to it is what the re-bake ladder reacts to.
+    /// That id set is the drift key: a change to it is what the planned re-bake ladder, not built
+    /// yet, is meant to react to.
     /// </summary>
     /// <remarks>
     /// <para>Streams the document rather than loading it into a node tree. The two facts wanted here

@@ -9,6 +9,7 @@ using Content.Shared._NF.Shipyard.BUI;
 using Robust.Client.Graphics;
 using Robust.Client.UserInterface;
 using Robust.Client.UserInterface.Controls;
+using Robust.Shared.GameObjects;
 using Robust.Shared.Localization;
 using Robust.Shared.Maths;
 
@@ -331,8 +332,8 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                     Loc.GetString("shipyard-console-transfer-picker-empty"),
                     new[]
                     {
-                        new DrydockListPicker.Item("Mara Voss", Loc.GetString("shipyard-console-transfer-picker-berths", ("count", 2)), true, () => { }),
-                        new DrydockListPicker.Item("Ilse Varga", Loc.GetString("shipyard-console-transfer-picker-no-berth"), false, () => { }),
+                        new DrydockMenuButton.Item("Mara Voss", Loc.GetString("shipyard-console-transfer-picker-berths", ("count", 2)), true, () => { }),
+                        new DrydockMenuButton.Item("Ilse Varga", Loc.GetString("shipyard-console-transfer-picker-no-berth"), false, () => { }),
                     });
 
                 var abandon = new DrydockTextPrompt(
@@ -379,11 +380,11 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             {
                 var picker = new DrydockListPicker("Transfer Kestrel", "Filter", null, "Offer", "No one else is online.", new[]
                 {
-                    new DrydockListPicker.Item("Mara Voss", "2 berths free", true, () => { }),
-                    new DrydockListPicker.Item("Ilse Varga", "no berth fits", false, () => { }),
+                    new DrydockMenuButton.Item("Mara Voss", "2 berths free", true, () => { }),
+                    new DrydockMenuButton.Item("Ilse Varga", "no berth fits", false, () => { }),
                 });
                 var empty = new DrydockListPicker("Transfer Kestrel", "Filter", null, "Offer", "No one else is online.",
-                    Array.Empty<DrydockListPicker.Item>());
+                    Array.Empty<DrydockMenuButton.Item>());
 
                 LayOut(picker);
                 LayOut(empty);
@@ -501,6 +502,10 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                     transferOfferMinutes: 30)
                 {
                     ImpoundedShips = impounded ?? new List<DrydockImpoundedShipInfo>(),
+                    // The deed ship is out in the world, which is what the tab counts ships out by.
+                    ShipsOut = deedShip != null
+                        ? new List<DrydockReissueShipInfo> { new(NetEntity.Invalid, deedShip.Name, deedShip.SizeClass) }
+                        : new List<DrydockReissueShipInfo>(),
                 },
             };
             return state;

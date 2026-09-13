@@ -1215,18 +1215,19 @@ namespace Content.Server.Database
     }
 
     // Triad: tamper protection
+    /// <summary>
+    /// A key the server once signed ship saves with. Read-only since ship saving was removed: legacy
+    /// import reads <see cref="PublicKey"/> to recognise our own saves, and nothing writes new rows.
+    /// </summary>
     public class TriadShipyardSigningKey
     {
         public int Id { get; set; }
         public byte[] PublicKey { get; set; } = default!;
 
         /// <summary>
-        /// F14 fix: the private key lives on disk as a PEM file, not in the database. This stable
-        /// identifier is the filename stem under <c>triad.tamper_signing_keys_dir</c>. DB compromise
-        /// alone now yields no usable signing material - the attacker would also need filesystem
-        /// access to read the keys directory. Nullable so rows that pre-date this change can be
-        /// retired without being usable; the keystore treats null KeyId as "not loadable" and
-        /// either retires the row and generates fresh, or refuses to start.
+        /// Filename stem of the PEM file the private key was kept in, from when the server still
+        /// signed. Historical only: nothing reads the private key any more. Null on rows that
+        /// pre-date on-disk keys.
         /// </summary>
         public string? KeyId { get; set; }
 
@@ -1237,9 +1238,9 @@ namespace Content.Server.Database
 
     /// <summary>
     /// A per-player legacy-onboarding permit. While the server is in enforce mode, a player with an
-    /// active permit may load non-our-key (unsigned or foreign-signed) ships, which the load path
-    /// re-signs with the server key. It is the rollout exception for stragglers who did not get a
-    /// ship signed during the notify window; it clears on admin revoke or session end.
+    /// active permit may import non-our-key (unsigned or foreign-signed) legacy saves into the
+    /// drydock; they are never re-signed. It is the rollout exception for stragglers who did not get
+    /// a ship signed during the notify window; it clears on admin revoke or session end.
     /// </summary>
     public class TriadShipyardMigrationPermit
     {

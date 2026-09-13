@@ -21,9 +21,6 @@ public sealed partial class DrydockBerthRow : PanelContainer
 
     public Guid? OccupantShipId;
 
-    /// <summary>The standing offer on the occupant, when it is in escrow. Cancel sends this.</summary>
-    public long? OccupantTransferId;
-
     private readonly string? _occupantName;
     private readonly string? _occupantClass;
     private readonly string? _escrowText;
@@ -44,7 +41,6 @@ public sealed partial class DrydockBerthRow : PanelContainer
 
         BerthId = berth.BerthId;
         OccupantShipId = berth.OccupantShipId;
-        OccupantTransferId = berth.OccupantTransferId;
 
         // Class text is whatever the row was filed with, spaced for reading and otherwise shown
         // as-is: a berth or ship stored by an older build can name a class this one no longer has,

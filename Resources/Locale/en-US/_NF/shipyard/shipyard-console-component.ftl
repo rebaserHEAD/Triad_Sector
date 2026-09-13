@@ -95,12 +95,6 @@ shipyard-console-engine-Plasma = Plasma
 shipyard-console-engine-Uranium = Uranium
 shipyard-console-engine-Bananium = Bananium
 
-## Error Messages
-shipyard-console-load-ship-no-id = Insert an ID card to load saved ships.
-shipyard-console-load-failed = Failed to load ship.
-shipyard-console-insufficient-funds = Insufficient funds to load ship. Cost: {$cost} credits. Your balance: {$balance} credits.
-shipyard-console-load-success-charged = Ship "{$ship}" loaded successfully. {$cost} credits charged to your account.
-shipyard-console-load-success-debt = Ship "{$ship}" loaded successfully. {$cost} credits charged. WARNING: You are now {$debt} credits in debt!
 # Mono start
 shipyard-console-engine-NFR = NFR
 # Mono end

@@ -12,7 +12,6 @@ using Robust.Shared.GameObjects;
 using Robust.Shared.IoC;
 using Robust.Shared.Log;
 using Robust.Shared.Network;
-using Robust.Server;
 using Robust.Server.Player;
 using Robust.Shared.Enums;
 using Robust.Shared.Player;
@@ -32,7 +31,6 @@ public sealed partial class TriadTamperPolicyService : EntitySystem
     [Dependency] private ITriadShipyardPermitStore _permitStore = default!;
     [Dependency] private IPlayerManager _playerManager = default!;
     [Dependency] private Admin.TriadTamperAdminEuiRegistry _euiRegistry = default!;
-    [Dependency] private IBaseServer _baseServer = default!;
 
     private ISawmill _sawmill = default!;
 
@@ -64,9 +62,9 @@ public sealed partial class TriadTamperPolicyService : EntitySystem
         _auditCts = new CancellationTokenSource();
         _auditConsumerTask = Task.Run(() => ConsumeAuditAsync(_auditCts.Token));
 
-        // Bootstrap the active key into the static AuthenticatedShipFile surface.
+        // Seed the own-key and permit caches the import checks read from.
         // Fire-and-forget; failure logs an error but does not block server start.
-        _ = BootstrapKeyAsync();
+        _ = BootstrapCachesAsync();
 
         // Per-player permits are a one-session legacy-onboarding bypass: clear a player's permit on
         // disconnect (admin revoke is the other end condition). This re-adds the disconnect-clear the
@@ -117,27 +115,11 @@ public sealed partial class TriadTamperPolicyService : EntitySystem
             _ = _permitStore.RevokeAsync(e.Session.UserId.UserId, default);
     }
 
-    private async Task BootstrapKeyAsync()
+    private async Task BootstrapCachesAsync()
     {
-        try
-        {
-            var key = await _keyStore.GetOrCreateActivePrivateKeyAsync(default);
-            AuthenticatedShipFile.SetStaticKeyInfo(key);
-            _sawmill.Info("Active signing key installed into AuthenticatedShipFile.");
-        }
-        catch (Exception ex)
-        {
-            // F14 intent: the signing key is the load authority. We must not run without it - saves
-            // would throw and silently fail, and the whole tamper model is meaningless. Refuse to
-            // start rather than limp in a broken state. Operator fix: restore the key file from backup,
-            // or clear the active triad_shipyard_signing_keys row so a fresh key is generated.
-            _sawmill.Error($"Failed to bootstrap tamper-protection signing key; refusing to start: {ex}");
-            _baseServer.Shutdown("Triad tamper-protection signing key could not be loaded");
-            return;
-        }
-
-        // Seed the own-key authority set from the signing-keys table (active + retired). After this
-        // completes, EvaluateLoad answers "is this our key" from memory.
+        // Seed the own-key authority set from the signing-keys table (every key this server once
+        // signed with). After this completes, EvaluateLoad answers "is this our key" from memory;
+        // until then IsOwnKey falls back to the database.
         try
         {
             await _keyStore.PopulateOwnKeysAsync(default);
@@ -258,23 +240,6 @@ public sealed partial class TriadTamperPolicyService : EntitySystem
         };
     }
 
-    public AuthenticatedShipFile SignSave(string yaml, int appraisal)
-    {
-        var box = AuthenticatedShipFile.FromShipData(yaml);
-        box.SignShip();
-        box.Appraisal = appraisal;
-        return box;
-    }
-
-    public AuthenticatedShipFile ReSignForMigration(AuthenticatedShipFile original, int loadTimeAppraisal)
-    {
-        var yaml = original.ShipYamlString();
-        var fresh = AuthenticatedShipFile.FromShipData(yaml);
-        fresh.SignShip();
-        fresh.Appraisal = loadTimeAppraisal;
-        return fresh;
-    }
-
     public LoadDecision EvaluateLoad(AuthenticatedShipFile envelope, NetUserId player, string? shipName)
     {
         var mode = ResolveMode();
@@ -285,12 +250,12 @@ public sealed partial class TriadTamperPolicyService : EntitySystem
         var hasSignature = envelope.GetInstancePublicKeyInfo() != null;
         var signatureValid = hasSignature && envelope.IsShipSigned();
         var pubkey = envelope.GetInstancePublicKeyInfo();
-        // Authority is the server's own signing key (active or retired), not an admin trust flag.
-        // "Valid but foreign" = a player forged their own keypair to re-sign a ship; it is rejected
+        // Authority is a key this server once signed saves with, not an admin trust flag.
+        // "Valid but foreign" = a player forged their own keypair to sign a ship; it is rejected
         // under enforce and only ever flagged (never trusted) under notify.
         var ours = signatureValid && pubkey != null && _keyStore.IsOwnKey(SHA256.HashData(pubkey));
 
-        // Ships signed by our own key are always allowed and never migrated.
+        // Ships signed by our own key are always allowed and never logged as migrated.
         if (ours)
             return new LoadDecision(true, TriadShipyardEventType.LoadVerifiedTrusted, null);
 
@@ -305,8 +270,9 @@ public sealed partial class TriadTamperPolicyService : EntitySystem
             return new LoadDecision(true, ev, null);
         }
 
-        // Enforce. Permit is the per-player legacy-onboarding bypass: a permitted player may load a
-        // non-our-key ship, which the load path re-signs with our key. HasPermitFor reads the cache.
+        // Enforce. Permit is the per-player legacy-onboarding bypass: a permitted player may import a
+        // non-our-key ship, which is filed into the drydock like any other and never re-signed. The
+        // LoadMigrated label records that the permit let it through. HasPermitFor reads the cache.
         if (_permitStore.HasPermitFor(player.UserId))
             return new LoadDecision(true, TriadShipyardEventType.LoadMigrated, null);
 
@@ -353,42 +319,9 @@ public sealed partial class TriadTamperPolicyService : EntitySystem
         if (publicKey != null && _keyStore.IsOwnKey(SHA256.HashData(publicKey)))
             return true;
 
-        // The permit is the same straggler bypass the load path honours; those ships re-sign on
-        // the way in.
+        // The permit is the same straggler bypass EvaluateLoad honours; those ships file into the
+        // drydock as they are, with no re-signing.
         return _permitStore.HasPermitFor(player.UserId);
-    }
-
-    public Task RecordSaveAsync(
-        AuthenticatedShipFile envelope,
-        NetUserId player,
-        string? playerName,
-        string? shipName,
-        int appraisal,
-        int? signingKeyId,
-        int? roundId,
-        string? serverName,
-        string? vesselId,
-        string? mapId,
-        string? deedHolderEntity)
-    {
-        Enqueue(new TriadShipyardAuditEvent
-        {
-            At = DateTime.UtcNow,
-            EventType = TriadShipyardEventType.SaveSigned,
-            PlayerUserId = player.UserId,
-            PlayerName = playerName,
-            ShipName = shipName,
-            ShipHash = envelope.GetHash(),
-            PublicKey = envelope.GetInstancePublicKeyInfo(),
-            SigningKeyId = signingKeyId,
-            SaveTimeAppraisal = appraisal,
-            RoundId = roundId,
-            ServerName = serverName,
-            VesselId = vesselId,
-            MapId = mapId,
-            DeedHolderEntity = deedHolderEntity,
-        });
-        return Task.CompletedTask;
     }
 
     public Task RecordLoadAsync(
@@ -429,33 +362,9 @@ public sealed partial class TriadTamperPolicyService : EntitySystem
         return Task.CompletedTask;
     }
 
-    public Task RecordRejectedLoadAsync(
-        NetUserId player,
-        string? playerName,
-        string? sourceFilePath,
-        int? roundId)
-    {
-        if (ResolveMode() == TamperMode.Off)
-            return Task.CompletedTask;
-
-        Enqueue(new TriadShipyardAuditEvent
-        {
-            At = DateTime.UtcNow,
-            EventType = TriadShipyardEventType.LoadRejected,
-            PlayerUserId = player.UserId,
-            PlayerName = playerName,
-            // No ship hash on a rejected load (often there's no valid payload at all). The column is
-            // non-null, so carry an empty hash like RecordPermitAction does.
-            ShipHash = Array.Empty<byte>(),
-            SourceFilePath = sourceFilePath,
-            RoundId = roundId,
-        });
-        return Task.CompletedTask;
-    }
-
     /// <summary>
     /// Record an admin permit action (grant/revoke) into the audit feed. Routed through the same
-    /// channel as load/save events so it batches and triggers the live-update fan-out. The acting
+    /// channel as load events so it batches and triggers the live-update fan-out. The acting
     /// admin lands in AdminUserId; the target player + ship hash identify what the permit covers.
     /// </summary>
     public void RecordPermitAction(

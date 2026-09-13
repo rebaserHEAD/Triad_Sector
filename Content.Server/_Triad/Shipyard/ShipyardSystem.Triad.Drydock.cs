@@ -1056,10 +1056,10 @@ public sealed partial class ShipyardSystem
     }
 
     /// <summary>
-    /// Whether the operator is barred from the drydock the way they are barred from ship saving.
-    /// Faction crews (TDF, TFA, the station roles) are issued their vessels on voucher and the
-    /// drydock is the civilian garage, so the same signals decide both: the blacklist component the
-    /// job stamps on the character, and the console's own save blacklist, which reads that
+    /// Whether the operator is barred from the drydock. Faction crews (TDF, TFA, the station roles)
+    /// are issued their vessels on voucher and the drydock is the civilian garage, so two signals
+    /// decide it: the blacklist component the job stamps on the character, and the console's own
+    /// whitelist and blacklist (named for the ship saving they once gated), which read that
     /// component too. The direct check is here so a console whose blacklist a mapper forgot still
     /// refuses.
     /// </summary>

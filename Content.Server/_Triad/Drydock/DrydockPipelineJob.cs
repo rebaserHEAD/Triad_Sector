@@ -76,13 +76,6 @@ public sealed class DrydockPipelineJob<TContext, TOutcome> : Job<TOutcome>, IDry
     /// <summary>The id <see cref="DrydockSystem.RegisterJob"/> returned for this job. Set right after registration.</summary>
     public int JobId { get; set; }
 
-    /// <summary>
-    /// Whether this job can suspend at all. A budget of zero would make the engine's own
-    /// out-of-time check a no-op, so rather than run the whole pipeline inside one tick under a name
-    /// that says otherwise, the caller is expected to skip the job entirely at that setting.
-    /// </summary>
-    public bool Slicing => MaxTime > 0.0;
-
     /// <summary>Worst single run span in milliseconds, a lower bound on the worst tick. Sampled at each suspension.</summary>
     public double WorstSliceMs { get; private set; }
 
@@ -111,12 +104,6 @@ public sealed class DrydockPipelineJob<TContext, TOutcome> : Job<TOutcome>, IDry
         Progress.BeginPhase(phase, items);
         _sinceProgress.Restart();
 
-        if (!Slicing)
-        {
-            _spanPhase = phase;
-            return;
-        }
-
         // Unconditional, not budget-conditional. A phase that starts with most of a tick's budget
         // already spent by the phase before it would otherwise overrun on its very first items,
         // and the phases whose first items are expensive are exactly the ones worth protecting.
@@ -132,7 +119,7 @@ public sealed class DrydockPipelineJob<TContext, TOutcome> : Job<TOutcome>, IDry
         Progress.Advance(index);
         _sinceProgress.Restart();
 
-        if (!Slicing || index % _stride != 0)
+        if (index % _stride != 0)
             return;
 
         // The engine's SuspendIfOutOfTime would do this, but it cannot tell us whether it actually

@@ -357,12 +357,9 @@ public interface IDrydockSlice
 
     DrydockProgress Progress { get; }
 
-    /// <summary>True only when this slice can actually suspend. False for <see cref="DrydockSyncSlice"/>.</summary>
-    bool Slicing { get; }
-
     /// <summary>
     /// Opens a phase and force-suspends, so one phase's overrun never lands on the next phase's
-    /// start. The suspension is a no-op when <see cref="Slicing"/> is false.
+    /// start. <see cref="DrydockSyncSlice"/> never suspends, so there it only opens the phase.
     /// </summary>
     Task Begin(DrydockPhase phase, int items);
 
@@ -397,8 +394,6 @@ public sealed class DrydockSyncSlice : IDrydockSlice
 
     public DrydockProgress Progress { get; }
 
-    public bool Slicing => false;
-
     public Task Begin(DrydockPhase phase, int items)
     {
         Progress.BeginPhase(phase, items);
@@ -424,13 +419,21 @@ public sealed class DrydockSyncSlice : IDrydockSlice
 /// </summary>
 public sealed class DrydockAbortedException : Exception
 {
-    public DrydockAbortedException(string reason)
+    public DrydockAbortedException(string reason, bool gridGone = false)
         : base($"Drydock pipeline aborted: {reason}")
     {
         Reason = reason;
+        GridGone = gridGone;
     }
 
+    /// <summary>Human-readable, for the log line. Never branched on; that is what <see cref="GridGone"/> is for.</summary>
     public string Reason { get; }
+
+    /// <summary>
+    /// True when the abort is the store's grid having been deleted, which the store reports as a
+    /// failed serialize rather than a cancellation. Set only by the guard that detects it.
+    /// </summary>
+    public bool GridGone { get; }
 }
 
 public sealed record DrydockStoreOutcome(DrydockStoreResult Result, Guid? ShipId);
@@ -480,7 +483,6 @@ public sealed class DrydockStoreContext
 
     public string? ReturnDockTag;
 
-    public int EntityCount;
     public bool Committed;
     public bool Frozen;
     public bool Undocked;
@@ -608,7 +610,6 @@ public sealed class DrydockRetrieveContext
     public EntityUid? StagingMap;
     public EntityUid? Grid;
     public int EntityCount;
-    public int RevisionLoaded;
 
     /// <summary>True from the moment the database claim lands until the ship is really docked.</summary>
     public bool ClaimHeld;

@@ -105,7 +105,8 @@ public sealed partial class ShipyardConsoleMenu : FancyWindow
     private DrydockBerthRow? _retrievingRow;
 
     // Triad: legacy import, the same pair for the import rows. An import is not sliced and reports
-    // nothing, so its timer measures the press after all and its button keeps the dots.
+    // nothing, so its timer runs uninterrupted from the moment the payload is sent, which is after
+    // the confirm and the file read rather than at the press, and its button keeps the dots.
     private readonly PendingOp _import = new();
     private DrydockImportRow? _importingRow;
 
@@ -124,6 +125,12 @@ public sealed partial class ShipyardConsoleMenu : FancyWindow
         /// <summary>The last percent reported, or null before the first one (or for import, which never gets one).</summary>
         public int? Percent;
 
+        /// <summary>
+        /// The percent and dot count the indicator text was last built from, or null when it has
+        /// not been drawn since the op began or since something else rewrote the button.
+        /// </summary>
+        private (int? Percent, int Dots)? _drawn;
+
         public bool Active => Elapsed >= 0f;
 
         /// <summary>Starts the clock at zero with no percent yet. The caller's own button/row side effects follow.</summary>
@@ -131,13 +138,36 @@ public sealed partial class ShipyardConsoleMenu : FancyWindow
         {
             Elapsed = 0f;
             Percent = null;
+            _drawn = null;
         }
 
         /// <summary>
-        /// A live report, ignored while nothing is pending (the "when _xFor >= 0f" guard every call
-        /// site had). Resets the elapsed clock by default, matching a message from the server; pass
-        /// <paramref name="resetElapsed"/> false for store's state-seed path, which must not restart
-        /// the timeout on every unrelated console refresh.
+        /// Whether this frame's indicator text differs from the last one drawn, recording it when it
+        /// does. <paramref name="dots"/> is the dot count to draw while no percent has arrived. Label
+        /// text has no equality check, so assigning the same string still re-measures the button.
+        /// </summary>
+        public bool NeedsRedraw(out int dots)
+        {
+            dots = Percent == null ? (int)(Elapsed * 2) % 4 : 0;
+            var key = (Percent, dots);
+            if (_drawn == key)
+                return false;
+
+            _drawn = key;
+            return true;
+        }
+
+        /// <summary>Forgets the last drawn text, for a caller that has just rewritten the button itself.</summary>
+        public void InvalidateDrawn()
+        {
+            _drawn = null;
+        }
+
+        /// <summary>
+        /// A live report, ignored while nothing is pending, so a report that lands after the answer
+        /// changes nothing. Resets the elapsed clock by default, matching a message from the server;
+        /// pass <paramref name="resetElapsed"/> false for store's state-seed path, which must not
+        /// restart the timeout on every unrelated console refresh.
         /// </summary>
         public void SetPercent(int? percent, bool resetElapsed = true)
         {
@@ -167,6 +197,7 @@ public sealed partial class ShipyardConsoleMenu : FancyWindow
         {
             Elapsed = -1f;
             Percent = null;
+            _drawn = null;
         }
     }
 
@@ -237,8 +268,10 @@ public sealed partial class ShipyardConsoleMenu : FancyWindow
     }
 
     /// <summary>
-    /// Triad: the offer clocks tick here, once a second, from the last state the server sent. A
-    /// clock that reaches zero stays at zero until the next state says the offer is gone.
+    /// Triad: every frame, the pending store, retrieve and import indicators advance their timeouts
+    /// and redraw when their text would change. Once a second, the offer and escrow clocks tick
+    /// from the last state the server sent; a clock that reaches zero stays at zero until the next
+    /// state says the offer is gone.
     /// </summary>
     protected override void FrameUpdate(FrameEventArgs args)
     {
@@ -259,14 +292,11 @@ public sealed partial class ShipyardConsoleMenu : FancyWindow
                 // a console that looks permanently busy.
                 PopulateDeedShip(_lastDeedShip);
             }
-            else if (_store.Percent is { } percent)
+            else if (_store.NeedsRedraw(out var dots))
             {
-                StoreButton.Text = Loc.GetString("shipyard-console-storing-percent-button", ("percent", percent));
-            }
-            else
-            {
-                var dots = new string('.', (int)(_store.Elapsed * 2) % 4);
-                StoreButton.Text = Loc.GetString("shipyard-console-storing-button") + dots;
+                StoreButton.Text = _store.Percent is { } percent
+                    ? Loc.GetString("shipyard-console-storing-percent-button", ("percent", percent))
+                    : Loc.GetString("shipyard-console-storing-button") + new string('.', dots);
             }
         }
 
@@ -279,11 +309,11 @@ public sealed partial class ShipyardConsoleMenu : FancyWindow
                 _escrowRows.Clear();
                 PopulateBerths(_lastBerths, _lastCanRetrieve);
             }
-            else if (_retrievingRow != null)
+            else if (_retrievingRow != null && _retrieve.NeedsRedraw(out var dots))
             {
                 _retrievingRow.RetrieveButton.Text = _retrieve.Percent is { } percent
                     ? Loc.GetString("shipyard-console-retrieving-percent-button", ("percent", percent))
-                    : Loc.GetString("shipyard-console-retrieving-button") + new string('.', (int)(_retrieve.Elapsed * 2) % 4);
+                    : Loc.GetString("shipyard-console-retrieving-button") + new string('.', dots);
             }
         }
 
@@ -298,10 +328,9 @@ public sealed partial class ShipyardConsoleMenu : FancyWindow
                 _escrowRows.Clear();
                 PopulateBerths(_lastBerths, _lastCanRetrieve);
             }
-            else if (_importingRow != null)
+            else if (_importingRow != null && _import.NeedsRedraw(out var dots))
             {
-                var dots = new string('.', (int)(_import.Elapsed * 2) % 4);
-                _importingRow.ImportButton.Text = Loc.GetString("shipyard-console-importing-button") + dots;
+                _importingRow.ImportButton.Text = Loc.GetString("shipyard-console-importing-button") + new string('.', dots);
             }
         }
 
@@ -319,18 +348,23 @@ public sealed partial class ShipyardConsoleMenu : FancyWindow
     private List<StoredShipInfo> _lastShips = new();
     private List<DrydockBerthInfo> _lastBerths = new();
 
+    /// <summary>The empty berths of the last state in berth order, derived once per state for Store, the impound pickers and the summary.</summary>
+    private List<DrydockBerthInfo> _freeBerths = new();
+
+    /// <summary>
+    /// The berths an offer on the tab would land in, each with the first such offer's ship name,
+    /// derived once per state from <see cref="_lastOffers"/>.
+    /// </summary>
+    private Dictionary<int, string> _incoming = new();
+
+    /// <summary>The civilian ships the account had out in the world as of the last state.</summary>
+    private List<DrydockReissueShipInfo> _shipsOut = new();
+
     /// <summary>Triad: legacy import. The saves the server last agreed to take.</summary>
     private List<DrydockImportShipInfo> _lastImportable = new();
 
     /// <summary>Triad: legacy import. Raised with the file id and the ship's name, for the prompt.</summary>
     public event Action<string, string>? OnImport;
-
-    private bool WouldLeaveAShipWithoutABerth(int consumes)
-    {
-        var free = _lastBerths.Count(b => b.OccupantShipId == null);
-        var shipsOut = _lastShips.Count(s => s.State == "CheckedOut");
-        return shipsOut > 0 && free - consumes < shipsOut;
-    }
 
 
     private void OnCategoryItemSelected(OptionButton.ItemSelectedEventArgs args)
@@ -657,6 +691,14 @@ public sealed partial class ShipyardConsoleMenu : FancyWindow
         _lastCaptains = state.Drydock.Captains;
         // Never an alert for one's own offer; the escrow row already says it.
         _lastOffers = state.Drydock.TransferOffers.Where(o => LocalUserId == null || o.OfferedByUserId != LocalUserId).ToList();
+        _freeBerths = _lastBerths.Where(b => b.OccupantShipId == null).OrderBy(b => b.BerthId).ToList();
+        _incoming = new Dictionary<int, string>();
+        foreach (var offer in _lastOffers)
+        {
+            if (offer.LandsInBerthId is { } lands)
+                _incoming.TryAdd(lands, offer.ShipName);
+        }
+        _shipsOut = state.Drydock.ShipsOut;
         _lastImpounded = state.Drydock.ImpoundedShips;
         _lastBalance = state.Balance;
         _offerMinutes = state.Drydock.TransferOfferMinutes;
@@ -687,8 +729,7 @@ public sealed partial class ShipyardConsoleMenu : FancyWindow
 
         PopulateBuyMenu(state.Drydock.BerthPrices);
 
-        var free = state.Drydock.Berths.Count(b => b.OccupantShipId == null);
-        BerthSummaryLabel.Text = Loc.GetString("shipyard-console-berths-free", ("free", free), ("total", state.Drydock.Berths.Count))
+        BerthSummaryLabel.Text = Loc.GetString("shipyard-console-berths-free", ("free", _freeBerths.Count), ("total", state.Drydock.Berths.Count))
             // Triad: legacy import. Only said while there is something to import, so the line stays
             // as short as it is on a console with nothing waiting.
             + (state.Drydock.ImportableShips.Count > 0
@@ -761,8 +802,10 @@ public sealed partial class ShipyardConsoleMenu : FancyWindow
         StoreButton.Text = (ship.DefaultBerthId is { } berth
             ? Loc.GetString("shipyard-console-store-in-button", ("berth", berth))
             : Loc.GetString("shipyard-console-store-no-fit-button")) + DrydockText.Caret;
+        // A state that lands mid-store has just overwritten the indicator, so the next frame draws it again.
+        _store.InvalidateDrawn();
 
-        var free = _lastBerths.Where(b => b.OccupantShipId == null).OrderBy(b => b.BerthId).ToList();
+        var free = _freeBerths;
         StoreButton.SetItems(BerthItems(free, ship.FittingBerthIds, id =>
         {
             BeginStoreFeedback();
@@ -772,10 +815,9 @@ public sealed partial class ShipyardConsoleMenu : FancyWindow
         // Storing into the berth an offer on the tab would land in takes that berth from the offer.
         // A ship that is not docked here cannot be stored at all, and that outranks the landing
         // note: the button says why it is greyed.
-        var landing = _lastOffers.Where(o => o.LandsInBerthId != null).Select(o => o.LandsInBerthId!.Value).ToHashSet();
         StoreButton.Note = !ship.Docked
             ? Loc.GetString("shipyard-console-store-not-docked-note")
-            : free.Any(b => landing.Contains(b.BerthId)) ? Loc.GetString("shipyard-console-store-takes-landing") : null;
+            : free.Any(b => _incoming.ContainsKey(b.BerthId)) ? Loc.GetString("shipyard-console-store-takes-landing") : null;
         // The last clause is the store that is still running: the button is redrawn from scratch
         // here, and a state that arrived mid-store must not hand it back.
         StoreButton.Disabled = free.Count == 0 || !_validId || !ship.Docked || _store.Active;
@@ -895,25 +937,19 @@ public sealed partial class ShipyardConsoleMenu : FancyWindow
 
         // Fresh rows are the server answering, so any retrieve or import in flight is over. The
         // rows themselves are rebuilt here, so a retrieve that is still running loses the row its
-        // percentage was drawn on; UpdateState greys every Retrieve again in that case, which is
-        // the part that matters - a live Retrieve over a running one is an action, a lost figure
-        // is only a lost figure.
+        // percentage was drawn on. UpdateState greys every Retrieve again whenever the state carries
+        // StoreProgressPercent, and that covers a running retrieve only because the server writes
+        // that one field for a store and a retrieve alike. The greying is the part that matters: a
+        // live Retrieve over a running one is an action, a lost figure is only a lost figure.
         _retrieve.Clear();
         _retrievingRow = null;
         _import.Clear();
         _importingRow = null;
         _lastCanRetrieve = canRetrieve;
 
-        var incoming = new Dictionary<int, string>();
-        foreach (var offer in _lastOffers)
-        {
-            if (offer.LandsInBerthId is { } lands)
-                incoming.TryAdd(lands, offer.ShipName);
-        }
-
         foreach (var berth in berths)
         {
-            var row = new DrydockBerthRow(berth, canRetrieve, incoming.GetValueOrDefault(berth.BerthId));
+            var row = new DrydockBerthRow(berth, canRetrieve, _incoming.GetValueOrDefault(berth.BerthId));
             row.RetrieveButton.OnPressed += _ =>
             {
                 if (row.OccupantShipId is not { } shipId)
@@ -997,7 +1033,7 @@ public sealed partial class ShipyardConsoleMenu : FancyWindow
             {
                 var fits = captain.FreeBerthClasses.Any(berthClass => ShipSizeRules.Fits(shipClass, berthClass));
                 var recipient = captain.UserId;
-                return new DrydockListPicker.Item(
+                return new DrydockMenuButton.Item(
                     captain.Name,
                     fits
                         ? Loc.GetString("shipyard-console-transfer-picker-berths", ("count", captain.FreeBerthClasses.Count))
@@ -1023,7 +1059,7 @@ public sealed partial class ShipyardConsoleMenu : FancyWindow
             .Select(target =>
             {
                 var berthId = target.BerthId;
-                return new DrydockListPicker.Item(
+                return new DrydockMenuButton.Item(
                     Loc.GetString("shipyard-console-move-item", ("berth", berthId)),
                     DrydockText.Class(target.MaxSizeClass),
                     true,
@@ -1152,8 +1188,7 @@ public sealed partial class ShipyardConsoleMenu : FancyWindow
                     VerticalAlignment = VAlignment.Center,
                     Text = IntoText(target),
                 };
-                var free = _lastBerths.Where(b => b.OccupantShipId == null).OrderBy(b => b.BerthId).ToList();
-                into.SetItems(BerthItems(free, ship.FittingBerthIds, id =>
+                into.SetItems(BerthItems(_freeBerths, ship.FittingBerthIds, id =>
                 {
                     target = id;
                     into.Text = IntoText(id);
@@ -1289,10 +1324,11 @@ public sealed partial class ShipyardConsoleMenu : FancyWindow
             headlineLabel.SetMessage(headline);
             text.AddChild(headlineLabel);
 
-            if (offer.LandsInBerthId != null && WouldLeaveAShipWithoutABerth(consumes: 1))
+            // Taking the offer uses one free berth; warn when that leaves fewer than the ships out.
+            if (offer.LandsInBerthId != null && _shipsOut.Count > 0 && _freeBerths.Count - 1 < _shipsOut.Count)
             {
                 var stranded = _lastDeedShip?.Name
-                    ?? _lastShips.FirstOrDefault(s => s.State == "CheckedOut")?.Name
+                    ?? _shipsOut[0].Name
                     ?? Loc.GetString("shipyard-console-transfer-your-ship");
                 text.AddChild(new Label
                 {

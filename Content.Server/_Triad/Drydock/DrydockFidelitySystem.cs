@@ -166,7 +166,7 @@ public sealed partial class DrydockFidelitySystem : EntitySystem
                     }
 
                     var key = $"{compType.Name}|{member.Name}";
-                    sidecar.Fields[key] = Convert.ToBase64String(Encoding.UTF8.GetBytes(node.ToString()));
+                    sidecar.Fields[key] = EncodeNode(node);
                     capture.CapturedKeys.Add(key);
                 }
                 else
@@ -188,10 +188,10 @@ public sealed partial class DrydockFidelitySystem : EntitySystem
     }
 
     /// <summary>
-    /// Abort path, called from the store's unwind: put every field <see cref="CaptureAndStrip"/>
+    /// Abort path, called from the store's unwind: put every field <see cref="CaptureAndStripSliced"/>
     /// cleared back to its original live value and remove the sidecars it added, leaving the
     /// still-live ship exactly as usable as it was. This works on the same live entities, with no
-    /// serialization involved, which is what separates it from <see cref="RestoreCaptured"/>.
+    /// serialization involved, which is what separates it from <see cref="RestoreCapturedSliced"/>.
     /// </summary>
     /// <remarks>
     /// Synchronous, and it has to stay that way: it runs from an unwind, and an unwind that could
@@ -253,15 +253,11 @@ public sealed partial class DrydockFidelitySystem : EntitySystem
 
             foreach (var (key, encoded) in sidecar.Fields)
             {
-                var sep = key.IndexOf('|');
-                if (sep < 0)
+                if (!TrySplitKey(key, out var compName, out var fieldName))
                 {
                     report.Skip(key, "malformed key");
                     continue;
                 }
-
-                var compName = key[..sep];
-                var fieldName = key[(sep + 1)..];
 
                 if (!byName.TryGetValue(compName, out var comp))
                 {
@@ -278,11 +274,7 @@ public sealed partial class DrydockFidelitySystem : EntitySystem
 
                 try
                 {
-                    var yaml = Encoding.UTF8.GetString(Convert.FromBase64String(encoded));
-                    using var reader = new StringReader(yaml);
-                    var node = DataNodeParser.ParseYamlStream(reader).First().Root;
-
-                    SetMember(comp, member, _capture.Restore(MemberType(member), node));
+                    SetMember(comp, member, _capture.Restore(MemberType(member), DecodeNode(encoded)));
                     DirtyIfNetworked(uid, comp);
                     report.Applied++;
                 }
@@ -296,13 +288,7 @@ public sealed partial class DrydockFidelitySystem : EntitySystem
             await slice.Step(i);
         }
 
-        if (report.Skipped.Count > 0)
-        {
-            Log.Warning(
-                $"drydock fidelity restore skipped {report.Skipped.Count} captured field(s) on grid {ToPrettyString(grid)}: "
-                + string.Join("; ", report.Skipped.Select(s => $"{s.Key} ({s.Reason})")));
-        }
-
+        WarnSkips(report, grid, "drydock fidelity restore", "captured field(s)");
         return report;
     }
 
@@ -362,8 +348,7 @@ public sealed partial class DrydockFidelitySystem : EntitySystem
                     sidecar = EnsureComp<DrydockAppearanceComponent>(uid);
                 }
 
-                sidecar.Data[$"{key.GetType().FullName}|{key}"] =
-                    Convert.ToBase64String(Encoding.UTF8.GetBytes(wrapped.ToString()));
+                sidecar.Data[$"{key.GetType().FullName}|{key}"] = EncodeNode(wrapped);
             }
 
             await slice.Step(i);
@@ -402,29 +387,26 @@ public sealed partial class DrydockFidelitySystem : EntitySystem
             {
                 try
                 {
-                    var sep = key.IndexOf('|');
-                    if (sep < 0)
+                    if (!TrySplitKey(key, out var keyTypeName, out var keyMember))
                     {
                         report.Skip(key, "malformed key");
                         continue;
                     }
 
-                    var keyType = DrydockReflectiveCapture.ResolveType(key[..sep]);
+                    var keyType = DrydockReflectiveCapture.ResolveType(keyTypeName);
                     if (keyType is not { IsEnum: true })
                     {
                         report.Skip(key, "no such appearance key type");
                         continue;
                     }
 
-                    if (!Enum.TryParse(keyType, key[(sep + 1)..], out var parsed) || parsed is not Enum enumKey)
+                    if (!Enum.TryParse(keyType, keyMember, out var parsed) || parsed is not Enum enumKey)
                     {
                         report.Skip(key, "appearance key type no longer has that member");
                         continue;
                     }
 
-                    var yaml = Encoding.UTF8.GetString(Convert.FromBase64String(encoded));
-                    using var reader = new StringReader(yaml);
-                    var node = (MappingDataNode) DataNodeParser.ParseYamlStream(reader).First().Root;
+                    var node = (MappingDataNode) DecodeNode(encoded);
 
                     var valueType = DrydockReflectiveCapture.ResolveType(
                         ((ValueDataNode) node[AppearanceValueType]).Value);
@@ -454,14 +436,55 @@ public sealed partial class DrydockFidelitySystem : EntitySystem
             await slice.Step(i);
         }
 
-        if (report.Skipped.Count > 0)
+        WarnSkips(report, grid, "drydock appearance restore", "key(s)");
+        return report;
+    }
+
+    /// <summary>
+    /// How a captured node is held in a sidecar string: its YAML text, base64 so the map document
+    /// carries it as one opaque scalar. <see cref="DecodeNode"/> is the inverse, and the two are a
+    /// persisted format, so they move only behind a <see cref="DrydockFormat"/> bump.
+    /// </summary>
+    private static string EncodeNode(DataNode node)
+    {
+        return Convert.ToBase64String(Encoding.UTF8.GetBytes(node.ToString()));
+    }
+
+    /// <inheritdoc cref="EncodeNode"/>
+    private static DataNode DecodeNode(string encoded)
+    {
+        var yaml = Encoding.UTF8.GetString(Convert.FromBase64String(encoded));
+        using var reader = new StringReader(yaml);
+        return DataNodeParser.ParseYamlStream(reader).First().Root;
+    }
+
+    /// <summary>
+    /// Splits a sidecar key at its first <c>|</c>: component and field for a captured field, key
+    /// type and member for an appearance entry. False when the key has no separator.
+    /// </summary>
+    private static bool TrySplitKey(string key, out string head, out string tail)
+    {
+        var sep = key.IndexOf('|');
+        if (sep < 0)
         {
-            Log.Warning(
-                $"drydock appearance restore skipped {report.Skipped.Count} key(s) on grid {ToPrettyString(grid)}: "
-                + string.Join("; ", report.Skipped.Select(s => $"{s.Key} ({s.Reason})")));
+            head = tail = string.Empty;
+            return false;
         }
 
-        return report;
+        head = key[..sep];
+        tail = key[(sep + 1)..];
+        return true;
+    }
+
+    /// <summary>One warning per restore naming every skip, and nothing when there were none.</summary>
+    private void WarnSkips(DrydockFidelityRestore report, EntityUid grid, string restore, string noun)
+    {
+        if (report.Skipped.Count == 0)
+            return;
+
+        Log.Warning(
+            $"{restore} skipped {report.Skipped.Count} {noun} on grid {ToPrettyString(grid)}: "
+            + string.Join("; ", report.Skipped.Select(s => $"{s.Key} ({s.Reason})")));
     }
 
     /// <summary>
@@ -654,30 +677,23 @@ public sealed partial class DrydockFidelitySystem : EntitySystem
     /// the entity manager, which on a development server throws inside the capture, aborts
     /// the store, and refuses the ship.</para>
     ///
-    /// <para>The attribute test is the same one the engine asserts on. Results are cached by
-    /// type because this is called once per cleared field.</para>
+    /// <para>The test is the component registration's <c>Networked</c> flag, which the factory
+    /// sets from that same attribute when it registers the type, so it is the answer the engine
+    /// asserts on, already cached per type. Every caller here is on the game thread, touching
+    /// live components.</para>
     /// </summary>
     private void DirtyIfNetworked(EntityUid uid, IComponent comp)
     {
-        var type = comp.GetType();
-
-        if (!NetworkedCache.TryGetValue(type, out var networked))
-        {
-            networked = type.GetCustomAttribute<NetworkedComponentAttribute>() != null;
-            NetworkedCache[type] = networked;
-        }
-
-        if (networked)
+        if (Factory.GetRegistration(comp).Networked)
             Dirty(uid, comp);
     }
-
-    private static readonly Dictionary<Type, bool> NetworkedCache = new();
 }
 
 /// <summary>
-/// The ledger a single <see cref="DrydockFidelitySystem.CaptureAndStrip"/> hands back: the live
-/// values it cleared, to put back verbatim on abort, and the entities it gave a sidecar, to take
-/// back off. Discarded on a successful store, since the grid despawns and there is nothing to undo.
+/// The ledger one <see cref="DrydockFidelitySystem.CaptureAndStripSliced"/> fills, which the caller
+/// creates and passes in: the live values it cleared, to put back verbatim on abort, and the
+/// entities it gave a sidecar, to take back off. Discarded on a successful store, since the grid
+/// despawns and there is nothing to undo.
 /// </summary>
 public sealed class DrydockFidelityCapture
 {

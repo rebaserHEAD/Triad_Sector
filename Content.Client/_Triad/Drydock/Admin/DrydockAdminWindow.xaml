@@ -7,8 +7,7 @@
      with the reason box, the escrow card while an offer stands, and the owner's berths beside the
      timeline. With nothing selected the right side is one empty panel that says so.
 
-     Chips, cards, verbs and rows are built in code into the named holders; this file is the frame.
-     Tooltips live on this surface only, the player tab has none. -->
+     Chips, cards, verbs and rows are built in code into the named holders; this file is the frame. -->
 <controls:FancyWindow xmlns="https://spacestation14.io"
                       xmlns:gfx="clr-namespace:Robust.Client.Graphics;assembly=Robust.Client"
                       xmlns:controls="clr-namespace:Content.Client.UserInterface.Controls"

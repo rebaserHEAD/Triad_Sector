@@ -125,21 +125,24 @@ public sealed partial class DrydockStore
             .Where(predicate)
             .ExecuteUpdateAsync(set => set
                 .SetState(DrydockShipState.Stored, now)
-                .SetProperty(s => s.CheckedOutRoundId, (int?)null)
+                .ClearRound()
                 .SetProperty(s => s.LastBerthId, s => s.BerthId)
                 .SetProperty(s => s.BerthId, newBerthId), token);
     }
 
     /// <summary>
-    /// Whether a hull already sitting in <paramref name="heldBerthId"/> may stay there: the berth
-    /// still exists and is large enough. Shared by the tracked seat a filing does and by the
-    /// advisory check a store makes before it touches anything, so both answer "would the current
-    /// berth still work" the same way.
+    /// Whether a store keeps the berth the hull already holds: it holds one, the caller named no
+    /// other, and that berth still exists and is large enough. Shared by the tracked seat a filing
+    /// does and by the advisory check a store makes before it touches anything, so both answer
+    /// "would the current berth still work" the same way.
     /// </summary>
-    private static async Task<bool> HeldBerthStillFits(ServerDbContext db, int heldBerthId, string? hullClass, CancellationToken token)
+    private static async Task<bool> KeepsHeldBerth(ServerDbContext db, int? heldBerthId, int? requestedBerth, string? hullClass, CancellationToken token)
     {
+        if (heldBerthId is not { } held || (requestedBerth != null && requestedBerth != held))
+            return false;
+
         var current = await db.DrydockBerth.AsNoTracking()
-            .SingleOrDefaultAsync(b => b.BerthId == heldBerthId, token);
+            .SingleOrDefaultAsync(b => b.BerthId == held, token);
 
         return current != null && ShipSizeRules.Fits(hullClass, current.MaxSizeClass);
     }
@@ -228,7 +231,7 @@ public sealed partial class DrydockStore
                 .Where(s => s.ShipGuid == shipGuid && s.State == DrydockShipState.CheckedOut)
                 .ExecuteUpdateAsync(set => set
                     .SetState(DrydockShipState.Stored, now)
-                    .SetProperty(s => s.CheckedOutRoundId, (int?)null), token);
+                    .ClearRound(), token);
 
             return moved > 0;
         }, ct);
@@ -287,8 +290,7 @@ public sealed partial class DrydockStore
                     .SetProperty(s => s.ImpoundFee, fee)
                     .SetProperty(s => s.ImpoundReason, impound.Reason)
                     .SetProperty(s => s.ImpoundRedeemable, impound.Redeemable)
-                    .SetProperty(s => s.LastBerthId, s => s.BerthId ?? s.LastBerthId)
-                    .SetProperty(s => s.BerthId, (int?)null), token);
+                    .VacateBerth(), token);
 
             if (moved == 0)
                 return (DrydockBerthResult.WrongState, 0);
@@ -330,7 +332,7 @@ public sealed partial class DrydockStore
                 .Where(s => s.ShipGuid == shipGuid && s.State != DrydockShipState.Impounded)
                 .ExecuteUpdateAsync(set => set
                     .SetState(DrydockShipState.Impounded, now)
-                    .SetProperty(s => s.CheckedOutRoundId, (int?)null), token);
+                    .ClearRound(), token);
 
             return moved > 0;
         }, ct);
@@ -377,9 +379,8 @@ public sealed partial class DrydockStore
                 .Where(s => s.ShipGuid == shipGuid && s.State == DrydockShipState.CheckedOut)
                 .ExecuteUpdateAsync(set => set
                     .SetState(DrydockShipState.Destroyed, now)
-                    .SetProperty(s => s.CheckedOutRoundId, (int?)null)
-                    .SetProperty(s => s.LastBerthId, s => s.BerthId ?? s.LastBerthId)
-                    .SetProperty(s => s.BerthId, (int?)null), token);
+                    .ClearRound()
+                    .VacateBerth(), token);
 
             if (moved == 0)
                 return false;
@@ -434,7 +435,7 @@ public sealed partial class DrydockStore
             if (ship.State != DrydockShipState.Impounded)
                 return (DrydockBerthResult.WrongState, null);
 
-            var (seated, pick) = await ResolveBerth(db, shipGuid, ship.OwnerUserId, ship.SizeClass, berthId, ship.LastBerthId, new HashSet<int>(), token);
+            var (seated, pick) = await ResolveBerth(db, shipGuid, ship.OwnerUserId, ship.SizeClass, berthId, ship.LastBerthId, token);
             if (seated != DrydockBerthResult.Success)
                 return (seated, null);
 
@@ -509,7 +510,7 @@ public sealed partial class DrydockStore
             if (ship.ImpoundFee != paidFee)
                 return DrydockBerthResult.Conflict;
 
-            var (fit, _) = await ResolveBerth(db, shipGuid, ownerUserId, ship.SizeClass, berthId, null, new HashSet<int>(), token);
+            var (fit, _) = await ResolveBerth(db, shipGuid, ownerUserId, ship.SizeClass, berthId, null, token);
             if (fit != DrydockBerthResult.Success)
                 return fit;
 
@@ -588,7 +589,7 @@ public sealed partial class DrydockStore
                     && s.ImpoundRedeemable)
                 .ExecuteUpdateAsync(set => set
                     .SetState(DrydockShipState.Abandoned, now)
-                    .SetProperty(s => s.CheckedOutRoundId, (int?)null), token);
+                    .ClearRound(), token);
 
             if (moved == 0)
                 return (DrydockBerthResult.WrongState, null);
@@ -649,9 +650,10 @@ public sealed partial class DrydockStore
         ship.SizeClass = request.SizeClass;
         ship.UpdatedAt = now;
 
-        // A player store needs somewhere to put the hull. A re-bake rewrites a document and never
-        // touches the berth, because the ship may be out flying while the ladder runs. Refusing
-        // here rolls the whole transaction back: nothing is filed for a ship with nowhere to go.
+        // A player store needs somewhere to put the hull. A system re-bake, filed by the planned
+        // ladder that is not built yet, would rewrite a document and must never touch the berth,
+        // because the ship may be out flying while it runs. Refusing here rolls the whole
+        // transaction back: nothing is filed for a ship with nowhere to go.
         //
         // An impound is the third case: it has somewhere to go that is not a berth, so it vacates
         // instead of seating. LastBerthId keeps where the hull came from, which is what a release
@@ -711,8 +713,8 @@ public sealed partial class DrydockStore
 
         // An import has no live grid, so it is stored the moment it is filed. A player store is
         // marked stored by the pipeline after the grid is gone, unless the caller asks for it
-        // here. A system re-bake must leave the state alone: the ship may be checked out and
-        // flying while the ladder rewrites an older revision.
+        // here. A system re-bake must leave the state alone: the planned ladder (not built yet)
+        // would rewrite an older revision while the ship may be checked out and flying.
         if (request.Kind == DrydockRevisionKind.LegacyImport
             || (request.Kind == DrydockRevisionKind.PlayerStore && request.MarkStored))
         {
@@ -768,10 +770,10 @@ public sealed partial class DrydockStore
         Action<int> berthPicked,
         CancellationToken token)
     {
-        if (ship.BerthId is { } held && (requestedBerth == null || requestedBerth == held) && await HeldBerthStillFits(db, held, hullClass, token))
+        if (await KeepsHeldBerth(db, ship.BerthId, requestedBerth, hullClass, token))
             return DrydockBerthResult.Success;
 
-        var (outcome, pick) = await ResolveBerth(db, ship.ShipGuid, ship.OwnerUserId, hullClass, requestedBerth, ship.LastBerthId, excludedBerths, token);
+        var (outcome, pick) = await ResolveBerth(db, ship.ShipGuid, ship.OwnerUserId, hullClass, requestedBerth, ship.LastBerthId, token, excludedBerths);
         if (outcome != DrydockBerthResult.Success)
             return outcome;
 
@@ -794,11 +796,11 @@ public sealed partial class DrydockStore
         string? hullClass,
         int? requestedBerth,
         int? preferredBerth,
-        HashSet<int> excludedBerths,
-        CancellationToken token)
+        CancellationToken token,
+        IReadOnlySet<int>? excludedBerths = null)
     {
         if (requestedBerth is not { } wanted)
-            return await PickFreeBerth(db, ownerUserId, hullClass, preferredBerth, excludedBerths, token);
+            return await PickFreeBerth(db, ownerUserId, hullClass, preferredBerth, token, excludedBerths);
 
         var named = await db.DrydockBerth.AsNoTracking()
             .SingleOrDefaultAsync(b => b.BerthId == wanted && b.OwnerUserId == ownerUserId, token);
@@ -818,15 +820,16 @@ public sealed partial class DrydockStore
     /// <summary>
     /// The owner's free berths that accept the hull, preferring the ship's own old slot and then
     /// the smallest that fits so the big ones stay available. Free means no ship row points at
-    /// it, which the unique index on that column answers directly.
+    /// it, which the unique index on that column answers directly. <paramref name="excludedBerths"/>
+    /// is the filing retry's lost picks; null excludes nothing.
     /// </summary>
     private static async Task<(DrydockBerthResult Outcome, int? BerthId)> PickFreeBerth(
         ServerDbContext db,
         Guid ownerUserId,
         string? hullClass,
         int? preferredBerth,
-        HashSet<int> excludedBerths,
-        CancellationToken token)
+        CancellationToken token,
+        IReadOnlySet<int>? excludedBerths = null)
     {
         // A hull class that does not parse is a taxonomy the berths cannot answer for. Fail closed.
         if (!ShipSizeRules.TryParseClass(hullClass, out var hull))
@@ -836,7 +839,8 @@ public sealed partial class DrydockStore
             .Where(b => b.OwnerUserId == ownerUserId && !db.DrydockShip.Any(s => s.BerthId == b.BerthId))
             .ToListAsync(token);
 
-        free.RemoveAll(b => excludedBerths.Contains(b.BerthId));
+        if (excludedBerths != null)
+            free.RemoveAll(b => excludedBerths.Contains(b.BerthId));
 
         if (free.Count == 0)
             return (DrydockBerthResult.NoBerth, null);
@@ -884,17 +888,19 @@ public sealed partial class DrydockStore
         return _db.RunTriadDbCommand(async (db, token) =>
         {
             var ship = await db.DrydockShip.AsNoTracking()
-                .SingleOrDefaultAsync(s => s.ShipGuid == shipGuid, token);
+                .Where(s => s.ShipGuid == shipGuid)
+                .Select(s => new { s.OwnerUserId, s.BerthId, s.LastBerthId })
+                .SingleOrDefaultAsync(token);
 
             // The row's owner, not the caller's: a store never moves a ship between garages.
             var owner = ship?.OwnerUserId ?? ownerUserId;
 
-            if (ship?.BerthId is { } held && (requestedBerth == null || requestedBerth == held) && await HeldBerthStillFits(db, held, hullClass, token))
+            if (await KeepsHeldBerth(db, ship?.BerthId, requestedBerth, hullClass, token))
                 return DrydockBerthResult.Success;
 
             // The same checks the filing transaction makes for a named or a picked berth, so the
             // player hears "too small" or "occupied" before anything aboard is touched.
-            var (outcome, _) = await ResolveBerth(db, shipGuid, owner, hullClass, requestedBerth, ship?.LastBerthId, new HashSet<int>(), token);
+            var (outcome, _) = await ResolveBerth(db, shipGuid, owner, hullClass, requestedBerth, ship?.LastBerthId, token);
             return outcome;
         }, ct);
     }
@@ -906,24 +912,7 @@ public sealed partial class DrydockStore
     /// </summary>
     public Task<DrydockLoad?> LoadCurrent(Guid shipGuid, CancellationToken ct = default)
     {
-        return _db.RunTriadDbCommand(async (db, token) =>
-        {
-            // One query, two joins keyed off CurrentRevision, rather than the three round trips a
-            // header read followed by a revision read followed by a blob read would cost. An
-            // INNER JOIN drops out exactly where each of those used to return null: no ship, no
-            // revision row at that number, or no blob left for it.
-            return await db.DrydockShip.AsNoTracking()
-                .Where(s => s.ShipGuid == shipGuid)
-                .Join(db.DrydockRevision.AsNoTracking(),
-                    s => new { s.ShipGuid, Revision = s.CurrentRevision },
-                    r => new { r.ShipGuid, r.Revision },
-                    (s, r) => new { Ship = s, Revision = r })
-                .Join(db.DrydockBlob.AsNoTracking(),
-                    sr => new { sr.Ship.ShipGuid, Revision = sr.Ship.CurrentRevision },
-                    b => new { b.ShipGuid, b.Revision },
-                    (sr, b) => new DrydockLoad(sr.Ship, sr.Revision, b.Blob))
-                .SingleOrDefaultAsync(token);
-        }, ct);
+        return _db.RunTriadDbCommand<DrydockLoad?>((db, token) => LoadJoined(db, shipGuid, null, token), ct);
     }
 
     /// <summary>
@@ -933,25 +922,29 @@ public sealed partial class DrydockStore
     /// </summary>
     public Task<DrydockLoad?> LoadRevision(Guid shipGuid, int revision, CancellationToken ct = default)
     {
-        return _db.RunTriadDbCommand(async (db, token) =>
-        {
-            var ship = await db.DrydockShip.AsNoTracking()
-                .SingleOrDefaultAsync(s => s.ShipGuid == shipGuid, token);
+        return _db.RunTriadDbCommand<DrydockLoad?>((db, token) => LoadJoined(db, shipGuid, revision, token), ct);
+    }
 
-            if (ship == null)
-                return null;
-
-            var row = await db.DrydockRevision.AsNoTracking()
-                .SingleOrDefaultAsync(r => r.ShipGuid == shipGuid && r.Revision == revision, token);
-
-            if (row == null)
-                return null;
-
-            var blob = await db.DrydockBlob.AsNoTracking()
-                .SingleOrDefaultAsync(b => b.ShipGuid == shipGuid && b.Revision == revision, token);
-
-            return blob == null ? null : new DrydockLoad(ship, row, blob.Blob);
-        }, ct);
+    /// <summary>
+    /// The read behind both loads: the ship, the revision numbered <paramref name="revision"/> or
+    /// the ship's current one when that is null, and its blob. One query, two joins, rather than the
+    /// three round trips a header read followed by a revision read followed by a blob read would
+    /// cost. An INNER JOIN drops out exactly where each of those would return null: no ship, no
+    /// revision row at that number, or no blob left for it.
+    /// </summary>
+    private static Task<DrydockLoad?> LoadJoined(ServerDbContext db, Guid shipGuid, int? revision, CancellationToken token)
+    {
+        return db.DrydockShip.AsNoTracking()
+            .Where(s => s.ShipGuid == shipGuid)
+            .Join(db.DrydockRevision.AsNoTracking(),
+                s => new { s.ShipGuid, Revision = revision ?? s.CurrentRevision },
+                r => new { r.ShipGuid, r.Revision },
+                (s, r) => new { Ship = s, Revision = r })
+            .Join(db.DrydockBlob.AsNoTracking(),
+                sr => new { sr.Revision.ShipGuid, sr.Revision.Revision },
+                b => new { b.ShipGuid, b.Revision },
+                (sr, b) => new DrydockLoad(sr.Ship, sr.Revision, b.Blob))
+            .SingleOrDefaultAsync(token);
     }
 
     /// <summary>
@@ -1298,7 +1291,7 @@ public sealed partial class DrydockStore
                 if (ship.State != DrydockShipState.Stored)
                     return DrydockBerthResult.WrongState;
 
-                var (fit, _) = await ResolveBerth(db, shipGuid, ship.OwnerUserId, ship.SizeClass, target, null, new HashSet<int>(), token);
+                var (fit, _) = await ResolveBerth(db, shipGuid, ship.OwnerUserId, ship.SizeClass, target, null, token);
                 if (fit != DrydockBerthResult.Success)
                     return fit;
 
@@ -1387,7 +1380,7 @@ public sealed partial class DrydockStore
             if (fromUserId == toUserId || ship.State != DrydockShipState.Stored)
                 return (DrydockBerthResult.WrongState, null);
 
-            var (fit, _) = await PickFreeBerth(db, toUserId, ship.SizeClass, null, new HashSet<int>(), token);
+            var (fit, _) = await PickFreeBerth(db, toUserId, ship.SizeClass, null, token);
             if (fit != DrydockBerthResult.Success)
                 return (fit, null);
 
@@ -1562,36 +1555,37 @@ public sealed partial class DrydockStore
     }
 
     /// <summary>
-    /// The last sale price of each ship in a set that has one, keyed by ship: the figure on the
-    /// admin panel's Sold rows. Read the way <see cref="GetLastSale"/> reads, from the newest
-    /// ShipSold timeline row, so a row and the detail beneath it never disagree.
+    /// The last sale of each ship in a set that has one, keyed by ship: the figure on the admin
+    /// panel's Sold rows and the sale card under the selected hull, which the panel folds into the
+    /// same set so the two are one read. Read the way <see cref="GetLastSale"/> reads, from the
+    /// newest ShipSold timeline row.
     /// </summary>
-    public Task<Dictionary<Guid, int>> GetLastSalePrices(IEnumerable<Guid> shipGuids, CancellationToken ct = default)
+    public Task<Dictionary<Guid, (int Price, DateTime At)>> GetLastSales(IEnumerable<Guid> shipGuids, CancellationToken ct = default)
     {
         var ids = shipGuids.Distinct().ToList();
         if (ids.Count == 0)
-            return Task.FromResult(new Dictionary<Guid, int>());
+            return Task.FromResult(new Dictionary<Guid, (int Price, DateTime At)>());
 
         return _db.RunTriadDbCommand(async (db, token) =>
         {
             var rows = await db.DrydockAudit.AsNoTracking()
                 .Where(a => a.ShipGuid != null && ids.Contains(a.ShipGuid.Value) && a.Action == DrydockAuditAction.ShipSold)
                 .OrderByDescending(a => a.CreatedAt)
-                .Select(a => new { a.ShipGuid, a.Reason })
+                .Select(a => new { a.ShipGuid, a.Reason, a.CreatedAt })
                 .ToListAsync(token);
 
             // Newest first, so the first row seen for a ship is its last sale.
-            var prices = new Dictionary<Guid, int>();
+            var sales = new Dictionary<Guid, (int Price, DateTime At)>();
             foreach (var row in rows)
             {
-                if (row.ShipGuid is not { } ship || prices.ContainsKey(ship))
+                if (row.ShipGuid is not { } ship || sales.ContainsKey(ship))
                     continue;
 
                 if (ParseSoldPrice(row.Reason) is { } price)
-                    prices[ship] = price;
+                    sales[ship] = (price, row.CreatedAt);
             }
 
-            return prices;
+            return sales;
         }, ct);
     }
 
@@ -1635,7 +1629,7 @@ public sealed partial class DrydockStore
             if (ship == null || ship.OwnerUserId != transfer.FromUserId || ship.State != DrydockShipState.InEscrow)
                 return (DrydockBerthResult.WrongState, null, null);
 
-            var (outcome, pick) = await PickFreeBerth(db, toUserId, ship.SizeClass, null, new HashSet<int>(), token);
+            var (outcome, pick) = await PickFreeBerth(db, toUserId, ship.SizeClass, null, token);
             if (outcome != DrydockBerthResult.Success)
                 return (outcome, null, null);
 
@@ -1780,7 +1774,7 @@ public sealed partial class DrydockStore
         int? roundId,
         CancellationToken ct = default)
     {
-        return MarkSold(shipGuid, DrydockShipState.Stored, ownerUserId, ownerUserId, price, appraisal, roundId, live: false, ct);
+        return MarkSold(shipGuid, DrydockShipState.Stored, ownerUserId, ownerUserId, price, appraisal, roundId, ct);
     }
 
     /// <summary>
@@ -1798,14 +1792,15 @@ public sealed partial class DrydockStore
         int? roundId,
         CancellationToken ct = default)
     {
-        return MarkSold(shipGuid, DrydockShipState.CheckedOut, requiredOwner: null, sellerUserId, price, appraisal, roundId, live: true, ct);
+        return MarkSold(shipGuid, DrydockShipState.CheckedOut, requiredOwner: null, sellerUserId, price, appraisal, roundId, ct);
     }
 
     /// <summary>
     /// One conditional update from the state the sale is legal in to <see cref="DrydockShipState.Sold"/>,
     /// vacating the berth and clearing the round, so a retrieve claiming the row in the same instant
     /// is not overwritten by a sale that read it as stored. The reason keeps the price in the form
-    /// <see cref="SoldForPattern"/> reads back.
+    /// <see cref="SoldForPattern"/> reads back, and says so when the hull was sold out of CheckedOut,
+    /// which is a live sale at the shipyard.
     /// </summary>
     private Task<(DrydockBerthResult Outcome, string? ShipName)> MarkSold(
         Guid shipGuid,
@@ -1815,9 +1810,10 @@ public sealed partial class DrydockStore
         int price,
         int appraisal,
         int? roundId,
-        bool live,
         CancellationToken ct)
     {
+        var live = from == DrydockShipState.CheckedOut;
+
         return _db.RunTriadDbCommand<(DrydockBerthResult, string?)>(async (db, token) =>
         {
             await using var tx = await db.Database.BeginTransactionAsync(token);
@@ -1838,9 +1834,8 @@ public sealed partial class DrydockStore
                 .Where(s => s.ShipGuid == shipGuid && s.State == from)
                 .ExecuteUpdateAsync(set => set
                     .SetState(DrydockShipState.Sold, now)
-                    .SetProperty(s => s.CheckedOutRoundId, (int?)null)
-                    .SetProperty(s => s.LastBerthId, s => s.BerthId ?? s.LastBerthId)
-                    .SetProperty(s => s.BerthId, (int?)null), token);
+                    .ClearRound()
+                    .VacateBerth(), token);
 
             if (moved == 0)
                 return (DrydockBerthResult.WrongState, null);
@@ -1947,12 +1942,16 @@ public sealed partial class DrydockStore
         }, ct);
     }
 
-    /// <summary>A filtered page of hulls for the admin panel, newest activity first, owners loaded.</summary>
+    /// <summary>
+    /// A filtered page of hulls for the admin panel, newest activity first. The owner is joined only
+    /// inside the filters; <see cref="DrydockShip.Owner"/> is not loaded on the rows, whose names the
+    /// panel resolves itself.
+    /// </summary>
     public Task<(List<DrydockShip> Rows, int Total)> QueryShips(DrydockShipFilter filter, int page, int pageSize, CancellationToken ct = default)
     {
         return _db.RunTriadDbCommand(async (db, token) =>
         {
-            var query = db.DrydockShip.AsNoTracking().Include(s => s.Owner).AsQueryable();
+            var query = db.DrydockShip.AsNoTracking();
 
             if (filter.OwnerUserId is { } owner)
                 query = query.Where(s => s.OwnerUserId == owner);
@@ -2058,13 +2057,16 @@ public sealed partial class DrydockStore
         }, ct);
     }
 
-    /// <summary>One hull with its whole history and timeline, for the admin panel's detail view.</summary>
+    /// <summary>
+    /// One hull with its whole history and timeline, for the admin panel's detail view. The history
+    /// is the scalar columns the panel draws, never the manifest, which is the one large column on a
+    /// revision and is re-read on every refresh otherwise.
+    /// </summary>
     public Task<DrydockShipDetail?> GetShipDetail(Guid shipGuid, CancellationToken ct = default)
     {
         return _db.RunTriadDbCommand<DrydockShipDetail?>(async (db, token) =>
         {
             var ship = await db.DrydockShip.AsNoTracking()
-                .Include(s => s.Owner)
                 .SingleOrDefaultAsync(s => s.ShipGuid == shipGuid, token);
 
             if (ship == null)
@@ -2073,6 +2075,15 @@ public sealed partial class DrydockStore
             var revisions = await db.DrydockRevision.AsNoTracking()
                 .Where(r => r.ShipGuid == shipGuid)
                 .OrderByDescending(r => r.Revision)
+                .Select(r => new DrydockRevisionSummary(
+                    r.Revision,
+                    r.Kind,
+                    r.CreatedAt,
+                    r.CreatedRoundId,
+                    r.ActorUserId,
+                    r.SizeBytes,
+                    r.DerivedFromRevision,
+                    r.AppraisedValue))
                 .ToListAsync(token);
 
             var withBlob = await db.DrydockBlob.AsNoTracking()
@@ -2142,11 +2153,15 @@ public sealed partial class DrydockStore
             var source = await db.DrydockRevision.AsNoTracking()
                 .SingleOrDefaultAsync(r => r.ShipGuid == shipGuid && r.Revision == revision, token);
 
+            // Refused before the blob read, so a revision that never existed costs no document.
+            if (source == null)
+                return (DrydockBerthResult.NotFound, 0);
+
             var blob = await db.DrydockBlob.AsNoTracking()
                 .SingleOrDefaultAsync(b => b.ShipGuid == shipGuid && b.Revision == revision, token);
 
             // History without a document cannot be promoted; that is what pruning took.
-            if (source == null || blob == null)
+            if (blob == null)
                 return (DrydockBerthResult.NotFound, 0);
 
             var now = DateTime.UtcNow;
@@ -2168,6 +2183,9 @@ public sealed partial class DrydockStore
                 CapturedKeyHash = source.CapturedKeyHash,
                 Checksum = source.Checksum,
                 SizeBytes = source.SizeBytes,
+                // The appraisal rides with the document: it is what a sale quotes and an impound
+                // charges against, and a promoted current revision without one sells for nothing.
+                AppraisedValue = source.AppraisedValue,
                 Manifest = source.Manifest,
             });
 
@@ -2278,7 +2296,7 @@ public sealed partial class DrydockStore
             if (ship.State == DrydockShipState.Sold && !fromSale)
                 return DrydockBerthResult.WrongState;
 
-            var (fit, _) = await ResolveBerth(db, shipGuid, ship.OwnerUserId, ship.SizeClass, berthId, null, new HashSet<int>(), token);
+            var (fit, _) = await ResolveBerth(db, shipGuid, ship.OwnerUserId, ship.SizeClass, berthId, null, token);
             if (fit != DrydockBerthResult.Success)
                 return fit;
 
@@ -2341,9 +2359,10 @@ public sealed class DrydockRevisionRequest
     public string? SizeClass { get; init; }
 
     /// <summary>
-    /// Name the berth rather than letting the store pick one. The import bridge and admin paths
-    /// use it; a player store leaves it null. It still has to be the owner's, free, and large
-    /// enough, and the store checks all three.
+    /// Name the berth rather than letting the store pick one. The console's store passes the berth
+    /// the player chose, or null to have one picked, and the shipyard import passes the berth it just
+    /// granted for the hull; an impound passes null and vacates instead. It still has to be the
+    /// owner's, free, and large enough, and the store checks all three.
     /// </summary>
     public int? BerthId { get; init; }
 
@@ -2364,7 +2383,7 @@ public sealed class DrydockRevisionRequest
     /// <summary>Null for the system.</summary>
     public Guid? ActorUserId { get; init; }
 
-    /// <summary>Null between rounds, which is when the re-bake ladder runs.</summary>
+    /// <summary>Null outside a round, which is when the planned re-bake ladder (not built yet) would file.</summary>
     public int? CreatedRoundId { get; init; }
 
     public required int EngineFormatVer { get; init; }
@@ -2423,6 +2442,23 @@ internal static class DrydockShipUpdateExtensions
             .SetProperty(s => s.StateChangedAt, now)
             .SetProperty(s => s.UpdatedAt, now);
     }
+
+    /// <summary>
+    /// Empties the berth and remembers it, keeping the previous memory when the row held no berth,
+    /// so a move out of a state that had already vacated never overwrites where the hull last sat.
+    /// </summary>
+    public static UpdateSettersBuilder<DrydockShip> VacateBerth(this UpdateSettersBuilder<DrydockShip> set)
+    {
+        return set
+            .SetProperty(s => s.LastBerthId, s => s.BerthId ?? s.LastBerthId)
+            .SetProperty(s => s.BerthId, (int?)null);
+    }
+
+    /// <summary>Clears the round a checkout recorded, for a move that leaves the hull anywhere but out.</summary>
+    public static UpdateSettersBuilder<DrydockShip> ClearRound(this UpdateSettersBuilder<DrydockShip> set)
+    {
+        return set.SetProperty(s => s.CheckedOutRoundId, (int?)null);
+    }
 }
 
 /// <summary>The admin panel's list filter. Every field null or false means "any".</summary>
@@ -2441,6 +2477,17 @@ public sealed record DrydockShipFilter(
 /// <summary>One hull with its history and timeline, newest first, and which revisions still have a document.</summary>
 public sealed record DrydockShipDetail(
     DrydockShip Ship,
-    List<DrydockRevision> Revisions,
+    List<DrydockRevisionSummary> Revisions,
     HashSet<int> RevisionsWithBlob,
     List<DrydockAudit> Timeline);
+
+/// <summary>One row of a hull's history as the admin panel draws it: a revision's columns without its manifest.</summary>
+public sealed record DrydockRevisionSummary(
+    int Revision,
+    DrydockRevisionKind Kind,
+    DateTime CreatedAt,
+    int? CreatedRoundId,
+    Guid? ActorUserId,
+    int SizeBytes,
+    int? DerivedFromRevision,
+    int? AppraisedValue);

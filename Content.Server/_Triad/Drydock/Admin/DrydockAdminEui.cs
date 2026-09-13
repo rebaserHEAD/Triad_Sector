@@ -94,7 +94,7 @@ public sealed partial class DrydockAdminEui : BaseEui
             case DrydockAdminRequestPageMessage req:
                 _page = Math.Max(0, req.Page);
                 _pageSize = Math.Clamp(req.PageSize, 1, 500);
-                _search = string.IsNullOrWhiteSpace(req.Search) ? null : req.Search.Trim();
+                _search = Clean(req.Search);
                 _stateFilter = null;
                 _strandedOnly = false;
                 switch (req.Chip)
@@ -181,7 +181,7 @@ public sealed partial class DrydockAdminEui : BaseEui
                 _ = Act(async () =>
                 {
                     var resolved = await _store.TryResolveTransfer(cancel.TransferId, DrydockTransferResolution.Cancelled, AdminId, RoundForAudit(),
-                        adminOverride: true, reason: string.IsNullOrWhiteSpace(cancel.Reason) ? "cancelled by admin" : cancel.Reason);
+                        adminOverride: true, reason: Clean(cancel.Reason) ?? "cancelled by admin");
                     if (resolved != null)
                     {
                         KickConsoles(resolved.FromUserId);
@@ -194,7 +194,7 @@ public sealed partial class DrydockAdminEui : BaseEui
             case DrydockAdminNotesMessage notes:
                 _ = Act(async () =>
                 {
-                    await _store.SetAdminNotes(notes.ShipGuid, string.IsNullOrWhiteSpace(notes.Notes) ? null : notes.Notes);
+                    await _store.SetAdminNotes(notes.ShipGuid, Clean(notes.Notes));
                     return "Notes saved.";
                 });
                 break;
@@ -202,7 +202,7 @@ public sealed partial class DrydockAdminEui : BaseEui
             case DrydockAdminRestoreMessage restore:
                 _ = Act(async () =>
                 {
-                    var reason = string.IsNullOrWhiteSpace(restore.Reason) ? "restored by admin" : restore.Reason;
+                    var reason = Clean(restore.Reason) ?? "restored by admin";
                     var outcome = await _entMan.System<DrydockSystem>().TryAdminRestore(restore.ShipGuid, restore.BerthId, AdminId, RoundForAudit(), reason);
                     if (outcome == DrydockBerthResult.Success)
                         KickConsolesOf(restore.ShipGuid);
@@ -217,7 +217,7 @@ public sealed partial class DrydockAdminEui : BaseEui
             case DrydockAdminMoveMessage move:
                 _ = Act(async () =>
                 {
-                    var outcome = await _store.TryMoveShip(move.ShipGuid, move.BerthId, AdminId, RoundForAudit(), move.Reason);
+                    var outcome = await _store.TryMoveShip(move.ShipGuid, move.BerthId, AdminId, RoundForAudit(), Clean(move.Reason));
                     if (outcome == DrydockBerthResult.Success)
                         KickConsolesOf(move.ShipGuid);
                     return outcome switch
@@ -263,7 +263,7 @@ public sealed partial class DrydockAdminEui : BaseEui
                 _ = Act(async () =>
                 {
                     var keep = _cfg.GetCVar(TriadCCVars.DrydockKeepBlobs);
-                    var (outcome, revision) = await _store.TryPromoteRevision(promote.ShipGuid, promote.Revision, AdminId, RoundForAudit(), promote.Reason, keep);
+                    var (outcome, revision) = await _store.TryPromoteRevision(promote.ShipGuid, promote.Revision, AdminId, RoundForAudit(), Clean(promote.Reason), keep);
                     return outcome == DrydockBerthResult.Success
                         ? $"Revision {promote.Revision} promoted as revision {revision}."
                         : "Refused: that revision has no document left to promote.";
@@ -276,7 +276,7 @@ public sealed partial class DrydockAdminEui : BaseEui
                     if (_entMan.System<DrydockSystem>().IsShipLive(delShip.ShipGuid))
                         return "Refused: a live grid still carries this hull this round.";
 
-                    var outcome = await _store.TryDeleteShip(delShip.ShipGuid, AdminId, RoundForAudit(), delShip.Reason);
+                    var outcome = await _store.TryDeleteShip(delShip.ShipGuid, AdminId, RoundForAudit(), Clean(delShip.Reason));
                     if (outcome == DrydockBerthResult.Success && _selected == delShip.ShipGuid)
                         _selected = null;
 
@@ -334,6 +334,7 @@ public sealed partial class DrydockAdminEui : BaseEui
             return "Refused: that ship is not sold.";
 
         var sale = await _store.GetLastSale(undo.ShipGuid);
+        var given = Clean(undo.Reason);
         var took = 0;
         if (undo.TakeMoneyBack)
         {
@@ -345,12 +346,12 @@ public sealed partial class DrydockAdminEui : BaseEui
 
             took = sale.Value.Price;
         }
-        else if (string.IsNullOrWhiteSpace(undo.Reason))
+        else if (given == null)
         {
             return "Refused: leaving the money with the owner needs a reason.";
         }
 
-        var reason = string.IsNullOrWhiteSpace(undo.Reason) ? "sale reversed by admin" : undo.Reason;
+        var reason = given ?? "sale reversed by admin";
         var outcome = await _entMan.System<DrydockSystem>().TryAdminRestore(undo.ShipGuid, undo.BerthId, AdminId, RoundForAudit(), reason, fromSale: true);
         if (outcome != DrydockBerthResult.Success)
         {
@@ -451,13 +452,15 @@ public sealed partial class DrydockAdminEui : BaseEui
 
     /// <summary>
     /// The same, for an action that named a ship rather than an account: the owner is read off the
-    /// selected hull when it is the one acted on, else every tab is kicked, since the panel does not
-    /// carry the owner of a hull that is not selected.
+    /// selected hull, else off the hull's row on the current page, as the panel last drew them. Only
+    /// a hull on neither kicks every tab.
     /// </summary>
     private void KickConsolesOf(Guid shipGuid)
     {
         if (_state.Selected is { } detail && detail.Ship.ShipGuid == shipGuid)
             KickConsoles(detail.Ship.OwnerUserId);
+        else if (_state.Ships.FirstOrDefault(s => s.ShipGuid == shipGuid) is { } row)
+            KickConsoles(row.OwnerUserId);
         else
             _entMan.System<ShipyardSystem>().KickDrydockRefreshAll();
     }
@@ -497,39 +500,43 @@ public sealed partial class DrydockAdminEui : BaseEui
         if (_selected != null && detail == null)
             _selected = null;
 
-        // Three more reads that don't depend on each other: the list's offers and sale prices,
-        // and the selected hull's berths.
-        var offersTask = _store.GetPendingOffersForShips(rows.Select(r => r.ShipGuid));
-        var salesTask = _store.GetLastSalePrices(rows.Where(r => r.State == DrydockShipState.Sold).Select(r => r.ShipGuid));
+        // More reads that don't depend on each other: the offers and last sales for the page with
+        // the selected hull folded into the same sets, the selected hull's berths, and a sold hull's
+        // owner's live balance.
+        var offerIds = rows.Select(r => r.ShipGuid).ToHashSet();
+        var soldIds = rows.Where(r => r.State == DrydockShipState.Sold).Select(r => r.ShipGuid).ToHashSet();
+        if (detail != null)
+        {
+            offerIds.Add(detail.Ship.ShipGuid);
+            if (detail.Ship.State == DrydockShipState.Sold)
+                soldIds.Add(detail.Ship.ShipGuid);
+        }
+
+        var offersTask = _store.GetPendingOffersForShips(offerIds);
+        var salesTask = _store.GetLastSales(soldIds);
         var berthsTask = detail != null ? _store.GetBerths(detail.Ship.OwnerUserId) : Task.FromResult(new List<DrydockBerthSlot>());
-        await Task.WhenAll(offersTask, salesTask, berthsTask);
+        var balanceTask = detail is { Ship.State: DrydockShipState.Sold } ? OwnerBalance(detail.Ship.OwnerUserId) : Task.FromResult<int?>(null);
+        await Task.WhenAll(offersTask, salesTask, berthsTask, balanceTask);
 
         var offers = await offersTask;
         var sales = await salesTask;
         var berths = await berthsTask;
+        var ownerBalance = await balanceTask;
 
         DrydockTransfer? escrow = null;
         List<DrydockBerthSlot> recipientBerths = new();
         (int Price, DateTime At)? lastSale = null;
-        int? ownerBalance = null;
         if (detail != null)
         {
             if (detail.Ship.State == DrydockShipState.InEscrow)
             {
-                escrow = await _store.GetPendingOfferForShip(detail.Ship.ShipGuid);
+                escrow = offers.GetValueOrDefault(detail.Ship.ShipGuid);
                 if (escrow != null)
                     recipientBerths = await _store.GetBerths(escrow.ToUserId);
             }
 
-            if (detail.Ship.State == DrydockShipState.Sold)
-            {
-                // The sale price and the owner's live balance are independent reads too.
-                var saleTask = _store.GetLastSale(detail.Ship.ShipGuid);
-                var balanceTask = OwnerBalance(detail.Ship.OwnerUserId);
-                await Task.WhenAll(saleTask, balanceTask);
-                lastSale = await saleTask;
-                ownerBalance = await balanceTask;
-            }
+            if (detail.Ship.State == DrydockShipState.Sold && sales.TryGetValue(detail.Ship.ShipGuid, out var sale))
+                lastSale = sale;
         }
 
         // Names, resolved once for everything on screen. Online sessions win; the player table
@@ -571,7 +578,7 @@ public sealed partial class DrydockAdminEui : BaseEui
         };
 
         foreach (var row in rows)
-            state.Ships.Add(ToDto(row, names, live, offers.GetValueOrDefault(row.ShipGuid), sales.TryGetValue(row.ShipGuid, out var price) ? price : null));
+            state.Ships.Add(ToDto(row, names, live, offers.GetValueOrDefault(row.ShipGuid), sales.TryGetValue(row.ShipGuid, out var rowSale) ? rowSale.Price : null));
 
         if (detail != null)
         {

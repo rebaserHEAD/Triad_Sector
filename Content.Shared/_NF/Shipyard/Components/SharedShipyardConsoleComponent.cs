@@ -71,13 +71,13 @@ public sealed partial class ShipyardConsoleComponent : Component
     public bool IgnoreBaseSaleRate;
 
     /// <summary>
-    /// Triad - Whitelist for the ship saving and loading
+    /// Triad - Who may use this console's drydock. Named for the ship saving it once gated.
     /// </summary>
     [DataField]
     public EntityWhitelist? ShipSaveWhitelist;
 
     /// <summary>
-    /// Triad - Blacklist for the ship saving and loading
+    /// Triad - Who is barred from this console's drydock. Named for the ship saving it once gated.
     /// </summary>
     [DataField]
     public EntityWhitelist? ShipSaveBlacklist;

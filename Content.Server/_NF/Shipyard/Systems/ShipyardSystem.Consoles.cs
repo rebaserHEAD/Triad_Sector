@@ -772,8 +772,13 @@ public sealed partial class ShipyardSystem : SharedShipyardSystem
     /// <param name="uid">The entity to search (e.g. a shuttle, a station)</param>
     /// <param name="mobQuery">A query to get the MobState from an entity</param>
     /// <param name="xformQuery">A query to get the transform component of an entity</param>
+    /// <param name="into">
+    /// Triad: when given, every match is added here instead of returning at the first, and the
+    /// method returns null. The drydock impound's eviction uses it, so the gate and the eviction
+    /// share one predicate and one walk. A match is still not descended into.
+    /// </param>
     /// <returns>The name of the sapient being if one was found, null otherwise.</returns>
-    public string? FoundOrganics(EntityUid uid, EntityQuery<MobStateComponent> mobQuery, EntityQuery<TransformComponent> xformQuery)
+    public string? FoundOrganics(EntityUid uid, EntityQuery<MobStateComponent> mobQuery, EntityQuery<TransformComponent> xformQuery, List<EntityUid>? into = null) // Triad: into
     {
         var xform = xformQuery.GetComponent(uid);
         var childEnumerator = xform.ChildEnumerator;
@@ -789,11 +794,17 @@ public sealed partial class ShipyardSystem : SharedShipyardSystem
                 && (mindComp.Session != null
                 || !_mind.IsCharacterDeadPhysically(mindComp)))
             {
+                if (into != null) // Triad: collect every match rather than returning the first
+                {
+                    into.Add(child); // Triad
+                    continue; // Triad
+                }
+
                 return Name(child);
             }
             else
             {
-                var charName = FoundOrganics(child, mobQuery, xformQuery);
+                var charName = FoundOrganics(child, mobQuery, xformQuery, into); // Triad: into
                 if (charName != null)
                     return charName;
             }

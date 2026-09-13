@@ -22,7 +22,7 @@ public sealed partial class ShipyardSystem : SharedShipyardSystem
     [Dependency] private Content.Server._Triad.Shipyard.Persistence.ITriadShipyardConsumedStore _consumedStore = default!;
 
     /// <summary>
-    /// Writes YAML data to a temporary file and attempts the same initial strict load path as purchase-from-file.
+    /// Writes a legacy save's grid YAML to a temporary file and loads it the way a purchase loads its ship file.
     /// </summary>
     private bool TryPurchaseShuttleFromYamlData(EntityUid consoleUid, string yamlData, [NotNullWhen(true)] out EntityUid? shuttleEntityUid)
     {
@@ -50,11 +50,7 @@ public sealed partial class ShipyardSystem : SharedShipyardSystem
                 writer.Write(yamlData);
             }
 
-            // Try load the
-            if (TryPurchaseShuttleFromFileSafe(consoleUid, tempPath, out shuttleEntityUid))
-                return true;
-
-            return false;
+            return TryPurchaseShuttleFromFile(consoleUid, tempPath, out shuttleEntityUid);
         }
         catch (Exception ex)
         {
@@ -77,12 +73,12 @@ public sealed partial class ShipyardSystem : SharedShipyardSystem
 
     /// <summary>
     /// Loads a shuttle from a file and docks it to the grid the console is on, like ship purchases.
-    /// This is used for loading saved ships.
+    /// Legacy import stages old ship saves through this.
     /// </summary>
     /// <param name="consoleUid">The entity of the shipyard console to dock to its grid</param>
     /// <param name="shuttlePath">The path to the shuttle file to load. Must be a grid file!</param>
     /// <param name="shuttleEntityUid">The EntityUid of the shuttle that was loaded</param>
-    public bool TryPurchaseShuttleFromFile(EntityUid consoleUid, ResPath shuttlePath, [NotNullWhen(true)] out EntityUid? shuttleEntityUid)
+    private bool TryPurchaseShuttleFromFile(EntityUid consoleUid, ResPath shuttlePath, [NotNullWhen(true)] out EntityUid? shuttleEntityUid)
     {
         if (!TryAddShuttle(shuttlePath, out var shuttleGrid)) // HardLight
         {
@@ -91,21 +87,6 @@ public sealed partial class ShipyardSystem : SharedShipyardSystem
         }
 
         return TryFinalizeLoadedShuttle(consoleUid, shuttleGrid.Value, out shuttleEntityUid);
-    }
-
-    private bool TryPurchaseShuttleFromFileSafe(EntityUid consoleUid, ResPath shuttlePath, [NotNullWhen(true)] out EntityUid? shuttleEntityUid)
-    {
-        shuttleEntityUid = null;
-
-        try
-        {
-            return TryPurchaseShuttleFromFile(consoleUid, shuttlePath, out shuttleEntityUid);
-        }
-        catch (Exception ex)
-        {
-            _sawmill.Debug($"Strict load stage threw exception: {ex.Message}");
-            return false;
-        }
     }
 
     /// <summary>

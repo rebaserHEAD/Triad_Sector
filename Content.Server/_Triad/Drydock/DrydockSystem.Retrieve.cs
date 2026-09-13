@@ -184,8 +184,6 @@ public sealed partial class DrydockSystem
         };
 
         var budget = TickBudgetSeconds;
-        var jobId = 0;
-        CancellationTokenSource? cancellation = null;
         DrydockPipelineJob<DrydockRetrieveContext, DrydockRetrieveOutcome>? job = null;
         DrydockProgress? progress = null;
         var outcome = DrydockRetrieve.Refused(DrydockRetrieveResult.Cancelled);
@@ -203,22 +201,14 @@ public sealed partial class DrydockSystem
             }
             else
             {
-                cancellation = new CancellationTokenSource();
-                job = new DrydockPipelineJob<DrydockRetrieveContext, DrydockRetrieveOutcome>(
-                    this, ctx, budget, SliceStride, onProgress, cancellation.Token,
-                    DrydockPhases.Retrieve, RunRetrievePipeline);
+                job = StartPipelineJob<DrydockRetrieveContext, DrydockRetrieveOutcome>(
+                    ctx, budget, onProgress, DrydockPhases.Retrieve, RunRetrievePipeline);
                 progress = job.Progress;
-                jobId = RegisterJob(job, cancellation);
-                job.JobId = jobId;
-                EnqueueJob(job);
 
+                // The job's own wrapper records a pipeline's exception and faults the task with it,
+                // so a failed retrieve throws out of this await for its caller the same way it did
+                // when the pipeline was called directly.
                 var result = await job.AsTask;
-
-                // The job's own wrapper swallows an exception into a property and faults the task
-                // with it. This rethrow is what keeps a failed retrieve failing for its caller the
-                // same way it did when the pipeline was called directly.
-                if (job.Exception != null)
-                    throw job.Exception;
 
                 outcome = result?.Retrieve ?? DrydockRetrieve.Refused(DrydockRetrieveResult.Cancelled);
             }
@@ -232,14 +222,7 @@ public sealed partial class DrydockSystem
         }
         finally
         {
-            if (jobId != 0)
-                RetireJob(jobId);
-            else
-                cancellation?.Dispose();
-
-            // Null on the rollback lever, which clears the table rather than leaving the previous
-            // sliced run's for the next reader to mistake for this one's.
-            RecordPhaseCosts(job?.Meter);
+            EndPipelineJob(job);
 
             // The bar's last phase belongs to the wrapper, because the two writes it names are the
             // wrapper's own.
@@ -310,7 +293,6 @@ public sealed partial class DrydockSystem
     internal async Task<DrydockRetrieveOutcome> RunRetrievePipeline(DrydockRetrieveContext ctx, IDrydockSlice slice)
     {
         var timer = ctx.Timer;
-        var jobId = JobIdOf(slice);
 
         try
         {
@@ -386,7 +368,7 @@ public sealed partial class DrydockSystem
                 await slice.Begin(DrydockPhase.Load, 0);
                 GuardRetrieveResume(ctx);
 
-                if (!await TryLoadOntoStagingMap(ctx, slice, timer, jobId, revision, yamlBytes))
+                if (!await TryLoadOntoStagingMap(ctx, slice, revision, yamlBytes))
                     continue;
 
                 var grid = ctx.Grid!.Value;
@@ -442,19 +424,14 @@ public sealed partial class DrydockSystem
                     // Re-resolved for the reason no component reference is ever held across a
                     // suspension: the dictionary behind it is mutated by anything that spawns or
                     // removes a component anywhere on the server.
-                    if (!TryComp<ShuttleComponent>(grid, out var shuttle))
+                    if (!HasComp<ShuttleComponent>(grid))
                         throw new DrydockAbortedException($"the loaded grid for {ctx.ShipId} lost its shuttle component");
 
                     // The dock a purchase of this hull would pick: the vessel's priority tag steers
                     // the choice toward the shipyard's own docks. Without it a retrieve took whatever
                     // dock was free first ("my ship spawned on the other side of Venmar"). Resolved
                     // the same way the station is, so an imported hull docks where its class does.
-                    string? dockTag = null;
-                    if (ResolveVesselProto(grid, stored.Ship) is { } vesselId
-                        && _protoMan.TryIndex<VesselPrototype>(vesselId, out var vesselProto))
-                    {
-                        dockTag = vesselProto.PriorityDockTag;
-                    }
+                    var dockTag = PriorityDockTagFor(ResolveVesselProto(grid, stored.Ship));
 
                     // TryFTLDock's own first guard, kept: a target with no valid map goes straight
                     // to proximity, since the search reads the target's grid and transform bare.
@@ -538,12 +515,10 @@ public sealed partial class DrydockSystem
     /// <summary>
     /// Loads one revision onto a private, paused map of its own.
     ///
-    /// <para>Replicates the <c>TryLoadGrid</c> map-creating overload by hand, the same way
-    /// <c>DetectRoundTripMismatch</c> replicates it for the validation scratch load: that overload
-    /// parses and merges in one call and there is no overload that takes an already-parsed document
-    /// and still owns creating the target map. The map is created map-initialised and paused while
-    /// it is still empty, so the engine's recursive pause walks one entity instead of a whole hull,
-    /// and the merge's own epilogue then applies the target map's pause state to everything it
+    /// <para>The load itself is <see cref="TryLoadOntoNewPausedMap"/>, which the validation scratch
+    /// load shares; this one asks for a map-initialised map. The map is paused while it is still
+    /// empty, so the engine's recursive pause walks one entity instead of a whole hull, and the
+    /// merge's own epilogue then applies the target map's pause state to everything it
     /// loads. The mechanism is the target map's state and not the document's own per-entity paused
     /// flags. Documents written by the older readers carry no such flags at all, deriving pause from
     /// a file-level one instead, and it makes no difference here.</para>
@@ -558,64 +533,27 @@ public sealed partial class DrydockSystem
     /// spacing could not have covered, and a private map has nothing to overlap with.</para>
     /// </summary>
     private async Task<bool> TryLoadOntoStagingMap(
-        DrydockRetrieveContext ctx, IDrydockSlice slice, DrydockPhaseTimer timer, int jobId, int revision, byte[] yamlBytes)
+        DrydockRetrieveContext ctx, IDrydockSlice slice, int revision, byte[] yamlBytes)
     {
-        var options = new DeserializationOptions
-        {
-            InitializeMaps = true,
-            PauseMaps = true,
-        };
-
-        var source = $"drydock/{ctx.ShipId}";
-
         // The parse alone, off-thread: no entity is touched until the data node comes back.
         var data = await slice.Await(Task.Run(() => ParseDocument(Encoding.UTF8.GetString(yamlBytes))));
         GuardRetrieveResume(ctx);
-        timer.Mark("load_parse");
+        ctx.Timer.Mark("load_parse");
 
-        if (data == null)
+        if (data == null
+            || TryLoadOntoNewPausedMap(data, $"drydock/{ctx.ShipId}", initializeMap: true) is not { } load)
         {
             Log.Error($"Drydock: {ctx.ShipId} revision {revision} passed its checksum but would not load.");
             return false;
         }
 
-        var mapUid = _maps.CreateMap(out var mapId, runMapInit: options.InitializeMaps);
-        if (options.PauseMaps)
-            _maps.SetPaused(mapUid, true);
-
-        var loadOptions = new MapLoadOptions
-        {
-            MergeMap = mapId,
-            DeserializationOptions = options,
-            ExpectedCategory = FileCategory.Grid,
-        };
-
-        var loaded = _mapLoader.TryLoadGeneric(data, source, out var result, loadOptions);
-
-        if (!loaded || result!.Grids.Count != 1)
-        {
-            if (result != null)
-            {
-                foreach (var uid in result.Entities)
-                {
-                    if (Exists(uid))
-                        Del(uid);
-                }
-            }
-
-            Del(mapUid);
-            Log.Error($"Drydock: {ctx.ShipId} revision {revision} passed its checksum but would not load.");
-            return false;
-        }
-
-        ctx.StagingMap = mapUid;
-        ctx.Grid = result.Grids.Single().Owner;
-        ctx.RevisionLoaded = revision;
+        ctx.StagingMap = load.Map;
+        ctx.Grid = load.Grid;
 
         // Tagged only once the load has held: a failed load deletes the map above. The tag is what
         // lets the orphan sweep tell a map whose pipeline is still running from one whose pipeline
         // died holding it.
-        TagStagingMap(ctx.StagingMap.Value, jobId, DrydockStagingKind.Retrieve, ctx.ShipId);
+        TagStagingMap(load.Map, JobIdOf(slice), DrydockStagingKind.Retrieve, ctx.ShipId);
         return true;
     }
 
@@ -731,12 +669,12 @@ public sealed partial class DrydockSystem
     /// does. Slicing may reorder entities inside a step; it must never reorder the steps.</para>
     /// </summary>
     /// <param name="timer">
-    /// Split into its own phases when given, because "revive" as one number cannot say whether the
-    /// cost is the fidelity restore or the per-system sweeps below it, and those have opposite fixes.
-    /// Under slicing every one of these phases is wall clock rather than main-thread time, which is
-    /// why the timing line carries a worst-slice figure beside them.
+    /// Split into its own phases, because "revive" as one number cannot say whether the cost is the
+    /// fidelity restore or the per-system sweeps below it, and those have opposite fixes. Under
+    /// slicing every one of these phases is wall clock rather than main-thread time, which is why
+    /// the timing line carries a worst-slice figure beside them.
     /// </param>
-    private async Task ReviveSliced(EntityUid grid, DrydockShip record, IDrydockSlice slice, DrydockPhaseTimer? timer = null)
+    private async Task ReviveSliced(EntityUid grid, DrydockShip record, IDrydockSlice slice, DrydockPhaseTimer timer)
     {
         await ReviveBegin(grid, slice, DrydockPhase.Fidelity, 0);
 
@@ -760,13 +698,10 @@ public sealed partial class DrydockSystem
         // stale in-progress marker is the store's re-entrancy sentinel, so a ship whose document
         // carries one has every later store of it refused as already in progress, permanently. No
         // code change heals a document that is already filed, which is why both scrubs stay.
-        if (HasComp<FTLComponent>(grid))
-            RemComp<FTLComponent>(grid);
+        RemComp<FTLComponent>(grid);
+        RemComp<DrydockInProgressComponent>(grid);
 
-        if (HasComp<DrydockInProgressComponent>(grid))
-            RemComp<DrydockInProgressComponent>(grid);
-
-        timer?.Mark("fidelity");
+        timer.Mark("fidelity");
 
         await ReviveGravitySliced(grid, slice);
         await ReviveNpcsSliced(grid, slice);
@@ -784,7 +719,7 @@ public sealed partial class DrydockSystem
         await ReviveCabinetLocksSliced(grid, slice);
         await ScrubStaleLatheProductionSliced(grid, slice);
 
-        timer?.Mark("sweeps");
+        timer.Mark("sweeps");
 
         await RehydrateDamageSliced(grid, slice);
 
@@ -792,7 +727,7 @@ public sealed partial class DrydockSystem
         // nor the purchase event, and the repair system subscribes only to the latter.
         _shipRepair.GenerateRepairData(grid);
 
-        timer?.Mark("damage");
+        timer.Mark("damage");
 
         await ReviveBegin(grid, slice, DrydockPhase.Station, 0);
 
@@ -810,7 +745,7 @@ public sealed partial class DrydockSystem
 
         RecreateStation(grid, record);
 
-        timer?.Mark("station");
+        timer.Mark("station");
     }
 
     /// <summary>
@@ -972,8 +907,8 @@ public sealed partial class DrydockSystem
     {
         var servers = SnapshotOnGrid<ResearchServerComponent>(grid);
 
-        // No servers aboard means nothing to register against, and the client walk is a whole
-        // component sweep of the server that would find nothing to do with its answer.
+        // No servers aboard means nothing to register against, so the second walk of the hull's
+        // tree for clients would find nothing to do with its answer.
         var clients = servers.Count == 0
             ? new List<EntityUid>()
             : SnapshotOnGrid<ResearchClientComponent>(grid);
@@ -1214,10 +1149,30 @@ public sealed partial class DrydockSystem
         if (!string.IsNullOrEmpty(record.VesselProto))
             return record.VesselProto;
 
-        if (TryComp<VesselComponent>(grid, out var vessel) && !string.IsNullOrEmpty(vessel.VesselId.Id))
-            return vessel.VesselId.Id;
+        return VesselIdOnGrid(grid);
+    }
 
-        return null;
+    /// <summary>
+    /// The vessel id the purchase wrote onto the grid's own <c>VesselComponent</c>, or null when it
+    /// carries none. The fallback source for both the store and the retrieve; each asks its own
+    /// primary source first.
+    /// </summary>
+    private string? VesselIdOnGrid(EntityUid grid)
+    {
+        return TryComp<VesselComponent>(grid, out var vessel) && !string.IsNullOrEmpty(vessel.VesselId.Id)
+            ? vessel.VesselId.Id
+            : null;
+    }
+
+    /// <summary>
+    /// The priority dock tag of a vessel, which steers a dock search toward the berths a purchase of
+    /// it would pick. Null when there is no vessel id or it names no vessel prototype.
+    /// </summary>
+    private string? PriorityDockTagFor(string? vesselId)
+    {
+        return vesselId != null && _protoMan.TryIndex<VesselPrototype>(vesselId, out var vessel)
+            ? vessel.PriorityDockTag
+            : null;
     }
 
     /// <summary>

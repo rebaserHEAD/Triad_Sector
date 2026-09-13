@@ -5,7 +5,6 @@ using System.Threading;
 using System.Threading.Tasks;
 using Content.Server.Shuttles.Components;
 using Content.Server.Shuttles.Systems;
-using Content.Server.Station.Components;
 using Content.Shared._Triad.CCVar;
 using Content.Shared.Shuttles.Components;
 using Robust.Shared.Audio;
@@ -111,6 +110,41 @@ public sealed partial class DrydockSystem
         _jobQueue.EnqueueJob(job);
     }
 
+    /// <summary>
+    /// The start half every sliced wrapper shares: a token source, the job, its registration and its
+    /// place in the queue. The id is stamped on the job before it is enqueued, so the pipeline has it
+    /// before the first staging map it creates. From here <see cref="RetireJob"/> owns the token
+    /// source; pair every call with <see cref="EndPipelineJob{TContext,TOutcome}"/> in a finally.
+    /// </summary>
+    private DrydockPipelineJob<TContext, TOutcome> StartPipelineJob<TContext, TOutcome>(
+        TContext context,
+        double budget,
+        DrydockProgressCallback? onProgress,
+        IReadOnlyList<DrydockPhase> phases,
+        Func<TContext, IDrydockSlice, Task<TOutcome>> pipeline)
+    {
+        var cancellation = new CancellationTokenSource();
+        var job = new DrydockPipelineJob<TContext, TOutcome>(
+            this, context, budget, SliceStride, onProgress, cancellation.Token, phases, pipeline);
+
+        job.JobId = RegisterJob(job, cancellation);
+        EnqueueJob(job);
+        return job;
+    }
+
+    /// <summary>
+    /// The finish half: retires the job and records its meter. Null means the pipeline ran on the
+    /// rollback lever with no job, which still clears the cost table rather than leaving the previous
+    /// sliced run's for the next reader to mistake for this one's.
+    /// </summary>
+    private void EndPipelineJob<TContext, TOutcome>(DrydockPipelineJob<TContext, TOutcome>? job)
+    {
+        if (job != null)
+            RetireJob(job.JobId);
+
+        RecordPhaseCosts(job?.Meter);
+    }
+
     /// <summary>Disposes the token source and drops the registry entry. Idempotent.</summary>
     internal void RetireJob(int jobId)
     {
@@ -190,7 +224,7 @@ public sealed partial class DrydockSystem
     /// in debug and silently hangs in release, and a hung store means a frozen ship parked on a
     /// private map for the rest of the round. Cancelling ends it in an unwind instead.</para>
     /// </summary>
-    internal void ProcessJobs(float frameTime)
+    internal void ProcessJobs()
     {
         _jobQueue.Budget = Math.Max(MinQueueTime, TickBudgetSeconds);
         _jobQueue.Process();
@@ -369,9 +403,9 @@ public sealed partial class DrydockSystem
 
     /// <summary>
     /// Counts a transform tree, root included, without materialising it: order does not matter for a
-    /// total, so this stays a non-allocating stack walk rather than the sliced walkers' list-building
-    /// one (see <see cref="DrydockFidelitySystem.GridTreeList"/>), which is worth keeping on hulls up
-    /// to 960 entities.
+    /// total, so this walks a stack that only ever holds the frontier rather than building the whole
+    /// list the sliced walkers use (see <see cref="DrydockFidelitySystem.GridTreeList"/>). It still
+    /// allocates that stack once per call.
     /// </summary>
     internal int CountTree(EntityUid root)
     {
@@ -401,7 +435,7 @@ public sealed partial class DrydockSystem
     ///
     /// <para>The reparent is what actually freezes the ship: on the server the engine reads whether
     /// the destination map is paused and applies that to every descendant inside the one call that
-    /// changes the map id. The walk afterwards therefore counts the tree and back-stops the flag; it
+    /// changes the map id. The walk afterwards therefore drives the progress bar and back-stops the flag; it
     /// is not the mechanism, which is why an entity that appears between the count and the walk is
     /// still frozen and why setting a flag that is already set costs nothing.</para>
     ///
@@ -411,15 +445,14 @@ public sealed partial class DrydockSystem
     /// <para>The caller must have undocked first: a serialized dock reloads as a reference to a
     /// partner that is not in the document.</para>
     /// </summary>
-    /// <returns>How many entities were walked.</returns>
-    internal async Task<int> FreezeOntoStagingMap(EntityUid gridUid, EntityUid stagingMap, IDrydockSlice slice)
+    internal async Task FreezeOntoStagingMap(EntityUid gridUid, EntityUid stagingMap, IDrydockSlice slice)
     {
         // Counted before the phase opens, because opening a phase force-suspends and the count is
         // what the progress bar divides by.
         var estimate = CountTree(gridUid);
 
-        // The reparent stays above the phase open. Begin force-suspends unconditionally
-        // (DrydockStoreJob.cs:69-81), the caller's last organics gate is the statement before this
+        // The reparent stays above the phase open. A job's Begin force-suspends unconditionally
+        // (DrydockPipelineJob.Begin), the caller's last organics gate is the statement before this
         // call, and the ship is undocked with its airlock still swinging shut, so a suspension here
         // is a tick someone can walk aboard in, and the walk-on would be frozen onto the grid below
         // and written into the document. Past this line the grid is on a private paused map and
@@ -437,8 +470,6 @@ public sealed partial class DrydockSystem
 
             await slice.Step(i);
         }
-
-        return tree.Count;
     }
 
     // --- departure / return -----------------------------------------------------------
@@ -519,17 +550,10 @@ public sealed partial class DrydockSystem
         if (rememberedTarget is { } remembered && Exists(remembered) && Transform(remembered).MapUid != null)
             target = remembered;
 
-        if (target == null
-            && Exists(stationUid)
-            && TryComp<StationDataComponent>(stationUid, out var stationData))
-        {
-            target = _station.GetLargestGrid(stationData);
-
-            // The ship being stored is itself a member of its station's Grids, so GetLargestGrid
-            // can return it.
-            if (target == gridUid)
-                target = null;
-        }
+        // The ship being stored is itself a member of its station's Grids, so the station's largest
+        // grid can be the ship.
+        if (target == null && ResolveDockTarget(stationUid) is { } largest && largest != gridUid)
+            target = largest;
 
         if (target is not { } dockTarget || !Exists(dockTarget))
             return false;

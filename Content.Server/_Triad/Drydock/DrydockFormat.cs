@@ -7,8 +7,9 @@ public static class DrydockFormat
 {
     /// <summary>
     /// Written to <c>drydock_format_ver</c> on every revision, covering the sidecar encoding and the
-    /// manifest shape together. Bump it when either changes in a way an older reader would misread,
-    /// and give the re-bake ladder a step that migrates the old version forward.
+    /// manifest shape together. Bump it when either changes in a way an older reader would misread.
+    /// The planned re-bake ladder, not built yet, would carry a step migrating each old version
+    /// forward; until it exists an old version is read as it stands, per the note below.
     /// </summary>
     /// <remarks>
     /// Version 2: absolute-time fields gained <c>TimeOffsetSerializer</c> and are written as an
@@ -21,7 +22,8 @@ public static class DrydockFormat
 
     /// <summary>
     /// The oldest <see cref="Current"/> value a retrieve will still read. Raising this abandons
-    /// every revision below it, so it moves only after the ladder has re-baked them all.
+    /// every revision below it, so it moves only after every such revision has been re-baked, which
+    /// waits on the planned re-bake ladder (not built yet).
     /// </summary>
     public const int MinimumSupported = 1;
 }

@@ -611,7 +611,7 @@ public sealed partial class DrydockAdminWindow : FancyWindow
             var id = berth.BerthId;
 
             items.Add(new DrydockMenuButton.Item(
-                $"#{berth.BerthId} {berth.MaxSizeClass}",
+                $"#{berth.BerthId} {DrydockText.Class(berth.MaxSizeClass)}",
                 BerthReason(!occupied, fits),
                 !occupied && fits,
                 () => pick(id)));
@@ -623,7 +623,7 @@ public sealed partial class DrydockAdminWindow : FancyWindow
     private void BuildGrantMenu(Guid owner)
     {
         var items = Enum.GetValues<ShipSizeClass>()
-            .Select(cls => new DrydockMenuButton.Item(cls.ToString(), null, true,
+            .Select(cls => new DrydockMenuButton.Item(DrydockText.Class(cls.ToString()), null, true,
                 () => _eui.Send(new DrydockAdminGrantBerthMessage { OwnerUserId = owner, MaxSizeClass = cls.ToString() })))
             .ToList();
 

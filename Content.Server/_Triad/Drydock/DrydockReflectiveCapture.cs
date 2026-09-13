@@ -226,23 +226,32 @@ public sealed class DrydockReflectiveCapture
     ///
     /// <para>Public because the appearance sidecar resolves the same way, for the same reason, and
     /// two copies of this would drift apart exactly where the first one was proven safe.</para>
+    ///
+    /// <para>Memoized per name, misses included, like the caches below: a restore asks once per
+    /// tagged object, and the fallback walks every loaded assembly. A miss stays a miss for the
+    /// process, which holds because content assemblies are all loaded before any ship is.</para>
     /// </summary>
     public static Type? ResolveType(string assemblyQualifiedName)
     {
-        if (Type.GetType(assemblyQualifiedName) is { } direct)
-            return direct;
-
-        var comma = assemblyQualifiedName.IndexOf(',');
-        var fullName = comma < 0 ? assemblyQualifiedName : assemblyQualifiedName[..comma].Trim();
-
-        foreach (var assembly in AppDomain.CurrentDomain.GetAssemblies())
+        return TypeNameCache.GetOrAdd(assemblyQualifiedName, static name =>
         {
-            if (assembly.GetType(fullName) is { } found)
-                return found;
-        }
+            if (Type.GetType(name) is { } direct)
+                return direct;
 
-        return null;
+            var comma = name.IndexOf(',');
+            var fullName = comma < 0 ? name : name[..comma].Trim();
+
+            foreach (var assembly in AppDomain.CurrentDomain.GetAssemblies())
+            {
+                if (assembly.GetType(fullName) is { } found)
+                    return found;
+            }
+
+            return null;
+        });
     }
+
+    private static readonly ConcurrentDictionary<string, Type?> TypeNameCache = new(StringComparer.Ordinal);
 
     // Type metadata does not change while the process runs, so all three answers below are memoized
     // per type. These are called once per VALUE, recursing through every field of every captured

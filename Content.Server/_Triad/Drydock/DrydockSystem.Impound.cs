@@ -7,8 +7,7 @@ using Content.Server.Spawners.Components;
 using Content.Shared.Anomaly.Components;
 using Content.Shared.Buckle;
 using Content.Shared.Explosion.Components;
-using Content.Shared.Ghost;
-using Content.Shared.Mind;
+using Content.Shared.Mobs.Components;
 using Content.Shared.Nuke;
 using Content.Shared.Singularity.Components;
 using Robust.Shared.Map;
@@ -33,7 +32,6 @@ namespace Content.Server._Triad.Drydock;
 /// </summary>
 public sealed partial class DrydockSystem
 {
-    [Dependency] private SharedMindSystem _mind = default!;
     [Dependency] private SharedBuckleSystem _buckle = default!;
     [Dependency] private PublicTransitSystem _transit = default!;
 
@@ -111,8 +109,11 @@ public sealed partial class DrydockSystem
     {
         var gridUid = ctx.GridUid;
 
+        // The organics gate's own walk, collecting instead of stopping at the first: anything the
+        // gate would find and the eviction missed would refuse an impound at a gate with no refusal
+        // left, so the two share one predicate.
         var aboard = new List<EntityUid>();
-        CollectMindsAboard(gridUid, aboard);
+        _shipyard.FoundOrganics(gridUid, GetEntityQuery<MobStateComponent>(), GetEntityQuery<TransformComponent>(), aboard);
 
         if (aboard.Count == 0)
             return 0;
@@ -134,34 +135,6 @@ public sealed partial class DrydockSystem
 
         Log.Info($"Drydock: impound moved {aboard.Count} occupant(s) off {ToPrettyString(gridUid)}.");
         return aboard.Count;
-    }
-
-    /// <summary>
-    /// Mirrors the predicate in <c>ShipyardSystem.FoundOrganics</c>, which is the gate this exists to
-    /// satisfy: ghosts do not count, and a mind counts when its player may still come back to it,
-    /// meaning a live session or a character that is not physically dead. Anything that method finds
-    /// and this one misses refuses an impound at a gate with no refusal left, so the two walks have
-    /// to stay the same walk. That includes not recursing into a match, which is why the match arm
-    /// continues rather than descending.
-    /// </summary>
-    private void CollectMindsAboard(EntityUid uid, List<EntityUid> into)
-    {
-        var children = Transform(uid).ChildEnumerator;
-
-        while (children.MoveNext(out var child))
-        {
-            if (HasComp<GhostComponent>(child))
-                continue;
-
-            if (_mind.TryGetMind(child, out _, out var mindComp)
-                && (mindComp.Session != null || !_mind.IsCharacterDeadPhysically(mindComp)))
-            {
-                into.Add(child);
-                continue;
-            }
-
-            CollectMindsAboard(child, into);
-        }
     }
 
     /// <summary>

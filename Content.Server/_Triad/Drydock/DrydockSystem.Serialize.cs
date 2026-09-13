@@ -252,8 +252,8 @@ public sealed partial class DrydockSystem
                 continue;
             }
 
-            var a = Canonical(entry.Node, skipMapGrid: true);
-            var b = Canonical(other.Node, skipMapGrid: true);
+            var a = Canonical(entry.Node);
+            var b = Canonical(other.Node);
 
             if (a != b)
                 into.Add($"uid {uid} ({entry.Proto}) differs {Divergence(a, b)}");
@@ -338,15 +338,16 @@ public sealed partial class DrydockSystem
     /// <summary>
     /// A node as a stable string. Mapping keys are sorted, so two documents that agree on content
     /// but not on key order compare equal; sequence order is preserved, because for a component's
-    /// list field the order is content.
+    /// list field the order is content. A <c>MapGrid</c> component is replaced by a placeholder, for
+    /// the reason <see cref="CompareEntitySections"/> gives.
     /// </summary>
-    private static string Canonical(DataNode node, bool skipMapGrid = false)
+    private static string Canonical(DataNode node)
     {
         var builder = new StringBuilder();
-        WriteNode(node, builder, skipMapGrid);
+        WriteNode(node, builder);
         return builder.ToString();
 
-        static void WriteNode(DataNode node, StringBuilder builder, bool skipMapGrid)
+        static void WriteNode(DataNode node, StringBuilder builder)
         {
             switch (node)
             {
@@ -358,8 +359,7 @@ public sealed partial class DrydockSystem
                     builder.Append('[');
                     foreach (var item in sequence)
                     {
-                        if (skipMapGrid
-                            && item is MappingDataNode comp
+                        if (item is MappingDataNode comp
                             && comp.TryGet<ValueDataNode>("type", out var type)
                             && type.Value == "MapGrid")
                         {
@@ -367,7 +367,7 @@ public sealed partial class DrydockSystem
                             continue;
                         }
 
-                        WriteNode(item, builder, skipMapGrid);
+                        WriteNode(item, builder);
                         builder.Append(',');
                     }
 
@@ -381,7 +381,7 @@ public sealed partial class DrydockSystem
                     foreach (var key in keys)
                     {
                         builder.Append(key).Append(':');
-                        WriteNode(mapping[key], builder, skipMapGrid);
+                        WriteNode(mapping[key], builder);
                         builder.Append(',');
                     }
 

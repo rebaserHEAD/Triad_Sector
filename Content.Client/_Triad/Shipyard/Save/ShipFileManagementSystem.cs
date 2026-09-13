@@ -1,20 +1,21 @@
-using Content.Shared._NF.Shipyard.Events; // Triad: legacy import
+using Content.Shared._NF.Shipyard.Events;
 using Content.Shared._Triad.Shipyard.Save;
-using System.Threading.Tasks;
 using System.Linq;
 using Robust.Shared.ContentPack;
 using Robust.Shared.Utility;
-using YamlDotNet.RepresentationModel; // Triad: legacy import
+using YamlDotNet.RepresentationModel;
 
 namespace Content.Client._Triad.Shipyard.Save;
 
+/// <summary>
+/// The client's side of legacy import: finds the old ship saves in the user data Exports folder,
+/// describes them to the server, reads the one being imported, and retires it to backup when the
+/// server says it has been spent.
+/// </summary>
 public sealed partial class ShipFileManagementSystem : EntitySystem
 {
     [Dependency] private IResourceManager _resourceManager = default!;
     [Dependency] private ILogManager _log = default!;
-
-    // Static data shared across all instances to handle multiple system instances
-    private static readonly Dictionary<string, string> CachedShipData = new();
 
     /// <summary>
     ///     Holds all file paths whitelisted for <see cref="DeleteLocalShipFileMessage"/>
@@ -25,21 +26,16 @@ public sealed partial class ShipFileManagementSystem : EntitySystem
     /// </remarks>
     private static readonly List<string> DeletableShipPaths = new();
 
+    /// <summary>
+    ///     Static so a second instance of the system (integration tests run several clients in one
+    ///     process) does not enumerate the folder again.
+    /// </summary>
     private static readonly List<string> AvailableShips = new();
 
-    // Triad: the import manifest's parsed header per path, with the text it was parsed from.
+    /// <summary>The import manifest's parsed header per path, with the text it was parsed from.</summary>
     private static readonly Dictionary<string, (string Text, DrydockImportCandidate Candidate)> ImportHeaderCache = new();
 
     private ISawmill _sawmill = default!;
-
-    private static int _instanceCounter = 0;
-    private readonly int _instanceId;
-
-    public ShipFileManagementSystem()
-    {
-        _instanceId = ++_instanceCounter;
-        // Reduced logging for performance
-    }
 
     public override void Initialize()
     {
@@ -49,55 +45,28 @@ public sealed partial class ShipFileManagementSystem : EntitySystem
 
         SubscribeNetworkEvent<DeleteLocalShipFileMessage>(HandleDeleteLocalShipFile);
 
-        // Ensure saved_ships directory exists on startup
-        EnsureSavedShipsDirectoryExists();
-
-        // Only load existing ships if we haven't already loaded them
         if (AvailableShips.Count == 0)
-        {
-            // Load existing saved ships from user data
             LoadExistingShips();
-        }
-        // Skip reload if ships already loaded by previous instance
     }
 
-    private void EnsureSavedShipsDirectoryExists()
+    /// <summary>Reads one save's full text for import, or null if it cannot be read.</summary>
+    public string? ReadShipFile(string filePath)
     {
-        // Exports folder already exists, no need to create directories
-    }
-
-    public async Task<string?> GetShipYamlData(string filePath)
-    {
-        string? yamlData;
-
-        // Check cache first, load from disk if needed (lazy loading)
-        if (CachedShipData.TryGetValue(filePath, out yamlData))
+        try
         {
-            // Data already cached
+            using var reader = _resourceManager.UserData.OpenText(new ResPath(filePath));
+            return reader.ReadToEnd();
         }
-        else
+        catch (Exception ex)
         {
-            // Load from disk
-            try
-            {
-                using var reader = _resourceManager.UserData.OpenText(new(filePath));
-                yamlData = reader.ReadToEnd();
-                CachedShipData[filePath] = yamlData;
-            }
-            catch (Exception ex)
-            {
-                _sawmill.Error($"Failed to load ship data from {filePath}: {ex.Message}");
-                return null;
-            }
+            _sawmill.Error($"Failed to load ship data from {filePath}: {ex.Message}");
+            return null;
         }
-
-        await Task.CompletedTask;
-        return yamlData;
     }
 
     /// <summary>
-    /// Triad: legacy import. Describes every local save to the server so it can say which it will
-    /// take: the envelope's name, its unsigned appraisal, and the signature and public key it claims.
+    /// Describes every local save to the server so it can say which it will take: the envelope's
+    /// name, its unsigned appraisal, and the signature and public key it claims.
     ///
     /// <para>No hashing here, deliberately. A signature covers a SHA-256 of the ship data and
     /// <c>System.Security.Cryptography</c> is not on the engine's sandbox whitelist, so the client
@@ -108,7 +77,7 @@ public sealed partial class ShipFileManagementSystem : EntitySystem
     {
         var manifest = new List<DrydockImportCandidate>();
 
-        foreach (var path in GetSavedShipFiles())
+        foreach (var path in AvailableShips)
         {
             try
             {
@@ -182,7 +151,6 @@ public sealed partial class ShipFileManagementSystem : EntitySystem
         return decoded;
     }
 
-    // Triad start
     /// <summary>
     ///     This method whitelists a path to be acted on by <see cref="DeleteLocalShipFileMessage"/>
     /// </summary>
@@ -198,31 +166,14 @@ public sealed partial class ShipFileManagementSystem : EntitySystem
     /// <param name="filePath">The file path to check.</param>
     public static bool WasShipMarkedAsDeletable(string filePath)
     {
-        var index = DeletableShipPaths.IndexOf(filePath);
-        if (index == -1)
-        {
-            return false;
-        }
-        else
-        {
-            DeletableShipPaths.RemoveAt(index);
-            return true;
-        }
+        return DeletableShipPaths.Remove(filePath);
     }
-
-    // Triad end
 
     private void LoadExistingShips()
     {
         try
         {
-            _sawmill.Info($"Instance #{_instanceId}: Attempting to find saved ship files...");
-
-            // Try UserData.Find to enumerate all .yml files
-            var (ymlFiles, directories) = _resourceManager.UserData.Find("*.yml", recursive: true);
-
-            var ymlFilesList = ymlFiles.ToList();
-            _sawmill.Info($"Instance #{_instanceId}: Found {ymlFilesList.Count.ToString()} .yml files total");
+            var (ymlFiles, _) = _resourceManager.UserData.Find("*.yml", recursive: true);
 
             foreach (var file in ymlFiles)
             {
@@ -239,23 +190,18 @@ public sealed partial class ShipFileManagementSystem : EntitySystem
                 }
             }
 
-            _sawmill.Debug($"Instance #{_instanceId}: Final result: Loaded {AvailableShips.Count} saved ships from Exports directory");
+            _sawmill.Debug($"Found {AvailableShips.Count} saved ships in the Exports directory");
         }
         catch (NotImplementedException)
         {
             // In test environments, the Find method may not be implemented
             // This is expected and should not cause test failures
-            _sawmill.Debug($"Instance #{_instanceId}: Ship file enumeration not available in test environment");
+            _sawmill.Debug("Ship file enumeration not available in test environment");
         }
         catch (Exception ex)
         {
-            _sawmill.Error($"Instance #{_instanceId}: Failed to load existing ships: {ex.Message}");
+            _sawmill.Error($"Failed to load existing ships: {ex.Message}");
         }
-    }
-
-    public List<string> GetSavedShipFiles()
-    {
-        return new List<string>(AvailableShips);
     }
 
     /// <summary>
@@ -266,14 +212,12 @@ public sealed partial class ShipFileManagementSystem : EntitySystem
     {
         try
         {
-            // Triad start
             // We only allow the server to delete files that we have previously sent to the server
             if (!WasShipMarkedAsDeletable(message.FilePath))
             {
                 _sawmill.Warning($"Server asked to move local file '{message.FilePath}' that was not previously loaded");
                 return;
             }
-            // Triad end
 
             // Move the loaded ship file into /Exports/backup instead of deleting.
             var originalPath = new ResPath(message.FilePath);
@@ -285,18 +229,12 @@ public sealed partial class ShipFileManagementSystem : EntitySystem
 
                 // Compute destination file path under backup directory
                 var fileName = ExtractFileNameWithoutExtension(message.FilePath);
-                // Reconstruct original extension (assumed .yml)
-                var destBase = new ResPath($"/Exports/backup/{fileName}");
-                var destinationPath = new ResPath(destBase.ToString() + ".yml");
+                var destinationPath = new ResPath($"/Exports/backup/{fileName}.yml");
 
                 // If a file with the same name already exists in backup, append a timestamp
                 if (_resourceManager.UserData.Exists(destinationPath))
-                {
-                    var timestamped = new ResPath($"/Exports/backup/{fileName}_loaded_{DateTime.Now:yyyyMMdd_HHmmss}.yml");
-                    destinationPath = timestamped;
-                }
+                    destinationPath = new ResPath($"/Exports/backup/{fileName}_loaded_{DateTime.Now:yyyyMMdd_HHmmss}.yml");
 
-                // Triad start
                 // Timestamp uniqueness is not something programmers can trust.
                 // If we still don't have an unused path, we give up
                 if (_resourceManager.UserData.Exists(destinationPath))
@@ -305,11 +243,10 @@ public sealed partial class ShipFileManagementSystem : EntitySystem
                 }
                 else
                 {
-                    // Originally opened the files as text
-                    // Now we open them as bytes
+                    // Both disposed before the delete, so the copy is flushed before the original goes.
                     using (var reader = _resourceManager.UserData.OpenRead(originalPath))
+                    using (var writer = _resourceManager.UserData.OpenWrite(destinationPath))
                     {
-                        var writer = _resourceManager.UserData.OpenWrite(destinationPath);
                         reader.CopyTo(writer);
                     }
 
@@ -317,11 +254,9 @@ public sealed partial class ShipFileManagementSystem : EntitySystem
                     _resourceManager.UserData.Delete(originalPath);
                     _sawmill.Info($"Moved local ship file to backup: {message.FilePath} -> {destinationPath}");
                 }
-                // Triad end
             }
 
             // Remove original entry from caches and list (do not add backup to menu)
-            CachedShipData.Remove(message.FilePath);
             ImportHeaderCache.Remove(message.FilePath);
             AvailableShips.Remove(message.FilePath);
         }

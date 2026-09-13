@@ -19,8 +19,8 @@ public sealed partial class DrydockImportRow : PanelContainer
 
         FileId = ship.FileId;
 
-        // "new" in the amber the row is edged with, where a berth row puts its number: this is a hull
-        // arriving rather than one already in a slot.
+        // "new" in the warning amber, where a berth row puts its number, on the row's dark-edged
+        // brown fill: this is a hull arriving rather than one already in a slot.
         var marker = new FormattedMessage();
         marker.AddColored(Loc.GetString("shipyard-console-import-row-marker"), DrydockText.Warning);
         MarkerLabel.SetMessage(marker);

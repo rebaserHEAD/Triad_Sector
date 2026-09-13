@@ -13,7 +13,7 @@ namespace Content.Client._NF.Shipyard.UI;
 /// <summary>
 /// The one place the drydock tab writes a clock, a class name or a weighted name, so the card, the
 /// rows, the alerts and the prompts all agree on the shape of the same fact, plus the small widgets
-/// the drydock windows share.
+/// and the palette the drydock windows share.
 /// </summary>
 internal static class DrydockText
 {
@@ -117,6 +117,17 @@ internal static class DrydockText
         label.FontColorOverride = on ? Color.White : ChipText;
     }
 
+    // ---------------------------------------------------------------- Dropdown and picker rows
+
+    /// <summary>The fill behind the rows of a dropdown and of a list picker.</summary>
+    public static readonly Color ListBackground = Color.FromHex("#141414");
+
+    /// <summary>The 1px rule between two rows of a dropdown or a list picker.</summary>
+    public static readonly Color RowRule = Color.FromHex("#262626");
+
+    /// <summary>The fill of a dropdown row under the mouse, and of the selected row in a list picker.</summary>
+    public static readonly Color RowHighlight = Color.FromHex("#2a3a4c");
+
     /// <summary>A 1px rule panel in the given colour: the row divider both the menu button and the list picker draw.</summary>
     public static PanelContainer RulePanel(Color color)
     {
@@ -132,6 +143,39 @@ internal static class DrydockText
     public static (Color Text, Color Detail) RowColors(bool enabled)
     {
         return (enabled ? Color.White : Disabled, enabled ? Dim : Disabled);
+    }
+
+    /// <summary>
+    /// One row of a dropdown or a list picker: a flat button with no style class, so nothing draws a
+    /// box around it, greyed when the item cannot be taken. Inside it a transparent fill holds the
+    /// label and, 12px to its right, the detail, in <see cref="RowColors"/>. <paramref name="fill"/>
+    /// is that fill's box, for the caller to paint a hover or a selection on. A
+    /// <paramref name="rule"/>, when given, sits under the fill inside the button, so hiding the row
+    /// hides its rule too. Pressing does nothing until the caller subscribes.
+    /// </summary>
+    public static ContainerButton ItemRow(DrydockMenuButton.Item item, out StyleBoxFlat fill, Control? rule = null)
+    {
+        fill = new StyleBoxFlat { BackgroundColor = Color.Transparent };
+        var panel = new PanelContainer { PanelOverride = fill, HorizontalExpand = true };
+        var (text, detail) = RowColors(item.Enabled);
+        var line = new BoxContainer { Orientation = BoxContainer.LayoutOrientation.Horizontal, Margin = new Thickness(10, 7), HorizontalExpand = true };
+        line.AddChild(new Label { Text = item.Label, HorizontalExpand = true, Modulate = text });
+        if (item.Detail != null)
+            line.AddChild(new Label { Text = item.Detail, Modulate = detail, Margin = new Thickness(12, 0, 0, 0) });
+        panel.AddChild(line);
+
+        var row = new ContainerButton { Disabled = !item.Enabled, HorizontalExpand = true };
+        if (rule == null)
+        {
+            row.AddChild(panel);
+            return row;
+        }
+
+        var cell = new BoxContainer { Orientation = BoxContainer.LayoutOrientation.Vertical, HorizontalExpand = true };
+        cell.AddChild(panel);
+        cell.AddChild(rule);
+        row.AddChild(cell);
+        return row;
     }
 
     /// <summary>One labelled line of a card: the label in the key colour, the value clipped.</summary>

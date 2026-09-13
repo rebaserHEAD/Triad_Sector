@@ -56,7 +56,7 @@ public sealed partial class DrydockSystem
         // the same tick that continuation landed: the server drains the synchronisation context
         // immediately before it ticks the systems, so running the queue at the top of our update
         // costs the job no extra tick of latency.
-        ProcessJobs(frameTime);
+        ProcessJobs();
 
         _transferSweepAccumulator += frameTime;
         if (_transferSweepAccumulator < TransferSweepSeconds)

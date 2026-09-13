@@ -8,27 +8,32 @@ using Robust.Shared.Maths;
 namespace Content.Client._NF.Shipyard.UI;
 
 /// <summary>
-/// A button that drops a short menu: the row's three dots, Store in #N, and Buy berth. The rare
-/// verbs live here so the row itself carries one button. Items are set by the menu that owns the
-/// row and rebuilt on every state, so a stale entry cannot outlive its state.
+/// A button that drops a short menu. On the shipyard console: a berth row's three dots, Store in
+/// #N, Buy berth, and an impound card's Into #N picker; on the drydock admin panel: Restore to…,
+/// the overflow menu, Grant berth, and the admin berth rows' three dots. The rare verbs live here
+/// so a row itself carries one button.
+///
+/// <para>The owning window replaces the items on every state, but a menu that is already open was
+/// built from the items as they stood when it opened. Its popup sits in the modal root rather than
+/// under this button, so it keeps those entries and their callbacks until it closes, even across a
+/// state that rebuilt the button or removed it. The server checks every verb again on receipt.</para>
 /// </summary>
 public sealed class DrydockMenuButton : Button
 {
     /// <summary>
-    /// One entry: a label on the left, a detail on the right, and whether it can be taken. A
-    /// disabled entry stays visible with its detail saying why, read without hovering.
-    /// <paramref name="DividerAbove"/> draws the rule that separates the ship verbs from the
-    /// berth verbs.
+    /// One entry of a dropdown or of a <see cref="DrydockListPicker"/>: a label on the left, a
+    /// detail on the right, and whether it can be taken. A disabled entry stays visible with its
+    /// detail saying why, read without hovering. <paramref name="OnPressed"/> runs when a dropdown
+    /// entry is pressed, or when a picker's verb commits the selected row.
+    /// <paramref name="DividerAbove"/> draws the heavier rule that separates the ship verbs from the
+    /// berth verbs in a dropdown; a picker ignores it.
     /// </summary>
     public sealed record Item(string Label, string? Detail, bool Enabled, Action? OnPressed, bool DividerAbove = false);
 
     private const float MenuWidth = 200f;
 
-    private static readonly Color MenuBackground = Color.FromHex("#141414");
     private static readonly Color MenuBorder = Color.FromHex("#5a5a5a");
-    private static readonly Color RowRule = Color.FromHex("#262626");
     private static readonly Color SectionRule = Color.FromHex("#3a3a3a");
-    private static readonly Color HoverFill = Color.FromHex("#2a3a4c");
 
     private readonly List<Item> _items = new();
 
@@ -63,7 +68,7 @@ public sealed class DrydockMenuButton : Button
         {
             PanelOverride = new StyleBoxFlat
             {
-                BackgroundColor = MenuBackground,
+                BackgroundColor = DrydockText.ListBackground,
                 BorderColor = MenuBorder,
                 BorderThickness = new Thickness(1),
             },
@@ -78,28 +83,14 @@ public sealed class DrydockMenuButton : Button
 
             // A rule between entries; the section rule is heavier and stands in for the row one.
             if (i > 0)
-                list.AddChild(DrydockText.RulePanel(item.DividerAbove ? SectionRule : RowRule));
+                list.AddChild(DrydockText.RulePanel(item.DividerAbove ? SectionRule : DrydockText.RowRule));
 
-            // A flat row, not a button: no style class, so nothing draws a box around it, and
-            // the hover fill is painted by hand on the panel inside.
-            var entry = new ContainerButton
-            {
-                Disabled = !item.Enabled,
-                HorizontalExpand = true,
-            };
-            var box = new StyleBoxFlat { BackgroundColor = Color.Transparent };
-            var fill = new PanelContainer { PanelOverride = box, HorizontalExpand = true };
-            var (text, detail) = DrydockText.RowColors(item.Enabled);
-            var line = new BoxContainer { Orientation = BoxContainer.LayoutOrientation.Horizontal, Margin = new Thickness(10, 7), HorizontalExpand = true };
-            line.AddChild(new Label { Text = item.Label, HorizontalExpand = true, Modulate = text });
-            if (item.Detail != null)
-                line.AddChild(new Label { Text = item.Detail, Modulate = detail, Margin = new Thickness(12, 0, 0, 0) });
-            fill.AddChild(line);
-            entry.AddChild(fill);
+            // A flat row, not a button; the hover fill is painted by hand on the box inside.
+            var entry = DrydockText.ItemRow(item, out var box);
 
             if (item.Enabled)
             {
-                entry.OnMouseEntered += _ => box.BackgroundColor = HoverFill;
+                entry.OnMouseEntered += _ => box.BackgroundColor = DrydockText.RowHighlight;
                 entry.OnMouseExited += _ => box.BackgroundColor = Color.Transparent;
             }
 

@@ -33,8 +33,9 @@ namespace Content.Server._Triad.Drydock;
 /// </summary>
 public sealed partial class DrydockSystem
 {
-    // The player manager is injected on another partial as _player; RA0032 forbids a second field
-    // of the type, and this is the landmine the tracker names twice.
+    // The player manager is injected on another partial as _player. RA0032 forbids a second
+    // dependency field of the same type anywhere across a system's partials, so a partial that
+    // needs it uses that field rather than declaring its own.
     [Dependency] private IChatManager _chat = default!;
 
     /// <summary>The round the sweep last started for, so a restart that follows an end does not run it twice.</summary>
@@ -180,7 +181,10 @@ public sealed partial class DrydockSystem
         Log.Info($"Drydock: round-end sweep judging {rows.Count} hull(s) still out in round {round}.");
 
         // One world scan for the whole sweep; each row re-checks its grid, since the loop awaits.
+        // The helm and dock scans are snapshots of the same moment, taken once rather than twice per
+        // hull: a fitting built or taken apart while the sweep is filing is not seen.
         var liveGrids = LiveShipGridMap();
+        var (gridsWithHelm, gridsWithDock) = GridsWithHelmsAndDocks();
 
         var percent = RoundEndFeePercent;
         var reason = Loc.GetString("drydock-sweep-impound-reason", ("round", round));
@@ -211,7 +215,7 @@ public sealed partial class DrydockSystem
                 continue;
             }
 
-            if (!CouldHaveComeHome(grid))
+            if (!CouldHaveComeHome(grid, gridsWithHelm, gridsWithDock))
             {
                 if (await _store.MarkDestroyed(row.ShipGuid, round, "no piloting console or no dock aboard at the end of the round"))
                     destroyed++;
@@ -237,32 +241,38 @@ public sealed partial class DrydockSystem
     /// The criterion, deliberately small: a piloting console and at least one dock aboard. Read
     /// as "could this hull have saved itself", never as "is this a ship": a console-less hull is
     /// still storable from the station's console if its owner gets it home, and this only decides
-    /// what the sweep does for an owner who did not.
+    /// what the sweep does for an owner who did not. The two sets come from
+    /// <see cref="GridsWithHelmsAndDocks"/>.
     /// </summary>
-    internal bool CouldHaveComeHome(EntityUid grid)
+    internal bool CouldHaveComeHome(EntityUid grid, HashSet<EntityUid> gridsWithHelm, HashSet<EntityUid> gridsWithDock)
     {
-        var helm = false;
-        var helms = AllEntityQuery<ShuttleConsoleComponent, TransformComponent>();
-        while (helms.MoveNext(out _, out _, out var xform))
-        {
-            if (xform.GridUid != grid)
-                continue;
+        return gridsWithHelm.Contains(grid) && gridsWithDock.Contains(grid);
+    }
 
-            helm = true;
-            break;
+    /// <summary>
+    /// Every grid carrying at least one shuttle console, and every grid carrying at least one dock,
+    /// each from one world query. Taken once per sweep so the criterion is not two world scans per
+    /// hull.
+    /// </summary>
+    internal (HashSet<EntityUid> Helms, HashSet<EntityUid> Docks) GridsWithHelmsAndDocks()
+    {
+        var helms = new HashSet<EntityUid>();
+        var helmQuery = AllEntityQuery<ShuttleConsoleComponent, TransformComponent>();
+        while (helmQuery.MoveNext(out _, out _, out var xform))
+        {
+            if (xform.GridUid is { } grid)
+                helms.Add(grid);
         }
 
-        if (!helm)
-            return false;
-
-        var docks = AllEntityQuery<DockingComponent, TransformComponent>();
-        while (docks.MoveNext(out _, out _, out var xform))
+        var docks = new HashSet<EntityUid>();
+        var dockQuery = AllEntityQuery<DockingComponent, TransformComponent>();
+        while (dockQuery.MoveNext(out _, out _, out var xform))
         {
-            if (xform.GridUid == grid)
-                return true;
+            if (xform.GridUid is { } grid)
+                docks.Add(grid);
         }
 
-        return false;
+        return (helms, docks);
     }
 
     /// <summary>The verdict row for a hull the sweep reached and could not file. The row itself stays checked out.</summary>
