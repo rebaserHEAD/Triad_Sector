@@ -712,7 +712,7 @@ public sealed partial class DrydockStore
             var current = await db.DrydockBerth.AsNoTracking()
                 .SingleOrDefaultAsync(b => b.BerthId == held, token);
 
-            if (current != null && Fits(hullClass, current.MaxSizeClass))
+            if (current != null && ShipSizeRules.Fits(hullClass, current.MaxSizeClass))
                 return DrydockBerthResult.Success;
         }
 
@@ -751,7 +751,7 @@ public sealed partial class DrydockStore
         if (named == null)
             return (DrydockBerthResult.NotFound, null);
 
-        if (!Fits(hullClass, named.MaxSizeClass))
+        if (!ShipSizeRules.Fits(hullClass, named.MaxSizeClass))
             return (DrydockBerthResult.BerthTooSmall, null);
 
         if (await db.DrydockShip.AnyAsync(s => s.BerthId == wanted && s.ShipGuid != shipGuid, token))
@@ -774,7 +774,7 @@ public sealed partial class DrydockStore
         CancellationToken token)
     {
         // A hull class that does not parse is a taxonomy the berths cannot answer for. Fail closed.
-        if (!TryParseClass(hullClass, out var hull))
+        if (!ShipSizeRules.TryParseClass(hullClass, out var hull))
             return (DrydockBerthResult.BerthTooSmall, null);
 
         var free = await db.DrydockBerth.AsNoTracking()
@@ -787,35 +787,16 @@ public sealed partial class DrydockStore
             return (DrydockBerthResult.NoBerth, null);
 
         var fitting = free
-            .Where(b => TryParseClass(b.MaxSizeClass, out var max) && hull <= max)
+            .Where(b => ShipSizeRules.TryParseClass(b.MaxSizeClass, out var max) && hull <= max)
             .ToList();
 
         if (fitting.Count == 0)
             return (DrydockBerthResult.BerthTooSmall, null);
 
         var pick = fitting.FirstOrDefault(b => b.BerthId == preferredBerth)
-            ?? fitting
-                .OrderBy(b => TryParseClass(b.MaxSizeClass, out var max) ? (int)max : int.MaxValue)
-                .ThenBy(b => b.BerthId)
-                .First();
+            ?? ShipSizeRules.OrderByFitPreference(fitting, b => b.MaxSizeClass, b => b.BerthId).First();
 
         return (DrydockBerthResult.Success, pick.BerthId);
-    }
-
-    /// <summary>
-    /// Both classes are stored as text so a taxonomy change cannot invalidate rows; the comparison
-    /// happens here, after parsing, never in SQL. Anything that does not parse fits nothing.
-    /// </summary>
-    internal static bool Fits(string? hullClass, string? berthClass)
-    {
-        return TryParseClass(hullClass, out var hull)
-            && TryParseClass(berthClass, out var max)
-            && hull <= max;
-    }
-
-    internal static bool TryParseClass(string? text, out ShipSizeClass sizeClass)
-    {
-        return Enum.TryParse(text, ignoreCase: false, out sizeClass) && Enum.IsDefined(sizeClass);
     }
 
     /// <summary>
@@ -858,7 +839,7 @@ public sealed partial class DrydockStore
                 var current = await db.DrydockBerth.AsNoTracking()
                     .SingleOrDefaultAsync(b => b.BerthId == held, token);
 
-                if (current != null && Fits(hullClass, current.MaxSizeClass))
+                if (current != null && ShipSizeRules.Fits(hullClass, current.MaxSizeClass))
                     return DrydockBerthResult.Success;
             }
 
@@ -872,7 +853,7 @@ public sealed partial class DrydockStore
                 if (named == null)
                     return DrydockBerthResult.NotFound;
 
-                if (!Fits(hullClass, named.MaxSizeClass))
+                if (!ShipSizeRules.Fits(hullClass, named.MaxSizeClass))
                     return DrydockBerthResult.BerthTooSmall;
 
                 return await db.DrydockShip.AnyAsync(s => s.BerthId == wanted && s.ShipGuid != shipGuid, token)
@@ -1239,7 +1220,7 @@ public sealed partial class DrydockStore
             if (berth == null)
                 return DrydockBerthResult.NotFound;
 
-            if (!TryParseClass(berth.MaxSizeClass, out var current) || newClass <= current)
+            if (!ShipSizeRules.TryParseClass(berth.MaxSizeClass, out var current) || newClass <= current)
                 return DrydockBerthResult.WrongState;
 
             berth.MaxSizeClass = newClass.ToString();

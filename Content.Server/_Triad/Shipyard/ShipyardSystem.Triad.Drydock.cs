@@ -76,11 +76,6 @@ public sealed partial class ShipyardSystem
         return prices;
     }
 
-    private static ShipSizeClass? NextSizeClass(ShipSizeClass sizeClass)
-    {
-        return sizeClass == ShipSizeClass.SuperCapital ? null : sizeClass + 1;
-    }
-
     // ---------------------------------------------------------------- Bundled berth on purchase
 
     /// <summary>
@@ -453,7 +448,7 @@ public sealed partial class ShipyardSystem
         {
             int? upgradePrice = null;
             string? upgradeClass = null;
-            if (DrydockStore.TryParseClass(slot.Berth.MaxSizeClass, out var current) && NextSizeClass(current) is { } next)
+            if (ShipSizeRules.TryParseClass(slot.Berth.MaxSizeClass, out var current) && ShipSizeRules.NextSizeClass(current) is { } next)
             {
                 upgradePrice = Math.Max(0, DrydockBerthPrice(next) - DrydockBerthPrice(current));
                 upgradeClass = next.ToString();
@@ -493,12 +488,7 @@ public sealed partial class ShipyardSystem
         // accepted right now. The berth is chosen again at accept, so this is a preview.
         foreach (var (transfer, ship) in offersIn)
         {
-            int? lands = slots
-                .Where(s => s.Occupant == null && DrydockStore.Fits(ship.SizeClass, s.Berth.MaxSizeClass))
-                .OrderBy(s => DrydockStore.TryParseClass(s.Berth.MaxSizeClass, out var max) ? (int)max : int.MaxValue)
-                .ThenBy(s => s.Berth.BerthId)
-                .Select(s => (int?)s.Berth.BerthId)
-                .FirstOrDefault();
+            int? lands = ShipSizeRules.PreferredBerth(FittingFreeBerths(slots, ship.SizeClass), null);
 
             offerInfos.Add(new DrydockTransferOfferInfo(
                 transfer.Id,
@@ -538,7 +528,7 @@ public sealed partial class ShipyardSystem
                 basis,
                 row.ImpoundRedeemable,
                 row.ImpoundReason,
-                PreferredBerth(fitting, row.LastBerthId),
+                ShipSizeRules.PreferredBerth(fitting, row.LastBerthId),
                 fitting));
         }
 
@@ -882,7 +872,7 @@ public sealed partial class ShipyardSystem
         // The same preference the store applies: the ship's own last berth if it is free and
         // fits, else the smallest free berth that fits. The dropdown lists the rest.
         var fitting = FittingFreeBerths(slots, hullClass);
-        var preferred = PreferredBerth(fitting, row?.LastBerthId);
+        var preferred = ShipSizeRules.PreferredBerth(fitting, row?.LastBerthId);
 
         var docked = _station.GetOwningStation(console) is { Valid: true } station && IsDockedToStation(shuttle, station);
 
@@ -892,24 +882,12 @@ public sealed partial class ShipyardSystem
     /// <summary>The operator's free berths the hull fits, smallest class first, in the order the store's own pick walks them.</summary>
     private static List<int> FittingFreeBerths(List<DrydockBerthSlot> slots, string? hullClass)
     {
-        return slots
-            .Where(s => s.Occupant == null && DrydockStore.Fits(hullClass, s.Berth.MaxSizeClass))
-            .OrderBy(s => DrydockStore.TryParseClass(s.Berth.MaxSizeClass, out var max) ? (int)max : int.MaxValue)
-            .ThenBy(s => s.Berth.BerthId)
+        return ShipSizeRules.OrderByFitPreference(
+                slots.Where(s => s.Occupant == null && ShipSizeRules.Fits(hullClass, s.Berth.MaxSizeClass)),
+                s => s.Berth.MaxSizeClass,
+                s => s.Berth.BerthId)
             .Select(s => s.Berth.BerthId)
             .ToList();
-    }
-
-    /// <summary>
-    /// The berth a plain store or a reclaim lands in: the ship's own last berth when it is among
-    /// the fitting ones, else the first of them, which is the smallest. Null when nothing fits.
-    /// </summary>
-    private static int? PreferredBerth(List<int> fitting, int? lastBerthId)
-    {
-        if (fitting.Count == 0)
-            return null;
-
-        return lastBerthId is { } last && fitting.Contains(last) ? last : fitting[0];
     }
 
     /// <summary>
@@ -1421,7 +1399,7 @@ public sealed partial class ShipyardSystem
         if (!TryComp<ActorComponent>(player, out var actor))
             return false;
 
-        if (!DrydockStore.TryParseClass(sizeClassText, out var sizeClass) || DrydockBerthPrice(sizeClass) is var price && price <= 0)
+        if (!ShipSizeRules.TryParseClass(sizeClassText, out var sizeClass) || DrydockBerthPrice(sizeClass) is var price && price <= 0)
         {
             PlayDenySound(player, uid, component);
             return false;
@@ -1502,8 +1480,8 @@ public sealed partial class ShipyardSystem
 
         var slot = slots.FirstOrDefault(s => s.Berth.BerthId == berthId);
         if (slot == null
-            || !DrydockStore.TryParseClass(slot.Berth.MaxSizeClass, out var current)
-            || NextSizeClass(current) is not { } next)
+            || !ShipSizeRules.TryParseClass(slot.Berth.MaxSizeClass, out var current)
+            || ShipSizeRules.NextSizeClass(current) is not { } next)
         {
             PlayDenySound(player, uid, component);
             return false;
@@ -1766,45 +1744,13 @@ public sealed partial class ShipyardSystem
 
         if (TryComp<ShuttleDeedComponent>(grid, out var deed))
         {
-            var (name, suffix) = SplitShuttleName(fullName);
+            var (name, suffix) = DrydockNameRules.SplitShuttleName(fullName);
             deed.ShuttleName = name;
             deed.ShuttleNameSuffix = suffix;
             Dirty(grid, deed);
         }
 
         _metaData.SetEntityName(grid, fullName);
-    }
-
-    /// <summary>
-    /// The shipyard's own rule for telling a suffix from a name: a short last word with a dash
-    /// in it is the suffix. Duplicated from the private parse in the console file rather than
-    /// widened there, so the upstream file stays untouched.
-    /// </summary>
-    private static (string Name, string? Suffix) SplitShuttleName(string fullName)
-    {
-        var parts = fullName.Split(' ', StringSplitOptions.RemoveEmptyEntries);
-        var hasSuffix = parts.Length > 1 && parts[^1].Length < ShuttleDeedComponent.MaxSuffixLength && parts[^1].Contains('-');
-        return hasSuffix
-            ? (string.Join(' ', parts[..^1]), parts[^1])
-            : (fullName, null);
-    }
-
-    /// <summary>
-    /// The one shape a stored ship's new name may take. The client mirrors this for the counter
-    /// and the greyed button; this is the check that counts.
-    /// </summary>
-    public static bool IsValidStoredShipName(string name)
-    {
-        if (name.Length == 0 || name.Length > ShuttleDeedComponent.MaxNameLength)
-            return false;
-
-        foreach (var c in name)
-        {
-            if (!char.IsAsciiLetterOrDigit(c) && c != ' ' && c != '-')
-                return false;
-        }
-
-        return name.Trim().Length == name.Length;
     }
 
     /// <summary>
@@ -1926,7 +1872,7 @@ public sealed partial class ShipyardSystem
             return false;
 
         newName = newName.Trim();
-        if (!IsValidStoredShipName(newName))
+        if (!DrydockNameRules.IsValidStoredShipName(newName))
         {
             PlayDenySound(player, uid, component);
             return false;
@@ -1949,7 +1895,7 @@ public sealed partial class ShipyardSystem
             return false;
         }
 
-        var (_, suffix) = SplitShuttleName(header.ShipName);
+        var (_, suffix) = DrydockNameRules.SplitShuttleName(header.ShipName);
         var fullName = suffix == null ? newName : $"{newName} {suffix}";
 
         var outcome = await _drydockStore.TryRenameShip(shipId, owner, fullName, DrydockRoundId);

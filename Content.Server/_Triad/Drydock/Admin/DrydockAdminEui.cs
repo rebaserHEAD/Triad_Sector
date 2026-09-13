@@ -236,7 +236,7 @@ public sealed partial class DrydockAdminEui : BaseEui
             case DrydockAdminGrantBerthMessage grant:
                 _ = Act(async () =>
                 {
-                    if (!DrydockStore.TryParseClass(grant.MaxSizeClass, out var sizeClass))
+                    if (!ShipSizeRules.TryParseClass(grant.MaxSizeClass, out var sizeClass))
                         return "Refused: not a size class.";
 
                     var id = await _store.AddBerth(grant.OwnerUserId, sizeClass, DrydockBerthKind.Granted, 0, AdminId, RoundForAudit());
@@ -589,10 +589,10 @@ public sealed partial class DrydockAdminEui : BaseEui
             {
                 // The same preference the accept applies: smallest free berth of the recipient's
                 // that fits. A preview, since the berth is picked again when they accept.
-                int? lands = recipientBerths
-                    .Where(s => s.Occupant == null && DrydockStore.Fits(detail.Ship.SizeClass, s.Berth.MaxSizeClass))
-                    .OrderBy(s => DrydockStore.TryParseClass(s.Berth.MaxSizeClass, out var max) ? (int)max : int.MaxValue)
-                    .ThenBy(s => s.Berth.BerthId)
+                int? lands = ShipSizeRules.OrderByFitPreference(
+                        recipientBerths.Where(s => s.Occupant == null && ShipSizeRules.Fits(detail.Ship.SizeClass, s.Berth.MaxSizeClass)),
+                        s => s.Berth.MaxSizeClass,
+                        s => s.Berth.BerthId)
                     .Select(s => (int?)s.Berth.BerthId)
                     .FirstOrDefault();
 
@@ -623,13 +623,13 @@ public sealed partial class DrydockAdminEui : BaseEui
                 var appraisal = detail.Revisions.FirstOrDefault(r => r.Revision == detail.Ship.CurrentRevision)?.AppraisedValue;
 
                 var last = berths.FirstOrDefault(b => b.Berth.BerthId == detail.Ship.LastBerthId);
-                var lastFree = last is { Occupant: null } && DrydockStore.Fits(detail.Ship.SizeClass, last.Berth.MaxSizeClass);
+                var lastFree = last is { Occupant: null } && ShipSizeRules.Fits(detail.Ship.SizeClass, last.Berth.MaxSizeClass);
                 var fallback = lastFree
                     ? null
-                    : berths
-                        .Where(b => b.Occupant == null && DrydockStore.Fits(detail.Ship.SizeClass, b.Berth.MaxSizeClass))
-                        .OrderBy(b => DrydockStore.TryParseClass(b.Berth.MaxSizeClass, out var max) ? (int)max : int.MaxValue)
-                        .ThenBy(b => b.Berth.BerthId)
+                    : ShipSizeRules.OrderByFitPreference(
+                            berths.Where(b => b.Occupant == null && ShipSizeRules.Fits(detail.Ship.SizeClass, b.Berth.MaxSizeClass)),
+                            b => b.Berth.MaxSizeClass,
+                            b => b.Berth.BerthId)
                         .FirstOrDefault();
 
                 impoundDto = new DrydockAdminImpoundDto(
