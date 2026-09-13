@@ -21,7 +21,9 @@ public sealed partial class MapMigrationSystem : EntitySystem
     [Dependency] private IPrototypeManager _protoMan = default!;
     [Dependency] private IResourceManager _resMan = default!;
 
-    private static readonly string[] MigrationFiles = { "/migration.yml", "/nf_migration.yml", "/mono_migration.yml", "/triad_migration.yml" }; // Triad: custom migration file
+    // Triad: removed [private; the drydock's DrydockMigrationTable reads the same files and must not keep its own list]
+    // private static readonly string[] MigrationFiles = { "/migration.yml", "/nf_migration.yml", "/mono_migration.yml", "/triad_migration.yml" }; // Triad: custom migration file
+    internal static readonly string[] MigrationFiles = { "/migration.yml", "/nf_migration.yml", "/mono_migration.yml", "/triad_migration.yml" }; // Triad: custom migration file; internal for DrydockMigrationTable
 
     public override void Initialize()
     {

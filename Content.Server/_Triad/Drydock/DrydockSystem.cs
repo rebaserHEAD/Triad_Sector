@@ -1493,6 +1493,17 @@ public sealed partial class DrydockSystem : EntitySystem
     /// </remarks>
     internal static (byte[] Fingerprint, int FormatVersion) ReadDriftMetadata(string yaml)
     {
+        var (ids, formatVer) = ReadDriftIds(yaml);
+        return (DriftFingerprint(ids), formatVer);
+    }
+
+    /// <summary>
+    /// The fingerprint's input without the hash: the ordinal-sorted set of non-empty <c>proto</c>
+    /// ids and the <c>meta.format</c> value, 0 where either is absent. The drift detector and the
+    /// re-bake read this rather than the hash, because they need to know which ids moved.
+    /// </summary>
+    internal static (SortedSet<string> Ids, int FormatVersion) ReadDriftIds(string yaml)
+    {
         var formatVer = 0;
         var protos = new SortedSet<string>(StringComparer.Ordinal);
 
@@ -1501,7 +1512,7 @@ public sealed partial class DrydockSystem : EntitySystem
         parser.Consume<DocumentStart>();
 
         if (!parser.TryConsume<MappingStart>(out _))
-            return (Fingerprint(protos), formatVer);
+            return (protos, formatVer);
 
         while (!parser.TryConsume<MappingEnd>(out _))
         {
@@ -1521,11 +1532,15 @@ public sealed partial class DrydockSystem : EntitySystem
             }
         }
 
-        return (Fingerprint(protos), formatVer);
-
-        static byte[] Fingerprint(SortedSet<string> ids) =>
-            SHA256.HashData(Encoding.UTF8.GetBytes(string.Join('\n', ids)));
+        return (protos, formatVer);
     }
+
+    /// <summary>
+    /// SHA-256 over the ids joined with '\n'. The set must be ordinal-sorted, as
+    /// <see cref="ReadDriftIds"/> returns it: the value is persisted and compared across stores.
+    /// </summary>
+    internal static byte[] DriftFingerprint(SortedSet<string> ids) =>
+        SHA256.HashData(Encoding.UTF8.GetBytes(string.Join('\n', ids)));
 
     /// <summary>Reads <c>format</c> out of the meta mapping, skipping everything else in it.</summary>
     private static int ReadFormat(IParser parser)
