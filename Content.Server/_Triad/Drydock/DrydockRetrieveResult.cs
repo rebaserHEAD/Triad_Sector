@@ -21,8 +21,8 @@ public enum DrydockRetrieveResult : byte
     /// ask for it to be built first; it now loads onto a private paused map of its own, made by the
     /// loader as part of the load, so there is nothing left that can fail this way.
     ///
-    /// <para>Kept because the console's refusal switch reads it and it has a live locale string
-    /// behind it, and because renumbering this enum would silently re-map every value after it.</para>
+    /// <para>Nothing returns or reads it. Kept because the enum numbers implicitly, and removing it
+    /// would silently re-map every value after it.</para>
     /// </summary>
     NoStagingMap,
 

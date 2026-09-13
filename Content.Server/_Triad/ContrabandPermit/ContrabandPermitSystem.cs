@@ -242,6 +242,8 @@ public sealed partial class ContrabandPermitSystem : SharedContrabandPermitSyste
         return !string.IsNullOrEmpty(characterName) && permit.PermitOwnerName == characterName;
     }
 
+    // Triad: removed, no callers since the legacy ship save was deleted
+    /*
     public void ClearPermitItemsOnGrid(EntityUid gridUid, EntityUid user)
     {
         if (!_gridQuery.HasComp(gridUid))
@@ -290,12 +292,12 @@ public sealed partial class ContrabandPermitSystem : SharedContrabandPermitSyste
             Del(uid);
         }
     }
+    */
 
     /// <summary>
     /// Whether a permitted item may go away with a ship: the permit has to belong to whoever the ship
-    /// is being put away for, and the item has to still be permittable. The drydock store's half of
-    /// <see cref="ClearPermitItemsOnGrid"/>, judged per item so the store can apply it inside its own
-    /// purge rather than as a second walk of the grid.
+    /// is being put away for, and the item has to still be permittable. Judged per item so the drydock
+    /// store can apply this rule inside its own purge rather than as a second walk of the grid.
     ///
     /// <para>The holder is the strictest identity the caller can vouch for. A store made at a console
     /// has someone standing at it, so <paramref name="holderMind"/> is theirs and the permit's mind has

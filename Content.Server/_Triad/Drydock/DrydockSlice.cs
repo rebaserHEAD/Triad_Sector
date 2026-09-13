@@ -116,20 +116,6 @@ public static class DrydockPhases
         };
     }
 
-    /// <summary>
-    /// True when the phase is one un-yieldable call, so progress cannot move inside it. These are
-    /// exactly the four bulk calls content cannot interrupt: the grid serialize, the round-trip
-    /// validation load, the retrieve's grid load, and the dock. A client showing a bar can use this
-    /// to say "working" rather than implying a stall.
-    /// </summary>
-    public static bool IsAtomic(DrydockPhase phase)
-    {
-        return phase is DrydockPhase.Serialize
-            or DrydockPhase.Validate
-            or DrydockPhase.Load
-            or DrydockPhase.Dock;
-    }
-
     public static IReadOnlyList<DrydockPhase> Store => StorePhases;
 
     public static IReadOnlyList<DrydockPhase> Retrieve => RetrievePhases;
