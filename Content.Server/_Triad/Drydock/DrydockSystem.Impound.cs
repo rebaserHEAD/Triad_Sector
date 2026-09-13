@@ -4,6 +4,7 @@ using System.Threading.Tasks;
 using Content.Server._NF.PublicTransit;
 using Content.Server.Nuke;
 using Content.Server.Spawners.Components;
+using Content.Shared.Anomaly.Components;
 using Content.Shared.Buckle;
 using Content.Shared.Explosion.Components;
 using Content.Shared.Ghost;
@@ -68,10 +69,11 @@ public sealed partial class DrydockSystem
 
     /// <summary>
     /// Clears what <see cref="HasHazardAboard"/> refuses for, so the gate that follows has nothing
-    /// left to find. Each of the three gets the treatment its reason for blocking calls for, and
+    /// left to find. Each of the four gets the treatment its reason for blocking calls for, and
     /// those are not the same treatment.
     ///
-    /// <para>An armed nuke and a singularity ARE the hazard, so they go.
+    /// <para>An armed nuke, a singularity and an anomaly ARE the hazard, so they go. An anomaly's own
+    /// shutdown ends it without dropping a core, so nothing is left behind to take its place.
     /// <c>ActiveTimerTriggerComponent</c> is not a hazard component at all: the trigger system adds
     /// it to anything with a running countdown, so deleting every carrier would take innocuous
     /// hardware with it. The narrow reason a countdown blocks is that it is an ordinary data field
@@ -103,6 +105,13 @@ public sealed partial class DrydockSystem
 
         var singularities = AllEntityQuery<SingularityComponent, TransformComponent>();
         while (singularities.MoveNext(out var uid, out _, out var xform))
+        {
+            if (xform.GridUid == gridUid)
+                doomed.Add(uid);
+        }
+
+        var anomalies = AllEntityQuery<AnomalyComponent, TransformComponent>();
+        while (anomalies.MoveNext(out var uid, out _, out var xform))
         {
             if (xform.GridUid == gridUid)
                 doomed.Add(uid);

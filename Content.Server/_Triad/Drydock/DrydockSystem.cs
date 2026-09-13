@@ -24,6 +24,7 @@ using Content.Shared._Triad.CCVar;
 using Content.Shared._Triad.ContrabandPermit;
 using Content.Shared._Triad.Shipyard.Save.Contraband;
 using Content.Shared._Triad.ShipSize;
+using Content.Shared.Anomaly.Components;
 using Content.Shared.Damage;
 using Content.Shared.Explosion.Components;
 using Content.Shared.FixedPoint;
@@ -1369,9 +1370,14 @@ public sealed partial class DrydockSystem : EntitySystem
     }
 
     /// <summary>
-    /// Whether an armed nuke, an active countdown, or a singularity is aboard. Each is a world query
-    /// filtered by grid rather than a child walk, because hazards are rare and the transform's grid
-    /// resolves through container nesting: a nuke stashed in a crate still reports the ship.
+    /// Whether an armed nuke, an active countdown, a singularity, or an anomaly is aboard. Each is a
+    /// world query filtered by grid rather than a child walk, because hazards are rare and the
+    /// transform's grid resolves through container nesting: a nuke stashed in a crate still reports
+    /// the ship.
+    ///
+    /// <para>An anomaly is refused for the same reason as a live countdown: its pulse and
+    /// supercritical timers are ordinary data fields that resume on thaw, and it does not come back
+    /// from a document the way it went in.</para>
     /// </summary>
     private bool HasHazardAboard(EntityUid gridUid)
     {
@@ -1391,6 +1397,13 @@ public sealed partial class DrydockSystem : EntitySystem
 
         var singularities = AllEntityQuery<SingularityComponent, TransformComponent>();
         while (singularities.MoveNext(out _, out _, out var xform))
+        {
+            if (xform.GridUid == gridUid)
+                return true;
+        }
+
+        var anomalies = AllEntityQuery<AnomalyComponent, TransformComponent>();
+        while (anomalies.MoveNext(out _, out _, out var xform))
         {
             if (xform.GridUid == gridUid)
                 return true;
