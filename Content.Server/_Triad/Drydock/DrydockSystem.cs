@@ -41,6 +41,8 @@ using Robust.Shared.EntitySerialization;
 using Robust.Shared.EntitySerialization.Systems;
 using Robust.Shared.Map.Components;
 using Robust.Shared.Serialization.Manager;
+using Robust.Shared.Serialization.Markdown;
+using Robust.Shared.Serialization.Markdown.Mapping;
 using Robust.Shared.Utility;
 using YamlDotNet.Core;
 using YamlDotNet.Core.Events;
@@ -554,13 +556,13 @@ public sealed partial class DrydockSystem : EntitySystem
 
             MarkPhase(DrydockPhase.Serialize);
 
-            // The other bulk call, for the same reason: the deserializer's stages are public but
-            // every per-entity loop inside them is private, so the scratch load cannot be sliced
-            // below stage granularity and is not worth splitting at stage granularity either.
+            // The parse half of the reload can leave the main thread; the build half cannot, so this
+            // is now two marks instead of one. See DetectRoundTripMismatch for why.
             await slice.Begin(DrydockPhase.Validate, 0);
             GuardStoreResume(ctx);
 
-            if (DetectRoundTripMismatch(gridUid, yaml, jobId, shipId, out var liveEntities))
+            var (mismatch, liveEntities) = await DetectRoundTripMismatch(ctx, slice, timer, yaml, jobId, shipId);
+            if (mismatch)
                 return new DrydockStoreOutcome(DrydockStoreResult.ValidationFailed, null);
 
             MarkPhase(DrydockPhase.Validate);
@@ -938,6 +940,16 @@ public sealed partial class DrydockSystem : EntitySystem
     /// preserving the count is caught too. The scratch map never initializes or ticks, so it cannot
     /// touch the live simulation, and it is deleted on every path out of this call.
     ///
+    /// <para>The reload is two calls, not one. Parsing the YAML text into a document is pure CPU
+    /// with no entity access, so it runs on a threadpool thread behind <see cref="ParseDocument"/>
+    /// and the pipeline is free to suspend around it; that hop is what the <c>validate_parse</c>
+    /// timer key measures. Building the parsed document into entities and diffing them against the
+    /// live grid stays one atomic main-thread call, because the entities it creates have to be built
+    /// and started within a single tick: a yield in the middle would hand every other system's
+    /// Update a half-built scratch entity for however long the slice budget left it there. That call
+    /// is what the caller's own <c>validate</c> mark now measures alone, so the two keys together
+    /// show how the old single number split.</para>
+    ///
     /// <para>That last clause used to be a promise about the whole store and is now only a promise
     /// about this method: the store around it spans ticks. Nothing inside here yields, so the map
     /// still lives and dies within one call and the tag it is given is not load-bearing today. It is
@@ -962,55 +974,106 @@ public sealed partial class DrydockSystem : EntitySystem
     /// vessel that hit depended on the instant the store ran. The roster sweep caught it
     /// refusing different vessels on identical back-to-back runs.</para>
     /// </summary>
-    /// <returns>True on mismatch, meaning the store must abort.</returns>
-    /// <param name="liveEntities">
-    /// How many entities the live grid holds, counted here because this already walks the tree for
-    /// the comparison. Zero when the document would not reload at all.
-    /// </param>
-    private bool DetectRoundTripMismatch(EntityUid gridUid, string yaml, int jobId, Guid shipId, out int liveEntities)
+    /// <returns>
+    /// A mismatch flag, true meaning the store must abort, paired with how many entities the live
+    /// grid holds, counted here because this already walks the tree for the comparison. Zero on
+    /// every abort path, since none of them reach the count.
+    /// </returns>
+    private async Task<(bool Mismatch, int LiveEntities)> DetectRoundTripMismatch(
+        DrydockStoreContext ctx, IDrydockSlice slice, DrydockPhaseTimer timer, string yaml, int jobId, Guid shipId)
     {
-        liveEntities = 0;
-        using var reader = new StringReader(yaml);
+        var gridUid = ctx.GridUid;
+
+        // The parse alone, off-thread: no entity is touched until the data node comes back.
+        var data = await slice.Await(Task.Run(() => ParseDocument(yaml)));
+        GuardStoreResume(ctx);
+        timer.Mark("validate_parse");
+
+        if (data == null)
+        {
+            Log.Warning($"Drydock store validation failed for {ToPrettyString(gridUid)}: the document just written would not reload.");
+            return (true, 0);
+        }
+
         var options = new DeserializationOptions
         {
             InitializeMaps = false,
             PauseMaps = true,
         };
 
-        if (!_mapLoader.TryLoadGrid(reader, "drydock/validation", out var scratchMap, out var scratchGrid, options))
+        // Replicates the TextReader TryLoadGrid wrapper by hand, because that wrapper parses and
+        // builds in one call and there is no overload that takes an already-parsed document and
+        // still owns creating the target map.
+        var mapUid = _maps.CreateMap(out var mapId, runMapInit: false);
+        _maps.SetPaused(mapUid, true);
+
+        var loadOptions = new MapLoadOptions
         {
+            MergeMap = mapId,
+            DeserializationOptions = options,
+            ExpectedCategory = FileCategory.Grid,
+        };
+
+        var loaded = _mapLoader.TryLoadGeneric(data, "drydock/validation", out var result, loadOptions);
+
+        if (!loaded || result!.Grids.Count != 1)
+        {
+            if (result != null)
+            {
+                foreach (var uid in result.Entities)
+                {
+                    if (Exists(uid))
+                        Del(uid);
+                }
+            }
+
+            Del(mapUid);
             Log.Warning($"Drydock store validation failed for {ToPrettyString(gridUid)}: the document just written would not reload.");
-            return true;
+            return (true, 0);
         }
 
-        TagStagingMap(scratchMap!.Value.Owner, jobId, DrydockStagingKind.Validation, shipId);
+        var scratchGrid = result.Grids.Single();
+        TagStagingMap(mapUid, jobId, DrydockStagingKind.Validation, shipId);
 
         try
         {
             var live = CountChildPrototypes(gridUid);
-            var scratch = CountChildPrototypes(scratchGrid!.Value.Owner);
+            var scratch = CountChildPrototypes(scratchGrid.Owner);
 
             var liveCount = live.Values.Sum();
             var scratchCount = scratch.Values.Sum();
-            liveEntities = liveCount;
+            var liveEntities = liveCount;
             if (liveCount != scratchCount)
             {
                 Log.Warning($"Drydock store validation failed for {ToPrettyString(gridUid)}: entity count mismatch (live={liveCount}, scratch={scratchCount}).");
-                return true;
+                return (true, liveEntities);
             }
 
             if (!PrototypeCountsMatch(live, scratch, out var detail))
             {
                 Log.Warning($"Drydock store validation failed for {ToPrettyString(gridUid)}: composition mismatch ({detail}).");
-                return true;
+                return (true, liveEntities);
             }
 
-            return false;
+            return (false, liveEntities);
         }
         finally
         {
-            Del(scratchMap!.Value.Owner);
+            Del(mapUid);
         }
+    }
+
+    /// <summary>
+    /// The parse half of the reload, split out so it can run off the main thread: pure text-to-node
+    /// work with no entity access. No logging in here, since a Task.Run body runs off-thread and the
+    /// caller is the one positioned to attribute a failure to a grid and a ship.
+    /// </summary>
+    /// <returns>The parsed document, or null if the stream held anything but exactly one.</returns>
+    private static MappingDataNode? ParseDocument(string yaml)
+    {
+        using var reader = new StringReader(yaml);
+        var documents = DataNodeParser.ParseYamlStream(reader).ToArray();
+        return documents.Length == 1 ? (MappingDataNode) documents[0].Root : null;
     }
 
     private Dictionary<string, int> CountChildPrototypes(EntityUid gridUid)
