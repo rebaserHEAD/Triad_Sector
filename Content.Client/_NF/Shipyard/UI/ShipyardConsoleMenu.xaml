@@ -148,7 +148,8 @@
         </BoxContainer>
     </BoxContainer>
     <!-- Triad: drydock tab. One list, one row per berth. The ship on the inserted card's deed is a
-         card at the top with a single Store dropdown; everything rarer sits behind a row's menu.
+         card at the top with a single Store dropdown, or, for a blank card while the operator has a
+         ship out, that ship with Transfer deed; everything rarer sits behind a row's menu.
          Berths and the pending transfers are the operator's own, filled by the server. -->
     <Control Name="DrydockTabRoot">
     <BoxContainer Name="DrydockTab" Orientation="Vertical" Margin="5 0 5 0">
@@ -160,6 +161,10 @@
                 <RichTextLabel Name="DeedShipLabel" HorizontalExpand="True" VerticalAlignment="Center" />
                 <!-- Store is the dropdown itself: it lists every free berth, the ones too small greyed. -->
                 <ui:DrydockMenuButton Name="StoreButton" StyleClasses="ButtonSquare ButtonPrimary" MinWidth="130" AlignRight="True" />
+                <!-- In Store's place when the card carries no deed and the operator has a ship out:
+                     moves that ship's deed onto the card, wherever the ship is. -->
+                <Button Name="ReissueButton" Visible="False" StyleClasses="ButtonSquare ButtonPrimary" MinWidth="130"
+                        Text="{Loc 'shipyard-console-reissue-button'}" ToolTip="{Loc 'shipyard-console-reissue-tooltip'}" />
             </BoxContainer>
         </PanelContainer>
 
@@ -193,7 +198,8 @@
             </BoxContainer>
         </BoxContainer>
     </BoxContainer>
-    <!-- Triad: the lockout. Shown when the inserted card's ship belongs to another account. It
+    <!-- Triad: the lockout. Shown when the inserted card's ship belongs to another account, and with
+         its own lines when a voucher is in the slot or the operator is barred from the drydock. It
          swallows input, but the server refuses every message under it regardless; this is what the
          player sees, not what stops them. -->
     <PanelContainer Name="LockoutPanel" Visible="False" MouseFilter="Stop" VerticalExpand="True" HorizontalExpand="True">
@@ -210,7 +216,7 @@
         <BoxContainer Orientation="Vertical" VerticalAlignment="Center" HorizontalAlignment="Center">
             <Label Name="LockoutTitle" Text="{Loc 'shipyard-console-lockout-title'}" Modulate="#ff4a4a" Align="Center" />
             <Label Name="LockoutSubtitle" Text="{Loc 'shipyard-console-lockout-subtitle'}" Modulate="#ffb0b0" Align="Center" Margin="0 10 0 0" />
-            <Label Text="{Loc 'shipyard-console-lockout-body'}" Modulate="#d08080" Align="Center" Margin="0 6 0 0" />
+            <Label Name="LockoutBody" Text="{Loc 'shipyard-console-lockout-body'}" Modulate="#d08080" Align="Center" Margin="0 6 0 0" />
         </BoxContainer>
     </PanelContainer>
     </Control>

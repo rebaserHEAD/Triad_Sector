@@ -23,6 +23,7 @@ using Content.Shared._Triad.CCVar;
 using Content.Shared._Triad.Drydock;
 using Content.Shared._Triad.Shipyard.Save;
 using Content.Shared._Triad.ShipSize;
+using Content.Shared.Access.Components;
 using Content.Shared.Database;
 using Content.Shared.Forensics.Components;
 using Content.Shared.Preferences;
@@ -141,6 +142,10 @@ public sealed partial class ShipyardSystem
             if (paid > 0 && !TerminatingOrDeleted(purchaser))
                 _bank.TryBankDeposit(purchaser, paid, new MarketRecord { Kind = MarketTransactionKind.DrydockBerth });
         }
+
+        // The purchase handler refreshes the tab in the same tick it raises the purchase, which is
+        // before this write lands, so that read never sees the new berth. Refresh again now it has.
+        KickDrydockRefreshForAccount(owner);
     }
 
     // ---------------------------------------------------------------- Message handlers
@@ -160,8 +165,6 @@ public sealed partial class ShipyardSystem
         catch (Exception e)
         {
             Log.Error($"Drydock: store from console {ToPrettyString(uid)} by {ToPrettyString(player)} threw: {e}");
-            if (!TerminatingOrDeleted(player))
-                ConsolePopup(player, Loc.GetString("shipyard-console-store-failed"));
             // Before the refresh, not after: the refresh is what publishes the cached percentage,
             // and a throw from anywhere the pipeline's own finally does not cover would leave the
             // console reporting a store that is no longer running.
@@ -182,8 +185,6 @@ public sealed partial class ShipyardSystem
         catch (Exception e)
         {
             Log.Error($"Drydock: retrieve of {args.ShipId} from console {ToPrettyString(uid)} by {ToPrettyString(player)} threw: {e}");
-            if (!TerminatingOrDeleted(player))
-                ConsolePopup(player, Loc.GetString("shipyard-console-retrieve-failed"));
             ClearDrydockProgress(uid, component); // Same reason as the store handler's.
             await RefreshAfterRefusal(uid, component, player, (ShipyardConsoleUiKey)args.UiKey);
         }
@@ -246,8 +247,6 @@ public sealed partial class ShipyardSystem
         catch (Exception e)
         {
             Log.Error($"Drydock: transfer offer at {ToPrettyString(uid)} by {ToPrettyString(player)} threw: {e}");
-            if (!TerminatingOrDeleted(player))
-                ConsolePopup(player, Loc.GetString("shipyard-console-transfer-failed"));
         }
     }
 
@@ -293,8 +292,6 @@ public sealed partial class ShipyardSystem
         catch (Exception e)
         {
             Log.Error($"Drydock: sale of {args.ShipId} at {ToPrettyString(uid)} by {ToPrettyString(player)} threw: {e}");
-            if (!TerminatingOrDeleted(player))
-                ConsolePopup(player, Loc.GetString("shipyard-console-sell-failed"));
         }
     }
 
@@ -340,8 +337,6 @@ public sealed partial class ShipyardSystem
         catch (Exception e)
         {
             Log.Error($"Drydock: transfer accept at {ToPrettyString(uid)} by {ToPrettyString(player)} threw: {e}");
-            if (!TerminatingOrDeleted(player))
-                ConsolePopup(player, Loc.GetString("shipyard-console-transfer-failed"));
         }
     }
 
@@ -357,8 +352,6 @@ public sealed partial class ShipyardSystem
         catch (Exception e)
         {
             Log.Error($"Drydock: reclaim of {args.ShipId} at {ToPrettyString(uid)} by {ToPrettyString(player)} threw: {e}");
-            if (!TerminatingOrDeleted(player))
-                ConsolePopup(player, Loc.GetString("shipyard-console-impound-failed"));
         }
     }
 
@@ -374,8 +367,21 @@ public sealed partial class ShipyardSystem
         catch (Exception e)
         {
             Log.Error($"Drydock: abandon of {args.ShipId} at {ToPrettyString(uid)} by {ToPrettyString(player)} threw: {e}");
-            if (!TerminatingOrDeleted(player))
-                ConsolePopup(player, Loc.GetString("shipyard-console-impound-failed"));
+        }
+    }
+
+    private async void OnReissueDeedMessage(EntityUid uid, ShipyardConsoleComponent component, ShipyardConsoleReissueDeedMessage args)
+    {
+        if (args.Actor is not { Valid: true } player)
+            return;
+
+        try
+        {
+            await TryReissueDeed(uid, component, player, args.Ship, (ShipyardConsoleUiKey)args.UiKey);
+        }
+        catch (Exception e)
+        {
+            Log.Error($"Drydock: deed reissue of {args.Ship} at {ToPrettyString(uid)} by {ToPrettyString(player)} threw: {e}");
         }
     }
 
@@ -406,6 +412,7 @@ public sealed partial class ShipyardSystem
             component.CachedOffers = new();
             component.CachedCaptains = new();
             component.CachedImpounded = new();
+            CacheDrydockAccess(component, player, null);
             RefreshDrydockUi(uid, component, player, uiKey);
             return;
         }
@@ -543,7 +550,263 @@ public sealed partial class ShipyardSystem
         component.CachedCaptains = captainInfos;
         component.CachedImpounded = impoundedInfos;
         component.CachedDeedShip = BuildDeedShip(uid, targetId, rows, slots);
+        CacheDrydockAccess(component, player, targetId);
         RefreshDrydockUi(uid, component, player, uiKey);
+    }
+
+    // ---------------------------------------------------------------- Access, ships out, deed reissue
+
+    /// <summary>
+    /// Reads who the operator is into the console's caches: barred or not, the civilian ships their
+    /// account has out, and whether the inserted card can take a deed. World reads, so they are
+    /// taken at the swap and never across an await.
+    /// </summary>
+    private void CacheDrydockAccess(ShipyardConsoleComponent component, EntityUid player, EntityUid? targetId)
+    {
+        component.CachedOperatorBarred = DrydockBarsOperator(player, component);
+        component.CachedShipsOut = TryGetOperatorAccount(player, out var account)
+            ? CivilianShipsOut(account)
+                .Select(grid => new DrydockReissueShipInfo(
+                    GetNetEntity(grid),
+                    TryComp<ShuttleDeedComponent>(grid, out var deed) ? GetFullName(deed) : Name(grid),
+                    TryComp<MapGridComponent>(grid, out var map) ? _drydockSizes.GetSizeClass((grid, map)).ToString() : null))
+                .ToList()
+            : new();
+        component.CachedCanReissueToCard = targetId is { } card
+            && HasComp<IdCardComponent>(card)
+            && !HasComp<ShipyardVoucherComponent>(card)
+            && !HasComp<ShuttleDeedComponent>(card);
+    }
+
+    /// <summary>The access half of the console state, read from the caches. Called by the upstream state builder through one marked line.</summary>
+    internal void ApplyDrydockAccess(EntityUid uid, ShipyardConsoleInterfaceState state)
+    {
+        if (!TryComp<ShipyardConsoleComponent>(uid, out var console))
+            return;
+
+        state.DrydockOperatorBarred = console.CachedOperatorBarred;
+        state.ShipsOut = console.CachedShipsOut;
+        state.CanReissueToCard = console.CachedCanReissueToCard;
+    }
+
+    /// <summary>
+    /// Every civilian hull the account has out in the world: owned by it, not issued on a voucher
+    /// and not a faction hull. Those two are provisioned equipment, never counted and never stored.
+    ///
+    /// <para>Read from the world rather than the drydock rows, because a hull bought this round has
+    /// no row until its first store. <c>AllEntityQuery</c> and not the enumerator: a hull mid-store
+    /// sits paused on a private staging map for several seconds and is still out for that whole
+    /// window, and the paused-skipping enumerator would drop it.</para>
+    /// </summary>
+    internal List<EntityUid> CivilianShipsOut(Guid account)
+    {
+        var ships = new List<EntityUid>();
+        var query = AllEntityQuery<ShipOwnershipComponent>();
+        while (query.MoveNext(out var grid, out var ownership))
+        {
+            if (ownership.OwnerUserId.UserId != account || TerminatingOrDeleted(grid))
+                continue;
+
+            if (HasComp<ShipSavingBlacklistComponent>(grid)
+                || TryComp<ShuttleDeedComponent>(grid, out var deed) && deed.PurchasedWithVoucher)
+            {
+                continue;
+            }
+
+            ships.Add(grid);
+        }
+
+        return ships;
+    }
+
+    /// <summary>
+    /// Accounts with a retrieve between its gate and its hull landing. The hull carries no ownership
+    /// until the pipeline hands it back, so without this two presses at two consoles would both see
+    /// nothing out and both land a ship.
+    /// </summary>
+    private readonly HashSet<Guid> _retrievesInFlight = new();
+
+    /// <summary>
+    /// Whether the account may bring another civilian ship out: nothing out and no retrieve in flight.
+    /// One ship out per account is the rule the purchase and the retrieve both enforce.
+    /// </summary>
+    internal bool HasShipOut(Guid account)
+    {
+        return _retrievesInFlight.Contains(account) || CivilianShipsOut(account).Count > 0;
+    }
+
+    /// <summary>
+    /// The purchase half of one ship out, called from the upstream purchase handler through one
+    /// marked line. A voucher purchase never reaches it: provisioned equipment is not counted. Off
+    /// with the drydock, whose tab is what tells the player which ship they have out.
+    /// </summary>
+    internal bool RefuseShipAlreadyOut(EntityUid uid, ShipyardConsoleComponent component, EntityUid player)
+    {
+        if (!_configManager.GetCVar(TriadCCVars.DrydockEnabled))
+            return false;
+
+        if (!TryGetOperatorAccount(player, out var account) || !HasShipOut(account))
+            return false;
+
+        PlayDenySound(player, uid, component);
+        return true;
+    }
+
+    /// <summary>
+    /// The server half of the lockout for the upstream deed verbs (sell, rename, unassign). A deed is a holder
+    /// claim and cards get lent, lost and stolen, so a card is never proof of ownership: the account
+    /// behind the press has to own the hull. A hull issued on a voucher, or one no account owns, is
+    /// left to upstream's rules.
+    /// </summary>
+    internal bool RefuseDeedNotOwned(EntityUid uid, ShipyardConsoleComponent component, EntityUid player, ShuttleDeedComponent deed, string verb)
+    {
+        if (deed.PurchasedWithVoucher
+            || deed.ShuttleUid is not { Valid: true } shuttle
+            || !TryComp<ShipOwnershipComponent>(shuttle, out var ownership))
+        {
+            return false;
+        }
+
+        if (!TryGetOperatorAccount(player, out var account))
+        {
+            PlayDenySound(player, uid, component);
+            return true;
+        }
+
+        if (ownership.OwnerUserId.UserId == account)
+            return false;
+
+        Guid? knownId = TryComp<DrydockIdentityComponent>(shuttle, out var identity) && identity.ShipId != Guid.Empty
+            ? identity.ShipId
+            : null;
+        RefuseAccess(uid, component, player, account, knownId, Name(shuttle), ownership.OwnerUserId.UserId, null, verb);
+        return true;
+    }
+
+    /// <summary>
+    /// Writes the character at the console onto the hull's row as its captain, for the registry. Only
+    /// ever called after a verb the owning account's character just completed (store, retrieve,
+    /// import, accept), so the name is always one of the owner's characters. Fire and forget: it is
+    /// display only, and a failure is a log line, never a refusal.
+    /// </summary>
+    private void RecordCaptain(Guid shipId, EntityUid player)
+    {
+        var name = Name(player).Trim();
+        if (name.Length == 0)
+            return;
+
+        _ = RecordCaptainAsync(shipId, name);
+    }
+
+    private async Task RecordCaptainAsync(Guid shipId, string name)
+    {
+        try
+        {
+            await _drydockStore.SetCaptainName(shipId, name);
+        }
+        catch (Exception e)
+        {
+            Log.Error($"Drydock: recording {name} as captain of {shipId} threw: {e.Message}");
+        }
+    }
+
+    /// <summary>
+    /// Refuses a drydock verb from an operator the drydock bars. Faction crews are issued their
+    /// vessels and may not store, retrieve or keep a garage at all; the tab draws the access-denied
+    /// screen over every one of these, and this is what stops a press that gets past it.
+    /// </summary>
+    private bool RefuseBarredOperator(EntityUid uid, ShipyardConsoleComponent component, EntityUid player)
+    {
+        if (!DrydockBarsOperator(player, component))
+            return false;
+
+        PlayDenySound(player, uid, component);
+        return true;
+    }
+
+    /// <summary>
+    /// Moves the deed to one of the operator's ships that is out onto the card in the slot, wherever
+    /// the ship is, and strips it from every other card. A deed proves a claim; the hull does not
+    /// need to be alongside for the claim to be written down again.
+    ///
+    /// <para>Every other card loses it, not only the last holder: a lost or stolen card, and any copy
+    /// made from it, goes dead in the same press. Crew who need in again get guest access at the
+    /// helm, which the owner controls.</para>
+    /// </summary>
+    internal async Task<bool> TryReissueDeed(EntityUid uid, ShipyardConsoleComponent component, EntityUid player, NetEntity shipNet, ShipyardConsoleUiKey uiKey)
+    {
+        if (RefuseBarredOperator(uid, component, player))
+            return false;
+
+        if (component.TargetIdSlot.ContainerSlot?.ContainedEntity is not { Valid: true } targetId
+            || !HasComp<IdCardComponent>(targetId)
+            || HasComp<ShipyardVoucherComponent>(targetId)
+            || HasComp<ShuttleDeedComponent>(targetId))
+        {
+            PlayDenySound(player, uid, component);
+            return false;
+        }
+
+        if (!TryGetOperatorAccount(player, out var account))
+            return false;
+
+        if (!TryGetEntity(shipNet, out var maybeGrid)
+            || maybeGrid is not { } grid
+            || TerminatingOrDeleted(grid)
+            || !TryComp<ShipOwnershipComponent>(grid, out var ownership))
+        {
+            PlayDenySound(player, uid, component);
+            return false;
+        }
+
+        if (ownership.OwnerUserId.UserId != account)
+        {
+            Guid? knownId = TryComp<DrydockIdentityComponent>(grid, out var identity) && identity.ShipId != Guid.Empty
+                ? identity.ShipId
+                : null;
+            RefuseAccess(uid, component, player, account, knownId, Name(grid), ownership.OwnerUserId.UserId, null, "reissue deed");
+            return false;
+        }
+
+        // Provisioned hulls are not the drydock's to re-key, and a hull mid-store is about to have
+        // its deeds settled by the store itself.
+        if (!CivilianShipsOut(account).Contains(grid) || HasComp<DrydockInProgressComponent>(grid))
+        {
+            PlayDenySound(player, uid, component);
+            return false;
+        }
+
+        var loadedFromSave = TryComp<ShuttleDeedComponent>(grid, out var gridDeed) && gridDeed.LoadedFromSave;
+
+        MintDeeds(targetId, grid, player);
+        if (TryComp<ShuttleDeedComponent>(targetId, out var cardDeed))
+        {
+            // The sale rule rides the card; a reissue is not a way to make an unsellable hull sellable.
+            cardDeed.LoadedFromSave = loadedFromSave;
+            Dirty(targetId, cardDeed);
+        }
+
+        AddNewShuttleDeedAccessLevels(targetId, component);
+
+        // Collected before acting, because removing inside the walk mutates what is being walked.
+        // AllEntityQuery for the same reason as the count: a card can sit on a paused map.
+        var stale = new List<EntityUid>();
+        var deeds = AllEntityQuery<ShuttleDeedComponent>();
+        while (deeds.MoveNext(out var holder, out var deed))
+        {
+            if (deed.ShuttleUid == grid && holder != grid && holder != targetId)
+                stale.Add(holder);
+        }
+
+        foreach (var holder in stale)
+            RemComp<ShuttleDeedComponent>(holder);
+
+        _adminLogger.Add(LogType.ShipYardUsage, LogImpact.Medium,
+            $"{ToPrettyString(player):actor} reissued the deed to {ToPrettyString(grid)} onto {ToPrettyString(targetId)} via {ToPrettyString(uid)}, stripping {stale.Count} other card(s)");
+
+        PlayConfirmSound(player, uid, component);
+        await RefreshDrydockState(uid, component, player, uiKey);
+        return true;
     }
 
     /// <summary>
@@ -798,7 +1061,6 @@ public sealed partial class ShipyardSystem
             Reason = verb,
         });
 
-        ConsolePopup(player, Loc.GetString("shipyard-console-not-owner"));
         PlayDenySound(player, uid, component);
     }
 
@@ -864,21 +1126,18 @@ public sealed partial class ShipyardSystem
     {
         if (component.TargetIdSlot.ContainerSlot?.ContainedEntity is not { Valid: true } targetId)
         {
-            ConsolePopup(player, Loc.GetString("shipyard-console-no-idcard"));
             PlayDenySound(player, uid, component);
             return null;
         }
 
         if (!TryComp<ShuttleDeedComponent>(targetId, out var deed) || deed.ShuttleUid is not { Valid: true } shuttleUid)
         {
-            ConsolePopup(player, Loc.GetString("shipyard-console-no-deed"));
             PlayDenySound(player, uid, component);
             return null;
         }
 
         if (DrydockBarsOperator(player, component))
         {
-            ConsolePopup(player, Loc.GetString("shipyard-console-drydock-faction"));
             PlayDenySound(player, uid, component);
             return null;
         }
@@ -890,7 +1149,6 @@ public sealed partial class ShipyardSystem
         // else's ship, so it is a refusal and not a timeline row.
         if (!TryComp<ShipOwnershipComponent>(shuttleUid, out var ownership))
         {
-            ConsolePopup(player, Loc.GetString("shipyard-console-store-unregistered"));
             PlayDenySound(player, uid, component);
             return null;
         }
@@ -911,14 +1169,12 @@ public sealed partial class ShipyardSystem
         // a voucher says so. Both are what the ship-save path refuses, for the same reason.
         if (HasComp<ShipSavingBlacklistComponent>(shuttleUid))
         {
-            ConsolePopup(player, Loc.GetString("shipyard-console-store-faction-ship"));
             PlayDenySound(player, uid, component);
             return null;
         }
 
         if (deed.PurchasedWithVoucher)
         {
-            ConsolePopup(player, Loc.GetString("shipyard-console-store-voucher-ship"));
             PlayDenySound(player, uid, component);
             return null;
         }
@@ -927,7 +1183,6 @@ public sealed partial class ShipyardSystem
         // belongs to, not parked somewhere in the sector while its captain files it remotely.
         if (_station.GetOwningStation(uid) is not { Valid: true } station)
         {
-            ConsolePopup(player, Loc.GetString("shipyard-console-invalid-station"));
             PlayDenySound(player, uid, component);
             return null;
         }
@@ -939,14 +1194,12 @@ public sealed partial class ShipyardSystem
         // these gates.
         if (HasComp<DrydockInProgressComponent>(shuttleUid))
         {
-            ConsolePopup(player, Loc.GetString(StoreRefusalLoc(DrydockStoreResult.InProgress)));
             PlayDenySound(player, uid, component);
             return (DrydockStoreResult.InProgress, null);
         }
 
         if (!IsDockedToStation(shuttleUid, station))
         {
-            ConsolePopup(player, Loc.GetString("shipyard-console-store-not-docked"));
             PlayDenySound(player, uid, component);
             return null;
         }
@@ -985,7 +1238,6 @@ public sealed partial class ShipyardSystem
 
         if (result.Result != DrydockStoreResult.Success)
         {
-            ConsolePopup(player, Loc.GetString(StoreRefusalLoc(result.Result)));
             PlayDenySound(player, uid, component);
             await RefreshAfterRefusal(uid, component, player, uiKey);
             return result;
@@ -996,7 +1248,9 @@ public sealed partial class ShipyardSystem
         if (!TerminatingOrDeleted(targetId))
             RemComp<ShuttleDeedComponent>(targetId);
 
-        ConsolePopup(player, Loc.GetString("shipyard-console-store-success"));
+        if (result.ShipId is { } storedId)
+            RecordCaptain(storedId, player);
+
         PlayConfirmSound(player, uid, component);
 
         await RefreshDrydockState(uid, component, player, uiKey);
@@ -1015,7 +1269,6 @@ public sealed partial class ShipyardSystem
     {
         if (component.TargetIdSlot.ContainerSlot?.ContainedEntity is not { Valid: true } targetId)
         {
-            ConsolePopup(player, Loc.GetString("shipyard-console-no-idcard"));
             PlayDenySound(player, uid, component);
             return null;
         }
@@ -1024,14 +1277,12 @@ public sealed partial class ShipyardSystem
         // a ship existing twice. Refusing here keeps a card from carrying two claims at once.
         if (HasComp<ShuttleDeedComponent>(targetId))
         {
-            ConsolePopup(player, Loc.GetString("shipyard-console-already-deeded"));
             PlayDenySound(player, uid, component);
             return null;
         }
 
         if (DrydockBarsOperator(player, component))
         {
-            ConsolePopup(player, Loc.GetString("shipyard-console-drydock-faction"));
             PlayDenySound(player, uid, component);
             return null;
         }
@@ -1040,7 +1291,6 @@ public sealed partial class ShipyardSystem
         // be called in on. The ship-load path refuses it for the same reason.
         if (HasComp<ShipyardVoucherComponent>(targetId))
         {
-            ConsolePopup(player, Loc.GetString("shipyard-console-retrieve-voucher-card"));
             PlayDenySound(player, uid, component);
             return null;
         }
@@ -1050,11 +1300,33 @@ public sealed partial class ShipyardSystem
 
         if (_station.GetOwningStation(uid) is not { Valid: true } station)
         {
-            ConsolePopup(player, Loc.GetString("shipyard-console-invalid-station"));
             PlayDenySound(player, uid, component);
             return null;
         }
 
+        // One civilian ship out per account, the rule the purchase enforces too. The claim is taken
+        // here and held until the hull has landed carrying its ownership, so a second press at
+        // another console in between still sees a ship out.
+        if (HasShipOut(operatorAccount))
+        {
+            PlayDenySound(player, uid, component);
+            return null;
+        }
+
+        _retrievesInFlight.Add(operatorAccount);
+        try
+        {
+            return await RetrieveAfterGates(uid, component, player, shipId, uiKey, targetId, operatorAccount, station);
+        }
+        finally
+        {
+            _retrievesInFlight.Remove(operatorAccount);
+        }
+    }
+
+    /// <summary>The console half of a retrieve past its gates, under the account's in-flight claim.</summary>
+    private async Task<EntityUid?> RetrieveAfterGates(EntityUid uid, ShipyardConsoleComponent component, EntityUid player, Guid shipId, ShipyardConsoleUiKey uiKey, EntityUid targetId, Guid operatorAccount, EntityUid station)
+    {
         // The pipeline re-reads the owner and refuses on its own; this earlier read is what turns
         // a forged retrieve into a timeline row rather than a silent null.
         var header = await _drydockStore.GetShipHeader(shipId);
@@ -1086,10 +1358,7 @@ public sealed partial class ShipyardSystem
         if (!retrieve.Succeeded)
         {
             if (!TerminatingOrDeleted(player))
-            {
-                ConsolePopup(player, Loc.GetString(RetrieveRefusalLoc(retrieve.Result)));
                 PlayDenySound(player, uid, component);
-            }
 
             await RefreshAfterRefusal(uid, component, player, uiKey);
             return null;
@@ -1134,7 +1403,7 @@ public sealed partial class ShipyardSystem
         if (component.SecretShipyardChannel is { } secretChannel)
             SendPurchaseMessage(uid, player, gridName, secretChannel, secret: true);
 
-        ConsolePopup(player, Loc.GetString("shipyard-console-retrieve-success"));
+        RecordCaptain(shipId, player);
         PlayConfirmSound(player, uid, component);
 
         await RefreshDrydockState(uid, component, player, uiKey);
@@ -1146,19 +1415,20 @@ public sealed partial class ShipyardSystem
     /// <summary>Buys a berth for the operator's own account. Money first, then the row; a row that fails after the money moved refunds it.</summary>
     internal async Task<bool> TryBuyBerth(EntityUid uid, ShipyardConsoleComponent component, EntityUid player, string sizeClassText, ShipyardConsoleUiKey uiKey)
     {
+        if (RefuseBarredOperator(uid, component, player))
+            return false;
+
         if (!TryComp<ActorComponent>(player, out var actor))
             return false;
 
         if (!DrydockStore.TryParseClass(sizeClassText, out var sizeClass) || DrydockBerthPrice(sizeClass) is var price && price <= 0)
         {
-            ConsolePopup(player, Loc.GetString("shipyard-console-berth-failed"));
             PlayDenySound(player, uid, component);
             return false;
         }
 
         if (!_bank.TryBankWithdraw(player, price, new MarketRecord { Kind = MarketTransactionKind.DrydockBerth }))
         {
-            ConsolePopup(player, Loc.GetString("shipyard-console-berth-unaffordable", ("cost", price)));
             PlayDenySound(player, uid, component);
             return false;
         }
@@ -1172,10 +1442,7 @@ public sealed partial class ShipyardSystem
         {
             Log.Error($"Drydock: berth purchase for {owner} failed after payment: {e.Message}");
             if (!TerminatingOrDeleted(player))
-            {
                 _bank.TryBankDeposit(player, price, new MarketRecord { Kind = MarketTransactionKind.DrydockBerth });
-                ConsolePopup(player, Loc.GetString("shipyard-console-berth-failed"));
-            }
 
             return false;
         }
@@ -1183,7 +1450,6 @@ public sealed partial class ShipyardSystem
         if (TerminatingOrDeleted(uid) || TerminatingOrDeleted(player))
             return true;
 
-        ConsolePopup(player, Loc.GetString("shipyard-console-berth-bought", ("class", sizeClass.ToString())));
         PlayConfirmSound(player, uid, component);
         await RefreshDrydockState(uid, component, player, uiKey);
         return true;
@@ -1192,6 +1458,9 @@ public sealed partial class ShipyardSystem
     /// <summary>Sells one of the operator's empty berths for the configured fraction of what was paid.</summary>
     internal async Task<bool> TrySellBerth(EntityUid uid, ShipyardConsoleComponent component, EntityUid player, int berthId, ShipyardConsoleUiKey uiKey)
     {
+        if (RefuseBarredOperator(uid, component, player))
+            return false;
+
         if (!TryComp<ActorComponent>(player, out var actor))
             return false;
 
@@ -1203,9 +1472,6 @@ public sealed partial class ShipyardSystem
 
         if (outcome != DrydockBerthResult.Success || berth == null)
         {
-            ConsolePopup(player, Loc.GetString(outcome == DrydockBerthResult.BerthOccupied
-                ? "shipyard-console-berth-occupied"
-                : "shipyard-console-berth-failed"));
             PlayDenySound(player, uid, component);
             return false;
         }
@@ -1214,7 +1480,6 @@ public sealed partial class ShipyardSystem
         if (refund > 0)
             _bank.TryBankDeposit(player, refund, new MarketRecord { Kind = MarketTransactionKind.DrydockBerth });
 
-        ConsolePopup(player, Loc.GetString("shipyard-console-berth-sold", ("refund", refund)));
         PlayConfirmSound(player, uid, component);
         await RefreshDrydockState(uid, component, player, uiKey);
         return true;
@@ -1223,6 +1488,9 @@ public sealed partial class ShipyardSystem
     /// <summary>Raises one of the operator's berths one class, charging the price difference.</summary>
     internal async Task<bool> TryUpgradeBerth(EntityUid uid, ShipyardConsoleComponent component, EntityUid player, int berthId, ShipyardConsoleUiKey uiKey)
     {
+        if (RefuseBarredOperator(uid, component, player))
+            return false;
+
         if (!TryComp<ActorComponent>(player, out var actor))
             return false;
 
@@ -1237,7 +1505,6 @@ public sealed partial class ShipyardSystem
             || !DrydockStore.TryParseClass(slot.Berth.MaxSizeClass, out var current)
             || NextSizeClass(current) is not { } next)
         {
-            ConsolePopup(player, Loc.GetString("shipyard-console-berth-failed"));
             PlayDenySound(player, uid, component);
             return false;
         }
@@ -1245,7 +1512,6 @@ public sealed partial class ShipyardSystem
         var delta = Math.Max(0, DrydockBerthPrice(next) - DrydockBerthPrice(current));
         if (delta > 0 && !_bank.TryBankWithdraw(player, delta, new MarketRecord { Kind = MarketTransactionKind.DrydockBerth }))
         {
-            ConsolePopup(player, Loc.GetString("shipyard-console-berth-unaffordable", ("cost", delta)));
             PlayDenySound(player, uid, component);
             return false;
         }
@@ -1260,12 +1526,10 @@ public sealed partial class ShipyardSystem
             if (delta > 0)
                 _bank.TryBankDeposit(player, delta, new MarketRecord { Kind = MarketTransactionKind.DrydockBerth });
 
-            ConsolePopup(player, Loc.GetString("shipyard-console-berth-failed"));
             PlayDenySound(player, uid, component);
             return false;
         }
 
-        ConsolePopup(player, Loc.GetString("shipyard-console-berth-upgraded", ("class", next.ToString())));
         PlayConfirmSound(player, uid, component);
         await RefreshDrydockState(uid, component, player, uiKey);
         return true;
@@ -1281,16 +1545,17 @@ public sealed partial class ShipyardSystem
     /// </summary>
     internal async Task<bool> TryOfferTransfer(EntityUid uid, ShipyardConsoleComponent component, EntityUid player, Guid shipId, Guid recipient, ShipyardConsoleUiKey uiKey)
     {
+        if (RefuseBarredOperator(uid, component, player))
+            return false;
+
         if (!TryGetOperatorAccount(player, out var owner))
         {
-            ConsolePopup(player, Loc.GetString("shipyard-console-transfer-not-verified"));
             PlayDenySound(player, uid, component);
             return false;
         }
 
         if (recipient == owner)
         {
-            ConsolePopup(player, Loc.GetString("shipyard-console-transfer-own"));
             PlayDenySound(player, uid, component);
             return false;
         }
@@ -1311,16 +1576,12 @@ public sealed partial class ShipyardSystem
 
         if (current == null || current.State != DrydockShipState.Stored)
         {
-            ConsolePopup(player, Loc.GetString(current is { State: DrydockShipState.InEscrow }
-                ? "shipyard-console-transfer-busy"
-                : "shipyard-console-transfer-not-yours"));
             PlayDenySound(player, uid, component);
             return false;
         }
 
-        if (!_player.TryGetSessionById(new NetUserId(recipient), out var recipientSession))
+        if (!_player.TryGetSessionById(new NetUserId(recipient), out _))
         {
-            ConsolePopup(player, Loc.GetString("shipyard-console-transfer-offline"));
             PlayDenySound(player, uid, component);
             return false;
         }
@@ -1333,18 +1594,10 @@ public sealed partial class ShipyardSystem
 
         if (outcome != DrydockBerthResult.Success || transfer == null)
         {
-            ConsolePopup(player, Loc.GetString(outcome switch
-            {
-                DrydockBerthResult.NoBerth or DrydockBerthResult.BerthTooSmall => "shipyard-console-transfer-recipient-full",
-                DrydockBerthResult.Conflict => "shipyard-console-transfer-busy",
-                _ => "shipyard-console-transfer-not-yours",
-            }));
             PlayDenySound(player, uid, component);
             return false;
         }
 
-        ConsolePopup(player, Loc.GetString("shipyard-console-transfer-offered",
-            ("name", SessionDisplayName(recipientSession)), ("minutes", (int)Math.Ceiling(seconds / 60.0))));
         PlayConfirmSound(player, uid, component);
         await RefreshDrydockState(uid, component, player, uiKey);
         KickDrydockRefreshForAccount(recipient);
@@ -1365,6 +1618,9 @@ public sealed partial class ShipyardSystem
 
     private async Task<bool> TryEndTransfer(EntityUid uid, ShipyardConsoleComponent component, EntityUid player, long transferId, DrydockTransferResolution resolution, ShipyardConsoleUiKey uiKey)
     {
+        if (RefuseBarredOperator(uid, component, player))
+            return false;
+
         if (!TryGetOperatorAccount(player, out var operatorAccount))
             return false;
 
@@ -1375,7 +1631,6 @@ public sealed partial class ShipyardSystem
 
         if (pending is not var (transfer, ship))
         {
-            ConsolePopup(player, Loc.GetString("shipyard-console-transfer-none"));
             PlayDenySound(player, uid, component);
             return false;
         }
@@ -1398,14 +1653,10 @@ public sealed partial class ShipyardSystem
 
         if (resolved == null)
         {
-            ConsolePopup(player, Loc.GetString("shipyard-console-transfer-none"));
             PlayDenySound(player, uid, component);
             return false;
         }
 
-        ConsolePopup(player, Loc.GetString(resolution == DrydockTransferResolution.Cancelled
-            ? "shipyard-console-transfer-cancelled"
-            : "shipyard-console-transfer-declined"));
         PlayConfirmSound(player, uid, component);
         await RefreshDrydockState(uid, component, player, uiKey);
         KickDrydockRefreshForAccount(resolution == DrydockTransferResolution.Cancelled ? resolved.ToUserId : resolved.FromUserId);
@@ -1415,13 +1666,15 @@ public sealed partial class ShipyardSystem
     /// <summary>
     /// The recipient takes the ship. The store re-checks the deadline and picks the berth now,
     /// so an alert that outlived its offer, or a garage that filled up meanwhile, is a refusal
-    /// with a reason rather than a ship in two places.
+    /// rather than a ship in two places.
     /// </summary>
     internal async Task<bool> TryAcceptTransfer(EntityUid uid, ShipyardConsoleComponent component, EntityUid player, long transferId, ShipyardConsoleUiKey uiKey)
     {
+        if (RefuseBarredOperator(uid, component, player))
+            return false;
+
         if (!TryGetOperatorAccount(player, out var recipient))
         {
-            ConsolePopup(player, Loc.GetString("shipyard-console-transfer-not-verified"));
             PlayDenySound(player, uid, component);
             return false;
         }
@@ -1431,7 +1684,6 @@ public sealed partial class ShipyardSystem
         // a card, and a recipient with none in cannot follow the accept with the retrieve.
         if (component.TargetIdSlot.ContainerSlot?.ContainedEntity is not { Valid: true })
         {
-            ConsolePopup(player, Loc.GetString("shipyard-console-no-idcard"));
             PlayDenySound(player, uid, component);
             return false;
         }
@@ -1443,7 +1695,6 @@ public sealed partial class ShipyardSystem
 
         if (pending is not var (transfer, ship))
         {
-            ConsolePopup(player, Loc.GetString("shipyard-console-transfer-none"));
             PlayDenySound(player, uid, component);
             return false;
         }
@@ -1461,17 +1712,11 @@ public sealed partial class ShipyardSystem
 
         if (outcome != DrydockBerthResult.Success || acceptedName == null)
         {
-            ConsolePopup(player, Loc.GetString(outcome switch
-            {
-                DrydockBerthResult.NoBerth or DrydockBerthResult.BerthTooSmall => "shipyard-console-store-no-berth",
-                DrydockBerthResult.WrongState or DrydockBerthResult.NotFound => "shipyard-console-transfer-gone",
-                _ => "shipyard-console-transfer-failed",
-            }));
             PlayDenySound(player, uid, component);
             return false;
         }
 
-        ConsolePopup(player, Loc.GetString("shipyard-console-transfer-complete", ("ship", acceptedName)));
+        RecordCaptain(ship.ShipGuid, player);
         PlayConfirmSound(player, uid, component);
         await RefreshDrydockState(uid, component, player, uiKey);
         KickDrydockRefreshForAccount(transfer.FromUserId);
@@ -1570,12 +1815,14 @@ public sealed partial class ShipyardSystem
     /// </summary>
     internal async Task<(bool Sold, int Price, bool Paid)> TrySellStoredShip(EntityUid uid, ShipyardConsoleComponent component, EntityUid player, Guid shipId, string typedName, ShipyardConsoleUiKey uiKey)
     {
+        if (RefuseBarredOperator(uid, component, player))
+            return (false, 0, false);
+
         if (!TryGetOperatorAccount(player, out var owner))
             return (false, 0, false);
 
         if (!HasComp<BankAccountComponent>(player))
         {
-            ConsolePopup(player, Loc.GetString("shipyard-console-no-bank"));
             PlayDenySound(player, uid, component);
             return (false, 0, false);
         }
@@ -1594,21 +1841,18 @@ public sealed partial class ShipyardSystem
 
         if (header == null || header.State != DrydockShipState.Stored)
         {
-            ConsolePopup(player, Loc.GetString("shipyard-console-sell-not-available"));
             PlayDenySound(player, uid, component);
             return (false, 0, false);
         }
 
         if (!string.Equals(typedName.Trim(), header.ShipName.Trim(), StringComparison.Ordinal))
         {
-            ConsolePopup(player, Loc.GetString("shipyard-console-sell-name-mismatch"));
             PlayDenySound(player, uid, component);
             return (false, 0, false);
         }
 
         if (!appraisals.TryGetValue(shipId, out var appraisal) || appraisal is not { } value)
         {
-            ConsolePopup(player, Loc.GetString("shipyard-console-sell-no-appraisal"));
             PlayDenySound(player, uid, component);
             return (false, 0, false);
         }
@@ -1621,7 +1865,6 @@ public sealed partial class ShipyardSystem
 
         if (outcome != DrydockBerthResult.Success || soldName == null)
         {
-            ConsolePopup(player, Loc.GetString("shipyard-console-sell-not-available"));
             PlayDenySound(player, uid, component);
             return (false, 0, false);
         }
@@ -1635,7 +1878,6 @@ public sealed partial class ShipyardSystem
 
         _adminLogger.Add(LogType.ShipYardUsage, LogImpact.Low, $"{ToPrettyString(player):actor} scrapped stored ship {soldName} ({shipId}) for {price.Net} credits via {ToPrettyString(uid)}");
 
-        ConsolePopup(player, Loc.GetString("shipyard-console-sell-complete", ("ship", soldName), ("price", price.Net)));
         PlayConfirmSound(player, uid, component);
         await RefreshDrydockState(uid, component, player, uiKey);
         return (true, price.Net, paid);
@@ -1677,13 +1919,15 @@ public sealed partial class ShipyardSystem
     /// </summary>
     internal async Task<bool> TryRenameStoredShip(EntityUid uid, ShipyardConsoleComponent component, EntityUid player, Guid shipId, string newName, ShipyardConsoleUiKey uiKey)
     {
+        if (RefuseBarredOperator(uid, component, player))
+            return false;
+
         if (!TryGetOperatorAccount(player, out var owner))
             return false;
 
         newName = newName.Trim();
         if (!IsValidStoredShipName(newName))
         {
-            ConsolePopup(player, Loc.GetString("shipyard-console-rename-invalid", ("max", ShuttleDeedComponent.MaxNameLength)));
             PlayDenySound(player, uid, component);
             return false;
         }
@@ -1701,7 +1945,6 @@ public sealed partial class ShipyardSystem
 
         if (header == null || header.State != DrydockShipState.Stored)
         {
-            ConsolePopup(player, Loc.GetString("shipyard-console-rename-not-available"));
             PlayDenySound(player, uid, component);
             return false;
         }
@@ -1716,12 +1959,10 @@ public sealed partial class ShipyardSystem
 
         if (outcome != DrydockBerthResult.Success)
         {
-            ConsolePopup(player, Loc.GetString("shipyard-console-rename-not-available"));
             PlayDenySound(player, uid, component);
             return false;
         }
 
-        ConsolePopup(player, Loc.GetString("shipyard-console-rename-complete", ("ship", fullName)));
         PlayConfirmSound(player, uid, component);
         await RefreshDrydockState(uid, component, player, uiKey);
         return true;
@@ -1734,6 +1975,9 @@ public sealed partial class ShipyardSystem
     /// </summary>
     internal async Task<bool> TryMoveStoredShip(EntityUid uid, ShipyardConsoleComponent component, EntityUid player, Guid shipId, int berthId, ShipyardConsoleUiKey uiKey)
     {
+        if (RefuseBarredOperator(uid, component, player))
+            return false;
+
         if (!TryGetOperatorAccount(player, out var owner))
             return false;
 
@@ -1750,7 +1994,6 @@ public sealed partial class ShipyardSystem
 
         if (header == null || header.State != DrydockShipState.Stored)
         {
-            ConsolePopup(player, Loc.GetString("shipyard-console-move-not-available"));
             PlayDenySound(player, uid, component);
             return false;
         }
@@ -1762,17 +2005,10 @@ public sealed partial class ShipyardSystem
 
         if (outcome != DrydockBerthResult.Success)
         {
-            ConsolePopup(player, Loc.GetString(outcome switch
-            {
-                DrydockBerthResult.BerthTooSmall => "shipyard-console-store-berth-too-small",
-                DrydockBerthResult.BerthOccupied => "shipyard-console-berth-occupied",
-                _ => "shipyard-console-move-not-available",
-            }));
             PlayDenySound(player, uid, component);
             return false;
         }
 
-        ConsolePopup(player, Loc.GetString("shipyard-console-move-complete", ("ship", header.ShipName), ("berth", berthId)));
         PlayConfirmSound(player, uid, component);
         await RefreshDrydockState(uid, component, player, uiKey);
         return true;
@@ -1789,12 +2025,14 @@ public sealed partial class ShipyardSystem
     /// </summary>
     internal async Task<bool> TryRedeemImpound(EntityUid uid, ShipyardConsoleComponent component, EntityUid player, Guid shipId, int berthId, ShipyardConsoleUiKey uiKey)
     {
+        if (RefuseBarredOperator(uid, component, player))
+            return false;
+
         if (!TryGetOperatorAccount(player, out var owner))
             return false;
 
         if (!HasComp<BankAccountComponent>(player))
         {
-            ConsolePopup(player, Loc.GetString("shipyard-console-no-bank"));
             PlayDenySound(player, uid, component);
             return false;
         }
@@ -1812,14 +2050,12 @@ public sealed partial class ShipyardSystem
 
         if (header == null || header.State != DrydockShipState.Impounded)
         {
-            ConsolePopup(player, Loc.GetString("shipyard-console-impound-not-available"));
             PlayDenySound(player, uid, component);
             return false;
         }
 
         if (!header.ImpoundRedeemable)
         {
-            ConsolePopup(player, Loc.GetString("shipyard-console-impound-locked"));
             PlayDenySound(player, uid, component);
             return false;
         }
@@ -1830,7 +2066,6 @@ public sealed partial class ShipyardSystem
         var fee = header.ImpoundFee;
         if (fee > 0 && !_bank.TryBankWithdraw(player, fee, new MarketRecord { Kind = MarketTransactionKind.DrydockImpound }))
         {
-            ConsolePopup(player, Loc.GetString("shipyard-console-impound-unaffordable", ("fee", fee)));
             PlayDenySound(player, uid, component);
             return false;
         }
@@ -1849,15 +2084,6 @@ public sealed partial class ShipyardSystem
             if (TerminatingOrDeleted(uid) || TerminatingOrDeleted(player))
                 return false;
 
-            ConsolePopup(player, Loc.GetString(outcome switch
-            {
-                DrydockBerthResult.BerthTooSmall => "shipyard-console-store-berth-too-small",
-                DrydockBerthResult.BerthOccupied => "shipyard-console-berth-occupied",
-                // The row is not what the card said: re-impounded on other terms, released, or
-                // locked since the read. The refreshed card says which.
-                DrydockBerthResult.Conflict or DrydockBerthResult.WrongState => "shipyard-console-impound-terms-changed",
-                _ => "shipyard-console-impound-failed",
-            }));
             PlayDenySound(player, uid, component);
             await RefreshAfterRefusal(uid, component, player, uiKey);
             return false;
@@ -1868,8 +2094,6 @@ public sealed partial class ShipyardSystem
 
         _adminLogger.Add(LogType.ShipYardUsage, LogImpact.Low, $"{ToPrettyString(player):actor} reclaimed impounded ship {header.ShipName} ({shipId}) into berth {berthId} for {fee} credits via {ToPrettyString(uid)}");
 
-        ConsolePopup(player, Loc.GetString(fee > 0 ? "shipyard-console-impound-reclaimed-paid" : "shipyard-console-impound-reclaimed",
-            ("ship", header.ShipName), ("berth", berthId), ("fee", fee)));
         PlayConfirmSound(player, uid, component);
         await RefreshDrydockState(uid, component, player, uiKey);
         return true;
@@ -1883,6 +2107,9 @@ public sealed partial class ShipyardSystem
     /// </summary>
     internal async Task<bool> TryAbandonShip(EntityUid uid, ShipyardConsoleComponent component, EntityUid player, Guid shipId, string typedName, ShipyardConsoleUiKey uiKey)
     {
+        if (RefuseBarredOperator(uid, component, player))
+            return false;
+
         if (!TryGetOperatorAccount(player, out var owner))
             return false;
 
@@ -1899,21 +2126,18 @@ public sealed partial class ShipyardSystem
 
         if (header == null || header.State != DrydockShipState.Impounded)
         {
-            ConsolePopup(player, Loc.GetString("shipyard-console-impound-not-available"));
             PlayDenySound(player, uid, component);
             return false;
         }
 
         if (!header.ImpoundRedeemable)
         {
-            ConsolePopup(player, Loc.GetString("shipyard-console-impound-locked"));
             PlayDenySound(player, uid, component);
             return false;
         }
 
         if (!string.Equals(typedName.Trim(), header.ShipName.Trim(), StringComparison.Ordinal))
         {
-            ConsolePopup(player, Loc.GetString("shipyard-console-abandon-name-mismatch"));
             PlayDenySound(player, uid, component);
             return false;
         }
@@ -1925,9 +2149,6 @@ public sealed partial class ShipyardSystem
 
         if (outcome != DrydockBerthResult.Success || abandonedName == null)
         {
-            ConsolePopup(player, Loc.GetString(outcome == DrydockBerthResult.WrongState
-                ? "shipyard-console-impound-terms-changed"
-                : "shipyard-console-impound-failed"));
             PlayDenySound(player, uid, component);
             await RefreshAfterRefusal(uid, component, player, uiKey);
             return false;
@@ -1935,61 +2156,12 @@ public sealed partial class ShipyardSystem
 
         _adminLogger.Add(LogType.ShipYardUsage, LogImpact.Low, $"{ToPrettyString(player):actor} abandoned impounded ship {abandonedName} ({shipId}) via {ToPrettyString(uid)}");
 
-        ConsolePopup(player, Loc.GetString("shipyard-console-abandon-complete", ("ship", abandonedName)));
         PlayConfirmSound(player, uid, component);
         await RefreshDrydockState(uid, component, player, uiKey);
         return true;
     }
 
     // ---------------------------------------------------------------- Helpers
-
-    /// <summary>
-    /// The player-facing reason a store was refused. Every non-success result maps to something,
-    /// so a refusal is never a button that silently does nothing.
-    /// </summary>
-    private static string StoreRefusalLoc(DrydockStoreResult result)
-    {
-        return result switch
-        {
-            DrydockStoreResult.OrganicsAboard => "shipyard-console-store-organics",
-            DrydockStoreResult.HazardAboard => "shipyard-console-store-hazard",
-            DrydockStoreResult.Disabled => "shipyard-console-store-disabled",
-            DrydockStoreResult.NoBerth => "shipyard-console-store-no-berth",
-            DrydockStoreResult.BerthTooSmall => "shipyard-console-store-berth-too-small",
-            DrydockStoreResult.InProgress => "shipyard-console-store-in-progress",
-            DrydockStoreResult.BerthOccupied => "shipyard-console-berth-occupied",
-            // Not a fault of the player's and not a fault of the ship's: a round restart, a
-            // shutdown, or the slice watchdog stopped a store that was already under way. The ship
-            // is back where it was, so the honest message is "try again", not "it failed".
-            DrydockStoreResult.Cancelled => "shipyard-console-store-cancelled",
-            _ => "shipyard-console-store-failed",
-        };
-    }
-
-    private static string RetrieveRefusalLoc(DrydockRetrieveResult result)
-    {
-        return result switch
-        {
-            DrydockRetrieveResult.Disabled => "shipyard-console-retrieve-disabled",
-            DrydockRetrieveResult.NoStation => "shipyard-console-retrieve-no-station",
-            DrydockRetrieveResult.NoStagingMap => "shipyard-console-retrieve-no-staging",
-            DrydockRetrieveResult.NotFound => "shipyard-console-retrieve-not-found",
-            DrydockRetrieveResult.NotOwned => "shipyard-console-not-owner",
-            DrydockRetrieveResult.AlreadyOut => "shipyard-console-retrieve-already-out",
-            DrydockRetrieveResult.Impounded => "shipyard-console-retrieve-impounded",
-            DrydockRetrieveResult.InEscrow => "shipyard-console-retrieve-in-escrow",
-            DrydockRetrieveResult.Sold => "shipyard-console-retrieve-sold",
-            DrydockRetrieveResult.Destroyed => "shipyard-console-retrieve-destroyed",
-            DrydockRetrieveResult.Abandoned => "shipyard-console-retrieve-abandoned",
-            DrydockRetrieveResult.NotStored => "shipyard-console-retrieve-not-stored",
-            DrydockRetrieveResult.NoReadableRevision => "shipyard-console-retrieve-no-revision",
-            DrydockRetrieveResult.StationLost => "shipyard-console-retrieve-station-lost",
-            // The store's counterpart: the pipeline was stopped mid-flight, the claim was released
-            // and nothing is out, so the ship is still stored and still retrievable.
-            DrydockRetrieveResult.Cancelled => "shipyard-console-retrieve-cancelled",
-            _ => "shipyard-console-retrieve-failed",
-        };
-    }
 
     /// <summary>
     /// Hands the operator who pressed the button the pipeline's own percentage, and remembers it on
@@ -2035,8 +2207,8 @@ public sealed partial class ShipyardSystem
     /// <summary>
     /// A refusal changes nothing on the server, but the client only takes its store or retrieve
     /// indicator down when a state arrives, so a refusal has to send one or the button sits on
-    /// "Retrieving" until its timeout. Errors here are logged and swallowed: the refusal itself
-    /// has already been delivered.
+    /// "Retrieving" until its timeout. Errors here are logged and swallowed: the deny sound has
+    /// already played.
     /// </summary>
     private async Task RefreshAfterRefusal(EntityUid uid, ShipyardConsoleComponent component, EntityUid player, ShipyardConsoleUiKey uiKey)
     {

@@ -117,6 +117,15 @@ public sealed partial class ShipyardConsoleComponent : Component
     /// <summary>Triad: the retrieve counterpart, for the same reason.</summary>
     public int? CachedRetrieveProgress;
 
+    /// <summary>Triad: whether the operator at the last refresh is barred from the drydock.</summary>
+    public bool CachedOperatorBarred;
+
+    /// <summary>Triad: the civilian ships the operator's account had out at the last refresh.</summary>
+    public List<BUI.DrydockReissueShipInfo> CachedShipsOut = new();
+
+    /// <summary>Triad: whether the inserted card could take a reissued deed at the last refresh.</summary>
+    public bool CachedCanReissueToCard;
+
     /// <summary>
     /// Triad: the candidates behind <see cref="CachedImportables"/>, keyed by the client's file id.
     ///

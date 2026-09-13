@@ -106,6 +106,7 @@ public sealed partial class ShipyardSystem : SharedShipyardSystem
         SubscribeLocalEvent<ShipyardConsoleComponent, ShipyardConsoleMoveStoredShipMessage>(OnMoveStoredShipMessage); // Triad: drydock tab
         SubscribeLocalEvent<ShipyardConsoleComponent, ShipyardConsoleRedeemImpoundMessage>(OnRedeemImpoundMessage); // Triad: drydock tab
         SubscribeLocalEvent<ShipyardConsoleComponent, ShipyardConsoleAbandonShipMessage>(OnAbandonShipMessage); // Triad: drydock tab
+        SubscribeLocalEvent<ShipyardConsoleComponent, ShipyardConsoleReissueDeedMessage>(OnReissueDeedMessage); // Triad: drydock tab, deed reissue
         SubscribeLocalEvent<ShipyardConsoleComponent, ShipyardConsoleImportManifestMessage>(OnImportManifestMessage); // Triad: legacy import
         SubscribeLocalEvent<ShipyardConsoleComponent, ShipyardConsoleImportMessage>(OnImportMessage); // Triad: legacy import
         SubscribeLocalEvent<ShipyardShuttlePurchaseEvent>(OnShuttlePurchased); // Triad: drydock, bundled berth

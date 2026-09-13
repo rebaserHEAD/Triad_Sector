@@ -83,6 +83,7 @@ public sealed partial class ShipyardConsoleBoundUserInterface : BoundUserInterfa
         _menu.OnMoveStoredShip += (shipId, berthId) => SendMessage(new ShipyardConsoleMoveStoredShipMessage(shipId, berthId));
         _menu.OnRedeemImpound += (shipId, berthId) => SendMessage(new ShipyardConsoleRedeemImpoundMessage(shipId, berthId));
         _menu.OnAbandonShip += (shipId, typed) => SendMessage(new ShipyardConsoleAbandonShipMessage(shipId, typed));
+        _menu.OnReissueDeed += ship => SendMessage(new ShipyardConsoleReissueDeedMessage(ship)); // Triad: deed reissue
         var targetIdButton = _menu.FindControl<Button>("TargetIdButton");
         if (targetIdButton != null)
             targetIdButton.OnPressed += _ => SendMessage(new ItemSlotButtonPressedEvent("ShipyardConsole-targetId"));

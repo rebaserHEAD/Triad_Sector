@@ -565,8 +565,10 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
 
             await pair.RunTicksSync(5);
 
-            // Clear the card, so what refuses below is the row and not card capacity.
+            // Clear the card, so what refuses below is the row and not card capacity. And take the
+            // ownership off the hull that came back, so it is not the one-ship-out rule either.
             await server.WaitPost(() => entMan.RemoveComponent<ShuttleDeedComponent>(card));
+            await server.WaitPost(() => entMan.RemoveComponent<ShipOwnershipComponent>(first!.Value));
             await pair.RunTicksSync(2);
 
             await RunOnServer(pair, async () =>

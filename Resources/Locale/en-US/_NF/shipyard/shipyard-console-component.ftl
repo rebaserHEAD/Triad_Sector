@@ -119,6 +119,14 @@ shipyard-console-store-unregistered = That ship is not registered to any account
 shipyard-console-lockout-title = ACCESS DENIED
 shipyard-console-lockout-subtitle = BIOMETRIC MISMATCH
 shipyard-console-lockout-body = This card is registered to another operator.
+# The same screen for a voucher in the slot or an operator the drydock bars (TDF, TFA and the other voucher-issued roles).
+shipyard-console-denied-subtitle = Enlisted personnel may not store provisioned equipment.
+# One civilian ship out per account.
+shipyard-console-purchase-ship-out = You already have a ship underway.
+# The card for a ship the operator has out while the inserted card carries no deed.
+shipyard-console-reissue-ship = · {$class} · underway
+shipyard-console-reissue-button = Transfer deed
+shipyard-console-reissue-tooltip = Moves this ship's deed to the inserted card and removes it from every other card.
 shipyard-console-store-organics = Someone is still aboard. Everyone has to be off the ship.
 shipyard-console-store-hazard = Something aboard is armed or unstable. Make it safe first.
 shipyard-console-store-disabled = The drydock is not accepting ships right now.

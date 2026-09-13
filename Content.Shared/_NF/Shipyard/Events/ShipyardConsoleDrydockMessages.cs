@@ -177,3 +177,19 @@ public sealed class ShipyardConsoleAbandonShipMessage : BoundUserInterfaceMessag
         TypedName = typedName;
     }
 }
+
+/// <summary>
+/// The owner moves the deed to one of their ships that is out onto the card in the slot, wherever
+/// the ship is. The server checks the account behind the press owns the hull and strips the deed
+/// from every other card that carries it.
+/// </summary>
+[Serializable, NetSerializable]
+public sealed class ShipyardConsoleReissueDeedMessage : BoundUserInterfaceMessage
+{
+    public readonly NetEntity Ship;
+
+    public ShipyardConsoleReissueDeedMessage(NetEntity ship)
+    {
+        Ship = ship;
+    }
+}

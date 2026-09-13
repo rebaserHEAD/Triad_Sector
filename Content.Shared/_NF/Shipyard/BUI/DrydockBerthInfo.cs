@@ -110,6 +110,25 @@ public sealed class DrydockDeedShipInfo
 }
 
 /// <summary>
+/// A ship the operator's account owns that is out in the world, for the card that moves its deed
+/// onto the inserted card. Only sent while the inserted card carries no deed.
+/// </summary>
+[Serializable, NetSerializable]
+public sealed class DrydockReissueShipInfo
+{
+    public NetEntity Ship;
+    public string Name = string.Empty;
+    public string? SizeClass;
+
+    public DrydockReissueShipInfo(NetEntity ship, string name, string? sizeClass)
+    {
+        Ship = ship;
+        Name = name;
+        SizeClass = sizeClass;
+    }
+}
+
+/// <summary>
 /// An offer addressed to the operator, as the alert on their tab draws it. Carries the offering
 /// account's id only so the client can refuse to draw the offerer's own offers as alerts; the
 /// server holds the real offer and decides everything about it.

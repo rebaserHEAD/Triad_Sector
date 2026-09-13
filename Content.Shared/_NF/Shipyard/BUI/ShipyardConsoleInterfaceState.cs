@@ -80,6 +80,27 @@ public sealed class ShipyardConsoleInterfaceState : BoundUserInterfaceState
     public int? StoreProgressPercent; // Triad: drydock tab
 
     /// <summary>
+    /// Triad: the operator is barred from the drydock (TDF, TFA and the other voucher-issued
+    /// roles), which covers the tab with the access-denied screen. Set after construction for the
+    /// same reason <see cref="ImportableShips"/> is. The server refuses every drydock message from a
+    /// barred operator regardless.
+    /// </summary>
+    public bool DrydockOperatorBarred; // Triad: drydock tab
+
+    /// <summary>
+    /// Triad: the civilian ships the operator's account has out in the world. Buying or retrieving
+    /// another is refused while this is not empty, so the purchase and retrieve buttons grey on it.
+    /// </summary>
+    public List<DrydockReissueShipInfo> ShipsOut = new(); // Triad: drydock tab
+
+    /// <summary>
+    /// Triad: whether the inserted card can take a deed moved onto it: an ID card, not a voucher,
+    /// carrying no deed. When it can, the deed card at the top names the ship in <see cref="ShipsOut"/>
+    /// and offers Transfer deed in Store's place.
+    /// </summary>
+    public bool CanReissueToCard; // Triad: drydock tab
+
+    /// <summary>
     /// Triad: how long a transfer offer stands, in whole minutes, for the sentence in the transfer
     /// prompt. The cvar behind it is server-only, so the client has to be told.
     /// </summary>

@@ -51,6 +51,14 @@ public sealed partial class ShipyardConsoleMenu : FancyWindow
     // The impound lot: reclaim names the berth to land in, abandon carries the typed name as sell does.
     public event Action<Guid, int>? OnRedeemImpound;
     public event Action<Guid, string>? OnAbandonShip;
+    // A reissue names the live hull; the server checks the account owns it and re-keys it to the card.
+    public event Action<NetEntity>? OnReissueDeed;
+
+    /// <summary>
+    /// Triad: the viewer's account has a civilian ship out, so a paid purchase greys. Set from the
+    /// state before the listing is rebuilt; a voucher listing is never held back by it.
+    /// </summary>
+    private bool _shipOutBlocksPurchase;
 
     /// <summary>
     /// Triad: the viewing account, so the tab can tell the operator from everyone else looking.
@@ -82,6 +90,9 @@ public sealed partial class ShipyardConsoleMenu : FancyWindow
 
     /// <summary>The last deed ship drawn, so the timeout can put the card back as it was.</summary>
     private DrydockDeedShipInfo? _lastDeedShip;
+
+    /// <summary>Triad: the ship the operator has out when the card in the slot carries no deed, drawn on the same card with Transfer deed.</summary>
+    private DrydockReissueShipInfo? _lastReissueShip;
 
     // Retrieve is the same shape on the row that was pressed, with every other Retrieve greyed.
     private float _retrievingFor = -1f;
@@ -134,6 +145,15 @@ public sealed partial class ShipyardConsoleMenu : FancyWindow
         RenameButton.OnPressed += OnRenameButtonPressed;
 
         // Triad: drydock tab
+        ReissueButton.OnPressed += _ =>
+        {
+            if (_lastReissueShip is not { } outShip)
+                return;
+
+            // Held down until the state that answers it redraws the card.
+            ReissueButton.Disabled = true;
+            OnReissueDeed?.Invoke(outShip.Ship);
+        };
         Tabs.SetTabTitle(0, Loc.GetString("shipyard-console-tab-purchase"));
         Tabs.SetTabTitle(1, Loc.GetString("shipyard-console-tab-drydock"));
         BuyBerthButton.Text = Loc.GetString("shipyard-console-berth-buy-button") + DrydockText.Caret;
@@ -376,6 +396,12 @@ public sealed partial class ShipyardConsoleMenu : FancyWindow
                 Guidebook = { Disabled = prototype.GuidebookPage is null, TooltipDelay = 0.2f, ToolTip = prototype.Description },
                 Price = { Text = priceText },
             };
+            // Triad: one civilian ship out per account. The server refuses the purchase regardless.
+            if (canPurchase && !free && _shipOutBlocksPurchase)
+            {
+                vesselEntry.Purchase.Disabled = true;
+                vesselEntry.Purchase.ToolTip = Loc.GetString("shipyard-console-purchase-ship-out");
+            }
             vesselEntry.Purchase.OnPressed += (args) => { OnOrderApproved?.Invoke(args); };
             Vessels.AddChild(vesselEntry);
         }
@@ -534,6 +560,7 @@ public sealed partial class ShipyardConsoleMenu : FancyWindow
         }
         _freeListings = state.FreeListings;
         _validId = state.IsTargetIdPresent;
+        _shipOutBlocksPurchase = state.DrydockEnabled && state.ShipsOut.Count > 0; // Triad: one civilian ship out per account
         PopulateProducts(_lastAvailableProtos, _lastUnavailableProtos, _freeListings, _validId);
 
         // Triad: drydock tab. Hidden outright when the master switch is off, rather than shown with
@@ -541,8 +568,15 @@ public sealed partial class ShipyardConsoleMenu : FancyWindow
         Tabs.SetTabVisible(1, state.DrydockEnabled);
 
         // The lockout: someone else's registered card in the slot. Decided here because one console
-        // state is shared by every viewer and only the client knows which viewer it is.
-        LockoutPanel.Visible = LocalUserId != null && state.DeedOwnerUserId is { } deedOwner && deedOwner != LocalUserId;
+        // state is shared by every viewer and only the client knows which viewer it is. A voucher in
+        // the slot or an operator the drydock bars draws the same screen with its own lines, and
+        // outranks the mismatch: provisioned personnel get no garage whoever's card it is.
+        var provisioned = state.FreeListings || state.DrydockOperatorBarred;
+        var mismatch = LocalUserId != null && state.DeedOwnerUserId is { } deedOwner && deedOwner != LocalUserId;
+        LockoutPanel.Visible = provisioned || mismatch;
+        // Provisioned is the title and one line under it; the mismatch keeps its subtitle and body.
+        LockoutSubtitle.Text = Loc.GetString(provisioned ? "shipyard-console-denied-subtitle" : "shipyard-console-lockout-subtitle");
+        LockoutBody.Visible = !provisioned;
 
         _lastShips = state.StoredShips;
         _lastBerths = state.Berths;
@@ -560,12 +594,14 @@ public sealed partial class ShipyardConsoleMenu : FancyWindow
         // Triad: drydock tab. The percentage says whether a store or a retrieve is still running at
         // this console, which is what stops an unrelated refresh taking the indicator down and what
         // makes a console opened halfway through draw it at all.
+        _lastReissueShip = state.CanReissueToCard ? state.ShipsOut.FirstOrDefault() : null;
         PopulateDeedShip(state.DeedShip, state.StoreProgressPercent);
         PopulateImpounds();
         PopulateOffers();
         // A voucher in the slot reads as free listings; it is not a card a stored ship can be called
-        // in on, and the server refuses the press, so the button is not drawn.
-        PopulateBerths(state.Berths, canRetrieve: state.IsTargetIdPresent && state.ShipDeedTitle == null && !state.FreeListings);
+        // in on, and the server refuses the press, so the button is not drawn. Nor with a ship
+        // already out: one at a time, and the card at the top already names the one that is.
+        PopulateBerths(state.Berths, canRetrieve: state.IsTargetIdPresent && state.ShipDeedTitle == null && !state.FreeListings && state.ShipsOut.Count == 0);
 
         // The retrieve half of the same rule. The rows were just rebuilt, so the greying is applied
         // here rather than carried on any one row: one ship comes back per card, and the server
@@ -591,7 +627,8 @@ public sealed partial class ShipyardConsoleMenu : FancyWindow
     /// Triad: the card at the top. Store is a dropdown naming the berth the server would choose,
     /// and listing every free berth: the ones the hull fits can be picked, the ones too small stay
     /// listed and say so. Picking is what sends the store. With no free berth at all the button is
-    /// out, and with none that fits it says so and every entry is greyed.
+    /// out, and with none that fits it says so and every entry is greyed. With a blank card in the
+    /// slot and a ship out, the same card names that ship and offers Transfer deed instead.
     /// </summary>
     private void PopulateDeedShip(DrydockDeedShipInfo? ship, int? progressPercent = null)
     {
@@ -616,9 +653,25 @@ public sealed partial class ShipyardConsoleMenu : FancyWindow
 
         _lastDeedShip = ship;
 
-        DeedShipPanel.Visible = ship != null;
+        // The same card serves a blank card in the slot while the operator has a ship out: the name
+        // and class of that ship, and Transfer deed in Store's place. One ship out per account, so
+        // there is only ever one to draw.
+        DeedShipPanel.Visible = ship != null || _lastReissueShip != null;
+        StoreButton.Visible = ship != null;
+        ReissueButton.Visible = ship == null && _lastReissueShip != null;
         if (ship == null)
+        {
+            if (_lastReissueShip is { } outShip)
+            {
+                var headline = new FormattedMessage();
+                headline.AddBoldSized(outShip.Name, 14);
+                headline.AddColored(" " + Loc.GetString("shipyard-console-reissue-ship", ("class", DrydockText.Class(outShip.SizeClass))), DrydockText.Dim);
+                DeedShipLabel.SetMessage(headline);
+                ReissueButton.Disabled = false;
+            }
+
             return;
+        }
 
         // The hull's name carries the weight, a size up from everything else on the tab; its class
         // sits behind it in the dim colour, and a hull that has never been stored says so. How long

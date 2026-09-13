@@ -166,6 +166,9 @@ public sealed partial class ShipyardSystem : SharedShipyardSystem
             return;
         }
 
+        if (voucher is null && RefuseShipAlreadyOut(shipyardConsoleUid, component, player)) // Triad: one civilian ship out per account
+            return; // Triad
+
         if (!TryPurchaseShuttle(station, vessel.ShuttlePath, out var shuttleUidOut, vessel.PriorityDockTag))
         {
             PlayDenySound(player, shipyardConsoleUid, component);
@@ -435,6 +438,9 @@ public sealed partial class ShipyardSystem : SharedShipyardSystem
             return;
         }
 
+        if (RefuseDeedNotOwned(uid, component, player, deed, "sell")) // Triad: a card is not proof of ownership, the account is
+            return; // Triad
+
         var shuttleUid = deed.ShuttleUid;
 
         bool voucherUsed = deed.PurchasedWithVoucher;
@@ -652,7 +658,8 @@ public sealed partial class ShipyardSystem : SharedShipyardSystem
 
     private void ConsolePopup(EntityUid uid, string text)
     {
-        _popup.PopupEntity(text, uid);
+        // Triad: removed, the console's buttons carry every state and popups log to chat. The deny and confirm sounds stay.
+        // _popup.PopupEntity(text, uid);
     }
 
     private void SendPurchaseMessage(EntityUid uid, EntityUid player, string name, string shipyardChannel, bool secret)
@@ -661,12 +668,12 @@ public sealed partial class ShipyardSystem : SharedShipyardSystem
 
         if (secret)
         {
-            _chat.TrySendInGameICMessage(uid, Loc.GetString("shipyard-console-docking-secret"), InGameICChatType.Speak, true);
+            // _chat.TrySendInGameICMessage(uid, Loc.GetString("shipyard-console-docking-secret"), InGameICChatType.Speak, true); // Triad: removed, the console no longer speaks locally
         }
         else
         {
             _radio.SendRadioMessage(uid, Loc.GetString("shipyard-console-docking", ("owner", player), ("vessel", name)), channel, uid);
-            _chat.TrySendInGameICMessage(uid, Loc.GetString("shipyard-console-docking", ("owner", player!), ("vessel", name)), InGameICChatType.Speak, true);
+            // _chat.TrySendInGameICMessage(uid, Loc.GetString("shipyard-console-docking", ("owner", player!), ("vessel", name)), InGameICChatType.Speak, true); // Triad: removed, the console no longer speaks locally
         }
     }
 
@@ -676,12 +683,12 @@ public sealed partial class ShipyardSystem : SharedShipyardSystem
 
         if (secret)
         {
-            _chat.TrySendInGameICMessage(uid, Loc.GetString("shipyard-console-leaving-secret"), InGameICChatType.Speak, true);
+            // _chat.TrySendInGameICMessage(uid, Loc.GetString("shipyard-console-leaving-secret"), InGameICChatType.Speak, true); // Triad: removed, the console no longer speaks locally
         }
         else
         {
             _radio.SendRadioMessage(uid, Loc.GetString("shipyard-console-leaving", ("owner", player!), ("vessel", name!), ("player", seller)), channel, uid);
-            _chat.TrySendInGameICMessage(uid, Loc.GetString("shipyard-console-leaving", ("owner", player!), ("vessel", name!), ("player", seller)), InGameICChatType.Speak, true);
+            // _chat.TrySendInGameICMessage(uid, Loc.GetString("shipyard-console-leaving", ("owner", player!), ("vessel", name!), ("player", seller)), InGameICChatType.Speak, true); // Triad: removed, the console no longer speaks locally
         }
     }
 
@@ -952,6 +959,7 @@ public sealed partial class ShipyardSystem : SharedShipyardSystem
         // client sends, not read from the database with the rest of the drydock state.
         newState.ImportableShips = drydock.Importables;
         newState.ImpoundedShips = drydock.Impounded; // Triad: drydock tab, the impound lot
+        ApplyDrydockAccess(uid, newState); // Triad: drydock tab, access-denied screen, ships out and deed reissue
 
         // Triad: drydock tab. The live percentage travels to the operator by message; this copy is
         // the reopen path alone, because a console opened mid-store only runs UpdateState and would
@@ -1067,6 +1075,9 @@ public sealed partial class ShipyardSystem : SharedShipyardSystem
             return;
         }
 
+        if (RefuseDeedNotOwned(uid, component, player, deed, "rename")) // Triad: a card is not proof of ownership, the account is
+            return; // Triad
+
         // Validate the new name
         var newName = args.NewName.Trim();
         if (string.IsNullOrEmpty(newName))
@@ -1137,6 +1148,9 @@ public sealed partial class ShipyardSystem : SharedShipyardSystem
             PlayDenySound(player, uid, component);
             return;
         }
+
+        if (RefuseDeedNotOwned(uid, component, player, deed, "unassign deed")) // Triad: a card is not proof of ownership, the account is
+            return; // Triad
 
         // Check if the player is on cooldown
         var cooldown = EnsureComp<ShipyardUnassignCooldownComponent>(player);
