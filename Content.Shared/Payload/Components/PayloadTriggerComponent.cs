@@ -46,10 +46,8 @@ public sealed partial class PayloadTriggerComponent : Component
     // System.RuntimeType" and kills the whole ship-grid save. Runtime-only now.
     // This never round-tripped anyway: the write threw, and a load raises no container-insert event
     // (SharedContainerSystem.OnStartupValidation re-flags contents without re-inserting them), so
-    // after a load PayloadSystem.OnEntityInserted has not run and both this set and Active are empty.
-    // The case keeps the components it was granted, since they serialize as its own, but uninstalling
-    // the trigger will not remove them and direct triggers no longer forward to the case. Both are
-    // pre-existing: Active was never persisted either. Not changed here.
+    // PayloadSystem.OnEntityInserted does not run for a loaded case. PayloadSystem.OnCaseStartup
+    // rebuilds this set and Active from the components the case carries instead.
     /*
     [DataField("grantedComponents", serverOnly: true)]
     */

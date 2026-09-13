@@ -26,6 +26,7 @@ public sealed partial class PayloadSystem : EntitySystem
     {
         base.Initialize();
 
+        SubscribeLocalEvent<PayloadCaseComponent, ComponentStartup>(OnCaseStartup); // Triad
         SubscribeLocalEvent<PayloadCaseComponent, TriggerEvent>(OnCaseTriggered);
         SubscribeLocalEvent<PayloadTriggerComponent, TriggerEvent>(OnTriggerTriggered);
         SubscribeLocalEvent<PayloadCaseComponent, EntInsertedIntoContainerMessage>(OnEntityInserted);
@@ -48,6 +49,39 @@ public sealed partial class PayloadSystem : EntitySystem
             }
         }
     }
+
+    // Triad: a loaded case raises no container-insert event, so OnEntityInserted never ran for the
+    // trigger it already holds: the trigger reads inactive (a signal to it goes nowhere) and has no
+    // record of what it granted (prying it out leaves the timer behind). Rebuild both from what the
+    // case carries. A granted component serializes as the case's own, so the case holding one the
+    // trigger grants is the trigger's grant. That is wrong only for a case that carries such a
+    // component innately, and no case prototype does.
+    private void OnCaseStartup(EntityUid uid, PayloadCaseComponent component, ComponentStartup args)
+    {
+        if (!TryComp(uid, out ContainerManagerComponent? contMan))
+            return;
+
+        foreach (var container in contMan.Containers.Values)
+        {
+            foreach (var entity in container.ContainedEntities)
+            {
+                if (!TryComp(entity, out PayloadTriggerComponent? trigger))
+                    continue;
+
+                trigger.Active = true;
+
+                if (trigger.Components == null)
+                    continue;
+
+                foreach (var name in trigger.Components.Keys)
+                {
+                    if (Factory.TryGetRegistration(name, out var registration) && HasComp(uid, registration.Type))
+                        trigger.GrantedComponents.Add(registration.Type);
+                }
+            }
+        }
+    }
+    // End Triad
 
     private void OnCaseTriggered(EntityUid uid, PayloadCaseComponent component, TriggerEvent args)
     {
