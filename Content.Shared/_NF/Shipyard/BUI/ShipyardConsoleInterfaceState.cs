@@ -16,95 +16,9 @@ public sealed class ShipyardConsoleInterfaceState : BoundUserInterfaceState
     public readonly string ShipyardName;
     public readonly bool FreeListings;
     public readonly float SellRate;
-    public readonly List<StoredShipInfo> StoredShips; // Triad: drydock tab
 
-    /// <summary>
-    /// Triad: whether the drydock tab is offered at all. The master switch is server-only, so the
-    /// client cannot read it and has to be told; without this the console would show a tab whose
-    /// every button comes back refused.
-    /// </summary>
-    public readonly bool DrydockEnabled;
-
-    /// <summary>Triad: the operator's berths, occupants included.</summary>
-    public readonly List<DrydockBerthInfo> Berths;
-
-    /// <summary>Triad: berth purchase price per size class name, for the buy control.</summary>
-    public readonly Dictionary<string, int> BerthPrices;
-
-    /// <summary>Triad: every standing offer addressed to the operator, oldest deadline first.</summary>
-    public readonly List<DrydockTransferOfferInfo> TransferOffers;
-
-    /// <summary>Triad: the captains online right now, for the transfer picker.</summary>
-    public readonly List<DrydockCaptainInfo> Captains;
-
-    /// <summary>
-    /// Triad: the account that owns the ship on the inserted card's deed, or null when the card
-    /// carries no deed to a live ship. The client compares it with its own account and covers the
-    /// drydock tab with the lockout when they differ. Presentation only: the server refuses every
-    /// message the lockout hides, and the id is already networked on the ship's ownership component.
-    /// </summary>
-    public readonly Guid? DeedOwnerUserId;
-
-    /// <summary>Triad: the ship on the inserted card's deed and the berths it can go into, or null.</summary>
-    public readonly DrydockDeedShipInfo? DeedShip;
-
-    /// <summary>
-    /// Triad: legacy saves on this client's disk that the server will accept. Set after construction
-    /// rather than passed in, because it is answered by a message from the client and so is not known
-    /// at the moment the rest of the state is built; empty until that manifest arrives, and empty for
-    /// good when legacy import is switched off.
-    /// </summary>
-    public List<DrydockImportShipInfo> ImportableShips = new();
-
-    /// <summary>
-    /// Triad: the operator's ships in the impound lot, for the cards above the berth list. Set
-    /// after construction for the same reason <see cref="ImportableShips"/> is: it is another list
-    /// the drydock handlers read from the database, and the constructor is wide enough.
-    /// </summary>
-    public List<DrydockImpoundedShipInfo> ImpoundedShips = new();
-
-    /// <summary>
-    /// Triad: how far along the store or retrieve running at this console is, or null when nothing
-    /// is running. Set after construction rather than passed in, for the same reason
-    /// <see cref="ImportableShips"/> is: it is a live figure the state builder reads off the
-    /// console's own cache, and widening a nineteen-argument constructor for it would be worse than
-    /// the assignment.
-    ///
-    /// <para>The live figure travels by message, aimed at the operator who pressed. This is the
-    /// reopen path alone: on open only UpdateState runs, so without it a console opened in the
-    /// middle of a store draws a live Store button over a running store. Being state rather than a
-    /// message it is per-console and any bystander with the tab open sees it, which is the intent -
-    /// a percentage is not sensitive, and the alternative is that bystander seeing a live Store
-    /// button for a ship that is already halfway into a berth.</para>
-    /// </summary>
-    public int? StoreProgressPercent; // Triad: drydock tab
-
-    /// <summary>
-    /// Triad: the operator is barred from the drydock (TDF, TFA and the other voucher-issued
-    /// roles), which covers the tab with the access-denied screen. Set after construction for the
-    /// same reason <see cref="ImportableShips"/> is. The server refuses every drydock message from a
-    /// barred operator regardless.
-    /// </summary>
-    public bool DrydockOperatorBarred; // Triad: drydock tab
-
-    /// <summary>
-    /// Triad: the civilian ships the operator's account has out in the world. Buying or retrieving
-    /// another is refused while this is not empty, so the purchase and retrieve buttons grey on it.
-    /// </summary>
-    public List<DrydockReissueShipInfo> ShipsOut = new(); // Triad: drydock tab
-
-    /// <summary>
-    /// Triad: whether the inserted card can take a deed moved onto it: an ID card, not a voucher,
-    /// carrying no deed. When it can, the deed card at the top names the ship in <see cref="ShipsOut"/>
-    /// and offers Transfer deed in Store's place.
-    /// </summary>
-    public bool CanReissueToCard; // Triad: drydock tab
-
-    /// <summary>
-    /// Triad: how long a transfer offer stands, in whole minutes, for the sentence in the transfer
-    /// prompt. The cvar behind it is server-only, so the client has to be told.
-    /// </summary>
-    public readonly int TransferOfferMinutes;
+    /// <summary>Triad: everything the drydock tab draws. See <see cref="DrydockTabState"/>.</summary>
+    public DrydockTabState Drydock = DrydockTabState.Empty; // Triad: drydock tab
 
     public ShipyardConsoleInterfaceState(
         int balance,
@@ -116,24 +30,8 @@ public sealed class ShipyardConsoleInterfaceState : BoundUserInterfaceState
         (List<string> available, List<string> unavailable) shipyardPrototypes,
         string shipyardName,
         bool freeListings,
-        float sellRate,
-        List<StoredShipInfo> storedShips, // Triad: drydock tab
-        bool drydockEnabled, // Triad: drydock tab
-        List<DrydockBerthInfo> berths, // Triad: drydock tab
-        Dictionary<string, int> berthPrices, // Triad: drydock tab
-        List<DrydockTransferOfferInfo> transferOffers, // Triad: drydock tab
-        List<DrydockCaptainInfo> captains, // Triad: drydock tab
-        Guid? deedOwnerUserId, // Triad: drydock tab
-        DrydockDeedShipInfo? deedShip, // Triad: drydock tab
-        int transferOfferMinutes) // Triad: drydock tab
+        float sellRate)
     {
-        TransferOfferMinutes = transferOfferMinutes; // Triad: drydock tab
-        Berths = berths; // Triad: drydock tab
-        BerthPrices = berthPrices; // Triad: drydock tab
-        TransferOffers = transferOffers; // Triad: drydock tab
-        Captains = captains; // Triad: drydock tab
-        DeedOwnerUserId = deedOwnerUserId; // Triad: drydock tab
-        DeedShip = deedShip; // Triad: drydock tab
         Balance = balance;
         AccessGranted = accessGranted;
         ShipDeedTitle = shipDeedTitle;
@@ -144,7 +42,5 @@ public sealed class ShipyardConsoleInterfaceState : BoundUserInterfaceState
         ShipyardName = shipyardName;
         FreeListings = freeListings;
         SellRate = sellRate;
-        StoredShips = storedShips; // Triad: drydock tab
-        DrydockEnabled = drydockEnabled; // Triad: drydock tab
     }
 }

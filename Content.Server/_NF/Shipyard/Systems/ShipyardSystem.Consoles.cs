@@ -928,7 +928,6 @@ public sealed partial class ShipyardSystem : SharedShipyardSystem
 
     private void RefreshState(EntityUid uid, int balance, bool access, string? shipDeed, int shipSellValue, EntityUid? targetId, ShipyardConsoleUiKey uiKey, bool freeListings)
     {
-        var drydock = BuildDrydockState(uid); // Triad: drydock tab
         var newState = new ShipyardConsoleInterfaceState(
             balance,
             access,
@@ -939,33 +938,10 @@ public sealed partial class ShipyardSystem : SharedShipyardSystem
             GetAvailableShuttles(uid, uiKey, targetId: targetId),
             uiKey.ToString(),
             freeListings,
-            CalculateSellRate(uid),
-            // Triad: drydock tab. Whatever the drydock handlers last read from the database; empty
-            // until one of them runs, so an unrelated refresh cannot blank a list that is showing.
-            drydock.Ships,
-            _configManager.GetCVar(TriadCCVars.DrydockEnabled), // Triad: drydock tab
-            drydock.Berths, // Triad: drydock tab
-            drydock.Prices, // Triad: drydock tab
-            drydock.Offers, // Triad: drydock tab
-            drydock.Captains, // Triad: drydock tab
-            drydock.DeedOwner, // Triad: drydock tab
-            drydock.DeedShip, // Triad: drydock tab
-            drydock.OfferMinutes); // Triad: drydock tab
-
-        // Triad: legacy import. Set after construction because it is answered by a manifest the
-        // client sends, not read from the database with the rest of the drydock state.
-        newState.ImportableShips = drydock.Importables;
-        newState.ImpoundedShips = drydock.Impounded; // Triad: drydock tab, the impound lot
-        ApplyDrydockAccess(uid, newState); // Triad: drydock tab, access-denied screen, ships out and deed reissue
-
-        // Triad: drydock tab. The live percentage travels to the operator by message; this copy is
-        // the reopen path alone, because a console opened mid-store only runs UpdateState and would
-        // otherwise draw a live Store button over a store that is still going. It is per-console
-        // state, so a bystander with the tab open sees the number too - deliberately: a percentage
-        // is not sensitive, and the alternative is that bystander being offered a Store button for
-        // a hull that is already halfway into a berth.
-        if (TryComp<ShipyardConsoleComponent>(uid, out var progressConsole)) // Triad: drydock tab
-            newState.StoreProgressPercent = progressConsole.CachedProgress; // Triad: drydock tab
+            CalculateSellRate(uid))
+        {
+            Drydock = BuildDrydockState(uid), // Triad: drydock tab
+        };
 
         _ui.SetUiState(uid, uiKey, newState);
     }

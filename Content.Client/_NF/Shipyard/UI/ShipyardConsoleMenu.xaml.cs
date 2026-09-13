@@ -559,33 +559,33 @@ public sealed partial class ShipyardConsoleMenu : FancyWindow
         }
         _freeListings = state.FreeListings;
         _validId = state.IsTargetIdPresent;
-        _shipOutBlocksPurchase = state.DrydockEnabled && state.ShipsOut.Count > 0; // Triad: one civilian ship out per account
+        _shipOutBlocksPurchase = state.Drydock.DrydockEnabled && state.Drydock.ShipsOut.Count > 0; // Triad: one civilian ship out per account
         PopulateProducts(_lastAvailableProtos, _lastUnavailableProtos, _freeListings, _validId);
 
         // Triad: drydock tab. Hidden outright when the master switch is off, rather than shown with
         // buttons that would every one of them come back refused.
-        Tabs.SetTabVisible(1, state.DrydockEnabled);
+        Tabs.SetTabVisible(1, state.Drydock.DrydockEnabled);
 
         // The lockout: someone else's registered card in the slot. Decided here because one console
         // state is shared by every viewer and only the client knows which viewer it is. A voucher in
         // the slot or an operator the drydock bars draws the same screen with its own lines, and
         // outranks the mismatch: provisioned personnel get no garage whoever's card it is.
-        var provisioned = state.FreeListings || state.DrydockOperatorBarred;
-        var mismatch = LocalUserId != null && state.DeedOwnerUserId is { } deedOwner && deedOwner != LocalUserId;
+        var provisioned = state.FreeListings || state.Drydock.DrydockOperatorBarred;
+        var mismatch = LocalUserId != null && state.Drydock.DeedOwnerUserId is { } deedOwner && deedOwner != LocalUserId;
         LockoutPanel.Visible = provisioned || mismatch;
         // Provisioned is the title and one line under it; the mismatch keeps its subtitle and body.
         LockoutSubtitle.Text = Loc.GetString(provisioned ? "shipyard-console-denied-subtitle" : "shipyard-console-lockout-subtitle");
         LockoutBody.Visible = !provisioned;
 
-        _lastShips = state.StoredShips;
-        _lastBerths = state.Berths;
-        _lastImportable = state.ImportableShips; // Triad: legacy import
-        _lastCaptains = state.Captains;
+        _lastShips = state.Drydock.StoredShips;
+        _lastBerths = state.Drydock.Berths;
+        _lastImportable = state.Drydock.ImportableShips; // Triad: legacy import
+        _lastCaptains = state.Drydock.Captains;
         // Never an alert for one's own offer; the escrow row already says it.
-        _lastOffers = state.TransferOffers.Where(o => LocalUserId == null || o.OfferedByUserId != LocalUserId).ToList();
-        _lastImpounded = state.ImpoundedShips;
+        _lastOffers = state.Drydock.TransferOffers.Where(o => LocalUserId == null || o.OfferedByUserId != LocalUserId).ToList();
+        _lastImpounded = state.Drydock.ImpoundedShips;
         _lastBalance = state.Balance;
-        _offerMinutes = state.TransferOfferMinutes;
+        _offerMinutes = state.Drydock.TransferOfferMinutes;
         _sinceState = 0f;
         _lastElapsed = -1;
         _offerClocks.Clear();
@@ -593,32 +593,32 @@ public sealed partial class ShipyardConsoleMenu : FancyWindow
         // Triad: drydock tab. The percentage says whether a store or a retrieve is still running at
         // this console, which is what stops an unrelated refresh taking the indicator down and what
         // makes a console opened halfway through draw it at all.
-        _lastReissueShip = state.CanReissueToCard ? state.ShipsOut.FirstOrDefault() : null;
-        PopulateDeedShip(state.DeedShip, state.StoreProgressPercent);
+        _lastReissueShip = state.Drydock.CanReissueToCard ? state.Drydock.ShipsOut.FirstOrDefault() : null;
+        PopulateDeedShip(state.Drydock.DeedShip, state.Drydock.StoreProgressPercent);
         PopulateImpounds();
         PopulateOffers();
         // A voucher in the slot reads as free listings; it is not a card a stored ship can be called
         // in on, and the server refuses the press, so the button is not drawn. Nor with a ship
         // already out: one at a time, and the card at the top already names the one that is.
-        PopulateBerths(state.Berths, canRetrieve: state.IsTargetIdPresent && state.ShipDeedTitle == null && !state.FreeListings && state.ShipsOut.Count == 0);
+        PopulateBerths(state.Drydock.Berths, canRetrieve: state.IsTargetIdPresent && state.ShipDeedTitle == null && !state.FreeListings && state.Drydock.ShipsOut.Count == 0);
 
         // The retrieve half of the same rule. The rows were just rebuilt, so the greying is applied
         // here rather than carried on any one row: one ship comes back per card, and the server
         // refuses the second regardless.
-        if (state.StoreProgressPercent != null)
+        if (state.Drydock.StoreProgressPercent != null)
         {
             foreach (var row in Berths.Children.OfType<DrydockBerthRow>())
                 row.RetrieveButton.Disabled = true;
         }
 
-        PopulateBuyMenu(state.BerthPrices);
+        PopulateBuyMenu(state.Drydock.BerthPrices);
 
-        var free = state.Berths.Count(b => b.OccupantShipId == null);
-        BerthSummaryLabel.Text = Loc.GetString("shipyard-console-berths-free", ("free", free), ("total", state.Berths.Count))
+        var free = state.Drydock.Berths.Count(b => b.OccupantShipId == null);
+        BerthSummaryLabel.Text = Loc.GetString("shipyard-console-berths-free", ("free", free), ("total", state.Drydock.Berths.Count))
             // Triad: legacy import. Only said while there is something to import, so the line stays
             // as short as it is on a console with nothing waiting.
-            + (state.ImportableShips.Count > 0
-                ? Loc.GetString("shipyard-console-import-summary", ("count", state.ImportableShips.Count))
+            + (state.Drydock.ImportableShips.Count > 0
+                ? Loc.GetString("shipyard-console-import-summary", ("count", state.Drydock.ImportableShips.Count))
                 : string.Empty);
     }
 

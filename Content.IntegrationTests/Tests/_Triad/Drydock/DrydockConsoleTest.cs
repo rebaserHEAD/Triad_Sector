@@ -146,7 +146,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
 
             await server.WaitAssertion(() =>
             {
-                var listed = consoleComp.CachedStoredShips.SingleOrDefault(s => s.ShipId == shipId);
+                var listed = consoleComp.CachedDrydock.StoredShips.SingleOrDefault(s => s.ShipId == shipId);
                 Assert.That(listed, Is.Not.Null,
                     "The ship was just stored by this operator, so it has to be offered back to them.");
                 Assert.That(listed!.Name, Is.EqualTo("Kestrel"));
@@ -555,7 +555,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
 
             await server.WaitAssertion(() =>
             {
-                Assert.That(consoleComp.CachedStoredShips.Any(s => s.ShipId == shipId), Is.True,
+                Assert.That(consoleComp.CachedDrydock.StoredShips.Any(s => s.ShipId == shipId), Is.True,
                     "The control: a stored ship is listed, so its later absence means something.");
             });
 
@@ -582,7 +582,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                 // A ship that is out stays on the list so its owner can see why a berth is empty,
                 // but it is listed as out, which is what disables its retrieve button. The row
                 // state below is what actually refuses; this is the console telling the truth.
-                var listed = consoleComp.CachedStoredShips.SingleOrDefault(s => s.ShipId == shipId);
+                var listed = consoleComp.CachedDrydock.StoredShips.SingleOrDefault(s => s.ShipId == shipId);
                 Assert.That(listed, Is.Not.Null, "A ship that is out is still the player's ship and still on their list.");
                 Assert.That(listed!.State, Is.EqualTo(nameof(DrydockShipState.CheckedOut)),
                     "The list must say the ship is out, or the tab would offer a retrieve that the row refuses.");
@@ -640,7 +640,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
 
                 // What the client draws the lockout from: the card's ship belongs to someone else.
                 var state = shipyard.BuildDrydockState(console);
-                Assert.That(state.DeedOwner, Is.EqualTo(absentOwner.UserId),
+                Assert.That(state.DeedOwnerUserId, Is.EqualTo(absentOwner.UserId),
                     "The console state must name the deed ship's owner, or the client cannot tell this card is not the operator's.");
             });
 
@@ -837,7 +837,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
 
             await server.WaitAssertion(() =>
             {
-                var deedShip = consoleComp.CachedDeedShip;
+                var deedShip = consoleComp.CachedDrydock.DeedShip;
                 Assert.That(deedShip, Is.Not.Null, "With a deed in the slot the tab must describe the ship on it.");
                 Assert.That(deedShip!.Name, Is.EqualTo("Kestrel"));
                 Assert.That(deedShip.MinutesOut, Is.Null, "A hull that has never been stored has no time out.");
@@ -861,8 +861,8 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
 
             await server.WaitAssertion(() =>
             {
-                Assert.That(consoleComp.CachedDeedShip, Is.Null, "The deed came off with the store, so the card at the top goes with it.");
-                var row = consoleComp.CachedBerths.Single(b => b.BerthId == named);
+                Assert.That(consoleComp.CachedDrydock.DeedShip, Is.Null, "The deed came off with the store, so the card at the top goes with it.");
+                var row = consoleComp.CachedDrydock.Berths.Single(b => b.BerthId == named);
                 Assert.That(row.OccupantName, Is.EqualTo("Kestrel"));
                 Assert.That(row.OccupantState, Is.EqualTo(nameof(DrydockShipState.Stored)));
             });
@@ -1114,8 +1114,8 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             });
             await server.WaitAssertion(() =>
             {
-                Assert.That(consoleComp.CachedDeedShip, Is.Not.Null);
-                Assert.That(consoleComp.CachedDeedShip!.Docked, Is.False, "The card at the top of the tab says the ship is not docked here, which is what greys Store.");
+                Assert.That(consoleComp.CachedDrydock.DeedShip, Is.Not.Null);
+                Assert.That(consoleComp.CachedDrydock.DeedShip!.Docked, Is.False, "The card at the top of the tab says the ship is not docked here, which is what greys Store.");
             });
 
             var loose = await RunOnServer(pair,
@@ -1142,7 +1142,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             });
             await server.WaitAssertion(() =>
             {
-                Assert.That(consoleComp.CachedDeedShip!.Docked, Is.True, "Docked now, so the tab offers the store.");
+                Assert.That(consoleComp.CachedDrydock.DeedShip!.Docked, Is.True, "Docked now, so the tab offers the store.");
             });
 
             var stored = await RunOnServer(pair,
@@ -1197,7 +1197,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             var defaultBerth = 0;
             await server.WaitAssertion(() =>
             {
-                var impounded = consoleComp.CachedImpounded.SingleOrDefault(i => i.ShipId == shipId);
+                var impounded = consoleComp.CachedDrydock.ImpoundedShips.SingleOrDefault(i => i.ShipId == shipId);
                 Assert.That(impounded, Is.Not.Null, "An impounded ship is listed above the berths.");
                 Assert.Multiple(() =>
                 {
@@ -1253,7 +1253,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                 Is.EqualTo(DrydockBerthResult.Success));
             await RefreshTab(pair, shipyard, console, consoleComp, operatorEnt);
             await server.WaitAssertion(() =>
-                Assert.That(consoleComp.CachedImpounded.Single(i => i.ShipId == shipId).Redeemable, Is.False, "The card says an admin holds it."));
+                Assert.That(consoleComp.CachedDrydock.ImpoundedShips.Single(i => i.ShipId == shipId).Redeemable, Is.False, "The card says an admin holds it."));
             Assert.That(await RunOnServer(pair,
                 () => shipyard.TryRedeemImpound(console, consoleComp, operatorEnt, shipId, defaultBerth, ShipyardConsoleUiKey.Shipyard)), Is.False);
             Assert.That(await RunOnServer(pair,
@@ -1368,7 +1368,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                     Assert.That(dangling!.ShuttleUid, Is.Not.Null);
                     Assert.That(entMan.EntityExists(dangling.ShuttleUid!.Value), Is.False,
                         "Control: and it points at a ship that no longer exists.");
-                    Assert.That(consoleComp.CachedImpounded, Is.Empty,
+                    Assert.That(consoleComp.CachedDrydock.ImpoundedShips, Is.Empty,
                         "Control: nothing has read the tab yet, so the lot is not in the cache.");
                 });
             });
@@ -1382,7 +1382,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             while (!listed && deadline.Elapsed < TimeSpan.FromSeconds(30))
             {
                 await pair.RunTicksSync(5);
-                await server.WaitPost(() => listed = consoleComp.CachedImpounded.Any(i => i.ShipId == shipId));
+                await server.WaitPost(() => listed = consoleComp.CachedDrydock.ImpoundedShips.Any(i => i.ShipId == shipId));
             }
 
             Assert.That(listed, Is.True,

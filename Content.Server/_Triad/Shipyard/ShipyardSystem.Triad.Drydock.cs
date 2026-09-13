@@ -319,12 +319,15 @@ public sealed partial class ShipyardSystem
         if (component.TargetIdSlot.ContainerSlot?.ContainedEntity is not { Valid: true } targetId
             || !TryComp<ActorComponent>(player, out var actor))
         {
-            component.CachedStoredShips = new();
-            component.CachedBerths = new();
-            component.CachedDeedShip = null;
-            component.CachedOffers = new();
-            component.CachedCaptains = new();
-            component.CachedImpounded = new();
+            component.CachedDrydock = component.CachedDrydock with
+            {
+                StoredShips = new(),
+                Berths = new(),
+                DeedShip = null,
+                TransferOffers = new(),
+                Captains = new(),
+                ImpoundedShips = new(),
+            };
             CacheDrydockAccess(component, player, null);
             RefreshDrydockUi(uid, component, player, uiKey);
             return;
@@ -468,12 +471,15 @@ public sealed partial class ShipyardSystem
 
         // Everything is read; swap the whole set in at once. Nothing above this line has touched
         // what the console is currently showing.
-        component.CachedStoredShips = storedShips;
-        component.CachedBerths = berthInfos;
-        component.CachedOffers = offerInfos;
-        component.CachedCaptains = captainInfos;
-        component.CachedImpounded = impoundedInfos;
-        component.CachedDeedShip = BuildDeedShip(uid, targetId, rows, slots);
+        component.CachedDrydock = component.CachedDrydock with
+        {
+            StoredShips = storedShips,
+            Berths = berthInfos,
+            TransferOffers = offerInfos,
+            Captains = captainInfos,
+            ImpoundedShips = impoundedInfos,
+            DeedShip = BuildDeedShip(uid, targetId, rows, slots),
+        };
         CacheDrydockAccess(component, player, targetId);
         RefreshDrydockUi(uid, component, player, uiKey);
     }
@@ -487,16 +493,19 @@ public sealed partial class ShipyardSystem
     /// </summary>
     private void CacheDrydockAccess(ShipyardConsoleComponent component, EntityUid player, EntityUid? targetId)
     {
-        component.CachedOperatorBarred = DrydockBarsOperator(player, component);
-        component.CachedShipsOut = TryGetOperatorAccount(player, out var account)
-            ? CivilianShipsOut(account)
-                .Select(grid => new DrydockReissueShipInfo(
-                    GetNetEntity(grid),
-                    TryComp<ShuttleDeedComponent>(grid, out var deed) ? GetFullName(deed) : Name(grid),
-                    TryComp<MapGridComponent>(grid, out var map) ? _drydockSizes.GetSizeClass((grid, map)).ToString() : null))
-                .ToList()
-            : new();
-        component.CachedCanReissueToCard = CanReissueDeedTo(targetId);
+        component.CachedDrydock = component.CachedDrydock with
+        {
+            DrydockOperatorBarred = DrydockBarsOperator(player, component),
+            ShipsOut = TryGetOperatorAccount(player, out var account)
+                ? CivilianShipsOut(account)
+                    .Select(grid => new DrydockReissueShipInfo(
+                        GetNetEntity(grid),
+                        TryComp<ShuttleDeedComponent>(grid, out var deed) ? GetFullName(deed) : Name(grid),
+                        TryComp<MapGridComponent>(grid, out var map) ? _drydockSizes.GetSizeClass((grid, map)).ToString() : null))
+                    .ToList()
+                : new(),
+            CanReissueToCard = CanReissueDeedTo(targetId),
+        };
     }
 
     /// <summary>Whether a card could take a reissued deed: present, an ID card, not a voucher, not already deeded.</summary>
@@ -506,17 +515,6 @@ public sealed partial class ShipyardSystem
             && HasComp<IdCardComponent>(id)
             && !HasComp<ShipyardVoucherComponent>(id)
             && !HasComp<ShuttleDeedComponent>(id);
-    }
-
-    /// <summary>The access half of the console state, read from the caches. Called by the upstream state builder through one marked line.</summary>
-    internal void ApplyDrydockAccess(EntityUid uid, ShipyardConsoleInterfaceState state)
-    {
-        if (!TryComp<ShipyardConsoleComponent>(uid, out var console))
-            return;
-
-        state.DrydockOperatorBarred = console.CachedOperatorBarred;
-        state.ShipsOut = console.CachedShipsOut;
-        state.CanReissueToCard = console.CachedCanReissueToCard;
     }
 
     /// <summary>
@@ -897,17 +895,31 @@ public sealed partial class ShipyardSystem
 
     /// <summary>
     /// The drydock half of the console state, read from the caches. Called by the upstream state
-    /// builder so it carries one line of ours rather than a block.
+    /// builder through one marked line.
+    ///
+    /// <para><see cref="ShipyardConsoleComponent.CachedImportables"/> stays its own cache rather
+    /// than folding into <see cref="ShipyardConsoleComponent.CachedDrydock"/>: it is written from
+    /// the import message handlers in ShipyardSystem.Triad.Import.cs, so merged in here rather
+    /// than at every one of that file's write sites.</para>
     /// </summary>
-    internal (List<StoredShipInfo> Ships, List<DrydockBerthInfo> Berths, Dictionary<string, int> Prices, List<DrydockTransferOfferInfo> Offers, List<DrydockCaptainInfo> Captains, Guid? DeedOwner, DrydockDeedShipInfo? DeedShip, int OfferMinutes, List<DrydockImportShipInfo> Importables, List<DrydockImpoundedShipInfo> Impounded) BuildDrydockState(EntityUid uid)
+    internal DrydockTabState BuildDrydockState(EntityUid uid)
     {
         // The same floor the offer itself applies, so the prompt never promises less than an offer gets.
         var offerMinutes = (int)Math.Ceiling(Math.Max(60, _configManager.GetCVar(TriadCCVars.DrydockTransferOfferSeconds)) / 60.0);
+        var enabled = _configManager.GetCVar(TriadCCVars.DrydockEnabled);
+        var prices = DrydockBerthPrices();
 
         if (!TryComp<ShipyardConsoleComponent>(uid, out var console))
-            return (new(), new(), DrydockBerthPrices(), new(), new(), null, null, offerMinutes, new(), new());
+            return DrydockTabState.Empty with { DrydockEnabled = enabled, BerthPrices = prices, TransferOfferMinutes = offerMinutes };
 
-        return (console.CachedStoredShips, console.CachedBerths, DrydockBerthPrices(), console.CachedOffers, console.CachedCaptains, DeedOwnerAccount(console), console.CachedDeedShip, offerMinutes, console.CachedImportables, console.CachedImpounded);
+        return console.CachedDrydock with
+        {
+            DrydockEnabled = enabled,
+            BerthPrices = prices,
+            DeedOwnerUserId = DeedOwnerAccount(console),
+            TransferOfferMinutes = offerMinutes,
+            ImportableShips = console.CachedImportables,
+        };
     }
 
     /// <summary>
@@ -1935,7 +1947,7 @@ public sealed partial class ShipyardSystem
         if (TerminatingOrDeleted(uid) || TerminatingOrDeleted(player))
             return;
 
-        component.CachedProgress = percent;
+        component.CachedDrydock = component.CachedDrydock with { StoreProgressPercent = percent };
 
         _ui.ServerSendUiMessage(uid, uiKey, new ShipyardConsoleDrydockProgressMessage(kind, percent), player);
     }
@@ -1950,7 +1962,7 @@ public sealed partial class ShipyardSystem
         if (TerminatingOrDeleted(uid))
             return;
 
-        component.CachedProgress = null;
+        component.CachedDrydock = component.CachedDrydock with { StoreProgressPercent = null };
     }
 
     /// <summary>

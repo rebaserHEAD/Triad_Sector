@@ -83,49 +83,25 @@ public sealed partial class ShipyardConsoleComponent : Component
     public EntityWhitelist? ShipSaveBlacklist;
 
     /// <summary>
-    /// Triad: the drydock tab's stored-ship list for whoever is currently at this console.
+    /// Triad: the drydock tab's state for whoever is currently at this console: the lists a
+    /// refresh reads from the database, the access and reissue flags read from the world at the
+    /// same swap, and the live store/retrieve percentage. See <see cref="BUI.DrydockTabState"/>.
     ///
-    /// <para>A cache rather than a lookup because the list comes from the database and the state
-    /// builder that has to publish it is synchronous. The drydock handlers fill this from an
+    /// <para>A cache rather than a lookup because the lists come from the database and the state
+    /// builder that has to publish them is synchronous. The drydock handlers fill this from an
     /// awaited read and then push the state; every other refresh path just re-sends whatever is
-    /// here. Not a <c>DataField</c>: it is per-operator scratch, and persisting one player's ship
-    /// list onto a mapped console would show it to the next person who opened it.</para>
+    /// here. Not a <c>DataField</c>: it is per-operator scratch, and persisting one player's
+    /// drydock tab onto a mapped console would show it to the next person who opened it.</para>
     /// </summary>
-    public List<BUI.StoredShipInfo> CachedStoredShips = new();
-
-    /// <summary>Triad: the operator's berths, cached for the same reason as the ship list.</summary>
-    public List<BUI.DrydockBerthInfo> CachedBerths = new();
-
-    /// <summary>Triad: the ship on the inserted card's deed and where it can be stored, cached for the same reason.</summary>
-    public BUI.DrydockDeedShipInfo? CachedDeedShip;
-
-    /// <summary>Triad: the offers addressed to the operator, read from their persisted rows, cached for the same reason.</summary>
-    public List<BUI.DrydockTransferOfferInfo> CachedOffers = new();
-
-    /// <summary>Triad: the captains online at the last refresh with their free berth classes, for the transfer picker.</summary>
-    public List<BUI.DrydockCaptainInfo> CachedCaptains = new();
-
-    /// <summary>Triad: legacy saves this operator may import, cached for the same reason as the ship list.</summary>
-    public List<BUI.DrydockImportShipInfo> CachedImportables = new();
-
-    /// <summary>Triad: the operator's ships in the impound lot, with their terms, cached for the same reason as the ship list.</summary>
-    public List<BUI.DrydockImpoundedShipInfo> CachedImpounded = new();
+    public BUI.DrydockTabState CachedDrydock = BUI.DrydockTabState.Empty;
 
     /// <summary>
-    /// Triad: how far along the store or retrieve running at this console is, so a reopened tab
-    /// draws the indicator; null when neither is running. One field because a console only ever
-    /// has one of the two in flight, so a caller does not need the kind back to read it.
+    /// Triad: legacy saves this operator may import, cached for the same reason
+    /// <see cref="CachedDrydock"/> is. Kept as its own field rather than folded into
+    /// <see cref="CachedDrydock"/>: it is written from the import message handlers, not the
+    /// drydock refresh, and answers a manifest the client sends rather than a database read.
     /// </summary>
-    public int? CachedProgress;
-
-    /// <summary>Triad: whether the operator at the last refresh is barred from the drydock.</summary>
-    public bool CachedOperatorBarred;
-
-    /// <summary>Triad: the civilian ships the operator's account had out at the last refresh.</summary>
-    public List<BUI.DrydockReissueShipInfo> CachedShipsOut = new();
-
-    /// <summary>Triad: whether the inserted card could take a reissued deed at the last refresh.</summary>
-    public bool CachedCanReissueToCard;
+    public List<BUI.DrydockImportShipInfo> CachedImportables = new();
 
     /// <summary>
     /// Triad: the candidates behind <see cref="CachedImportables"/>, keyed by the client's file id.

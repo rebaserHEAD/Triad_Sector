@@ -487,17 +487,22 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                 shipyardPrototypes: (new List<string>(), new List<string>()),
                 shipyardName: "Shipyard",
                 freeListings: false,
-                sellRate: 0.35f,
-                storedShips: ships,
-                drydockEnabled: true,
-                berths: berths,
-                berthPrices: new Dictionary<string, int> { ["Cutter"] = 2500, ["SuperCapital"] = 80000 },
-                transferOffers: offers ?? new List<DrydockTransferOfferInfo>(),
-                captains: new List<DrydockCaptainInfo>(),
-                deedOwnerUserId: deedOwner ?? (deedShip != null ? Viewer : null),
-                deedShip: deedShip,
-                transferOfferMinutes: 30);
-            state.ImpoundedShips = impounded ?? new List<DrydockImpoundedShipInfo>();
+                sellRate: 0.35f)
+            {
+                Drydock = new DrydockTabState(
+                    drydockEnabled: true,
+                    storedShips: ships,
+                    berths: berths,
+                    berthPrices: new Dictionary<string, int> { ["Cutter"] = 2500, ["SuperCapital"] = 80000 },
+                    transferOffers: offers ?? new List<DrydockTransferOfferInfo>(),
+                    captains: new List<DrydockCaptainInfo>(),
+                    deedOwnerUserId: deedOwner ?? (deedShip != null ? Viewer : null),
+                    deedShip: deedShip,
+                    transferOfferMinutes: 30)
+                {
+                    ImpoundedShips = impounded ?? new List<DrydockImpoundedShipInfo>(),
+                },
+            };
             return state;
         }
     }
