@@ -34,7 +34,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             var db = pair.Server.ResolveDependency<IServerDbManager>();
 
             var owner = Guid.NewGuid();
-            await InsertPlayer(db, owner);
+            await DrydockTestHelpers.InsertPlayer(db, owner);
 
             // Two cutter slots and one frigate slot. Smallest-first means a cutter never takes the
             // frigate slot while a cutter slot is free.
@@ -85,7 +85,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             var db = pair.Server.ResolveDependency<IServerDbManager>();
 
             var owner = Guid.NewGuid();
-            await InsertPlayer(db, owner);
+            await DrydockTestHelpers.InsertPlayer(db, owner);
             await store.AddBerth(owner, ShipSizeClass.Cutter, DrydockBerthKind.Granted, 0, null, null);
 
             var occupant = Guid.NewGuid();
@@ -122,7 +122,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
 
             var owner = Guid.NewGuid();
             var stranger = Guid.NewGuid();
-            await InsertPlayer(db, owner);
+            await DrydockTestHelpers.InsertPlayer(db, owner);
             await InsertPlayer(db, stranger);
 
             var ownBerth = await store.AddBerth(owner, ShipSizeClass.Cutter, DrydockBerthKind.Granted, 0, null, null);
@@ -250,7 +250,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             var db = pair.Server.ResolveDependency<IServerDbManager>();
 
             var owner = Guid.NewGuid();
-            await InsertPlayer(db, owner);
+            await DrydockTestHelpers.InsertPlayer(db, owner);
 
             // A grant records nothing paid whatever it is told, so it can never be sold for credits.
             var granted = await store.AddBerth(owner, ShipSizeClass.Cutter, DrydockBerthKind.Granted, 9999, null, null);
@@ -301,7 +301,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
 
             var owner = Guid.NewGuid();
             var admin = Guid.NewGuid();
-            await InsertPlayer(db, owner);
+            await DrydockTestHelpers.InsertPlayer(db, owner);
             await InsertPlayer(db, admin);
 
             var corvetteSlot = await store.AddBerth(owner, ShipSizeClass.Corvette, DrydockBerthKind.Granted, 0, null, null);
@@ -379,21 +379,5 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             }, CancellationToken.None);
         }
 
-        private static Task InsertPlayer(IServerDbManager db, Guid userId)
-        {
-            return db.RunTriadDbCommand(async (context, token) =>
-            {
-                context.Player.Add(new Player
-                {
-                    UserId = userId,
-                    LastSeenUserName = $"drydock-test-{userId:N}",
-                    FirstSeenTime = DateTime.UtcNow,
-                    LastSeenTime = DateTime.UtcNow,
-                    LastSeenAddress = IPAddress.Loopback,
-                });
-
-                await context.SaveChangesAsync(token);
-            }, CancellationToken.None);
-        }
     }
 }

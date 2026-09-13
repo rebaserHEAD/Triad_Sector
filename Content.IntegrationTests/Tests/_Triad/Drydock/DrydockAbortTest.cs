@@ -77,7 +77,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             var drydock = server.System<DrydockSystem>();
 
             var owner = Guid.NewGuid();
-            await InsertPlayer(db, owner);
+            await DrydockTestHelpers.InsertPlayer(db, owner);
             var store = server.ResolveDependency<DrydockStore>();
             await store.AddBerth(owner, ShipSizeClass.SuperCapital, DrydockBerthKind.Granted, 0, null, null);
 
@@ -146,7 +146,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             var drydock = server.System<DrydockSystem>();
 
             var owner = Guid.NewGuid();
-            await InsertPlayer(db, owner);
+            await DrydockTestHelpers.InsertPlayer(db, owner);
             var store = server.ResolveDependency<DrydockStore>();
             await store.AddBerth(owner, ShipSizeClass.SuperCapital, DrydockBerthKind.Granted, 0, null, null);
 
@@ -425,21 +425,5 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                 CancellationToken.None);
         }
 
-        private static Task InsertPlayer(IServerDbManager db, Guid userId)
-        {
-            return db.RunTriadDbCommand(async (context, token) =>
-            {
-                context.Player.Add(new Player
-                {
-                    UserId = userId,
-                    LastSeenUserName = $"drydock-test-{userId:N}",
-                    FirstSeenTime = DateTime.UtcNow,
-                    LastSeenTime = DateTime.UtcNow,
-                    LastSeenAddress = System.Net.IPAddress.Loopback,
-                });
-
-                await context.SaveChangesAsync(token);
-            }, CancellationToken.None);
-        }
     }
 }

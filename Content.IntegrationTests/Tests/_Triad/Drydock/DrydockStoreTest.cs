@@ -42,7 +42,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
 
             var owner = Guid.NewGuid();
             var shipId = Guid.NewGuid();
-            await InsertPlayer(db, owner);
+            await DrydockTestHelpers.InsertPlayer(db, owner);
             await store.AddBerth(owner, ShipSizeClass.Cutter, DrydockBerthKind.Granted, 0, null, null);
 
             var firstBlob = Encoding.UTF8.GetBytes("first revision document");
@@ -132,7 +132,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
 
             var owner = Guid.NewGuid();
             var shipId = Guid.NewGuid();
-            await InsertPlayer(db, owner);
+            await DrydockTestHelpers.InsertPlayer(db, owner);
             await store.AddBerth(owner, ShipSizeClass.Cutter, DrydockBerthKind.Granted, 0, null, null);
             await store.FileRevision(Request(shipId, owner, "Harrier"), Encoding.UTF8.GetBytes("doc"), keepBlobs: 2);
 
@@ -192,7 +192,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
 
             var owner = Guid.NewGuid();
             var admin = Guid.NewGuid();
-            await InsertPlayer(db, owner);
+            await DrydockTestHelpers.InsertPlayer(db, owner);
             for (var i = 0; i < 3; i++)
                 await store.AddBerth(owner, ShipSizeClass.Cutter, DrydockBerthKind.Granted, 0, null, null);
 
@@ -334,7 +334,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             var db = server.ResolveDependency<IServerDbManager>();
 
             var owner = Guid.NewGuid();
-            await InsertPlayer(db, owner);
+            await DrydockTestHelpers.InsertPlayer(db, owner);
             await store.AddBerth(owner, ShipSizeClass.Cutter, DrydockBerthKind.Granted, 0, null, null);
 
             // Stored first, so there is a berth to lose.
@@ -419,7 +419,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             var owner = Guid.NewGuid();
             var recipient = Guid.NewGuid();
             var admin = Guid.NewGuid();
-            await InsertPlayer(db, owner);
+            await DrydockTestHelpers.InsertPlayer(db, owner);
             await InsertPlayer(db, recipient);
             var home = await store.AddBerth(owner, ShipSizeClass.Cutter, DrydockBerthKind.Granted, 0, null, null);
             var spare = await store.AddBerth(owner, ShipSizeClass.Cutter, DrydockBerthKind.Granted, 0, null, null);
@@ -488,7 +488,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             var owner = Guid.NewGuid();
             var stranger = Guid.NewGuid();
             var admin = Guid.NewGuid();
-            await InsertPlayer(db, owner);
+            await DrydockTestHelpers.InsertPlayer(db, owner);
             await InsertPlayer(db, stranger);
             var home = await store.AddBerth(owner, ShipSizeClass.Cutter, DrydockBerthKind.Granted, 0, null, null);
             var spare = await store.AddBerth(owner, ShipSizeClass.Cutter, DrydockBerthKind.Granted, 0, null, null);
@@ -610,7 +610,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             var db = server.ResolveDependency<IServerDbManager>();
 
             var owner = Guid.NewGuid();
-            await InsertPlayer(db, owner);
+            await DrydockTestHelpers.InsertPlayer(db, owner);
             await store.AddBerth(owner, ShipSizeClass.Cutter, DrydockBerthKind.Granted, 0, null, null);
             var round = await db.AddNewRound(await db.AddOrGetServer("drydock-test"));
 
@@ -687,26 +687,6 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             Manifest = "{\"v\":1,\"e\":[]}",
         };
 
-        /// <summary>
-        /// The owner column is a real foreign key, so a ship cannot be filed for a player who does
-        /// not exist. That is the intended behaviour, and it means this test has to supply one.
-        /// </summary>
-        internal static Task InsertPlayer(IServerDbManager db, Guid userId)
-        {
-            return db.RunTriadDbCommand(async (context, token) =>
-            {
-                context.Player.Add(new Player
-                {
-                    UserId = userId,
-                    LastSeenUserName = $"drydock-test-{userId:N}",
-                    FirstSeenTime = DateTime.UtcNow,
-                    LastSeenTime = DateTime.UtcNow,
-                    LastSeenAddress = IPAddress.Loopback,
-                });
-
-                await context.SaveChangesAsync(token);
-            }, CancellationToken.None);
-        }
 
         private static Task<(int RevisionCount, int[] BlobRevisions)> ReadRevisionShape(IServerDbManager db, Guid shipId)
         {

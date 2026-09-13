@@ -73,7 +73,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             var mapLoader = server.System<MapLoaderSystem>();
 
             var owner = Guid.NewGuid();
-            await InsertPlayer(db, owner);
+            await DrydockTestHelpers.InsertPlayer(db, owner);
 
             // Every vessel is stored and retrieved in turn, so one berth would do; three keep a
             // single failed retrieve from turning every later store into a capacity refusal.
@@ -490,21 +490,5 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             return await task;
         }
 
-        private static Task InsertPlayer(IServerDbManager db, Guid userId)
-        {
-            return db.RunTriadDbCommand(async (context, token) =>
-            {
-                context.Player.Add(new Player
-                {
-                    UserId = userId,
-                    LastSeenUserName = $"drydock-sweep-{userId:N}",
-                    FirstSeenTime = DateTime.UtcNow,
-                    LastSeenTime = DateTime.UtcNow,
-                    LastSeenAddress = IPAddress.Loopback,
-                });
-
-                await context.SaveChangesAsync(token);
-            }, CancellationToken.None);
-        }
     }
 }

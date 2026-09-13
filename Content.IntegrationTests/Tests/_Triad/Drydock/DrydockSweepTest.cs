@@ -52,7 +52,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             var transform = server.System<SharedTransformSystem>();
 
             var owner = Guid.NewGuid();
-            await DrydockStoreTest.InsertPlayer(db, owner);
+            await DrydockTestHelpers.InsertPlayer(db, owner);
             for (var i = 0; i < 3; i++)
                 await store.AddBerth(owner, ShipSizeClass.SuperCapital, DrydockBerthKind.Granted, 0, null, null);
             var round = await db.AddNewRound(await db.AddOrGetServer("drydock-test"));
@@ -184,7 +184,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             var transform = server.System<SharedTransformSystem>();
 
             var owner = Guid.NewGuid();
-            await DrydockStoreTest.InsertPlayer(db, owner);
+            await DrydockTestHelpers.InsertPlayer(db, owner);
             await store.AddBerth(owner, ShipSizeClass.SuperCapital, DrydockBerthKind.Granted, 0, null, null);
             var round = await db.AddNewRound(await db.AddOrGetServer("drydock-test"));
 

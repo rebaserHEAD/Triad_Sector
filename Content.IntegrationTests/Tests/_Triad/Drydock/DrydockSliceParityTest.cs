@@ -69,7 +69,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             var fidelity = server.System<DrydockFidelitySystem>();
 
             var owner = Guid.NewGuid();
-            await InsertPlayer(db, owner);
+            await DrydockTestHelpers.InsertPlayer(db, owner);
 
             // Three, one per store below, because a berth is only freed once the retrieve that
             // empties it has finished.
@@ -317,21 +317,5 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             return output.ToArray();
         }
 
-        private static Task InsertPlayer(IServerDbManager db, Guid userId)
-        {
-            return db.RunTriadDbCommand(async (context, token) =>
-            {
-                context.Player.Add(new Player
-                {
-                    UserId = userId,
-                    LastSeenUserName = $"drydock-parity-{userId:N}",
-                    FirstSeenTime = DateTime.UtcNow,
-                    LastSeenTime = DateTime.UtcNow,
-                    LastSeenAddress = IPAddress.Loopback,
-                });
-
-                await context.SaveChangesAsync(token);
-            }, CancellationToken.None);
-        }
     }
 }

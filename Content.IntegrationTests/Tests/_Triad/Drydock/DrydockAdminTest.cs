@@ -31,7 +31,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
 
             var owner = Guid.NewGuid();
             var admin = Guid.NewGuid();
-            await InsertPlayer(db, owner);
+            await DrydockTestHelpers.InsertPlayer(db, owner);
             await InsertPlayer(db, admin);
             await store.AddBerth(owner, ShipSizeClass.Cutter, DrydockBerthKind.Granted, 0, null, null);
 
@@ -91,7 +91,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
 
             var owner = Guid.NewGuid();
             var admin = Guid.NewGuid();
-            await InsertPlayer(db, owner);
+            await DrydockTestHelpers.InsertPlayer(db, owner);
             await InsertPlayer(db, admin);
             var berth = await store.AddBerth(owner, ShipSizeClass.Cutter, DrydockBerthKind.Granted, 0, null, null);
 
@@ -133,7 +133,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
 
             var owner = Guid.NewGuid();
             var admin = Guid.NewGuid();
-            await InsertPlayer(db, owner);
+            await DrydockTestHelpers.InsertPlayer(db, owner);
             await InsertPlayer(db, admin);
             var berth = await store.AddBerth(owner, ShipSizeClass.Cutter, DrydockBerthKind.Granted, 0, null, null);
 
@@ -169,7 +169,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
 
             var owner = Guid.NewGuid();
             var admin = Guid.NewGuid();
-            await InsertPlayer(db, owner);
+            await DrydockTestHelpers.InsertPlayer(db, owner);
             await InsertPlayer(db, admin);
             await store.AddBerth(owner, ShipSizeClass.Cutter, DrydockBerthKind.Granted, 0, null, null);
             await store.AddBerth(owner, ShipSizeClass.Cutter, DrydockBerthKind.Granted, 0, null, null);
@@ -216,7 +216,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             var owner = Guid.NewGuid();
             var recipient = Guid.NewGuid();
             var admin = Guid.NewGuid();
-            await InsertPlayer(db, owner);
+            await DrydockTestHelpers.InsertPlayer(db, owner);
             await InsertPlayer(db, recipient);
             await InsertPlayer(db, admin);
 
@@ -276,7 +276,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             var db = pair.Server.ResolveDependency<IServerDbManager>();
 
             var owner = Guid.NewGuid();
-            await InsertPlayer(db, owner);
+            await DrydockTestHelpers.InsertPlayer(db, owner);
             await store.AddBerth(owner, ShipSizeClass.Cutter, DrydockBerthKind.Granted, 0, null, null);
 
             // Pooled pairs share one database, so the needles carry a token no other test uses.
@@ -320,7 +320,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
 
             var owner = Guid.NewGuid();
             var stranger = Guid.NewGuid();
-            await InsertPlayer(db, owner);
+            await DrydockTestHelpers.InsertPlayer(db, owner);
             await InsertPlayer(db, stranger);
             await store.AddBerth(owner, ShipSizeClass.Cutter, DrydockBerthKind.Granted, 0, null, null);
             await store.AddBerth(stranger, ShipSizeClass.Cutter, DrydockBerthKind.Granted, 0, null, null);
@@ -374,21 +374,5 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             Manifest = "{\"v\":1,\"e\":[]}",
         };
 
-        private static Task InsertPlayer(IServerDbManager db, Guid userId)
-        {
-            return db.RunTriadDbCommand(async (context, token) =>
-            {
-                context.Player.Add(new Player
-                {
-                    UserId = userId,
-                    LastSeenUserName = $"drydock-test-{userId:N}",
-                    FirstSeenTime = DateTime.UtcNow,
-                    LastSeenTime = DateTime.UtcNow,
-                    LastSeenAddress = IPAddress.Loopback,
-                });
-
-                await context.SaveChangesAsync(token);
-            }, CancellationToken.None);
-        }
     }
 }

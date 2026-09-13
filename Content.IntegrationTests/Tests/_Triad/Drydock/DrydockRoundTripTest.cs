@@ -144,7 +144,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             var mapSys = server.System<SharedMapSystem>();
 
             var owner = Guid.NewGuid();
-            await InsertPlayer(db, owner);
+            await DrydockTestHelpers.InsertPlayer(db, owner);
             await server.ResolveDependency<DrydockStore>().AddBerth(owner, ShipSizeClass.SuperCapital, DrydockBerthKind.Granted, 0, null, null);
 
             var (station, shipGrid, airlock) = await BuildShipAndStation(pair);
@@ -224,7 +224,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             var mapSys = server.System<SharedMapSystem>();
 
             var owner = Guid.NewGuid();
-            await InsertPlayer(db, owner);
+            await DrydockTestHelpers.InsertPlayer(db, owner);
             await server.ResolveDependency<DrydockStore>().AddBerth(owner, ShipSizeClass.SuperCapital, DrydockBerthKind.Granted, 0, null, null);
 
             var (station, shipGrid, _) = await BuildShipAndStation(pair);
@@ -305,7 +305,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             var drydock = server.System<DrydockSystem>();
 
             var owner = Guid.NewGuid();
-            await InsertPlayer(db, owner);
+            await DrydockTestHelpers.InsertPlayer(db, owner);
             await store.AddBerth(owner, ShipSizeClass.SuperCapital, DrydockBerthKind.Granted, 0, null, null);
 
             var (station, shipGrid, _) = await BuildShipAndStation(pair);
@@ -358,7 +358,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             var drydock = server.System<DrydockSystem>();
 
             var owner = Guid.NewGuid();
-            await InsertPlayer(db, owner);
+            await DrydockTestHelpers.InsertPlayer(db, owner);
             await server.ResolveDependency<DrydockStore>().AddBerth(owner, ShipSizeClass.SuperCapital, DrydockBerthKind.Granted, 0, null, null);
 
             var (station, shipGrid, _) = await BuildShipAndStation(pair);
@@ -439,7 +439,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             var drydock = server.System<DrydockSystem>();
 
             var owner = Guid.NewGuid();
-            await InsertPlayer(db, owner);
+            await DrydockTestHelpers.InsertPlayer(db, owner);
             await server.ResolveDependency<DrydockStore>().AddBerth(owner, ShipSizeClass.SuperCapital, DrydockBerthKind.Granted, 0, null, null);
 
             var (station, shipGrid, _) = await BuildShipAndStation(pair);
@@ -550,7 +550,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             var mapSys = server.System<SharedMapSystem>();
 
             var owner = Guid.NewGuid();
-            await InsertPlayer(db, owner);
+            await DrydockTestHelpers.InsertPlayer(db, owner);
             await server.ResolveDependency<DrydockStore>().AddBerth(owner, ShipSizeClass.SuperCapital, DrydockBerthKind.Granted, 0, null, null);
 
             var (station, shipGrid, _) = await BuildShipAndStation(pair);
@@ -813,7 +813,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             var drydock = server.System<DrydockSystem>();
 
             var owner = Guid.NewGuid();
-            await InsertPlayer(db, owner);
+            await DrydockTestHelpers.InsertPlayer(db, owner);
             var berth = await store.AddBerth(owner, ShipSizeClass.SuperCapital, DrydockBerthKind.Granted, 0, null, null);
 
             var (station, shipGrid, _) = await BuildShipAndStation(pair);
@@ -946,7 +946,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
 
             var owner = Guid.NewGuid();
             var admin = Guid.NewGuid();
-            await InsertPlayer(db, owner);
+            await DrydockTestHelpers.InsertPlayer(db, owner);
             await InsertPlayer(db, admin);
             var berth = await store.AddBerth(owner, ShipSizeClass.SuperCapital, DrydockBerthKind.Granted, 0, null, null);
 
@@ -1050,7 +1050,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             var protoMan = server.ResolveDependency<IPrototypeManager>();
 
             var owner = Guid.NewGuid();
-            await InsertPlayer(db, owner);
+            await DrydockTestHelpers.InsertPlayer(db, owner);
             await server.ResolveDependency<DrydockStore>().AddBerth(owner, ShipSizeClass.SuperCapital, DrydockBerthKind.Granted, 0, null, null);
 
             var (station, shipGrid, airlock) = await BuildShipAndStation(pair);
@@ -1118,7 +1118,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             var deviceNet = server.System<DeviceNetworkSystem>();
 
             var owner = Guid.NewGuid();
-            await InsertPlayer(db, owner);
+            await DrydockTestHelpers.InsertPlayer(db, owner);
             await server.ResolveDependency<DrydockStore>().AddBerth(owner, ShipSizeClass.SuperCapital, DrydockBerthKind.Granted, 0, null, null);
 
             // The airlock the wires assertion uses carries DeviceNetwork too, so one entity covers
@@ -1173,7 +1173,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             var drydock = server.System<DrydockSystem>();
 
             var owner = Guid.NewGuid();
-            await InsertPlayer(db, owner);
+            await DrydockTestHelpers.InsertPlayer(db, owner);
             await server.ResolveDependency<DrydockStore>().AddBerth(owner, ShipSizeClass.SuperCapital, DrydockBerthKind.Granted, 0, null, null);
 
             var (station, shipGrid, _) = await BuildShipAndStation(pair);
@@ -1247,7 +1247,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             var protoMan = server.ResolveDependency<IPrototypeManager>();
 
             var owner = Guid.NewGuid();
-            await InsertPlayer(db, owner);
+            await DrydockTestHelpers.InsertPlayer(db, owner);
             await server.ResolveDependency<DrydockStore>().AddBerth(owner, ShipSizeClass.SuperCapital, DrydockBerthKind.Granted, 0, null, null);
 
             var (station, shipGrid, _) = await BuildShipAndStation(pair);
@@ -1327,7 +1327,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             var containers = server.System<SharedContainerSystem>();
 
             var owner = Guid.NewGuid();
-            await InsertPlayer(db, owner);
+            await DrydockTestHelpers.InsertPlayer(db, owner);
             await server.ResolveDependency<DrydockStore>().AddBerth(owner, ShipSizeClass.SuperCapital, DrydockBerthKind.Granted, 0, null, null);
 
             var (station, shipGrid, _) = await BuildShipAndStation(pair);
@@ -1403,7 +1403,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             var drydock = server.System<DrydockSystem>();
 
             var owner = Guid.NewGuid();
-            await InsertPlayer(db, owner);
+            await DrydockTestHelpers.InsertPlayer(db, owner);
             await server.ResolveDependency<DrydockStore>().AddBerth(owner, ShipSizeClass.SuperCapital, DrydockBerthKind.Granted, 0, null, null);
 
             var (station, shipGrid, _) = await BuildShipAndStation(pair);
@@ -1502,7 +1502,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             var drydock = server.System<DrydockSystem>();
 
             var owner = Guid.NewGuid();
-            await InsertPlayer(db, owner);
+            await DrydockTestHelpers.InsertPlayer(db, owner);
             await server.ResolveDependency<DrydockStore>().AddBerth(owner, ShipSizeClass.SuperCapital, DrydockBerthKind.Granted, 0, null, null);
 
             var (station, shipGrid, _) = await BuildShipAndStation(pair);
@@ -1598,7 +1598,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             var drydock = server.System<DrydockSystem>();
 
             var owner = Guid.NewGuid();
-            await InsertPlayer(db, owner);
+            await DrydockTestHelpers.InsertPlayer(db, owner);
             await server.ResolveDependency<DrydockStore>().AddBerth(owner, ShipSizeClass.SuperCapital, DrydockBerthKind.Granted, 0, null, null);
 
             var (station, shipGrid, _) = await BuildShipAndStation(pair);
@@ -1665,7 +1665,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             var drydock = server.System<DrydockSystem>();
 
             var owner = Guid.NewGuid();
-            await InsertPlayer(db, owner);
+            await DrydockTestHelpers.InsertPlayer(db, owner);
             await server.ResolveDependency<DrydockStore>().AddBerth(owner, ShipSizeClass.SuperCapital, DrydockBerthKind.Granted, 0, null, null);
 
             var (station, shipGrid, _) = await BuildShipAndStation(pair);
@@ -1744,7 +1744,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             var deviceLink = server.System<DeviceLinkSystem>();
 
             var owner = Guid.NewGuid();
-            await InsertPlayer(db, owner);
+            await DrydockTestHelpers.InsertPlayer(db, owner);
             await server.ResolveDependency<DrydockStore>().AddBerth(owner, ShipSizeClass.SuperCapital, DrydockBerthKind.Granted, 0, null, null);
 
             var (station, shipGrid, _) = await BuildShipAndStation(pair);
@@ -1820,7 +1820,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             var timing = server.ResolveDependency<IGameTiming>();
 
             var owner = Guid.NewGuid();
-            await InsertPlayer(db, owner);
+            await DrydockTestHelpers.InsertPlayer(db, owner);
             await server.ResolveDependency<DrydockStore>().AddBerth(owner, ShipSizeClass.SuperCapital, DrydockBerthKind.Granted, 0, null, null);
 
             var (station, shipGrid, _) = await BuildShipAndStation(pair);
@@ -1923,7 +1923,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             var minds = server.System<MindSystem>();
 
             var owner = Guid.NewGuid();
-            await InsertPlayer(db, owner);
+            await DrydockTestHelpers.InsertPlayer(db, owner);
             await server.ResolveDependency<DrydockStore>().AddBerth(owner, ShipSizeClass.SuperCapital, DrydockBerthKind.Granted, 0, null, null);
 
             var (station, shipGrid, _) = await BuildShipAndStation(pair);
@@ -1997,7 +1997,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             var minds = server.System<MindSystem>();
 
             var owner = Guid.NewGuid();
-            await InsertPlayer(db, owner);
+            await DrydockTestHelpers.InsertPlayer(db, owner);
             await server.ResolveDependency<DrydockStore>().AddBerth(owner, ShipSizeClass.SuperCapital, DrydockBerthKind.Granted, 0, null, null);
 
             var (station, shipGrid, _) = await BuildShipAndStation(pair);
@@ -2193,7 +2193,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             var drydock = server.System<DrydockSystem>();
 
             var owner = Guid.NewGuid();
-            await InsertPlayer(db, owner);
+            await DrydockTestHelpers.InsertPlayer(db, owner);
             await server.ResolveDependency<DrydockStore>().AddBerth(owner, ShipSizeClass.SuperCapital, DrydockBerthKind.Granted, 0, null, null);
 
             var (station, shipGrid, _) = await BuildShipAndStation(pair);
@@ -2255,7 +2255,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             var drydock = server.System<DrydockSystem>();
 
             var owner = Guid.NewGuid();
-            await InsertPlayer(db, owner);
+            await DrydockTestHelpers.InsertPlayer(db, owner);
             await server.ResolveDependency<DrydockStore>().AddBerth(owner, ShipSizeClass.SuperCapital, DrydockBerthKind.Granted, 0, null, null);
 
             var (station, shipGrid, _) = await BuildShipAndStation(pair);
@@ -2324,7 +2324,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             var fidelity = server.System<DrydockFidelitySystem>();
 
             var owner = Guid.NewGuid();
-            await InsertPlayer(db, owner);
+            await DrydockTestHelpers.InsertPlayer(db, owner);
             await server.ResolveDependency<DrydockStore>().AddBerth(owner, ShipSizeClass.SuperCapital, DrydockBerthKind.Granted, 0, null, null);
 
             var (station, shipGrid, _) = await BuildShipAndStation(pair);
@@ -2437,7 +2437,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             var drydock = server.System<DrydockSystem>();
 
             var owner = Guid.NewGuid();
-            await InsertPlayer(db, owner);
+            await DrydockTestHelpers.InsertPlayer(db, owner);
             await server.ResolveDependency<DrydockStore>().AddBerth(owner, ShipSizeClass.SuperCapital, DrydockBerthKind.Granted, 0, null, null);
 
             var (station, shipGrid, _) = await BuildShipAndStation(pair);
@@ -2530,7 +2530,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             var xformSys = server.System<SharedTransformSystem>();
 
             var owner = Guid.NewGuid();
-            await InsertPlayer(db, owner);
+            await DrydockTestHelpers.InsertPlayer(db, owner);
             await server.ResolveDependency<DrydockStore>().AddBerth(owner, ShipSizeClass.SuperCapital, DrydockBerthKind.Granted, 0, null, null);
 
             var (station, shipGrid, _) = await BuildShipAndStation(pair);
@@ -2613,7 +2613,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             var drydock = server.System<DrydockSystem>();
 
             var owner = Guid.NewGuid();
-            await InsertPlayer(db, owner);
+            await DrydockTestHelpers.InsertPlayer(db, owner);
             await server.ResolveDependency<DrydockStore>().AddBerth(owner, ShipSizeClass.SuperCapital, DrydockBerthKind.Granted, 0, null, null);
 
             var (station, shipGrid, _) = await BuildShipAndStation(pair);
@@ -2684,7 +2684,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             var drydock = server.System<DrydockSystem>();
 
             var owner = Guid.NewGuid();
-            await InsertPlayer(db, owner);
+            await DrydockTestHelpers.InsertPlayer(db, owner);
             await server.ResolveDependency<DrydockStore>().AddBerth(owner, ShipSizeClass.SuperCapital, DrydockBerthKind.Granted, 0, null, null);
 
             var (station, shipGrid, _) = await BuildShipAndStation(pair);
@@ -2757,7 +2757,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             var drydock = server.System<DrydockSystem>();
 
             var owner = Guid.NewGuid();
-            await InsertPlayer(db, owner);
+            await DrydockTestHelpers.InsertPlayer(db, owner);
             await server.ResolveDependency<DrydockStore>().AddBerth(owner, ShipSizeClass.SuperCapital, DrydockBerthKind.Granted, 0, null, null);
 
             var (station, shipGrid, _) = await BuildShipAndStation(pair);
@@ -2999,21 +2999,5 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
         /// The owner column is a real foreign key, so a ship cannot be filed for a player who does
         /// not exist.
         /// </summary>
-        private static Task InsertPlayer(IServerDbManager db, Guid userId)
-        {
-            return db.RunTriadDbCommand(async (context, token) =>
-            {
-                context.Player.Add(new Player
-                {
-                    UserId = userId,
-                    LastSeenUserName = $"drydock-roundtrip-{userId:N}",
-                    FirstSeenTime = DateTime.UtcNow,
-                    LastSeenTime = DateTime.UtcNow,
-                    LastSeenAddress = IPAddress.Loopback,
-                });
-
-                await context.SaveChangesAsync(token);
-            }, CancellationToken.None);
-        }
     }
 }

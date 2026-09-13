@@ -698,7 +698,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             // Another account with room for two hulls, and a hull of its own already in one.
             var stranger = Guid.NewGuid();
             var theirs = Guid.NewGuid();
-            await DrydockStoreTest.InsertPlayer(server.ResolveDependency<IServerDbManager>(), stranger);
+            await DrydockTestHelpers.InsertPlayer(server.ResolveDependency<IServerDbManager>(), stranger);
             await store.AddBerth(stranger, ShipSizeClass.SuperCapital, DrydockBerthKind.Granted, 0, null, null);
             await store.AddBerth(stranger, ShipSizeClass.SuperCapital, DrydockBerthKind.Granted, 0, null, null);
             await store.FileRevision(new DrydockRevisionRequest
@@ -972,7 +972,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             // A ship this account does not own: refused and written down, whatever was typed.
             var stranger = Guid.NewGuid();
             var theirs = Guid.NewGuid();
-            await DrydockStoreTest.InsertPlayer(server.ResolveDependency<IServerDbManager>(), stranger);
+            await DrydockTestHelpers.InsertPlayer(server.ResolveDependency<IServerDbManager>(), stranger);
             await store.AddBerth(stranger, ShipSizeClass.SuperCapital, DrydockBerthKind.Granted, 0, null, null);
             await store.FileRevision(new DrydockRevisionRequest
             {
@@ -1276,7 +1276,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             // Somebody else's impounded hull: refused and written down, whatever was typed.
             var stranger = Guid.NewGuid();
             var theirs = Guid.NewGuid();
-            await DrydockStoreTest.InsertPlayer(server.ResolveDependency<IServerDbManager>(), stranger);
+            await DrydockTestHelpers.InsertPlayer(server.ResolveDependency<IServerDbManager>(), stranger);
             await store.AddBerth(stranger, ShipSizeClass.SuperCapital, DrydockBerthKind.Granted, 0, null, null);
             await store.FileRevision(Revision(theirs, stranger, "NotYours", appraisal: 1000), new byte[] { 1 }, 3);
             Assert.That((await store.TryImpoundStored(theirs, new DrydockImpound(50, "left out", Redeemable: true, ActorUserId: admin), null)).Outcome,
