@@ -394,3 +394,10 @@ ClothingOuterHardsuitAshenElite: ClothingOuterHardsuitTdfExperimental
 ClothingHeadHelmetHardsuitAshenElite: ClothingHeadHelmetHardsuitTdfExperimental
 ClothingOuterHardsuitVizier: ClothingOuterHardsuitTdfCasket
 ClothingHeadHelmetHardsuitVizier: ClothingHeadHelmetHardsuitTdfCasket
+
+# 2026-09-12
+# The old ship-load path respawned every AME controller as this variant, so any ship loaded and
+# re-saved under it carries the id, and one unknown id fails the whole load. The save only wrote
+# what differed from the variant, so the controller comes back off and with its fuel slot
+# unlocked; whatever sits in the slot is kept, and startingItem never re-runs after map init.
+AmeControllerFilledAndActive: AmeController
