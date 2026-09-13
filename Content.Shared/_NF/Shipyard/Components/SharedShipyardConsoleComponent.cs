@@ -111,11 +111,12 @@ public sealed partial class ShipyardConsoleComponent : Component
     /// <summary>Triad: the operator's ships in the impound lot, with their terms, cached for the same reason as the ship list.</summary>
     public List<BUI.DrydockImpoundedShipInfo> CachedImpounded = new();
 
-    /// <summary>Triad: how far along the store running at this console is, so a reopened tab draws the indicator; null when none is.</summary>
-    public int? CachedStoreProgress;
-
-    /// <summary>Triad: the retrieve counterpart, for the same reason.</summary>
-    public int? CachedRetrieveProgress;
+    /// <summary>
+    /// Triad: how far along the store or retrieve running at this console is, so a reopened tab
+    /// draws the indicator; null when neither is running. One field because a console only ever
+    /// has one of the two in flight, so a caller does not need the kind back to read it.
+    /// </summary>
+    public int? CachedProgress;
 
     /// <summary>Triad: whether the operator at the last refresh is barred from the drydock.</summary>
     public bool CachedOperatorBarred;

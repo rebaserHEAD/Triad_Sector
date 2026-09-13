@@ -6,7 +6,6 @@ using Content.Server._NF.Shipyard.Components;
 using Content.Server._NF.ShuttleRecords;
 using Content.Shared._NF.Bank.Components;
 using Content.Shared._NF.Shipyard;
-using Content.Server._Triad.Drydock; // Triad: drydock, the live sale reports into the row
 using Content.Shared._Triad.CCVar; // Triad: drydock tab
 using Content.Shared._NF.Shipyard.Events;
 using Content.Shared._NF.Shipyard.BUI;
@@ -449,9 +448,7 @@ public sealed partial class ShipyardSystem : SharedShipyardSystem
 
         // Triad: drydock. Read before the sale deletes the grid: a hull the drydock has filed carries
         // its id, and the row has to hear about the sale or it goes on reading as checked out.
-        Guid? drydockShipId = TryComp<DrydockIdentityComponent>(shuttleUid.Value, out var drydockIdentity) && drydockIdentity.ShipId != Guid.Empty
-            ? drydockIdentity.ShipId
-            : null;
+        Guid? drydockShipId = TryGetDrydockShipId(shuttleUid.Value);
 
         // Check if this is a loaded ship by looking at the ship's deed component
         if (loadedFromSave)
@@ -966,10 +963,9 @@ public sealed partial class ShipyardSystem : SharedShipyardSystem
         // otherwise draw a live Store button over a store that is still going. It is per-console
         // state, so a bystander with the tab open sees the number too - deliberately: a percentage
         // is not sensitive, and the alternative is that bystander being offered a Store button for
-        // a hull that is already halfway into a berth. Store first, retrieve second, because a
-        // console only ever has one of the two in flight.
+        // a hull that is already halfway into a berth.
         if (TryComp<ShipyardConsoleComponent>(uid, out var progressConsole)) // Triad: drydock tab
-            newState.StoreProgressPercent = progressConsole.CachedStoreProgress ?? progressConsole.CachedRetrieveProgress; // Triad: drydock tab
+            newState.StoreProgressPercent = progressConsole.CachedProgress; // Triad: drydock tab
 
         _ui.SetUiState(uid, uiKey, newState);
     }

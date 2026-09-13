@@ -45,14 +45,10 @@ public sealed partial class ShipyardSystem
     [Dependency] private ShipSizeSystem _drydockSizes = default!;
 
     /// <summary>
-    /// The round to stamp an audit row with, or null when there is no round yet.
-    ///
-    /// <para><see cref="GameTicker.RoundId"/> reads 0 before a round has been filed, and the round
-    /// columns are real foreign keys, so passing that straight through makes the insert fail on a
-    /// constraint rather than recording "no round". Nullable is what the schema means by it. The
-    /// same guard is written at every other Triad call site that stamps a round.</para>
+    /// The round to stamp an audit row with, or null when there is no round yet. See
+    /// <see cref="GameTicker.RoundIdOrNull"/> for why nullable is what the schema means by it.
     /// </summary>
-    private int? DrydockRoundId => _gameTicker.RoundId > 0 ? _gameTicker.RoundId : null;
+    private int? DrydockRoundId => _gameTicker.RoundIdOrNull;
 
     // ---------------------------------------------------------------- Pricing
 
@@ -145,238 +141,160 @@ public sealed partial class ShipyardSystem
 
     // ---------------------------------------------------------------- Message handlers
 
-    // Every handler is async void, which is what a BUI message subscription has to be, and an
-    // exception escaping an async void has nowhere to go but the synchronization context. A
-    // database fault is a logged refusal, never an unhandled throw.
-    private async void OnStoreMessage(EntityUid uid, ShipyardConsoleComponent component, ShipyardConsoleStoreMessage args)
+    // Every handler fires its verb through RunDrydockVerb: fire-and-forget, which is what a BUI
+    // message subscription needs, with the exception logged there rather than escaping to the
+    // synchronization context. A database fault is a logged refusal, never an unhandled throw.
+    private void OnStoreMessage(EntityUid uid, ShipyardConsoleComponent component, ShipyardConsoleStoreMessage args)
     {
         if (args.Actor is not { Valid: true } player)
             return;
 
-        try
+        var uiKey = (ShipyardConsoleUiKey)args.UiKey;
+        RunDrydockVerb(uid, player, "store from console", () => TryDrydockStore(uid, component, player, uiKey, args.BerthId), onFailure: () =>
         {
-            await TryDrydockStore(uid, component, player, (ShipyardConsoleUiKey)args.UiKey, args.BerthId);
-        }
-        catch (Exception e)
-        {
-            Log.Error($"Drydock: store from console {ToPrettyString(uid)} by {ToPrettyString(player)} threw: {e}");
             // Before the refresh, not after: the refresh is what publishes the cached percentage,
             // and a throw from anywhere the pipeline's own finally does not cover would leave the
             // console reporting a store that is no longer running.
             ClearDrydockProgress(uid, component);
-            await RefreshAfterRefusal(uid, component, player, (ShipyardConsoleUiKey)args.UiKey);
-        }
+            return RefreshAfterRefusal(uid, component, player, uiKey);
+        });
     }
 
-    private async void OnRetrieveMessage(EntityUid uid, ShipyardConsoleComponent component, ShipyardConsoleRetrieveMessage args)
+    private void OnRetrieveMessage(EntityUid uid, ShipyardConsoleComponent component, ShipyardConsoleRetrieveMessage args)
     {
         if (args.Actor is not { Valid: true } player)
             return;
 
-        try
+        var uiKey = (ShipyardConsoleUiKey)args.UiKey;
+        RunDrydockVerb(uid, player, $"retrieve of {args.ShipId} from console", () => TryDrydockRetrieve(uid, component, player, args.ShipId, uiKey), onFailure: () =>
         {
-            await TryDrydockRetrieve(uid, component, player, args.ShipId, (ShipyardConsoleUiKey)args.UiKey);
-        }
-        catch (Exception e)
-        {
-            Log.Error($"Drydock: retrieve of {args.ShipId} from console {ToPrettyString(uid)} by {ToPrettyString(player)} threw: {e}");
             ClearDrydockProgress(uid, component); // Same reason as the store handler's.
-            await RefreshAfterRefusal(uid, component, player, (ShipyardConsoleUiKey)args.UiKey);
-        }
+            return RefreshAfterRefusal(uid, component, player, uiKey);
+        });
     }
 
-    private async void OnBuyBerthMessage(EntityUid uid, ShipyardConsoleComponent component, ShipyardConsoleBuyBerthMessage args)
+    private void OnBuyBerthMessage(EntityUid uid, ShipyardConsoleComponent component, ShipyardConsoleBuyBerthMessage args)
     {
         if (args.Actor is not { Valid: true } player)
             return;
 
-        try
-        {
-            await TryBuyBerth(uid, component, player, args.SizeClass, (ShipyardConsoleUiKey)args.UiKey);
-        }
-        catch (Exception e)
-        {
-            Log.Error($"Drydock: berth purchase at {ToPrettyString(uid)} by {ToPrettyString(player)} threw: {e}");
-        }
+        RunDrydockVerb(uid, player, "berth purchase at", () => TryBuyBerth(uid, component, player, args.SizeClass, (ShipyardConsoleUiKey)args.UiKey));
     }
 
-    private async void OnSellBerthMessage(EntityUid uid, ShipyardConsoleComponent component, ShipyardConsoleSellBerthMessage args)
+    private void OnSellBerthMessage(EntityUid uid, ShipyardConsoleComponent component, ShipyardConsoleSellBerthMessage args)
     {
         if (args.Actor is not { Valid: true } player)
             return;
 
-        try
-        {
-            await TrySellBerth(uid, component, player, args.BerthId, (ShipyardConsoleUiKey)args.UiKey);
-        }
-        catch (Exception e)
-        {
-            Log.Error($"Drydock: berth sale at {ToPrettyString(uid)} by {ToPrettyString(player)} threw: {e}");
-        }
+        RunDrydockVerb(uid, player, "berth sale at", () => TrySellBerth(uid, component, player, args.BerthId, (ShipyardConsoleUiKey)args.UiKey));
     }
 
-    private async void OnUpgradeBerthMessage(EntityUid uid, ShipyardConsoleComponent component, ShipyardConsoleUpgradeBerthMessage args)
+    private void OnUpgradeBerthMessage(EntityUid uid, ShipyardConsoleComponent component, ShipyardConsoleUpgradeBerthMessage args)
     {
         if (args.Actor is not { Valid: true } player)
             return;
 
-        try
-        {
-            await TryUpgradeBerth(uid, component, player, args.BerthId, (ShipyardConsoleUiKey)args.UiKey);
-        }
-        catch (Exception e)
-        {
-            Log.Error($"Drydock: berth upgrade at {ToPrettyString(uid)} by {ToPrettyString(player)} threw: {e}");
-        }
+        RunDrydockVerb(uid, player, "berth upgrade at", () => TryUpgradeBerth(uid, component, player, args.BerthId, (ShipyardConsoleUiKey)args.UiKey));
     }
 
-    private async void OnOfferTransferMessage(EntityUid uid, ShipyardConsoleComponent component, ShipyardConsoleOfferTransferMessage args)
+    private void OnOfferTransferMessage(EntityUid uid, ShipyardConsoleComponent component, ShipyardConsoleOfferTransferMessage args)
     {
         if (args.Actor is not { Valid: true } player)
             return;
 
-        try
-        {
-            await TryOfferTransfer(uid, component, player, args.ShipId, args.RecipientUserId, (ShipyardConsoleUiKey)args.UiKey);
-        }
-        catch (Exception e)
-        {
-            Log.Error($"Drydock: transfer offer at {ToPrettyString(uid)} by {ToPrettyString(player)} threw: {e}");
-        }
+        RunDrydockVerb(uid, player, "transfer offer at", () => TryOfferTransfer(uid, component, player, args.ShipId, args.RecipientUserId, (ShipyardConsoleUiKey)args.UiKey));
     }
 
-    private async void OnCancelTransferMessage(EntityUid uid, ShipyardConsoleComponent component, ShipyardConsoleCancelTransferMessage args)
+    private void OnCancelTransferMessage(EntityUid uid, ShipyardConsoleComponent component, ShipyardConsoleCancelTransferMessage args)
     {
         if (args.Actor is not { Valid: true } player)
             return;
 
-        try
-        {
-            await TryCancelTransfer(uid, component, player, args.TransferId, (ShipyardConsoleUiKey)args.UiKey);
-        }
-        catch (Exception e)
-        {
-            Log.Error($"Drydock: transfer cancel at {ToPrettyString(uid)} by {ToPrettyString(player)} threw: {e}");
-        }
+        RunDrydockVerb(uid, player, "transfer cancel at", () => TryCancelTransfer(uid, component, player, args.TransferId, (ShipyardConsoleUiKey)args.UiKey));
     }
 
-    private async void OnDeclineTransferMessage(EntityUid uid, ShipyardConsoleComponent component, ShipyardConsoleDeclineTransferMessage args)
+    private void OnDeclineTransferMessage(EntityUid uid, ShipyardConsoleComponent component, ShipyardConsoleDeclineTransferMessage args)
     {
         if (args.Actor is not { Valid: true } player)
             return;
 
-        try
-        {
-            await TryDeclineTransfer(uid, component, player, args.TransferId, (ShipyardConsoleUiKey)args.UiKey);
-        }
-        catch (Exception e)
-        {
-            Log.Error($"Drydock: transfer decline at {ToPrettyString(uid)} by {ToPrettyString(player)} threw: {e}");
-        }
+        RunDrydockVerb(uid, player, "transfer decline at", () => TryDeclineTransfer(uid, component, player, args.TransferId, (ShipyardConsoleUiKey)args.UiKey));
     }
 
-    private async void OnSellStoredShipMessage(EntityUid uid, ShipyardConsoleComponent component, ShipyardConsoleSellStoredShipMessage args)
+    private void OnSellStoredShipMessage(EntityUid uid, ShipyardConsoleComponent component, ShipyardConsoleSellStoredShipMessage args)
     {
         if (args.Actor is not { Valid: true } player)
             return;
 
-        try
-        {
-            await TrySellStoredShip(uid, component, player, args.ShipId, args.TypedName, (ShipyardConsoleUiKey)args.UiKey);
-        }
-        catch (Exception e)
-        {
-            Log.Error($"Drydock: sale of {args.ShipId} at {ToPrettyString(uid)} by {ToPrettyString(player)} threw: {e}");
-        }
+        RunDrydockVerb(uid, player, $"sale of {args.ShipId} at", () => TrySellStoredShip(uid, component, player, args.ShipId, args.TypedName, (ShipyardConsoleUiKey)args.UiKey));
     }
 
-    private async void OnRenameStoredShipMessage(EntityUid uid, ShipyardConsoleComponent component, ShipyardConsoleRenameStoredShipMessage args)
+    private void OnRenameStoredShipMessage(EntityUid uid, ShipyardConsoleComponent component, ShipyardConsoleRenameStoredShipMessage args)
     {
         if (args.Actor is not { Valid: true } player)
             return;
 
-        try
-        {
-            await TryRenameStoredShip(uid, component, player, args.ShipId, args.NewName, (ShipyardConsoleUiKey)args.UiKey);
-        }
-        catch (Exception e)
-        {
-            Log.Error($"Drydock: rename of {args.ShipId} at {ToPrettyString(uid)} by {ToPrettyString(player)} threw: {e}");
-        }
+        RunDrydockVerb(uid, player, $"rename of {args.ShipId} at", () => TryRenameStoredShip(uid, component, player, args.ShipId, args.NewName, (ShipyardConsoleUiKey)args.UiKey));
     }
 
-    private async void OnMoveStoredShipMessage(EntityUid uid, ShipyardConsoleComponent component, ShipyardConsoleMoveStoredShipMessage args)
+    private void OnMoveStoredShipMessage(EntityUid uid, ShipyardConsoleComponent component, ShipyardConsoleMoveStoredShipMessage args)
     {
         if (args.Actor is not { Valid: true } player)
             return;
 
-        try
-        {
-            await TryMoveStoredShip(uid, component, player, args.ShipId, args.BerthId, (ShipyardConsoleUiKey)args.UiKey);
-        }
-        catch (Exception e)
-        {
-            Log.Error($"Drydock: move of {args.ShipId} at {ToPrettyString(uid)} by {ToPrettyString(player)} threw: {e}");
-        }
+        RunDrydockVerb(uid, player, $"move of {args.ShipId} at", () => TryMoveStoredShip(uid, component, player, args.ShipId, args.BerthId, (ShipyardConsoleUiKey)args.UiKey));
     }
 
-    private async void OnAcceptTransferMessage(EntityUid uid, ShipyardConsoleComponent component, ShipyardConsoleAcceptTransferMessage args)
+    private void OnAcceptTransferMessage(EntityUid uid, ShipyardConsoleComponent component, ShipyardConsoleAcceptTransferMessage args)
     {
         if (args.Actor is not { Valid: true } player)
             return;
 
-        try
-        {
-            await TryAcceptTransfer(uid, component, player, args.TransferId, (ShipyardConsoleUiKey)args.UiKey);
-        }
-        catch (Exception e)
-        {
-            Log.Error($"Drydock: transfer accept at {ToPrettyString(uid)} by {ToPrettyString(player)} threw: {e}");
-        }
+        RunDrydockVerb(uid, player, "transfer accept at", () => TryAcceptTransfer(uid, component, player, args.TransferId, (ShipyardConsoleUiKey)args.UiKey));
     }
 
-    private async void OnRedeemImpoundMessage(EntityUid uid, ShipyardConsoleComponent component, ShipyardConsoleRedeemImpoundMessage args)
+    private void OnRedeemImpoundMessage(EntityUid uid, ShipyardConsoleComponent component, ShipyardConsoleRedeemImpoundMessage args)
     {
         if (args.Actor is not { Valid: true } player)
             return;
 
-        try
-        {
-            await TryRedeemImpound(uid, component, player, args.ShipId, args.BerthId, (ShipyardConsoleUiKey)args.UiKey);
-        }
-        catch (Exception e)
-        {
-            Log.Error($"Drydock: reclaim of {args.ShipId} at {ToPrettyString(uid)} by {ToPrettyString(player)} threw: {e}");
-        }
+        RunDrydockVerb(uid, player, $"reclaim of {args.ShipId} at", () => TryRedeemImpound(uid, component, player, args.ShipId, args.BerthId, (ShipyardConsoleUiKey)args.UiKey));
     }
 
-    private async void OnAbandonShipMessage(EntityUid uid, ShipyardConsoleComponent component, ShipyardConsoleAbandonShipMessage args)
+    private void OnAbandonShipMessage(EntityUid uid, ShipyardConsoleComponent component, ShipyardConsoleAbandonShipMessage args)
     {
         if (args.Actor is not { Valid: true } player)
             return;
 
-        try
-        {
-            await TryAbandonShip(uid, component, player, args.ShipId, args.TypedName, (ShipyardConsoleUiKey)args.UiKey);
-        }
-        catch (Exception e)
-        {
-            Log.Error($"Drydock: abandon of {args.ShipId} at {ToPrettyString(uid)} by {ToPrettyString(player)} threw: {e}");
-        }
+        RunDrydockVerb(uid, player, $"abandon of {args.ShipId} at", () => TryAbandonShip(uid, component, player, args.ShipId, args.TypedName, (ShipyardConsoleUiKey)args.UiKey));
     }
 
-    private async void OnReissueDeedMessage(EntityUid uid, ShipyardConsoleComponent component, ShipyardConsoleReissueDeedMessage args)
+    private void OnReissueDeedMessage(EntityUid uid, ShipyardConsoleComponent component, ShipyardConsoleReissueDeedMessage args)
     {
         if (args.Actor is not { Valid: true } player)
             return;
 
+        RunDrydockVerb(uid, player, $"deed reissue of {args.Ship} at", () => TryReissueDeed(uid, component, player, args.Ship, (ShipyardConsoleUiKey)args.UiKey));
+    }
+
+    /// <summary>
+    /// Runs one drydock verb the way every message handler needs it run: fired without blocking
+    /// the BUI dispatch, with a throw logged rather than escaping to the synchronization context,
+    /// and, for the two handlers that need one, a cleanup step run after the log line.
+    /// <paramref name="label"/> is the text between "Drydock: " and the console/actor pair in the
+    /// log line, so each caller keeps its own wording exactly.
+    /// </summary>
+    private async void RunDrydockVerb(EntityUid uid, EntityUid player, string label, Func<Task> verb, Func<Task>? onFailure = null)
+    {
         try
         {
-            await TryReissueDeed(uid, component, player, args.Ship, (ShipyardConsoleUiKey)args.UiKey);
+            await verb();
         }
         catch (Exception e)
         {
-            Log.Error($"Drydock: deed reissue of {args.Ship} at {ToPrettyString(uid)} by {ToPrettyString(player)} threw: {e}");
+            Log.Error($"Drydock: {label} {ToPrettyString(uid)} by {ToPrettyString(player)} threw: {e}");
+            if (onFailure != null)
+                await onFailure();
         }
     }
 
@@ -413,11 +331,21 @@ public sealed partial class ShipyardSystem
         }
 
         var owner = actor.PlayerSession.UserId.UserId;
-        var rows = await _drydockStore.GetShipsByOwner(owner);
-        var slots = await _drydockStore.GetBerths(owner);
-        var offersOut = await _drydockStore.GetPendingOffersFrom(owner);
-        var offersIn = await _drydockStore.GetPendingOffersFor(owner);
-        var appraisals = await _drydockStore.GetCurrentAppraisals(owner);
+        // The five reads below take only the owner and do not depend on one another, and each opens
+        // its own database context (every DrydockStore read is its own RunTriadDbCommand), so they
+        // run concurrently rather than one main-thread hop at a time. Results still land in locals
+        // and swap into the cache together at the end, same as a sequential read would.
+        var rowsTask = _drydockStore.GetShipsByOwner(owner);
+        var slotsTask = _drydockStore.GetBerths(owner);
+        var offersOutTask = _drydockStore.GetPendingOffersFrom(owner);
+        var offersInTask = _drydockStore.GetPendingOffersFor(owner);
+        var appraisalsTask = _drydockStore.GetCurrentAppraisals(owner);
+        await Task.WhenAll(rowsTask, slotsTask, offersOutTask, offersInTask, appraisalsTask);
+        var rows = rowsTask.Result;
+        var slots = slotsTask.Result;
+        var offersOut = offersOutTask.Result;
+        var offersIn = offersInTask.Result;
+        var appraisals = appraisalsTask.Result;
 
         // Everyone else online, for the transfer picker, with the classes of their free berths so
         // the picker can grey the captains with nowhere to put the ship. Read in one query, and only
@@ -425,8 +353,14 @@ public sealed partial class ShipyardSystem
         // sweep and every admin action, and a list nobody can pick from is a query per tab for nothing.
         var canOffer = rows.Any(r => r.State == DrydockShipState.Stored);
         var online = canOffer ? _player.Sessions.Where(s => s.UserId.UserId != owner).ToList() : new List<ICommonSession>();
-        var freeClasses = await _drydockStore.GetFreeBerthClasses(online.Select(s => s.UserId.UserId));
-        var names = await _drydockStore.GetPlayerNames(offersOut.Values.Select(t => t.ToUserId).Concat(offersIn.Select(o => o.Transfer.FromUserId)));
+
+        // Independent of each other too: one draws on the online list above, the other on the two
+        // offer sets, neither on both.
+        var freeClassesTask = _drydockStore.GetFreeBerthClasses(online.Select(s => s.UserId.UserId));
+        var namesTask = _drydockStore.GetPlayerNames(offersOut.Values.Select(t => t.ToUserId).Concat(offersIn.Select(o => o.Transfer.FromUserId)));
+        await Task.WhenAll(freeClassesTask, namesTask);
+        var freeClasses = freeClassesTask.Result;
+        var names = namesTask.Result;
 
         // The console or the operator may have gone during the reads.
         if (TerminatingOrDeleted(uid) || TerminatingOrDeleted(player))
@@ -562,10 +496,16 @@ public sealed partial class ShipyardSystem
                     TryComp<MapGridComponent>(grid, out var map) ? _drydockSizes.GetSizeClass((grid, map)).ToString() : null))
                 .ToList()
             : new();
-        component.CachedCanReissueToCard = targetId is { } card
-            && HasComp<IdCardComponent>(card)
-            && !HasComp<ShipyardVoucherComponent>(card)
-            && !HasComp<ShuttleDeedComponent>(card);
+        component.CachedCanReissueToCard = CanReissueDeedTo(targetId);
+    }
+
+    /// <summary>Whether a card could take a reissued deed: present, an ID card, not a voucher, not already deeded.</summary>
+    private bool CanReissueDeedTo(EntityUid? card)
+    {
+        return card is { } id
+            && HasComp<IdCardComponent>(id)
+            && !HasComp<ShipyardVoucherComponent>(id)
+            && !HasComp<ShuttleDeedComponent>(id);
     }
 
     /// <summary>The access half of the console state, read from the caches. Called by the upstream state builder through one marked line.</summary>
@@ -666,10 +606,7 @@ public sealed partial class ShipyardSystem
         if (ownership.OwnerUserId.UserId == account)
             return false;
 
-        Guid? knownId = TryComp<DrydockIdentityComponent>(shuttle, out var identity) && identity.ShipId != Guid.Empty
-            ? identity.ShipId
-            : null;
-        RefuseAccess(uid, component, player, account, knownId, Name(shuttle), ownership.OwnerUserId.UserId, null, verb);
+        RefuseAccess(uid, component, player, account, TryGetDrydockShipId(shuttle), Name(shuttle), ownership.OwnerUserId.UserId, null, verb);
         return true;
     }
 
@@ -729,9 +666,7 @@ public sealed partial class ShipyardSystem
             return false;
 
         if (component.TargetIdSlot.ContainerSlot?.ContainedEntity is not { Valid: true } targetId
-            || !HasComp<IdCardComponent>(targetId)
-            || HasComp<ShipyardVoucherComponent>(targetId)
-            || HasComp<ShuttleDeedComponent>(targetId))
+            || !CanReissueDeedTo(targetId))
         {
             PlayDenySound(player, uid, component);
             return false;
@@ -751,10 +686,7 @@ public sealed partial class ShipyardSystem
 
         if (ownership.OwnerUserId.UserId != account)
         {
-            Guid? knownId = TryComp<DrydockIdentityComponent>(grid, out var identity) && identity.ShipId != Guid.Empty
-                ? identity.ShipId
-                : null;
-            RefuseAccess(uid, component, player, account, knownId, Name(grid), ownership.OwnerUserId.UserId, null, "reissue deed");
+            RefuseAccess(uid, component, player, account, TryGetDrydockShipId(grid), Name(grid), ownership.OwnerUserId.UserId, null, "reissue deed");
             return false;
         }
 
@@ -823,6 +755,14 @@ public sealed partial class ShipyardSystem
         return (int)Math.Max(0, Math.Ceiling((expiresAt - now).TotalSeconds));
     }
 
+    /// <summary>The hull's drydock identity, if it has ever been filed. Null for a hull with no history yet.</summary>
+    internal Guid? TryGetDrydockShipId(EntityUid grid)
+    {
+        return TryComp<DrydockIdentityComponent>(grid, out var identity) && identity.ShipId != Guid.Empty
+            ? identity.ShipId
+            : null;
+    }
+
     /// <summary>The character's name while they are online, else the account's last seen name, else a placeholder.</summary>
     private string CaptainName(Guid userId, Dictionary<Guid, string> lastSeen)
     {
@@ -862,8 +802,8 @@ public sealed partial class ShipyardSystem
         var hullClass = sizeClass.ToString();
 
         DrydockShip? row = null;
-        if (TryComp<DrydockIdentityComponent>(shuttle, out var identity) && identity.ShipId != Guid.Empty)
-            row = rows.FirstOrDefault(r => r.ShipGuid == identity.ShipId);
+        if (TryGetDrydockShipId(shuttle) is { } shipId)
+            row = rows.FirstOrDefault(r => r.ShipGuid == shipId);
 
         int? minutesOut = row is { State: DrydockShipState.CheckedOut }
             ? (int)Math.Max(0, (DateTime.UtcNow - row.StateChangedAt).TotalMinutes)
@@ -1070,7 +1010,7 @@ public sealed partial class ShipyardSystem
         var sellValue = 0;
         if (deed?.ShuttleUid is { } deedShuttle && Exists(deedShuttle))
         {
-            sellValue = (int)_pricing.AppraiseGrid(deedShuttle, LacksPreserveOnSaleComp);
+            sellValue = AppraiseHull(deedShuttle);
             sellValue = CalculateShipResaleValue((uid, component), sellValue);
         }
 
@@ -1135,11 +1075,7 @@ public sealed partial class ShipyardSystem
         {
             // A ship that has been stored before carries its id; a new hull has none yet, and the
             // refusal is filed against the actor alone.
-            Guid? knownId = TryComp<DrydockIdentityComponent>(shuttleUid, out var identity) && identity.ShipId != Guid.Empty
-                ? identity.ShipId
-                : null;
-
-            RefuseAccess(uid, component, player, operatorAccount, knownId, Name(shuttleUid), ownership.OwnerUserId.UserId, null, "store");
+            RefuseAccess(uid, component, player, operatorAccount, TryGetDrydockShipId(shuttleUid), Name(shuttleUid), ownership.OwnerUserId.UserId, null, "store");
             return null;
         }
 
@@ -1495,22 +1431,11 @@ public sealed partial class ShipyardSystem
         }
 
         var outcome = await _drydockStore.TryUpgradeBerth(berthId, owner, next, delta, owner, DrydockRoundId);
-
-        if (TerminatingOrDeleted(uid) || TerminatingOrDeleted(player))
-            return outcome == DrydockBerthResult.Success;
-
-        if (outcome != DrydockBerthResult.Success)
+        return await FinishVerb(uid, component, player, uiKey, outcome == DrydockBerthResult.Success, onDeny: () =>
         {
             if (delta > 0)
                 _bank.TryBankDeposit(player, delta, new MarketRecord { Kind = MarketTransactionKind.DrydockBerth });
-
-            PlayDenySound(player, uid, component);
-            return false;
-        }
-
-        PlayConfirmSound(player, uid, component);
-        await RefreshDrydockState(uid, component, player, uiKey);
-        return true;
+        });
     }
 
     // ---------------------------------------------------------------- Transfer
@@ -1538,25 +1463,11 @@ public sealed partial class ShipyardSystem
             return false;
         }
 
-        var current = await _drydockStore.GetShipHeader(shipId);
-
-        if (TerminatingOrDeleted(uid) || TerminatingOrDeleted(player))
-            return false;
-
         // The account behind the click must own the row. The card in the slot says nothing here,
         // and this is checked before anything about the recipient so a forged offer of someone
         // else's ship lands on the timeline whoever it was addressed to.
-        if (current != null && current.OwnerUserId != owner)
-        {
-            RefuseAccess(uid, component, player, owner, shipId, current.ShipName, current.OwnerUserId, current.BerthId, "transfer");
+        if (await GateOwnedShip(uid, component, player, shipId, owner, "transfer", DrydockShipState.Stored) is null)
             return false;
-        }
-
-        if (current == null || current.State != DrydockShipState.Stored)
-        {
-            PlayDenySound(player, uid, component);
-            return false;
-        }
 
         if (!_player.TryGetSessionById(new NetUserId(recipient), out _))
         {
@@ -1566,20 +1477,8 @@ public sealed partial class ShipyardSystem
 
         var seconds = Math.Max(60, _configManager.GetCVar(TriadCCVars.DrydockTransferOfferSeconds));
         var (outcome, transfer) = await _drydockStore.TryOfferTransfer(shipId, owner, recipient, TimeSpan.FromSeconds(seconds), DrydockRoundId);
-
-        if (TerminatingOrDeleted(uid) || TerminatingOrDeleted(player))
-            return outcome == DrydockBerthResult.Success;
-
-        if (outcome != DrydockBerthResult.Success || transfer == null)
-        {
-            PlayDenySound(player, uid, component);
-            return false;
-        }
-
-        PlayConfirmSound(player, uid, component);
-        await RefreshDrydockState(uid, component, player, uiKey);
-        KickDrydockRefreshForAccount(recipient);
-        return true;
+        return await FinishVerb(uid, component, player, uiKey, outcome == DrydockBerthResult.Success && transfer != null,
+            onSuccess: () => KickDrydockRefreshForAccount(recipient));
     }
 
     /// <summary>The owner withdraws a standing offer. The ship leaves escrow; the recipient's alert goes.</summary>
@@ -1625,20 +1524,8 @@ public sealed partial class ShipyardSystem
         }
 
         var resolved = await _drydockStore.TryResolveTransfer(transferId, resolution, operatorAccount, DrydockRoundId);
-
-        if (TerminatingOrDeleted(uid) || TerminatingOrDeleted(player))
-            return resolved != null;
-
-        if (resolved == null)
-        {
-            PlayDenySound(player, uid, component);
-            return false;
-        }
-
-        PlayConfirmSound(player, uid, component);
-        await RefreshDrydockState(uid, component, player, uiKey);
-        KickDrydockRefreshForAccount(resolution == DrydockTransferResolution.Cancelled ? resolved.ToUserId : resolved.FromUserId);
-        return true;
+        return await FinishVerb(uid, component, player, uiKey, resolved != null,
+            onSuccess: () => KickDrydockRefreshForAccount(resolution == DrydockTransferResolution.Cancelled ? resolved!.ToUserId : resolved!.FromUserId));
     }
 
     /// <summary>
@@ -1791,7 +1678,7 @@ public sealed partial class ShipyardSystem
             return (false, 0, false);
         }
 
-        if (!string.Equals(typedName.Trim(), header.ShipName.Trim(), StringComparison.Ordinal))
+        if (!TypedNameMatches(typedName, header.ShipName))
         {
             PlayDenySound(player, uid, component);
             return (false, 0, false);
@@ -1878,40 +1765,14 @@ public sealed partial class ShipyardSystem
             return false;
         }
 
-        var header = await _drydockStore.GetShipHeader(shipId);
-
-        if (TerminatingOrDeleted(uid) || TerminatingOrDeleted(player))
+        if (await GateOwnedShip(uid, component, player, shipId, owner, "rename", DrydockShipState.Stored) is not { } header)
             return false;
-
-        if (header != null && header.OwnerUserId != owner)
-        {
-            RefuseAccess(uid, component, player, owner, shipId, header.ShipName, header.OwnerUserId, header.BerthId, "rename");
-            return false;
-        }
-
-        if (header == null || header.State != DrydockShipState.Stored)
-        {
-            PlayDenySound(player, uid, component);
-            return false;
-        }
 
         var (_, suffix) = DrydockNameRules.SplitShuttleName(header.ShipName);
         var fullName = suffix == null ? newName : $"{newName} {suffix}";
 
         var outcome = await _drydockStore.TryRenameShip(shipId, owner, fullName, DrydockRoundId);
-
-        if (TerminatingOrDeleted(uid) || TerminatingOrDeleted(player))
-            return outcome == DrydockBerthResult.Success;
-
-        if (outcome != DrydockBerthResult.Success)
-        {
-            PlayDenySound(player, uid, component);
-            return false;
-        }
-
-        PlayConfirmSound(player, uid, component);
-        await RefreshDrydockState(uid, component, player, uiKey);
-        return true;
+        return await FinishVerb(uid, component, player, uiKey, outcome == DrydockBerthResult.Success);
     }
 
     /// <summary>
@@ -1927,37 +1788,11 @@ public sealed partial class ShipyardSystem
         if (!TryGetOperatorAccount(player, out var owner))
             return false;
 
-        var header = await _drydockStore.GetShipHeader(shipId);
-
-        if (TerminatingOrDeleted(uid) || TerminatingOrDeleted(player))
+        if (await GateOwnedShip(uid, component, player, shipId, owner, "move", DrydockShipState.Stored) is null)
             return false;
-
-        if (header != null && header.OwnerUserId != owner)
-        {
-            RefuseAccess(uid, component, player, owner, shipId, header.ShipName, header.OwnerUserId, header.BerthId, "move");
-            return false;
-        }
-
-        if (header == null || header.State != DrydockShipState.Stored)
-        {
-            PlayDenySound(player, uid, component);
-            return false;
-        }
 
         var outcome = await _drydockStore.TryMoveShip(shipId, berthId, owner, DrydockRoundId, "moved at the console");
-
-        if (TerminatingOrDeleted(uid) || TerminatingOrDeleted(player))
-            return outcome == DrydockBerthResult.Success;
-
-        if (outcome != DrydockBerthResult.Success)
-        {
-            PlayDenySound(player, uid, component);
-            return false;
-        }
-
-        PlayConfirmSound(player, uid, component);
-        await RefreshDrydockState(uid, component, player, uiKey);
-        return true;
+        return await FinishVerb(uid, component, player, uiKey, outcome == DrydockBerthResult.Success);
     }
 
     // ---------------------------------------------------------------- The impound lot
@@ -1983,22 +1818,8 @@ public sealed partial class ShipyardSystem
             return false;
         }
 
-        var header = await _drydockStore.GetShipHeader(shipId);
-
-        if (TerminatingOrDeleted(uid) || TerminatingOrDeleted(player))
+        if (await GateOwnedShip(uid, component, player, shipId, owner, "reclaim", DrydockShipState.Impounded) is not { } header)
             return false;
-
-        if (header != null && header.OwnerUserId != owner)
-        {
-            RefuseAccess(uid, component, player, owner, shipId, header.ShipName, header.OwnerUserId, header.BerthId, "reclaim");
-            return false;
-        }
-
-        if (header == null || header.State != DrydockShipState.Impounded)
-        {
-            PlayDenySound(player, uid, component);
-            return false;
-        }
 
         if (!header.ImpoundRedeemable)
         {
@@ -2059,22 +1880,8 @@ public sealed partial class ShipyardSystem
         if (!TryGetOperatorAccount(player, out var owner))
             return false;
 
-        var header = await _drydockStore.GetShipHeader(shipId);
-
-        if (TerminatingOrDeleted(uid) || TerminatingOrDeleted(player))
+        if (await GateOwnedShip(uid, component, player, shipId, owner, "abandon", DrydockShipState.Impounded) is not { } header)
             return false;
-
-        if (header != null && header.OwnerUserId != owner)
-        {
-            RefuseAccess(uid, component, player, owner, shipId, header.ShipName, header.OwnerUserId, header.BerthId, "abandon");
-            return false;
-        }
-
-        if (header == null || header.State != DrydockShipState.Impounded)
-        {
-            PlayDenySound(player, uid, component);
-            return false;
-        }
 
         if (!header.ImpoundRedeemable)
         {
@@ -2082,7 +1889,7 @@ public sealed partial class ShipyardSystem
             return false;
         }
 
-        if (!string.Equals(typedName.Trim(), header.ShipName.Trim(), StringComparison.Ordinal))
+        if (!TypedNameMatches(typedName, header.ShipName))
         {
             PlayDenySound(player, uid, component);
             return false;
@@ -2128,10 +1935,7 @@ public sealed partial class ShipyardSystem
         if (TerminatingOrDeleted(uid) || TerminatingOrDeleted(player))
             return;
 
-        if (kind == DrydockProgressKind.Retrieve)
-            component.CachedRetrieveProgress = percent;
-        else
-            component.CachedStoreProgress = percent;
+        component.CachedProgress = percent;
 
         _ui.ServerSendUiMessage(uid, uiKey, new ShipyardConsoleDrydockProgressMessage(kind, percent), player);
     }
@@ -2146,8 +1950,7 @@ public sealed partial class ShipyardSystem
         if (TerminatingOrDeleted(uid))
             return;
 
-        component.CachedStoreProgress = null;
-        component.CachedRetrieveProgress = null;
+        component.CachedProgress = null;
     }
 
     /// <summary>
@@ -2169,6 +1972,67 @@ public sealed partial class ShipyardSystem
         {
             Log.Error($"Drydock: state refresh after a refusal at {ToPrettyString(uid)} threw: {e.Message}");
         }
+    }
+
+    /// <summary>Whether a typed confirmation matches the row's name exactly, the safety a sell or abandon modal enforces server-side.</summary>
+    private static bool TypedNameMatches(string typedName, string shipName)
+    {
+        return string.Equals(typedName.Trim(), shipName.Trim(), StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The gate a stored or impounded-ship verb opens with once it has the operator's account: the
+    /// row, then (in order) whether the console or operator went during the read, whether the
+    /// account behind the click owns the row (audited and denied when it does not), and whether the
+    /// row is in the state the verb requires (denied). Returns null once the gate itself has denied
+    /// or the read found nothing to act on; the caller's own early return matches every branch this
+    /// leaves unhandled, so it need only test for null.
+    /// </summary>
+    private async Task<DrydockShip?> GateOwnedShip(EntityUid uid, ShipyardConsoleComponent component, EntityUid player, Guid shipId, Guid owner, string verb, DrydockShipState requiredState)
+    {
+        var header = await _drydockStore.GetShipHeader(shipId);
+
+        if (TerminatingOrDeleted(uid) || TerminatingOrDeleted(player))
+            return null;
+
+        if (header != null && header.OwnerUserId != owner)
+        {
+            RefuseAccess(uid, component, player, owner, shipId, header.ShipName, header.OwnerUserId, header.BerthId, verb);
+            return null;
+        }
+
+        if (header == null || header.State != requiredState)
+        {
+            PlayDenySound(player, uid, component);
+            return null;
+        }
+
+        return header;
+    }
+
+    /// <summary>
+    /// The deny-or-confirm-and-refresh tail a drydock write shares once its store call has an
+    /// outcome: the console or operator may have gone during the write, checked first and returned
+    /// with neither sound; a refusal plays the deny sound and runs <paramref name="onDeny"/> first,
+    /// in that order, matching every verb that refunds a charge on refusal; a success plays the
+    /// confirm sound, republishes state, then runs <paramref name="onSuccess"/>.
+    /// </summary>
+    private async Task<bool> FinishVerb(EntityUid uid, ShipyardConsoleComponent component, EntityUid player, ShipyardConsoleUiKey uiKey, bool success, Action? onDeny = null, Action? onSuccess = null)
+    {
+        if (TerminatingOrDeleted(uid) || TerminatingOrDeleted(player))
+            return success;
+
+        if (!success)
+        {
+            onDeny?.Invoke();
+            PlayDenySound(player, uid, component);
+            return false;
+        }
+
+        PlayConfirmSound(player, uid, component);
+        await RefreshDrydockState(uid, component, player, uiKey);
+        onSuccess?.Invoke();
+        return true;
     }
 
     /// <summary>
