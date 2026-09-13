@@ -2515,6 +2515,40 @@ public sealed partial class DrydockStore
     }
 
     /// <summary>
+    /// One page of the ships a re-bake sweep may look at: every <see cref="DrydockShipState.Stored"/>
+    /// hull with its current revision's number and drydock format, and no document bytes. Keyset paged
+    /// on the ship id rather than offset paged, so a ship that leaves storage or gets re-baked while the
+    /// sweep is between pages neither shifts a later ship out of the walk nor brings an earlier one
+    /// back into it.
+    ///
+    /// <para>Checked out, impounded, in escrow and terminal hulls are not listed, and the filing refuses
+    /// them anyway. The order is the provider's own ordering of the id column, which is all a cursor
+    /// needs: it only has to agree with itself.</para>
+    /// </summary>
+    /// <param name="after">The last ship id of the previous page, or null for the first.</param>
+    /// <param name="pageSize">How many rows at most.</param>
+    public Task<List<DrydockRebakeCandidate>> GetRebakeCandidates(Guid? after, int pageSize, CancellationToken ct = default)
+    {
+        return _db.RunTriadDbCommand(async (db, token) =>
+        {
+            var ships = db.DrydockShip.AsNoTracking().Where(s => s.State == DrydockShipState.Stored);
+            if (after is { } cursor)
+                ships = ships.Where(s => s.ShipGuid.CompareTo(cursor) > 0);
+
+            var rows = await ships
+                .Join(db.DrydockRevision.AsNoTracking(),
+                    s => new { s.ShipGuid, Revision = s.CurrentRevision },
+                    r => new { r.ShipGuid, r.Revision },
+                    (s, r) => new { s.ShipGuid, s.ShipName, s.CurrentRevision, r.DrydockFormatVer })
+                .OrderBy(c => c.ShipGuid)
+                .Take(pageSize)
+                .ToListAsync(token);
+
+            return rows.Select(c => new DrydockRebakeCandidate(c.ShipGuid, c.ShipName, c.CurrentRevision, c.DrydockFormatVer)).ToList();
+        }, ct);
+    }
+
+    /// <summary>
     /// Admin: deletes a hull and, by cascade, its revisions and blobs. The timeline row is written
     /// first and has no foreign key, so the evidence of the deletion outlives the thing deleted.
     /// The berth the hull sat in is left empty rather than removed.
@@ -2751,6 +2785,12 @@ public sealed class DrydockRebakeRequest
 
     public required string Manifest { get; init; }
 }
+
+/// <summary>
+/// A stored ship as the re-bake sweep first sees it, from <see cref="DrydockStore.GetRebakeCandidates"/>:
+/// enough to log and to find the document, and nothing that costs a blob read.
+/// </summary>
+public sealed record DrydockRebakeCandidate(Guid ShipGuid, string ShipName, int CurrentRevision, int DrydockFormatVer);
 
 /// <summary>What a retrieve reads: the hull row, the revision it is about to rebuild, and the document.</summary>
 public sealed record DrydockLoad(DrydockShip Ship, DrydockRevision Revision, byte[] Blob);

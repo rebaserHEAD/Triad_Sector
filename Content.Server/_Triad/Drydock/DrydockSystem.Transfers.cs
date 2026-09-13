@@ -16,7 +16,8 @@ namespace Content.Server._Triad.Drydock;
 /// timestamps that keep running while the owner is logged off and across a restart, so a ship past
 /// its deadline goes back to Stored and its offer is marked Expired. The round-end sweep's hooks,
 /// which live on the sweep partial and are subscribed from here. And the round boundary, which
-/// cancels any pipeline still in flight and then sweeps up whatever private maps they left.</para>
+/// cancels any pipeline still in flight and then sweeps up whatever private maps they left. The
+/// re-bake sweep is scheduled from here too, on a timer rather than this tick: see the re-bake partial.</para>
 /// </summary>
 public sealed partial class DrydockSystem
 {
@@ -46,6 +47,7 @@ public sealed partial class DrydockSystem
         SubscribeLocalEvent<RoundRestartCleanupEvent>(OnRoundRestart);
 
         InitializeSweep();
+        InitializeRebake();
     }
 
     public override void Update(float frameTime)
