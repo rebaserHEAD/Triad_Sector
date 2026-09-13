@@ -130,7 +130,7 @@ public sealed partial class ShipyardSystem
         // database is being read is refused rather than run alongside the first.
         if (component.ImportInProgress)
         {
-            Refuse(uid, component, player);
+            Refuse(uid, component, player, Loc.GetString("shipyard-console-import-error-in-progress"));
             return;
         }
 
@@ -170,11 +170,14 @@ public sealed partial class ShipyardSystem
         if (!_configManager.GetCVar(TriadCCVars.DrydockEnabled)
             || !_configManager.GetCVar(TriadCCVars.DrydockImportEnabled))
         {
-            return Refuse(uid, component, player);
+            return Refuse(uid, component, player, Loc.GetString("shipyard-console-import-error-disabled"));
         }
 
-        if (!TryGetOperatorAccount(player, out var operatorAccount) || DrydockBarsOperator(player, component))
-            return Refuse(uid, component, player);
+        if (!TryGetOperatorAccount(player, out var operatorAccount))
+            return Refuse(uid, component, player, Loc.GetString("shipyard-console-import-error-no-account"));
+
+        if (DrydockBarsOperator(player, component))
+            return Refuse(uid, component, player, Loc.GetString("shipyard-console-import-error-barred"));
 
         // The offer is the gate: a file the server did not just list cannot be imported, and a list
         // built for another captain is not this one's to spend.
@@ -182,17 +185,17 @@ public sealed partial class ShipyardSystem
             || component.ImportOfferAccount != operatorAccount
             || !component.OfferedImports.TryGetValue(fileId, out var candidate))
         {
-            return Refuse(uid, component, player);
+            return Refuse(uid, component, player, Loc.GetString("shipyard-console-import-error-stale-offer"));
         }
 
         if (!_mind.TryGetMind(player, out _, out var mind) || mind.UserId == null)
-            return Refuse(uid, component, player);
+            return Refuse(uid, component, player, Loc.GetString("shipyard-console-import-error-no-character"));
 
         if (!_player.TryGetSessionByEntity(player, out var session))
-            return Refuse(uid, component, player);
+            return Refuse(uid, component, player, Loc.GetString("shipyard-console-import-error-no-session"));
 
         if (string.IsNullOrWhiteSpace(yamlData))
-            return Refuse(uid, component, player);
+            return Refuse(uid, component, player, Loc.GetString("shipyard-console-import-error-empty-file"));
 
         var envelope = AuthenticatedShipFile.FromShipFile(yamlData);
         var hash = envelope.GetHash();
@@ -228,7 +231,8 @@ public sealed partial class ShipyardSystem
                 loadTimeAppraisal: null,
                 roundId: DrydockRoundId, serverName: null, vesselId: null, mapId: null,
                 sourceFilePath: fileId, deedHolderEntity: null);
-            return Refuse(uid, component, player);
+            // Triad: the tamper policy's own reason, the same key the ordinary load path reads.
+            return Refuse(uid, component, player, Loc.GetString(decision.PopupReasonLocId ?? "shipyard-tamper-blocked-invalid-signature"));
         }
 
         var enforcing = _tamperPolicy.IsEnforcing();
@@ -244,11 +248,11 @@ public sealed partial class ShipyardSystem
         // again for free. Reported from the 2026-09-07 play test with the same cruiser listed four
         // times over.
         if (await _consumedStore.IsConsumedAsync(hash, default))
-            return await RefuseAsync(uid, component, player, uiKey);
+            return await RefuseAsync(uid, component, player, uiKey, Loc.GetString("shipyard-console-import-error-already-imported"));
 
         var budget = _configManager.GetCVar(TriadCCVars.DrydockImportBudget);
         if (await _consumedStore.CountForPlayerAsync(operatorAccount, default) >= budget)
-            return await RefuseAsync(uid, component, player, uiKey);
+            return await RefuseAsync(uid, component, player, uiKey, Loc.GetString("shipyard-console-import-error-budget"));
 
         if (TerminatingOrDeleted(uid) || TerminatingOrDeleted(player))
             return false;
@@ -259,13 +263,13 @@ public sealed partial class ShipyardSystem
             || !TryPurchaseShuttleFromYamlData(uid, shipYaml, out var shuttleUid)
             || shuttleUid is not { } grid)
         {
-            return Refuse(uid, component, player);
+            return Refuse(uid, component, player, Loc.GetString("shipyard-console-import-error-load-failed"));
         }
 
         if (!TryComp<MapGridComponent>(grid, out var mapGrid))
         {
             QueueDel(grid);
-            return Refuse(uid, component, player);
+            return Refuse(uid, component, player, Loc.GetString("shipyard-console-import-error-invalid-grid"));
         }
 
         // A file that already carries a drydock identity describes a hull the drydock has filed.
@@ -274,7 +278,7 @@ public sealed partial class ShipyardSystem
         if (HasComp<DrydockIdentityComponent>(grid))
         {
             QueueDel(grid);
-            return Refuse(uid, component, player);
+            return Refuse(uid, component, player, Loc.GetString("shipyard-console-import-error-already-filed"));
         }
 
         var sizeClass = _drydockSizes.GetSizeClass((grid, mapGrid));
@@ -301,7 +305,21 @@ public sealed partial class ShipyardSystem
             if (TerminatingOrDeleted(uid) || TerminatingOrDeleted(player))
                 return false;
 
-            return await RefuseAsync(uid, component, player, uiKey);
+            // Triad: chat failure feedback. The store's own reason, not a guess: the enum names why a
+            // freshly staged hull could not be filed even though its berth had already been granted.
+            var storeReason = result.Result switch
+            {
+                DrydockStoreResult.NoBerth => "no berth was available",
+                DrydockStoreResult.BerthTooSmall => "no berth fit this hull",
+                DrydockStoreResult.BerthOccupied => "that berth is occupied",
+                DrydockStoreResult.OrganicsAboard => "a crew member was aboard",
+                DrydockStoreResult.HazardAboard => "a hazard was aboard",
+                DrydockStoreResult.Disabled => "drydock storage is off",
+                DrydockStoreResult.InProgress => "that ship was already mid-operation",
+                DrydockStoreResult.Cancelled => "the operation was cancelled",
+                _ => "the ship would not serialize",
+            };
+            return await RefuseAsync(uid, component, player, uiKey, Loc.GetString("shipyard-console-import-error-store-failed", ("reason", storeReason)));
         }
 
         // Filed, so the save is spent. Unconditionally: the ship this produced is real and
@@ -356,19 +374,21 @@ public sealed partial class ShipyardSystem
         return true;
     }
 
-    private bool Refuse(EntityUid uid, ShipyardConsoleComponent component, EntityUid player)
+    /// <summary>Refuses an import: the deny sound plus <paramref name="reason"/> in the pressing
+    /// player's chat, via <see cref="DenyWithReason"/>.</summary>
+    private bool Refuse(EntityUid uid, ShipyardConsoleComponent component, EntityUid player, string reason)
     {
         if (TerminatingOrDeleted(uid) || TerminatingOrDeleted(player))
             return false;
 
-        PlayDenySound(player, uid, component);
+        DenyWithReason(player, uid, component, reason);
         return false;
     }
 
     /// <summary>A refusal that also redraws, for the paths that have already read the database.</summary>
-    private async Task<bool> RefuseAsync(EntityUid uid, ShipyardConsoleComponent component, EntityUid player, ShipyardConsoleUiKey uiKey)
+    private async Task<bool> RefuseAsync(EntityUid uid, ShipyardConsoleComponent component, EntityUid player, ShipyardConsoleUiKey uiKey, string reason)
     {
-        Refuse(uid, component, player);
+        Refuse(uid, component, player, reason);
         await RefreshAfterRefusal(uid, component, player, uiKey);
         return false;
     }

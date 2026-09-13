@@ -141,7 +141,8 @@ public sealed partial class ShipyardSystem : SharedShipyardSystem
 
         if (!GetAvailableShuttles(shipyardConsoleUid, targetId: targetId).available.Contains(vessel.ID))
         {
-            PlayDenySound(player, shipyardConsoleUid, component);
+            // PlayDenySound(player, shipyardConsoleUid, component); // Triad: folded into DenyWithReason below
+            DenyWithReason(player, shipyardConsoleUid, component, Loc.GetString("shipyard-console-error-vessel-unavailable")); // Triad: chat failure feedback
             _adminLogger.Add(LogType.Action, LogImpact.Medium, $"{ToPrettyString(player):player} tried to purchase a vessel that was never available.");
             return;
         }
@@ -170,7 +171,8 @@ public sealed partial class ShipyardSystem : SharedShipyardSystem
 
         if (!TryPurchaseShuttle(station, vessel.ShuttlePath, out var shuttleUidOut, vessel.PriorityDockTag))
         {
-            PlayDenySound(player, shipyardConsoleUid, component);
+            // PlayDenySound(player, shipyardConsoleUid, component); // Triad: folded into DenyWithReason below
+            DenyWithReason(player, shipyardConsoleUid, component, Loc.GetString("shipyard-console-error-vessel-load-failed")); // Triad: chat failure feedback
             return;
         }
 
@@ -456,7 +458,8 @@ public sealed partial class ShipyardSystem : SharedShipyardSystem
         // Check if this is a loaded ship by looking at the ship's deed component
         if (loadedFromSave)
         {
-            ConsolePopup(player, "This vessel cannot be sold as it was loaded from a saved manifest.");
+            // ConsolePopup(player, "This vessel cannot be sold as it was loaded from a saved manifest."); // Triad: moved to a locale key
+            ConsolePopup(player, Loc.GetString("shipyard-console-error-sale-loaded-from-save")); // Triad
             PlayDenySound(player, uid, component);
             return;
         }
@@ -658,13 +661,16 @@ public sealed partial class ShipyardSystem : SharedShipyardSystem
 
     private void ConsolePopup(EntityUid uid, string text)
     {
-        // Triad: removed, the console's buttons carry every state and popups log to chat. The deny and confirm sounds stay.
+        // Triad: the console's buttons carry every state, so this no longer draws a popup; it writes
+        // the failure to the pressing player's chat instead (uid is that player at every call site).
+        // The deny and confirm sounds are played separately by each caller.
         // _popup.PopupEntity(text, uid);
+        ReportConsoleError(uid, text);
     }
 
     private void SendPurchaseMessage(EntityUid uid, EntityUid player, string name, string shipyardChannel, bool secret)
     {
-        var channel = _prototypeManager.Index<RadioChannelPrototype>(shipyardChannel);
+        // var channel = _prototypeManager.Index<RadioChannelPrototype>(shipyardChannel); // Triad: chat carries console failures only, to the player who pressed
 
         if (secret)
         {
@@ -672,14 +678,14 @@ public sealed partial class ShipyardSystem : SharedShipyardSystem
         }
         else
         {
-            _radio.SendRadioMessage(uid, Loc.GetString("shipyard-console-docking", ("owner", player), ("vessel", name)), channel, uid);
+            // _radio.SendRadioMessage(uid, Loc.GetString("shipyard-console-docking", ("owner", player), ("vessel", name)), channel, uid); // Triad: chat carries console failures only, to the player who pressed
             // _chat.TrySendInGameICMessage(uid, Loc.GetString("shipyard-console-docking", ("owner", player!), ("vessel", name)), InGameICChatType.Speak, true); // Triad: removed, the console no longer speaks locally
         }
     }
 
     private void SendSellMessage(EntityUid uid, string? player, string name, string shipyardChannel, EntityUid seller, bool secret)
     {
-        var channel = _prototypeManager.Index<RadioChannelPrototype>(shipyardChannel);
+        // var channel = _prototypeManager.Index<RadioChannelPrototype>(shipyardChannel); // Triad: chat carries console failures only, to the player who pressed
 
         if (secret)
         {
@@ -687,7 +693,7 @@ public sealed partial class ShipyardSystem : SharedShipyardSystem
         }
         else
         {
-            _radio.SendRadioMessage(uid, Loc.GetString("shipyard-console-leaving", ("owner", player!), ("vessel", name!), ("player", seller)), channel, uid);
+            // _radio.SendRadioMessage(uid, Loc.GetString("shipyard-console-leaving", ("owner", player!), ("vessel", name!), ("player", seller)), channel, uid); // Triad: chat carries console failures only, to the player who pressed
             // _chat.TrySendInGameICMessage(uid, Loc.GetString("shipyard-console-leaving", ("owner", player!), ("vessel", name!), ("player", seller)), InGameICChatType.Speak, true); // Triad: removed, the console no longer speaks locally
         }
     }
@@ -1057,14 +1063,16 @@ public sealed partial class ShipyardSystem : SharedShipyardSystem
         var newName = args.NewName.Trim();
         if (string.IsNullOrEmpty(newName))
         {
-            ConsolePopup(player, "Ship name cannot be empty.");
+            // ConsolePopup(player, "Ship name cannot be empty."); // Triad: moved to a locale key
+            ConsolePopup(player, Loc.GetString("shipyard-console-error-rename-empty")); // Triad
             PlayDenySound(player, uid, component);
             return;
         }
 
         if (newName.Length > ShuttleDeedComponent.MaxNameLength)
         {
-            ConsolePopup(player, $"Ship name cannot exceed {ShuttleDeedComponent.MaxNameLength} characters.");
+            // ConsolePopup(player, $"Ship name cannot exceed {ShuttleDeedComponent.MaxNameLength} characters."); // Triad: moved to a locale key
+            ConsolePopup(player, Loc.GetString("shipyard-console-error-rename-too-long", ("max", ShuttleDeedComponent.MaxNameLength))); // Triad
             PlayDenySound(player, uid, component);
             return;
         }
@@ -1082,7 +1090,7 @@ public sealed partial class ShipyardSystem : SharedShipyardSystem
         // Rename the ship using the existing method
         if (TryRenameShuttle(targetId, deed, newName, deed.ShuttleNameSuffix))
         {
-            ConsolePopup(player, $"Ship renamed to '{GetFullName(deed)}'");
+            // ConsolePopup(player, $"Ship renamed to '{GetFullName(deed)}'"); // Triad: success is shown by the console, chat carries failures only
             PlayConfirmSound(player, uid, component);
 
             // Get the player's balance or use 0 if they don't have a bank account
@@ -1100,7 +1108,8 @@ public sealed partial class ShipyardSystem : SharedShipyardSystem
         }
         else
         {
-            ConsolePopup(player, "Failed to rename ship.");
+            // ConsolePopup(player, "Failed to rename ship."); // Triad: moved to a locale key
+            ConsolePopup(player, Loc.GetString("shipyard-console-error-rename-failed")); // Triad
             PlayDenySound(player, uid, component);
         }
     }
@@ -1169,7 +1178,7 @@ public sealed partial class ShipyardSystem : SharedShipyardSystem
         // Set the cooldown
         cooldown.NextUnassignTime = currentTime + cooldown.CooldownDuration;
 
-        ConsolePopup(player, Loc.GetString("shipyard-console-deed-unassigned"));
+        // ConsolePopup(player, Loc.GetString("shipyard-console-deed-unassigned")); // Triad: success is shown by the console, chat carries failures only
         PlayConfirmSound(player, uid, component);
 
         // Get the player's balance or use 0 if they don't have a bank account

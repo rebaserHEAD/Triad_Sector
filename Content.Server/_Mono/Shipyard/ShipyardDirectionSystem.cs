@@ -67,7 +67,8 @@ public sealed partial class ShipyardDirectionSystem : EntitySystem
 
         if (_playerManager.TryGetSessionByEntity(player, out var session))
         {
-            _chatManager.ChatMessageToOne(ChatChannel.Server, message, message, EntityUid.Invalid, false, session.Channel);
+            // Triad: chat carries console failures only, to the player who pressed
+            // _chatManager.ChatMessageToOne(ChatChannel.Server, message, message, EntityUid.Invalid, false, session.Channel);
         }
     }
 

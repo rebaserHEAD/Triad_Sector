@@ -18,7 +18,9 @@ shipyard-console-sale-not-docked = Ship must be docked.
 shipyard-console-sale-organic-aboard = All crew must disembark. {$name} is still aboard.
 # This error message is bad, but if it happens, something awful's happened.
 shipyard-console-sale-invalid-ship = Ship is invalid and cannot be sold.
-shipyard-console-sale-unknown-reason = Ship cannot be sold: {reason}
+# shipyard-console-sale-unknown-reason = Ship cannot be sold: {reason}
+# Triad: the variable was missing its $, so the reason never printed.
+shipyard-console-sale-unknown-reason = Ship cannot be sold: {$reason}
 shipyard-console-deed-label = Registered Ship:
 shipyard-console-appraisal-label = Shuttle Resale Value:{" "}
 shipyard-console-no-voucher-redemptions = All voucher redemptions have been used.
@@ -224,3 +226,29 @@ shipyard-console-import-row-note = · old save
 shipyard-console-import-summary = { " " }· { $count } to import
 shipyard-console-import-prompt-title = Import { $ship }
 shipyard-console-import-prompt-body = [color=#e0e0e0]{ $ship }[/color] files into a [bold]new berth[/bold], sized to its hull and granted with the import.
+
+# Triad: console failure reasons. A refusal at a shipyard or drydock console reaches only the
+# player who pressed, via ReportConsoleError/DenyWithReason (ShipyardSystem.Triad.Feedback.cs).
+# Successes are never chat lines here; the console's own state already shows them.
+shipyard-console-error-vessel-unavailable = Purchase failed: that vessel is not available to you.
+shipyard-console-error-vessel-load-failed = Purchase failed: the vessel's ship file could not be loaded.
+shipyard-console-error-sale-loaded-from-save = Sale failed: this vessel was loaded from a saved manifest and cannot be sold.
+shipyard-console-error-rename-empty = Rename failed: ship name cannot be empty.
+shipyard-console-error-rename-too-long = Rename failed: ship name cannot exceed {$max} characters.
+shipyard-console-error-rename-failed = Rename failed: the ship could not be renamed.
+
+# Triad: legacy import failure reasons.
+shipyard-console-import-error-in-progress = Import failed: another import is already running.
+shipyard-console-import-error-disabled = Import failed: legacy ship import is disabled on this server.
+shipyard-console-import-error-no-account = Import failed: no player account found for this character.
+shipyard-console-import-error-barred = Import failed: enlisted personnel may not store provisioned equipment.
+shipyard-console-import-error-stale-offer = Import failed: that file is not on the current import list.
+shipyard-console-import-error-no-character = Import failed: no character found for this session.
+shipyard-console-import-error-no-session = Import failed: no active connection found for this character.
+shipyard-console-import-error-empty-file = Import failed: the selected file is empty.
+shipyard-console-import-error-already-imported = Import failed: this file has already been imported.
+shipyard-console-import-error-budget = Import failed: you have reached the import limit for this account.
+shipyard-console-import-error-load-failed = Import failed: the ship file could not be loaded. It may be corrupted.
+shipyard-console-import-error-invalid-grid = Import failed: the loaded file did not produce a valid ship.
+shipyard-console-import-error-already-filed = Import failed: this ship is already filed with the drydock.
+shipyard-console-import-error-store-failed = Import failed: could not file the ship ({$reason}).
