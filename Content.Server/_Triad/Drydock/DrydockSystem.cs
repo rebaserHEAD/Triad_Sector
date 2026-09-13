@@ -1479,8 +1479,8 @@ public sealed partial class DrydockSystem : EntitySystem
 
     /// <summary>
     /// The document's format version, and a hash over the sorted set of prototype ids it references.
-    /// That id set is the drift key: a change to it is what the planned re-bake ladder, not built
-    /// yet, is meant to react to.
+    /// That id set is the drift key: <see cref="DetectDrift"/> reads it at retrieve and in the re-bake
+    /// sweep, after the migration mappings.
     /// </summary>
     /// <remarks>
     /// <para>Streams the document rather than loading it into a node tree. The two facts wanted here
