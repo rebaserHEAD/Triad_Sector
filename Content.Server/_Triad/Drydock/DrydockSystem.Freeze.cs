@@ -373,29 +373,11 @@ public sealed partial class DrydockSystem
     // --- tree helpers -----------------------------------------------------------------
 
     /// <summary>
-    /// Breadth-first walk of a transform tree, root included, materialised into a list. Never a query
-    /// enumerator: those wrap a live dictionary enumerator, and a sliced loop parks across ticks
-    /// during which anything on the server may spawn or delete an entity.
+    /// Counts a transform tree, root included, without materialising it: order does not matter for a
+    /// total, so this stays a non-allocating stack walk rather than the sliced walkers' list-building
+    /// one (see <see cref="DrydockFidelitySystem.GridTreeList"/>), which is worth keeping on hulls up
+    /// to 960 entities.
     /// </summary>
-    internal List<EntityUid> SnapshotTree(EntityUid root)
-    {
-        var result = new List<EntityUid>();
-        if (!Exists(root))
-            return result;
-
-        // Index-walked rather than queue-popped: the list is the queue, so the breadth-first order
-        // survives into the result and the grid itself comes out first.
-        result.Add(root);
-        for (var i = 0; i < result.Count; i++)
-        {
-            var children = Transform(result[i]).ChildEnumerator;
-            while (children.MoveNext(out var child))
-                result.Add(child);
-        }
-
-        return result;
-    }
-
     internal int CountTree(EntityUid root)
     {
         if (!Exists(root))
@@ -451,76 +433,12 @@ public sealed partial class DrydockSystem
 
         await slice.Begin(DrydockPhase.Freeze, estimate);
 
-        var tree = SnapshotTree(gridUid);
+        var tree = _fidelity.GridTreeList(gridUid);
         for (var i = 0; i < tree.Count; i++)
         {
             var uid = tree[i];
             if (Exists(uid))
                 _meta.SetEntityPaused(uid, true);
-
-            await slice.Step(i);
-        }
-
-        return tree.Count;
-    }
-
-    /// <summary>
-    /// Per-entity unpause on the budget, with the engine computing the paused duration.
-    ///
-    /// <para>Used only by the unwind's last-resort branch, when the ship could not be put back
-    /// anywhere and is being handed to an administrator awake on a private map. The happy paths never
-    /// call it: the map change inside a reparent or a dock thaws the whole tree in one engine walk,
-    /// and for those the engine's own computed duration is the true one, because the ship really was
-    /// paused for exactly that long.</para>
-    /// </summary>
-    /// <returns>How many entities were walked.</returns>
-    internal async Task<int> ThawTree(EntityUid gridUid, IDrydockSlice slice)
-    {
-        var tree = SnapshotTree(gridUid);
-        await slice.Begin(DrydockPhase.Unwind, tree.Count);
-
-        for (var i = 0; i < tree.Count; i++)
-        {
-            var uid = tree[i];
-            if (Exists(uid))
-                _meta.SetEntityPaused(uid, false);
-
-            await slice.Step(i);
-        }
-
-        return tree.Count;
-    }
-
-    /// <summary>
-    /// The retrieve's thaw: unpause the tree, then tell it how long it was really away.
-    ///
-    /// <para>The engine cannot do the second half. A stored document carries a paused flag per entity
-    /// and the deserializer stamps the pause timestamp at load time, so the unpaused event the engine
-    /// raises carries a duration of roughly zero. Twenty-three handlers across twenty files read that
-    /// duration to shift their own absolute timers - use delays and do-afters among them - and a ship
-    /// that spent a week in a berth would come back with every one of them expiring in the past.
-    /// Raising it ourselves with the real storage duration is what makes those timers survive.</para>
-    ///
-    /// <para>The engine's own event fires first and is worth about nothing; ours carries the truth,
-    /// and because every handler of it offsets rather than assigns, the two compose. Ours is raised
-    /// even for an entity that was not flagged paused: its timers were still written a week ago.</para>
-    /// </summary>
-    /// <returns>How many entities were walked.</returns>
-    internal async Task<int> ThawFromStorage(EntityUid gridUid, TimeSpan storedFor, IDrydockSlice slice)
-    {
-        var tree = SnapshotTree(gridUid);
-        await slice.Begin(DrydockPhase.Release, tree.Count);
-
-        for (var i = 0; i < tree.Count; i++)
-        {
-            var uid = tree[i];
-            if (Exists(uid))
-            {
-                _meta.SetEntityPaused(uid, false);
-
-                var ev = new EntityUnpausedEvent(storedFor);
-                RaiseLocalEvent(uid, ref ev);
-            }
 
             await slice.Step(i);
         }

@@ -168,12 +168,10 @@ public sealed partial class DrydockSystem : EntitySystem
         // deliberately sit outside the try below: the finally removes the marker unconditionally, so
         // a second request that fell through it would strip the first store's sentinel.
         //
-        // Re-entrancy is all the marker does now. It used to double as a container insertion block,
-        // through what was the solution's only unfiltered subscription to the insertion attempt, so
-        // every insertion anywhere on the server paid two component lookups for the length of a
-        // store; a ship frozen on a private map with nobody aboard has nothing that can insert into
-        // it. The window that leaves open is the one between this stamp and the freeze, which is a
-        // single awaited capacity check: for that tick plus a database round trip the ship is live,
+        // Re-entrancy is all the marker does now: a ship frozen on a private map with nobody aboard
+        // has nothing that can insert into it. The window that leaves open is the one between this
+        // stamp and the freeze, which is a single awaited capacity check: for that tick plus a
+        // database round trip the ship is live,
         // docked and unguarded. That is the exposure the pre-slicing code already had after its own
         // await, and it is accepted.
         if (HasComp<DrydockInProgressComponent>(gridUid))
@@ -264,10 +262,9 @@ public sealed partial class DrydockSystem : EntitySystem
             // sliced run's for the next reader to mistake for this one's.
             RecordPhaseCosts(job?.Meter);
 
-            // One frame up from where this used to sit, at the bottom of the pipeline's own finally,
-            // so it now also covers a job cancelled before its body ever ran. On success the grid is
-            // already queued for deletion and this is a no-op; on any refusal it re-opens the ship to
-            // a second store attempt.
+            // Covers a job cancelled before its body ever ran, as well as every ordinary exit. On
+            // success the grid is already queued for deletion and this is a no-op; on any refusal it
+            // re-opens the ship to a second store attempt.
             if (!TerminatingOrDeleted(gridUid))
                 RemCompDeferred<DrydockInProgressComponent>(gridUid);
         }
@@ -504,8 +501,7 @@ public sealed partial class DrydockSystem : EntitySystem
 
             // The rest of preparation is deliberately not undoable, and runs last for that reason.
             // An empty AI core is the intended end state, and a ship at rest has no business carrying
-            // FTL state. The undock used to be the third member of this block and has moved up into
-            // the freeze, where the reparent forces it.
+            // FTL state.
             SanitizeStationAiCores(gridUid);
 
             // A ship stored during its FTL cooldown still carries the component the jump added. A
@@ -670,11 +666,9 @@ public sealed partial class DrydockSystem : EntitySystem
             // checked out with no hull behind it, which is the state MarkStored exists to prevent.
             // A grid that died in that window is the end state the despawn was about to produce.
             //
-            // The organics re-check that used to sit here is gone with the private map. It existed
-            // because the write above yields and the in-progress marker blocked insertion rather than
-            // boarding; there is no boarding a ship that has been on a paused map of its own since
-            // long before the write started. The late re-check in the freeze block is what covers the
-            // one window that is still real.
+            // No organics re-check here: the write above yields, but there is no boarding a ship that
+            // has been on a paused map of its own since long before the write started. The re-check in
+            // the freeze block is what covers the one window that is still real.
             slice.Progress.BeginPhase(DrydockPhase.Despawn, 0);
 
             // A no-op when the grid died while the write was in flight, which is the point.
@@ -781,6 +775,23 @@ public sealed partial class DrydockSystem : EntitySystem
     {
         await slice.Step(index);
         GuardStoreResume(ctx);
+    }
+
+    /// <summary>
+    /// The skeleton every sliced store walk shares: open the phase against a pre-built item list,
+    /// run <paramref name="body"/> per item, then step. <paramref name="body"/> does its own
+    /// existence and component checks, since which ones apply differs per walk.
+    /// </summary>
+    private async Task StoreSweep<T>(
+        DrydockStoreContext ctx, IDrydockSlice slice, DrydockPhase phase, IReadOnlyList<T> items, Action<T, int> body)
+    {
+        await slice.Begin(phase, items.Count);
+
+        for (var i = 0; i < items.Count; i++)
+        {
+            body(items[i], i);
+            await StoreStep(ctx, slice, i);
+        }
     }
 
     /// <summary>
@@ -1160,11 +1171,9 @@ public sealed partial class DrydockSystem : EntitySystem
                 stack.Push((child, myIndex));
         }
 
-        await slice.Begin(DrydockPhase.Manifest, order.Count);
-
-        for (var i = 0; i < order.Count; i++)
+        await StoreSweep(ctx, slice, DrydockPhase.Manifest, order, (node, _) =>
         {
-            var (uid, parent) = order[i];
+            var (uid, parent) = node;
             var entry = new DrydockManifestEntry { Parent = parent };
 
             // An entry is added for every position in the walk whether or not the entity survived to
@@ -1184,8 +1193,7 @@ public sealed partial class DrydockSystem : EntitySystem
             }
 
             manifest.Entries.Add(entry);
-            await StoreStep(ctx, slice, i);
-        }
+        });
     }
 
     /// <summary>
@@ -1245,26 +1253,21 @@ public sealed partial class DrydockSystem : EntitySystem
             }
         }
 
-        await slice.Begin(DrydockPhase.Sidecars, shares.Count);
-
-        for (var i = 0; i < shares.Count; i++)
+        await StoreSweep(ctx, slice, DrydockPhase.Sidecars, shares, (item, _) =>
         {
-            var (owner, name, share) = shares[i];
+            var (owner, name, share) = item;
+            if (TerminatingOrDeleted(owner))
+                return;
 
-            if (!TerminatingOrDeleted(owner))
-            {
-                // One ledger entry per owner, and it goes in before the component does. Asking
-                // whether the sidecar was already there beats counting the shares afterwards: an
-                // owner with two nodes gets two shares and must still be removed exactly once, and an
-                // abort between the two writes must still find it on the ledger.
-                if (!HasComp<DrydockPipeGasComponent>(owner))
-                    ctx.InjectedGas.Add(owner);
+            // One ledger entry per owner, and it goes in before the component does. Asking
+            // whether the sidecar was already there beats counting the shares afterwards: an
+            // owner with two nodes gets two shares and must still be removed exactly once, and an
+            // abort between the two writes must still find it on the ledger.
+            if (!HasComp<DrydockPipeGasComponent>(owner))
+                ctx.InjectedGas.Add(owner);
 
-                EnsureComp<DrydockPipeGasComponent>(owner).Shares[name] = share;
-            }
-
-            await StoreStep(ctx, slice, i);
-        }
+            EnsureComp<DrydockPipeGasComponent>(owner).Shares[name] = share;
+        });
     }
 
     private async Task InjectDamageSidecarsSliced(DrydockStoreContext ctx, IDrydockSlice slice)
@@ -1279,22 +1282,17 @@ public sealed partial class DrydockSystem : EntitySystem
             damaged.Add((uid, new Dictionary<string, FixedPoint2>(damageable.Damage.DamageDict)));
         }
 
-        await slice.Begin(DrydockPhase.Sidecars, damaged.Count);
-
-        for (var i = 0; i < damaged.Count; i++)
+        await StoreSweep(ctx, slice, DrydockPhase.Sidecars, damaged, (item, _) =>
         {
-            var (uid, damage) = damaged[i];
+            var (uid, damage) = item;
+            if (TerminatingOrDeleted(uid))
+                return;
 
-            if (!TerminatingOrDeleted(uid))
-            {
-                if (!HasComp<DrydockDamageSidecarComponent>(uid))
-                    ctx.InjectedDamage.Add(uid);
+            if (!HasComp<DrydockDamageSidecarComponent>(uid))
+                ctx.InjectedDamage.Add(uid);
 
-                EnsureComp<DrydockDamageSidecarComponent>(uid).DamageDict = damage;
-            }
-
-            await StoreStep(ctx, slice, i);
-        }
+            EnsureComp<DrydockDamageSidecarComponent>(uid).DamageDict = damage;
+        });
     }
 
     /// <summary>
@@ -1302,25 +1300,19 @@ public sealed partial class DrydockSystem : EntitySystem
     /// aborted store can put the field data back. A bare re-add of a fresh instance would come back
     /// empty.
     /// </summary>
-    private async Task StripListedComponentsSliced(DrydockStoreContext ctx, IDrydockSlice slice)
+    private Task StripListedComponentsSliced(DrydockStoreContext ctx, IDrydockSlice slice)
     {
-        await slice.Begin(DrydockPhase.Strip, StoreStripList.Length);
-
-        for (var i = 0; i < StoreStripList.Length; i++)
+        return StoreSweep(ctx, slice, DrydockPhase.Strip, StoreStripList, (type, _) =>
         {
-            var type = StoreStripList[i];
+            if (TerminatingOrDeleted(ctx.GridUid) || !TryComp(ctx.GridUid, type, out var comp))
+                return;
 
-            if (!TerminatingOrDeleted(ctx.GridUid) && TryComp(ctx.GridUid, type, out var comp))
-            {
-                // The copy lands on the ledger before the live component is taken off, so an abort
-                // between the two finds the component still on the grid and re-adds a duplicate of
-                // it, which is a no-op, rather than finding it gone with no copy to put back.
-                ctx.Stripped.Add(_serialization.CreateCopy(comp, notNullableOverride: true));
-                RemComp(ctx.GridUid, comp);
-            }
-
-            await StoreStep(ctx, slice, i);
-        }
+            // The copy lands on the ledger before the live component is taken off, so an abort
+            // between the two finds the component still on the grid and re-adds a duplicate of
+            // it, which is a no-op, rather than finding it gone with no copy to put back.
+            ctx.Stripped.Add(_serialization.CreateCopy(comp, notNullableOverride: true));
+            RemComp(ctx.GridUid, comp);
+        });
     }
 
     private void RestoreStrippedComponents(EntityUid gridUid, List<IComponent> stripped)
@@ -1371,20 +1363,16 @@ public sealed partial class DrydockSystem : EntitySystem
             }
         }
 
-        await slice.Begin(DrydockPhase.Purge, doomed.Count);
-
         var count = 0;
-        for (var i = 0; i < doomed.Count; i++)
+        await StoreSweep(ctx, slice, DrydockPhase.Purge, doomed, (uid, _) =>
         {
             // A container purged earlier in the list takes its contents with it.
-            if (!TerminatingOrDeleted(doomed[i]))
-            {
-                Del(doomed[i]);
-                count++;
-            }
+            if (TerminatingOrDeleted(uid))
+                return;
 
-            await StoreStep(ctx, slice, i);
-        }
+            Del(uid);
+            count++;
+        });
 
         if (count > 0)
             Log.Info($"Drydock: {ctx.ShipId} store purged {count} entities: saving contraband without a permit, or a permit that is not the holder's.");
@@ -1405,11 +1393,9 @@ public sealed partial class DrydockSystem : EntitySystem
             found.Add((uid, store.StartingMap));
         }
 
-        await slice.Begin(DrydockPhase.Strip, found.Count);
-
-        for (var i = 0; i < found.Count; i++)
+        await StoreSweep(ctx, slice, DrydockPhase.Strip, found, (item, _) =>
         {
-            var (uid, map) = found[i];
+            var (uid, map) = item;
 
             // Ledger first, blank second, so an abort between them re-writes a value that is still
             // there rather than losing one that is already gone.
@@ -1418,9 +1404,7 @@ public sealed partial class DrydockSystem : EntitySystem
                 ctx.StoreMaps.Add((uid, map));
                 store.StartingMap = null;
             }
-
-            await StoreStep(ctx, slice, i);
-        }
+        });
     }
 
     private void ReattachStoreMaps(List<(EntityUid Store, EntityUid? Map)> detached)
@@ -1476,12 +1460,8 @@ public sealed partial class DrydockSystem : EntitySystem
     }
 
     /// <summary>
-    /// The engine's document format version, and a hash over the sorted set of prototype ids the
-    /// document references. That id set is the drift key: a change to it is what the re-bake ladder
-    /// reacts to.
-    /// </summary>
-    /// <summary>
-    /// The document's format version and the fingerprint of the prototypes it names.
+    /// The document's format version, and a hash over the sorted set of prototype ids it references.
+    /// That id set is the drift key: a change to it is what the re-bake ladder reacts to.
     /// </summary>
     /// <remarks>
     /// <para>Streams the document rather than loading it into a node tree. The two facts wanted here

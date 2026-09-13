@@ -66,15 +66,17 @@ public sealed partial class DrydockFidelitySystem
         var snapshot = new DrydockStateSnapshot();
 
         // Path, then the entities holding it. Built first so ambiguity is known before any value is
-        // read: a path shared by two entities tells us nothing about either.
+        // read: a path shared by two entities tells us nothing about either. Parents are always
+        // resolved before their children in this walk, so each path is computed in one forward pass.
         var byPath = new Dictionary<string, List<EntityUid>>();
-        var queue = new Queue<(EntityUid Uid, string? ParentPath)>();
-        queue.Enqueue((grid, null));
+        var nodes = GridTreeListWithParents(grid);
+        var paths = new string[nodes.Count];
 
-        while (queue.Count > 0)
+        for (var i = 0; i < nodes.Count; i++)
         {
-            var (uid, parentPath) = queue.Dequeue();
-            var path = PathFor(uid, parentPath, grid);
+            var (uid, parent) = nodes[i];
+            var path = PathFor(uid, parent is { } p ? paths[p] : null, grid);
+            paths[i] = path;
 
             // The serializer's own exclusion, the same one the roster sweep's census applies. A
             // save: false prototype is never written into a store, so an entity of one aboard at the
@@ -89,10 +91,6 @@ public sealed partial class DrydockFidelitySystem
                     byPath[path] = sharing = new List<EntityUid>();
                 sharing.Add(uid);
             }
-
-            var children = Transform(uid).ChildEnumerator;
-            while (children.MoveNext(out var child))
-                queue.Enqueue((child, path));
         }
 
         foreach (var (path, uids) in byPath)

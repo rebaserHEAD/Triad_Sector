@@ -98,26 +98,12 @@ public sealed partial class DrydockFidelitySystem : EntitySystem
     /// it to <see cref="RestoreSnapshot"/> to put them straight back with no serialization round trip
     /// in the way.</para>
     ///
-    /// <para>The ledger belongs to the caller, not to this walk. That is why the sliced form takes it
-    /// as a parameter and why this synchronous form creates it before it starts: clearing happens
-    /// per field, per entity, and the walk it happens in can now be abandoned half-way, so a ledger
-    /// that only became visible on return would leave a ship blanked with no record of what was taken
-    /// off it. Anything that throws between here and the commit leaves a live ship with blanked
-    /// fields unless the caller restores from that ledger.</para>
+    /// <para>The ledger belongs to the caller, not to this walk: it is passed in rather than created
+    /// here, since clearing happens per field, per entity, and the walk can now be abandoned
+    /// half-way, so a ledger that only became visible on return would leave a ship blanked with no
+    /// record of what was taken off it. Anything that throws between here and the commit leaves a
+    /// live ship with blanked fields unless the caller restores from that ledger.</para>
     /// </summary>
-    /// <remarks>
-    /// The synchronous entry point, kept for callers that are not pipelines. It is the sliced walk
-    /// driven by a slice that never suspends, so its task is always already completed and reading the
-    /// result cannot block.
-    /// </remarks>
-    public DrydockFidelityCapture CaptureAndStrip(EntityUid grid)
-    {
-        var capture = new DrydockFidelityCapture();
-        CaptureAndStripSliced(grid, capture, new DrydockSyncSlice(DrydockPhases.Store)).GetAwaiter().GetResult();
-        return capture;
-    }
-
-    /// <inheritdoc cref="CaptureAndStrip"/>
     /// <remarks>
     /// The tick-budgeted form. Every snapshot entry is appended before the field it records is
     /// cleared, so an abort part-way through still restores every field already blanked, and the
@@ -241,12 +227,6 @@ public sealed partial class DrydockFidelitySystem : EntitySystem
     /// not come back. The returned report is what makes those skips visible, and a skip count above
     /// zero after an upstream merge is the signature of a rename orphaning a key.</para>
     /// </summary>
-    public DrydockFidelityRestore RestoreCaptured(EntityUid grid)
-    {
-        return RestoreCapturedSliced(grid, new DrydockSyncSlice(DrydockPhases.Retrieve)).GetAwaiter().GetResult();
-    }
-
-    /// <inheritdoc cref="RestoreCaptured"/>
     /// <remarks>
     /// The tick-budgeted form. Snapshot-then-apply over a materialised tree, re-checking each entity
     /// as it is consumed, and it opens its own phase rather than stepping inside one the caller
@@ -340,19 +320,10 @@ public sealed partial class DrydockFidelitySystem : EntitySystem
     /// a state change that will not happen again. Capturing both is deliberate, since nothing at
     /// store time can tell them apart, and re-applying a value the system was about to derive
     /// identically costs nothing.</para>
+    ///
+    /// <para>A key whose value cannot be captured at all is dropped rather than failing the store: an
+    /// appearance value is a visual, and no visual is worth refusing a ship over.</para>
     /// </summary>
-    /// <remarks>
-    /// A key whose value cannot be captured at all is dropped rather than failing the store: an
-    /// appearance value is a visual, and no visual is worth refusing a ship over.
-    /// </remarks>
-    public List<EntityUid> CaptureAppearance(EntityUid grid)
-    {
-        var injected = new List<EntityUid>();
-        CaptureAppearanceSliced(grid, injected, new DrydockSyncSlice(DrydockPhases.Store)).GetAwaiter().GetResult();
-        return injected;
-    }
-
-    /// <inheritdoc cref="CaptureAppearance"/>
     /// <remarks>
     /// The tick-budgeted form. Like the ledgers on the store's context, <paramref name="injected"/>
     /// belongs to the caller and is appended to before the sidecar it records is added, so an abort
@@ -410,12 +381,6 @@ public sealed partial class DrydockFidelitySystem : EntitySystem
     /// with. Restoring appearance last would reinstate the frozen animation this carrier exists to
     /// fix.</para>
     /// </summary>
-    public DrydockFidelityRestore RestoreAppearance(EntityUid grid)
-    {
-        return RestoreAppearanceSliced(grid, new DrydockSyncSlice(DrydockPhases.Retrieve)).GetAwaiter().GetResult();
-    }
-
-    /// <inheritdoc cref="RestoreAppearance"/>
     /// <remarks>Same shape as <see cref="RestoreCapturedSliced"/>: materialised tree, re-checked per
     /// entity, its own phase.</remarks>
     public async Task<DrydockFidelityRestore> RestoreAppearanceSliced(EntityUid grid, IDrydockSlice slice)
@@ -593,6 +558,28 @@ public sealed partial class DrydockFidelitySystem : EntitySystem
             var children = Transform(result[i]).ChildEnumerator;
             while (children.MoveNext(out var child))
                 result.Add(child);
+        }
+
+        return result;
+    }
+
+    /// <summary>
+    /// Same walk as <see cref="GridTreeList"/>, paired with the index of each entity's parent in the
+    /// returned list (the root's parent is null), for a caller that needs to rebuild parent links
+    /// without a second pass over the tree.
+    /// </summary>
+    public List<(EntityUid Uid, int? Parent)> GridTreeListWithParents(EntityUid grid)
+    {
+        var result = new List<(EntityUid Uid, int? Parent)>();
+        if (TerminatingOrDeleted(grid))
+            return result;
+
+        result.Add((grid, null));
+        for (var i = 0; i < result.Count; i++)
+        {
+            var children = Transform(result[i].Uid).ChildEnumerator;
+            while (children.MoveNext(out var child))
+                result.Add((child, i));
         }
 
         return result;

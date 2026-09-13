@@ -1,5 +1,6 @@
 using System;
 using System.IO;
+using System.Linq;
 using System.Security.Cryptography;
 using System.Text;
 using System.Threading;
@@ -90,11 +91,7 @@ public sealed partial class DrydockSystem
     [Dependency] private SharedHandsSystem _hands = default!;
     [Dependency] private ItemSlotsSystem _itemSlots = default!;
     [Dependency] private OpenableSystem _openable = default!;
-    // Triad: retired together with ReviveUseDelays further down. The generic offset path leaves
-    // every stored delay re-based onto this round's clock with its remaining time intact, so
-    // nothing on this path needs the use-delay system any more. Commented rather than deleted so
-    // the dependency and the method it existed for read as one decision.
-    // [Dependency] private UseDelaySystem _useDelay = default!;
+    [Dependency] private ItemCabinetSystem _itemCabinet = default!;
     [Dependency] private SharedAppearanceSystem _appearance = default!;
 
     /// <summary>
@@ -371,16 +368,17 @@ public sealed partial class DrydockSystem
                     }));
                 }
 
-                // One un-yieldable call, and it stays that way. The deserializer's stages are public
-                // but its constructor wants the renamed-prototype maps that only the map loader's
-                // own pre-read event produces, and the merge, the map-id assignment, the transform
-                // pass and the merge epilogue are all private, so a content-side staged loader would
-                // be a reimplementation of the engine rather than a slice of it. The honest per-tick
-                // claim for a retrieve is the budget plus this one call.
+                // The parse half can leave the main thread, mirroring the store's validate split; the
+                // merge half cannot, for the same reason DetectRoundTripMismatch's cannot: the
+                // deserializer's constructor wants the renamed-prototype maps that only the map
+                // loader's own pre-read event produces, and the merge, the map-id assignment, the
+                // transform pass and the merge epilogue are all private, so a content-side staged
+                // loader would be a reimplementation of the engine rather than a slice of it. The
+                // honest per-tick claim for a retrieve is the budget plus this one merge call.
                 await slice.Begin(DrydockPhase.Load, 0);
                 GuardRetrieveResume(ctx);
 
-                if (!TryLoadOntoStagingMap(ctx, jobId, revision, yamlBytes))
+                if (!await TryLoadOntoStagingMap(ctx, slice, timer, jobId, revision, yamlBytes))
                     continue;
 
                 var grid = ctx.Grid!.Value;
@@ -528,12 +526,18 @@ public sealed partial class DrydockSystem
     /// <summary>
     /// Loads one revision onto a private, paused map of its own.
     ///
-    /// <para>The map-creating overload is what does the work: it creates the map map-initialised and
-    /// pauses it while it is still empty, so the engine's recursive pause walks one entity instead
-    /// of a whole hull, and the loader's merge epilogue then applies the target map's pause state to
-    /// everything it loaded. The mechanism is the target map's state and not the document's own
-    /// per-entity paused flags. Documents written by the older readers carry no such flags at all,
-    /// deriving pause from a file-level one instead, and it makes no difference here.</para>
+    /// <para>Replicates the <c>TryLoadGrid</c> map-creating overload by hand, the same way
+    /// <c>DetectRoundTripMismatch</c> replicates it for the validation scratch load: that overload
+    /// parses and merges in one call and there is no overload that takes an already-parsed document
+    /// and still owns creating the target map. The map is created map-initialised and paused while
+    /// it is still empty, so the engine's recursive pause walks one entity instead of a whole hull,
+    /// and the merge's own epilogue then applies the target map's pause state to everything it
+    /// loads. The mechanism is the target map's state and not the document's own per-entity paused
+    /// flags. Documents written by the older readers carry no such flags at all, deriving pause from
+    /// a file-level one instead, and it makes no difference here.</para>
+    ///
+    /// <para>The parse half runs off-thread, behind the <c>load_parse</c> timer mark; the merge half
+    /// stays one atomic main-thread call, behind <c>load</c>, for the reason given at the call site.</para>
     ///
     /// <para>A map per retrieve also retires the spacing scheme that came before it. The shared
     /// shipyard map is unpaused and holds purchases and dead drops, so every retrieve used to be
@@ -541,7 +545,8 @@ public sealed partial class DrydockSystem
     /// a tick they shared. Residency is measured in seconds now, which is precisely the case that
     /// spacing could not have covered, and a private map has nothing to overlap with.</para>
     /// </summary>
-    private bool TryLoadOntoStagingMap(DrydockRetrieveContext ctx, int jobId, int revision, byte[] yamlBytes)
+    private async Task<bool> TryLoadOntoStagingMap(
+        DrydockRetrieveContext ctx, IDrydockSlice slice, DrydockPhaseTimer timer, int jobId, int revision, byte[] yamlBytes)
     {
         var options = new DeserializationOptions
         {
@@ -549,19 +554,53 @@ public sealed partial class DrydockSystem
             PauseMaps = true,
         };
 
-        using var reader = new StreamReader(new MemoryStream(yamlBytes), Encoding.UTF8);
+        var source = $"drydock/{ctx.ShipId}";
 
-        if (!_mapLoader.TryLoadGrid(reader, $"drydock/{ctx.ShipId}", out var map, out var loaded, options))
+        // The parse alone, off-thread: no entity is touched until the data node comes back.
+        var data = await slice.Await(Task.Run(() => ParseDocument(Encoding.UTF8.GetString(yamlBytes))));
+        GuardRetrieveResume(ctx);
+        timer.Mark("load_parse");
+
+        if (data == null)
         {
             Log.Error($"Drydock: {ctx.ShipId} revision {revision} passed its checksum but would not load.");
             return false;
         }
 
-        ctx.StagingMap = map.Value.Owner;
-        ctx.Grid = loaded.Value.Owner;
+        var mapUid = _maps.CreateMap(out var mapId, runMapInit: options.InitializeMaps);
+        if (options.PauseMaps)
+            _maps.SetPaused(mapUid, true);
+
+        var loadOptions = new MapLoadOptions
+        {
+            MergeMap = mapId,
+            DeserializationOptions = options,
+            ExpectedCategory = FileCategory.Grid,
+        };
+
+        var loaded = _mapLoader.TryLoadGeneric(data, source, out var result, loadOptions);
+
+        if (!loaded || result!.Grids.Count != 1)
+        {
+            if (result != null)
+            {
+                foreach (var uid in result.Entities)
+                {
+                    if (Exists(uid))
+                        Del(uid);
+                }
+            }
+
+            Del(mapUid);
+            Log.Error($"Drydock: {ctx.ShipId} revision {revision} passed its checksum but would not load.");
+            return false;
+        }
+
+        ctx.StagingMap = mapUid;
+        ctx.Grid = result.Grids.Single().Owner;
         ctx.RevisionLoaded = revision;
 
-        // Tagged after the fact, because the loader made the map rather than us. The tag is what
+        // Tagged only once the load has held: a failed load deletes the map above. The tag is what
         // lets the orphan sweep tell a map whose pipeline is still running from one whose pipeline
         // died holding it.
         TagStagingMap(ctx.StagingMap.Value, jobId, DrydockStagingKind.Retrieve, ctx.ShipId);
@@ -787,28 +826,56 @@ public sealed partial class DrydockSystem
     }
 
     /// <summary>
+    /// The skeleton every sliced revive sweep shares: open the phase against a pre-built target
+    /// list, then run <paramref name="body"/> per item ahead of <see cref="SweepStep"/>.
+    ///
+    /// <para>Takes a raw <see cref="EntityUid"/> rather than re-resolving a component, so a sweep
+    /// whose own existence check is not a plain <see cref="TryComp{T}"/> - gravity's is a bare
+    /// <see cref="Exists"/>, since it only needs the entity to still be there to raise an event -
+    /// can still share this skeleton instead of hand-rolling its own loop.</para>
+    /// </summary>
+    private async Task SweepRaw(EntityUid grid, IDrydockSlice slice, DrydockPhase phase, List<EntityUid> targets, Action<EntityUid> body)
+    {
+        await ReviveBegin(grid, slice, phase, targets.Count);
+
+        for (var i = 0; i < targets.Count; i++)
+        {
+            body(targets[i]);
+            await SweepStep(grid, slice, i);
+        }
+    }
+
+    /// <summary>
+    /// <see cref="SweepRaw"/> for the common case: snapshot every <typeparamref name="T"/> on the
+    /// grid, then run <paramref name="body"/> on every one that still carries it, re-checked fresh
+    /// per item since the sweep spans ticks.
+    /// </summary>
+    private Task SweepOnGrid<T>(EntityUid grid, IDrydockSlice slice, DrydockPhase phase, Action<EntityUid, T> body) where T : IComponent
+    {
+        return SweepRaw(grid, slice, phase, SnapshotOnGrid<T>(grid), uid =>
+        {
+            if (TryComp<T>(uid, out var comp))
+                body(uid, comp);
+        });
+    }
+
+    /// <summary>
     /// A gravity generator pushes gravity onto its grid only on the edge where its charge
     /// activates. On load the charge comes back already full, so the loop sees no edge and never
     /// pushes, while the generator's own active flag is not serialized and reads false. The result
     /// is a live generator and no gravity. Re-raising the activation lets its own handler do the
     /// work, which matters because the component is access-locked to that system.
     /// </summary>
-    private async Task ReviveGravitySliced(EntityUid grid, IDrydockSlice slice)
+    private Task ReviveGravitySliced(EntityUid grid, IDrydockSlice slice)
     {
-        var targets = SnapshotOnGrid<GravityGeneratorComponent>(grid);
-        await ReviveBegin(grid, slice, DrydockPhase.Sweeps, targets.Count);
-
-        for (var i = 0; i < targets.Count; i++)
+        return SweepRaw(grid, slice, DrydockPhase.Sweeps, SnapshotOnGrid<GravityGeneratorComponent>(grid), uid =>
         {
-            var uid = targets[i];
-            if (Exists(uid))
-            {
-                var activated = new ChargedMachineActivatedEvent();
-                RaiseLocalEvent(uid, ref activated);
-            }
+            if (!Exists(uid))
+                return;
 
-            await SweepStep(grid, slice, i);
-        }
+            var activated = new ChargedMachineActivatedEvent();
+            RaiseLocalEvent(uid, ref activated);
+        });
     }
 
     /// <summary>
@@ -820,30 +887,22 @@ public sealed partial class DrydockSystem
     /// in a drydock has no business resuming a course to a point that may no longer mean
     /// anything.</para>
     /// </summary>
-    private async Task ReviveNpcsSliced(EntityUid grid, IDrydockSlice slice)
+    private Task ReviveNpcsSliced(EntityUid grid, IDrydockSlice slice)
     {
-        var targets = SnapshotOnGrid<HTNComponent>(grid);
-        await ReviveBegin(grid, slice, DrydockPhase.Sweeps, targets.Count);
-
-        for (var i = 0; i < targets.Count; i++)
+        return SweepOnGrid<HTNComponent>(grid, slice, DrydockPhase.Sweeps, (uid, htn) =>
         {
-            var uid = targets[i];
-
             // A minded HTN should not have survived the organics gate, but the NPC system refuses to
             // wake one anyway, so match that rather than fight it.
-            if (TryComp<HTNComponent>(uid, out var htn)
-                && (!TryComp<MindContainerComponent>(uid, out var mind) || !mind.HasMind))
-            {
-                htn.Blackboard.SetValue(NPCBlackboard.Owner, uid);
+            if (TryComp<MindContainerComponent>(uid, out var mind) && mind.HasMind)
+                return;
 
-                if (TryComp<ShuttleConsoleComponent>(uid, out var console))
-                    htn.Blackboard.Remove<EntityCoordinates>(console.AutopilotTargetKey);
+            htn.Blackboard.SetValue(NPCBlackboard.Owner, uid);
 
-                _npc.WakeNPC(uid, htn);
-            }
+            if (TryComp<ShuttleConsoleComponent>(uid, out var console))
+                htn.Blackboard.Remove<EntityCoordinates>(console.AutopilotTargetKey);
 
-            await SweepStep(grid, slice, i);
-        }
+            _npc.WakeNPC(uid, htn);
+        });
     }
 
     /// <summary>
@@ -851,19 +910,13 @@ public sealed partial class DrydockSystem
     /// thing that ever built it was map init. Without this every panel on a restored ship opens
     /// empty: nothing to cut, nothing to pulse, on every airlock and every APC aboard.
     /// </summary>
-    private async Task ReviveWiresSliced(EntityUid grid, IDrydockSlice slice)
+    private Task ReviveWiresSliced(EntityUid grid, IDrydockSlice slice)
     {
-        var targets = SnapshotOnGrid<WiresComponent>(grid);
-        await ReviveBegin(grid, slice, DrydockPhase.Sweeps, targets.Count);
-
-        for (var i = 0; i < targets.Count; i++)
+        return SweepOnGrid<WiresComponent>(grid, slice, DrydockPhase.Sweeps, (uid, wires) =>
         {
-            var uid = targets[i];
-            if (TryComp<WiresComponent>(uid, out var wires) && !string.IsNullOrEmpty(wires.LayoutId))
+            if (!string.IsNullOrEmpty(wires.LayoutId))
                 _wires.SetOrCreateWireLayout(uid, wires);
-
-            await SweepStep(grid, slice, i);
-        }
+        });
     }
 
     /// <summary>
@@ -871,19 +924,10 @@ public sealed partial class DrydockSystem
     /// the device, and joining happens on map init. Without this a restored ship's air alarms,
     /// sensors and consoles are all present, all powered, and all deaf.
     /// </summary>
-    private async Task ReviveDeviceNetworkSliced(EntityUid grid, IDrydockSlice slice)
+    private Task ReviveDeviceNetworkSliced(EntityUid grid, IDrydockSlice slice)
     {
-        var targets = SnapshotOnGrid<DeviceNetworkComponent>(grid);
-        await ReviveBegin(grid, slice, DrydockPhase.Sweeps, targets.Count);
-
-        for (var i = 0; i < targets.Count; i++)
-        {
-            var uid = targets[i];
-            if (TryComp<DeviceNetworkComponent>(uid, out var device))
-                _deviceNetwork.ConnectDevice(uid, device);
-
-            await SweepStep(grid, slice, i);
-        }
+        return SweepOnGrid<DeviceNetworkComponent>(grid, slice, DrydockPhase.Sweeps,
+            (uid, device) => _deviceNetwork.ConnectDevice(uid, device));
     }
 
     /// <summary>
@@ -893,22 +937,18 @@ public sealed partial class DrydockSystem
     /// it. Every database aboard is reset, lathes and consoles included, since a lathe with no server
     /// keeps whatever recipes it last synced.
     /// </summary>
-    private async Task ResetResearchSliced(EntityUid grid, IDrydockSlice slice)
+    private Task ResetResearchSliced(EntityUid grid, IDrydockSlice slice)
     {
-        var targets = SnapshotOnGrid<TechnologyDatabaseComponent>(grid);
-        await ReviveBegin(grid, slice, DrydockPhase.Sweeps, targets.Count);
-
-        for (var i = 0; i < targets.Count; i++)
+        // Two independent checks, not one gating the other: a database and a server are separate
+        // components and either can be present without the other.
+        return SweepRaw(grid, slice, DrydockPhase.Sweeps, SnapshotOnGrid<TechnologyDatabaseComponent>(grid), uid =>
         {
-            var uid = targets[i];
             if (TryComp<TechnologyDatabaseComponent>(uid, out var database))
                 _research.ResetDatabase((uid, database));
 
             if (TryComp<ResearchServerComponent>(uid, out var server))
                 _research.ModifyServerPoints(uid, -server.Points, server);
-
-            await SweepStep(grid, slice, i);
-        }
+        });
     }
 
     /// <summary>
@@ -916,7 +956,7 @@ public sealed partial class DrydockSystem
     /// registration that sets it runs on map init by scanning the client's own grid for servers.
     /// This repeats that scan, which is the same shape and therefore the same result.
     /// </summary>
-    private async Task ReviveResearchClientsSliced(EntityUid grid, IDrydockSlice slice)
+    private Task ReviveResearchClientsSliced(EntityUid grid, IDrydockSlice slice)
     {
         var servers = SnapshotOnGrid<ResearchServerComponent>(grid);
 
@@ -926,22 +966,17 @@ public sealed partial class DrydockSystem
             ? new List<EntityUid>()
             : SnapshotOnGrid<ResearchClientComponent>(grid);
 
-        await ReviveBegin(grid, slice, DrydockPhase.Sweeps, clients.Count);
-
-        for (var i = 0; i < clients.Count; i++)
+        return SweepRaw(grid, slice, DrydockPhase.Sweeps, clients, uid =>
         {
-            var uid = clients[i];
-            if (TryComp<ResearchClientComponent>(uid, out var client))
-            {
-                foreach (var serverUid in servers)
-                {
-                    if (TryComp<ResearchServerComponent>(serverUid, out var server))
-                        _research.RegisterClient(uid, serverUid, client, server);
-                }
-            }
+            if (!TryComp<ResearchClientComponent>(uid, out var client))
+                return;
 
-            await SweepStep(grid, slice, i);
-        }
+            foreach (var serverUid in servers)
+            {
+                if (TryComp<ResearchServerComponent>(serverUid, out var server))
+                    _research.RegisterClient(uid, serverUid, client, server);
+            }
+        });
     }
 
     /// <summary>
@@ -951,20 +986,11 @@ public sealed partial class DrydockSystem
     /// deed will not open the helm. Stamps every console with the live uid, as purchase and ship
     /// load both do.
     /// </summary>
-    private async Task ReviveConsoleLocksSliced(EntityUid grid, IDrydockSlice slice)
+    private Task ReviveConsoleLocksSliced(EntityUid grid, IDrydockSlice slice)
     {
         var shuttleId = grid.ToString();
-        var targets = SnapshotOnGrid<ShuttleConsoleLockComponent>(grid);
-        await ReviveBegin(grid, slice, DrydockPhase.Sweeps, targets.Count);
-
-        for (var i = 0; i < targets.Count; i++)
-        {
-            var uid = targets[i];
-            if (TryComp<ShuttleConsoleLockComponent>(uid, out var lockComp))
-                _consoleLock.SetShuttleId(uid, shuttleId, lockComp);
-
-            await SweepStep(grid, slice, i);
-        }
+        return SweepOnGrid<ShuttleConsoleLockComponent>(grid, slice, DrydockPhase.Sweeps,
+            (uid, lockComp) => _consoleLock.SetShuttleId(uid, shuttleId, lockComp));
     }
 
     /// <summary>
@@ -978,19 +1004,13 @@ public sealed partial class DrydockSystem
     /// radiation source and its glow. Re-applying the flag through the generator system re-derives
     /// all of it.
     /// </summary>
-    private async Task ReviveGeneratorsSliced(EntityUid grid, IDrydockSlice slice)
+    private Task ReviveGeneratorsSliced(EntityUid grid, IDrydockSlice slice)
     {
-        var targets = SnapshotOnGrid<FuelGeneratorComponent>(grid);
-        await ReviveBegin(grid, slice, DrydockPhase.Sweeps, targets.Count);
-
-        for (var i = 0; i < targets.Count; i++)
+        return SweepOnGrid<FuelGeneratorComponent>(grid, slice, DrydockPhase.Sweeps, (uid, generator) =>
         {
-            var uid = targets[i];
-            if (TryComp<FuelGeneratorComponent>(uid, out var generator) && generator.On)
+            if (generator.On)
                 _generator.SetFuelGeneratorOn(uid, true, generator);
-
-            await SweepStep(grid, slice, i);
-        }
+        });
     }
 
     /// <summary>
@@ -998,19 +1018,10 @@ public sealed partial class DrydockSystem
     /// its key type cannot be a YAML mapping key. No map init here, so rebuild it by hand, or a
     /// stocked fridge reports itself empty and its contents are unreachable.
     /// </summary>
-    private async Task ReviveSmartFridgesSliced(EntityUid grid, IDrydockSlice slice)
+    private Task ReviveSmartFridgesSliced(EntityUid grid, IDrydockSlice slice)
     {
-        var targets = SnapshotOnGrid<SmartFridgeComponent>(grid);
-        await ReviveBegin(grid, slice, DrydockPhase.Sweeps, targets.Count);
-
-        for (var i = 0; i < targets.Count; i++)
-        {
-            var uid = targets[i];
-            if (TryComp<SmartFridgeComponent>(uid, out var fridge))
-                _smartFridge.RebuildEntries((uid, fridge));
-
-            await SweepStep(grid, slice, i);
-        }
+        return SweepOnGrid<SmartFridgeComponent>(grid, slice, DrydockPhase.Sweeps,
+            (uid, fridge) => _smartFridge.RebuildEntries((uid, fridge)));
     }
 
     /// <summary>
@@ -1018,19 +1029,10 @@ public sealed partial class DrydockSystem
     /// thing that re-resolves it from the device-link wire is the analyzer's map init. Without this
     /// the pair comes back linked on the wire and dead on the console.
     /// </summary>
-    private async Task ReviveArtifactAnalyzersSliced(EntityUid grid, IDrydockSlice slice)
+    private Task ReviveArtifactAnalyzersSliced(EntityUid grid, IDrydockSlice slice)
     {
-        var targets = SnapshotOnGrid<ArtifactAnalyzerComponent>(grid);
-        await ReviveBegin(grid, slice, DrydockPhase.Sweeps, targets.Count);
-
-        for (var i = 0; i < targets.Count; i++)
-        {
-            var uid = targets[i];
-            if (TryComp<ArtifactAnalyzerComponent>(uid, out var analyzer))
-                _artifactAnalyzer.RelinkConsole((uid, analyzer));
-
-            await SweepStep(grid, slice, i);
-        }
+        return SweepOnGrid<ArtifactAnalyzerComponent>(grid, slice, DrydockPhase.Sweeps,
+            (uid, analyzer) => _artifactAnalyzer.RelinkConsole((uid, analyzer)));
     }
 
     /// <summary>
@@ -1040,25 +1042,19 @@ public sealed partial class DrydockSystem
     /// persisted as a container child and is picked back up, and an empty hand was emptied on
     /// purpose.
     /// </summary>
-    private async Task ReviveFilledHandsSliced(EntityUid grid, IDrydockSlice slice)
+    private Task ReviveFilledHandsSliced(EntityUid grid, IDrydockSlice slice)
     {
-        var targets = SnapshotOnGrid<HandsFillComponent>(grid);
-        await ReviveBegin(grid, slice, DrydockPhase.Sweeps, targets.Count);
-
-        for (var i = 0; i < targets.Count; i++)
+        return SweepOnGrid<HandsFillComponent>(grid, slice, DrydockPhase.Sweeps, (uid, fill) =>
         {
-            var uid = targets[i];
-            if (TryComp<HandsFillComponent>(uid, out var fill) && TryComp<HandsComponent>(uid, out var hands))
-            {
-                foreach (var name in fill.Hands.Keys)
-                {
-                    if (!_hands.TryGetHand(uid, name, out _, hands))
-                        _hands.AddHand(uid, name, HandLocation.Middle, hands);
-                }
-            }
+            if (!TryComp<HandsComponent>(uid, out var hands))
+                return;
 
-            await SweepStep(grid, slice, i);
-        }
+            foreach (var name in fill.Hands.Keys)
+            {
+                if (!_hands.TryGetHand(uid, name, out _, hands))
+                    _hands.AddHand(uid, name, HandLocation.Middle, hands);
+            }
+        });
     }
 
     /// <summary>
@@ -1068,30 +1064,23 @@ public sealed partial class DrydockSystem
     /// slot knows about and nowhere to put a new one. The slot definitions persist on the dispenser;
     /// re-registering them finds the jugs already in their containers.
     /// </summary>
-    private async Task ReviveDispenserSlotsSliced(EntityUid grid, IDrydockSlice slice)
+    private Task ReviveDispenserSlotsSliced(EntityUid grid, IDrydockSlice slice)
     {
-        var targets = SnapshotOnGrid<ReagentDispenserComponent>(grid);
-        await ReviveBegin(grid, slice, DrydockPhase.Sweeps, targets.Count);
-
-        for (var i = 0; i < targets.Count; i++)
+        return SweepOnGrid<ReagentDispenserComponent>(grid, slice, DrydockPhase.Sweeps, (uid, dispenser) =>
         {
-            var uid = targets[i];
-            if (TryComp<ReagentDispenserComponent>(uid, out var dispenser)
-                && TryComp<ItemSlotsComponent>(uid, out var itemSlots))
+            if (!TryComp<ItemSlotsComponent>(uid, out var itemSlots))
+                return;
+
+            if (!_itemSlots.TryGetSlot(uid, SharedReagentDispenser.OutputSlotName, out _, itemSlots))
+                _itemSlots.AddItemSlot(uid, SharedReagentDispenser.OutputSlotName, dispenser.BeakerSlot, itemSlots);
+
+            var count = Math.Min(dispenser.StorageSlotIds.Count, dispenser.StorageSlots.Count);
+            for (var slot = 0; slot < count; slot++)
             {
-                if (!_itemSlots.TryGetSlot(uid, SharedReagentDispenser.OutputSlotName, out _, itemSlots))
-                    _itemSlots.AddItemSlot(uid, SharedReagentDispenser.OutputSlotName, dispenser.BeakerSlot, itemSlots);
-
-                var count = Math.Min(dispenser.StorageSlotIds.Count, dispenser.StorageSlots.Count);
-                for (var slot = 0; slot < count; slot++)
-                {
-                    if (!_itemSlots.TryGetSlot(uid, dispenser.StorageSlotIds[slot], out _, itemSlots))
-                        _itemSlots.AddItemSlot(uid, dispenser.StorageSlotIds[slot], dispenser.StorageSlots[slot], itemSlots);
-                }
+                if (!_itemSlots.TryGetSlot(uid, dispenser.StorageSlotIds[slot], out _, itemSlots))
+                    _itemSlots.AddItemSlot(uid, dispenser.StorageSlotIds[slot], dispenser.StorageSlots[slot], itemSlots);
             }
-
-            await SweepStep(grid, slice, i);
-        }
+        });
     }
 
     /// <summary>
@@ -1099,19 +1088,10 @@ public sealed partial class DrydockSystem
     /// slot to its door on map init. A retrieved closed cabinet therefore handed out its contents
     /// through the closed door ("cabinets that require them to be opened no longer do").
     /// </summary>
-    private async Task ReviveCabinetLocksSliced(EntityUid grid, IDrydockSlice slice)
+    private Task ReviveCabinetLocksSliced(EntityUid grid, IDrydockSlice slice)
     {
-        var targets = SnapshotOnGrid<ItemCabinetComponent>(grid);
-        await ReviveBegin(grid, slice, DrydockPhase.Sweeps, targets.Count);
-
-        for (var i = 0; i < targets.Count; i++)
-        {
-            var uid = targets[i];
-            if (TryComp<ItemCabinetComponent>(uid, out var cabinet) && TryComp<ItemSlotsComponent>(uid, out var itemSlots))
-                _itemSlots.SetLock(uid, cabinet.Slot, !_openable.IsOpen(uid), itemSlots);
-
-            await SweepStep(grid, slice, i);
-        }
+        return SweepOnGrid<ItemCabinetComponent>(grid, slice, DrydockPhase.Sweeps,
+            (uid, cabinet) => _itemCabinet.SetSlotLock((uid, cabinet), !_openable.IsOpen(uid)));
     }
 
     /// <summary>
@@ -1129,58 +1109,21 @@ public sealed partial class DrydockSystem
     /// looked like it was running. The marker behind that animation does not ride the save, so this
     /// is the step that settles the two against each other.</para>
     /// </summary>
-    private async Task ScrubStaleLatheProductionSliced(EntityUid grid, IDrydockSlice slice)
+    private Task ScrubStaleLatheProductionSliced(EntityUid grid, IDrydockSlice slice)
     {
-        var targets = SnapshotOnGrid<LatheComponent>(grid);
-        await ReviveBegin(grid, slice, DrydockPhase.Sweeps, targets.Count);
-
-        for (var i = 0; i < targets.Count; i++)
+        return SweepOnGrid<LatheComponent>(grid, slice, DrydockPhase.Sweeps, (uid, lathe) =>
         {
-            var uid = targets[i];
-            if (TryComp<LatheComponent>(uid, out var lathe))
+            var producing = HasComp<LatheProducingComponent>(uid);
+            if (producing && lathe.CurrentRecipe == null)
             {
-                var producing = HasComp<LatheProducingComponent>(uid);
-                if (producing && lathe.CurrentRecipe == null)
-                {
-                    RemCompDeferred<LatheProducingComponent>(uid);
-                    producing = false;
-                }
-
-                _appearance.SetData(uid, LatheVisuals.IsInserting, false);
-                _appearance.SetData(uid, LatheVisuals.IsRunning, producing);
+                RemCompDeferred<LatheProducingComponent>(uid);
+                producing = false;
             }
 
-            await SweepStep(grid, slice, i);
-        }
+            _appearance.SetData(uid, LatheVisuals.IsInserting, false);
+            _appearance.SetData(uid, LatheVisuals.IsRunning, producing);
+        });
     }
-
-    // Triad: ReviveUseDelays retired in favour of the generic offset path, which is strictly more
-    // faithful rather than merely cheaper.
-    //
-    // The problem it was written for is real: a use delay's end is an absolute game time and the
-    // clock starts over every round, so a half-second on a bag written in one round would read as
-    // hours in the next and nothing aboard would open on a press. What solves it is not this method.
-    // UseDelayInfo's times carry the engine's time-offset serializer, so a loaded delay arrives
-    // already re-based onto this round's clock with its REMAINING time intact, before anything here
-    // could look at it. Re-arming on top of that throws the remaining time away and hands every item
-    // aboard a fresh full-length delay. Preserving what is left is the faithful answer and re-arming
-    // is not, so the correct step is no step.
-    //
-    // Kept as a comment because the reasoning is the whole value. The old doc justified re-arming as
-    // "the same pass the ship-load path runs", and that path re-arms because it has no offset it can
-    // trust, not because re-arming is right.
-    //
-    // private void ReviveUseDelays(EntityUid grid)
-    // {
-    //     var query = AllEntityQuery<UseDelayComponent, TransformComponent>();
-    //     while (query.MoveNext(out var uid, out var delay, out var xform))
-    //     {
-    //         if (xform.GridUid != grid)
-    //             continue;
-    //
-    //         _useDelay.ResetAllDelays((uid, delay));
-    //     }
-    // }
 
     /// <summary>
     /// Applies each damage sidecar back onto its holder and removes it.
@@ -1196,24 +1139,17 @@ public sealed partial class DrydockSystem
     /// the very component it selects on, so consuming a live query would be reading a dictionary it
     /// is mutating as it goes.</para>
     /// </summary>
-    private async Task RehydrateDamageSliced(EntityUid grid, IDrydockSlice slice)
+    private Task RehydrateDamageSliced(EntityUid grid, IDrydockSlice slice)
     {
-        var targets = SnapshotOnGrid<DrydockDamageSidecarComponent>(grid);
-        await ReviveBegin(grid, slice, DrydockPhase.Damage, targets.Count);
-
-        for (var i = 0; i < targets.Count; i++)
+        return SweepOnGrid<DrydockDamageSidecarComponent>(grid, slice, DrydockPhase.Damage, (uid, sidecar) =>
         {
-            var uid = targets[i];
-            if (TryComp<DrydockDamageSidecarComponent>(uid, out var sidecar)
-                && TryComp<DamageableComponent>(uid, out var damageable))
-            {
-                var damage = new DamageSpecifier { DamageDict = new Dictionary<string, FixedPoint2>(sidecar.DamageDict) };
-                _damageable.SetDamage(uid, damageable, damage);
-                RemComp<DrydockDamageSidecarComponent>(uid);
-            }
+            if (!TryComp<DamageableComponent>(uid, out var damageable))
+                return;
 
-            await SweepStep(grid, slice, i);
-        }
+            var damage = new DamageSpecifier { DamageDict = new Dictionary<string, FixedPoint2>(sidecar.DamageDict) };
+            _damageable.SetDamage(uid, damageable, damage);
+            RemComp<DrydockDamageSidecarComponent>(uid);
+        });
     }
 
     /// <summary>
