@@ -1143,10 +1143,9 @@ public sealed partial class DrydockSystem : EntitySystem
         // name, or the last net written wins and the restore leaks it into the other.
         var nets = new Dictionary<object, List<(EntityUid Owner, string Name, PipeNode Pipe)>>();
 
-        var query = AllEntityQuery<NodeContainerComponent, TransformComponent>();
-        while (query.MoveNext(out var uid, out var nodeContainer, out var xform))
+        foreach (var uid in _fidelity.GridTreeList(ctx.GridUid))
         {
-            if (xform.GridUid != ctx.GridUid)
+            if (!TryComp<NodeContainerComponent>(uid, out var nodeContainer))
                 continue;
 
             foreach (var (name, node) in nodeContainer.Nodes)
@@ -1208,10 +1207,9 @@ public sealed partial class DrydockSystem : EntitySystem
     {
         var damaged = new List<(EntityUid Uid, Dictionary<string, FixedPoint2> Damage)>();
 
-        var query = AllEntityQuery<DamageableComponent, TransformComponent>();
-        while (query.MoveNext(out var uid, out var damageable, out var xform))
+        foreach (var uid in _fidelity.GridTreeList(ctx.GridUid))
         {
-            if (xform.GridUid != ctx.GridUid || damageable.TotalDamage <= FixedPoint2.Zero)
+            if (!TryComp<DamageableComponent>(uid, out var damageable) || damageable.TotalDamage <= FixedPoint2.Zero)
                 continue;
 
             damaged.Add((uid, new Dictionary<string, FixedPoint2>(damageable.Damage.DamageDict)));
@@ -1294,26 +1292,19 @@ public sealed partial class DrydockSystem : EntitySystem
     {
         var doomed = new List<EntityUid>();
 
-        var permits = AllEntityQuery<ContrabandPermitItemComponent, TransformComponent>();
-        while (permits.MoveNext(out var uid, out var permit, out var xform))
+        // One walk for both rules. A permitted item is judged by its permit alone, whichever way
+        // that goes; anything else that is marked goes.
+        foreach (var uid in _fidelity.GridTreeList(ctx.GridUid))
         {
-            if (xform.GridUid != ctx.GridUid
-                || _contrabandPermit.PermitTravelsWith((uid, permit), ctx.PermitHolderMind, ctx.OwnerUserId))
+            if (TryComp<ContrabandPermitItemComponent>(uid, out var permit))
             {
-                continue;
+                if (!_contrabandPermit.PermitTravelsWith((uid, permit), ctx.PermitHolderMind, ctx.OwnerUserId))
+                    doomed.Add(uid);
             }
-
-            doomed.Add(uid);
-        }
-
-        var query = AllEntityQuery<SavingContrabandComponent, TransformComponent>();
-        while (query.MoveNext(out var uid, out _, out var xform))
-        {
-            // A permitted item was judged by its permit above, whichever way that went.
-            if (xform.GridUid != ctx.GridUid || HasComp<ContrabandPermitItemComponent>(uid))
-                continue;
-
-            doomed.Add(uid);
+            else if (HasComp<SavingContrabandComponent>(uid))
+            {
+                doomed.Add(uid);
+            }
         }
 
         await slice.Begin(DrydockPhase.Purge, doomed.Count);
@@ -1342,10 +1333,9 @@ public sealed partial class DrydockSystem : EntitySystem
     private async Task DetachStoreMapsSliced(DrydockStoreContext ctx, IDrydockSlice slice)
     {
         var found = new List<(EntityUid Store, EntityUid? Map)>();
-        var query = AllEntityQuery<StoreComponent, TransformComponent>();
-        while (query.MoveNext(out var uid, out var store, out var xform))
+        foreach (var uid in _fidelity.GridTreeList(ctx.GridUid))
         {
-            if (xform.GridUid != ctx.GridUid || store.StartingMap == null)
+            if (!TryComp<StoreComponent>(uid, out var store) || store.StartingMap == null)
                 continue;
 
             found.Add((uid, store.StartingMap));

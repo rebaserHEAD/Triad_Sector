@@ -556,8 +556,15 @@ public sealed partial class DrydockFidelitySystem : EntitySystem
     /// now sliced, and a lazy walk reads the next entity's transform after the consumer has already
     /// parked on the previous one, which is harmless inside one tick and is not harmless across
     /// fifty.
+    ///
+    /// <para>The same set as an <c>AllEntityQuery</c> filtered on <c>GridUid</c>, because the engine
+    /// sets <c>GridUid</c> from the parent chain and from nothing else, at the cost of the ship
+    /// rather than the cost of the sector. The store's sidecar and purge scans and the retrieve's
+    /// sweeps walk this instead of querying the world: a world query is the one un-yieldable cost
+    /// that grows with the round rather than with the hull. It has no paused check either, which the
+    /// frozen ship needs.</para>
     /// </summary>
-    private List<EntityUid> GridTreeList(EntityUid grid)
+    public List<EntityUid> GridTreeList(EntityUid grid)
     {
         var result = new List<EntityUid>();
         if (TerminatingOrDeleted(grid))

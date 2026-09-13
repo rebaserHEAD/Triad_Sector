@@ -66,10 +66,10 @@ namespace Content.Server._Triad.Drydock;
 /// unpiloted on a private map, simulating itself against half-restored state. Frozen, it holds
 /// perfectly still until the moment it is handed over.</para>
 ///
-/// <para>Every sweep in the epilogue reads <c>AllEntityQuery</c>, which unlike
-/// <c>EntityQueryEnumerator</c> has no paused check, so all of it works verbatim on a frozen ship.
-/// That single engine fact is what the whole design rests on; do not "fix" a sweep to the
-/// paused-skipping enumerator.</para>
+/// <para>Every sweep in the epilogue finds its targets by walking the ship's transform tree
+/// (<see cref="SnapshotOnGrid{T}"/>), which has no paused check, so all of it works verbatim on a
+/// frozen ship. That is what the whole design rests on; do not "fix" a sweep to
+/// <c>EntityQueryEnumerator</c>, which skips paused entities and would find nothing.</para>
 /// </summary>
 public sealed partial class DrydockSystem
 {
@@ -750,23 +750,20 @@ public sealed partial class DrydockSystem
     /// Every entity on <paramref name="grid"/> carrying <typeparamref name="T"/>, materialised into
     /// a list the sweeps below can walk across ticks.
     ///
-    /// <para>A query enumerator wraps a live component dictionary and cannot be parked, so every
-    /// sweep snapshots first and re-resolves each uid as it consumes it. The snapshot pass itself
-    /// walks every instance of the component on the server and cannot yield part-way, which is the
-    /// sweeps' own un-yieldable floor; it is the same walk the epilogue has always done, once per
-    /// sweep.</para>
+    /// <para>Snapshotted first and re-resolved per uid as the sweep consumes it, because the sweep
+    /// spans ticks. The snapshot itself cannot yield part-way and is the sweeps' own un-yieldable
+    /// floor, so it walks the ship's transform tree rather than every instance of the component on
+    /// the server: the floor is then the size of the hull, not the size of the sector.</para>
     ///
-    /// <para>Deliberately <c>AllEntityQuery</c> rather than the paused-skipping enumerator. The ship
-    /// is frozen while all of this runs, and the paused-skipping one would return nothing at
-    /// all.</para>
+    /// <para>The walk has no paused check, which is what the frozen ship needs; the paused-skipping
+    /// query enumerator would return nothing at all here.</para>
     /// </summary>
     private List<EntityUid> SnapshotOnGrid<T>(EntityUid grid) where T : IComponent
     {
         var found = new List<EntityUid>();
-        var query = AllEntityQuery<T, TransformComponent>();
-        while (query.MoveNext(out var uid, out _, out var xform))
+        foreach (var uid in _fidelity.GridTreeList(grid))
         {
-            if (xform.GridUid == grid)
+            if (HasComp<T>(uid))
                 found.Add(uid);
         }
 
