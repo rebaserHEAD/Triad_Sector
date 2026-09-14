@@ -1005,6 +1005,58 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
         }
 
         /// <summary>
+        /// Ghosts and admin ghosts do not use shipyard consoles (user, 2026-09-13): the console refuses
+        /// to open for either, and the server drops any message an admin ghost sends it except closing
+        /// the window. A living operator opens it as before.
+        /// </summary>
+        [Test]
+        public async Task GhostsCannotUseTheShipyardConsole()
+        {
+            await using var pair = await PoolManager.GetServerClient(new PoolSettings { Connected = true });
+            using var _ = ExpectDockJointLog(pair);
+            var server = pair.Server;
+            var entMan = server.EntMan;
+
+            var playerMan = server.ResolveDependency<IPlayerManager>();
+            var session = playerMan.Sessions.First();
+            var (_, _, _, console, _, _, operatorEnt) = await BuildConsoleAndShip(pair, session.UserId);
+
+            await server.WaitAssertion(() =>
+            {
+                var at = entMan.GetComponent<TransformComponent>(console).Coordinates;
+                var aghost = entMan.SpawnEntity("AdminObserver", at);
+                var ghost = entMan.SpawnEntity("MobObserver", at);
+
+                bool OpenRefused(EntityUid user)
+                {
+                    var attempt = new Content.Shared.UserInterface.ActivatableUIOpenAttemptEvent(user);
+                    entMan.EventBus.RaiseLocalEvent(console, attempt);
+                    return attempt.Cancelled;
+                }
+
+                bool MessageRefused(EntityUid actor, BoundUserInterfaceMessage message)
+                {
+                    var attempt = new BoundUserInterfaceMessageAttempt(actor, console, ShipyardConsoleUiKey.Shipyard, message);
+                    entMan.EventBus.RaiseEvent(EventSource.Local, attempt);
+                    return attempt.Cancelled;
+                }
+
+                Assert.Multiple(() =>
+                {
+                    Assert.That(OpenRefused(operatorEnt), Is.False, "Control: a living operator opens the console.");
+                    Assert.That(OpenRefused(aghost), Is.True, "An admin ghost cannot open it.");
+                    Assert.That(OpenRefused(ghost), Is.True, "An ordinary ghost cannot open it.");
+                    Assert.That(MessageRefused(aghost, new Content.Shared._NF.Shipyard.Events.ShipyardConsoleStoreMessage(null)), Is.True,
+                        "A drydock press from an admin ghost is dropped by the server.");
+                    Assert.That(MessageRefused(aghost, new CloseBoundInterfaceMessage()), Is.False,
+                        "Control: closing the window is let through.");
+                });
+            });
+
+            await pair.CleanReturnAsync();
+        }
+
+        /// <summary>
         /// The footer's sale button follows the deed on the card, and the server refuses the one sale
         /// the button never offers: a hull the drydock can hold. Each mode is set by flipping one
         /// signal on the same fixture and cleared again, so the next one is read against a clean card.

@@ -25,6 +25,7 @@ using Robust.Shared.Utility;
 using Robust.Shared.ContentPack;
 using Robust.Shared.Physics;
 using Robust.Shared.Map.Components;
+using Content.Shared.UserInterface; // Triad: ghosts don't use the console
 
 namespace Content.Server._NF.Shipyard.Systems;
 
@@ -87,6 +88,8 @@ public sealed partial class ShipyardSystem : SharedShipyardSystem
 
         SubscribeLocalEvent<ShipyardConsoleComponent, ComponentStartup>(OnShipyardStartup);
         SubscribeLocalEvent<ShipyardConsoleComponent, BoundUIOpenedEvent>(OnConsoleUIOpened);
+        SubscribeLocalEvent<ShipyardConsoleComponent, ActivatableUIOpenAttemptEvent>(OnConsoleOpenAttempt); // Triad: ghosts don't use the console
+        SubscribeLocalEvent<BoundUserInterfaceMessageAttempt>(OnConsoleMessageAttempt); // Triad: ghosts don't use the console
         SubscribeLocalEvent<ShipyardConsoleComponent, ShipyardConsoleSellMessage>(OnSellMessage);
         SubscribeLocalEvent<ShipyardConsoleComponent, ShipyardConsolePurchaseMessage>(OnPurchaseMessage);
         // SubscribeLocalEvent<ShipyardConsoleComponent, ShipyardConsoleUnassignDeedMessage>(OnUnassignDeedMessage); // Triad: removed with the Unassign button

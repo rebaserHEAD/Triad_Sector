@@ -47,6 +47,8 @@ shipyard-console-confirm-unassign = Are you sure?
 shipyard-console-return-button = Return Vessel
 shipyard-console-return-confirm = Burn voucher?
 shipyard-console-return-tooltip = Hands the vessel back for nothing. The voucher is used up.
+# Triad: a ghost or admin ghost pressing a shipyard console
+shipyard-console-ghost-refused = Ghosts can't use shipyard consoles. Admins act on ships through drydockadmin.
 # shipyard-console-unassign-cooldown = Wait {$minutes} minute(s) before unassigning another deed.
 
 # Keep these in enum order for ease of validation.
