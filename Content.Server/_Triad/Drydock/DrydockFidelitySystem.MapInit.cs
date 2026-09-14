@@ -93,10 +93,23 @@ public sealed partial class DrydockFidelitySystem
 
     /// <summary>
     /// Persisted fields a map init is allowed to rewrite from the live world, as
-    /// <c>Component.Field</c>. Empty until the report names one whose stored value is worse than
-    /// its live one.
+    /// <c>Component.Field</c>: ones whose live value is what some registry now holds, so putting the
+    /// stored one back would leave the component disagreeing with the world about itself.
+    ///
+    /// <para>The device network's address and frequencies. Map init connects the device, and
+    /// <c>DeviceNet.Add</c> files it under its address, generating one when the stored address is
+    /// empty or taken; the frequencies it listens and sends on are resolved from their ids in the
+    /// same handler. A bought ship carries all three from its purchase, so nothing changes. A legacy
+    /// import carries none, and reverting them left every device registered under an address its
+    /// component no longer named: device-link signals were sent to an empty address and went
+    /// nowhere.</para>
     /// </summary>
-    private static readonly HashSet<string> MapInitKeepLive = new(StringComparer.Ordinal);
+    private static readonly HashSet<string> MapInitKeepLive = new(StringComparer.Ordinal)
+    {
+        "DeviceNetworkComponent.Address",
+        "DeviceNetworkComponent.ReceiveFrequency",
+        "DeviceNetworkComponent.TransmitFrequency",
+    };
 
     /// <summary>The last transaction's report, for tests. Overwritten per retrieve.</summary>
     public DrydockMapInitReport? LastMapInitReport;

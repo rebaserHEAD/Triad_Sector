@@ -4,6 +4,8 @@ using System.Collections.Generic;
 using System.Threading.Tasks;
 using Content.IntegrationTests.Pair;
 using Content.Server._Triad.Drydock;
+using Content.Server.DeviceNetwork.Systems;
+using Content.Shared.DeviceNetwork.Components;
 using Content.Shared._Triad.CCVar;
 using Content.Shared.Access;
 using Content.Shared.Access.Components;
@@ -122,6 +124,71 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                 new List<StationRecordKey>(),
                 airlock,
                 entMan.GetComponent<AccessReaderComponent>(airlock));
+        }
+
+        /// <summary>
+        /// A legacy document carries no device-network state, so the transaction's map init connects
+        /// every device fresh: the network files it under a generated address and the frequencies are
+        /// resolved from their ids. Putting the stored empty values back left the component naming an
+        /// address the network never held, and every device-link signal sent to it was lost. A bought
+        /// ship carries all three from its purchase and is the control the play test gave.
+        /// </summary>
+        [Test]
+        public async Task ADeviceStoredWithoutAnAddressComesBackReachable()
+        {
+            await using var pair = await PoolManager.GetServerClient();
+            var server = pair.Server;
+            var entMan = server.EntMan;
+            var fidelity = server.System<DrydockFidelitySystem>();
+            var network = server.System<DeviceNetworkSystem>();
+
+            var map = await pair.CreateTestMap();
+            await pair.MakeCleanupImmune(map.Grid.Owner);
+            var grid = map.Grid.Owner;
+
+            EntityUid airlock = default;
+            await server.WaitPost(() => airlock = entMan.SpawnEntity(AirlockProto, map.GridCoords));
+            await pair.RunTicksSync(5);
+
+            await server.WaitAssertion(() =>
+            {
+                var device = entMan.GetComponent<DeviceNetworkComponent>(airlock);
+                Assert.That(device.Address, Is.Not.Empty, "The control: a first map init gives the airlock an address.");
+                Assert.That(network.IsDeviceConnected(airlock, device), Is.True);
+            });
+
+            // The legacy document: no address, no resolved frequencies, not on any network. Written
+            // by reflection because the component's access rules reserve these fields for the network
+            // system, and no call of its produces the state a document that never held them loads as.
+            await server.WaitPost(() =>
+            {
+                var device = entMan.GetComponent<DeviceNetworkComponent>(airlock);
+                network.DisconnectDevice(airlock, device, preventAutoConnect: false);
+                typeof(DeviceNetworkComponent).GetField(nameof(DeviceNetworkComponent.Address))!.SetValue(device, string.Empty);
+                typeof(DeviceNetworkComponent).GetField(nameof(DeviceNetworkComponent.ReceiveFrequency))!.SetValue(device, null);
+                typeof(DeviceNetworkComponent).GetField(nameof(DeviceNetworkComponent.TransmitFrequency))!.SetValue(device, null);
+                Assert.That(network.IsDeviceConnected(airlock, device), Is.False, "The control: the device is off the network.");
+            });
+
+            DrydockMapInitReport report = default!;
+            await server.WaitPost(() =>
+                report = fidelity.RefireMapInitSliced(grid, new DrydockSyncSlice(DrydockPhases.Retrieve), DrydockMapInitMode.Revert)
+                    .GetAwaiter().GetResult());
+
+            await server.WaitAssertion(() =>
+            {
+                var device = entMan.GetComponent<DeviceNetworkComponent>(airlock);
+                Assert.That(report.Changed.ContainsKey("DeviceNetworkComponent.Address"), Is.True,
+                    "The control: the transaction saw map init write the address.");
+                Assert.That(device.Address, Is.Not.Empty, "The address map init gave the device was kept.");
+                Assert.That(network.IsAddressPresent(device.DeviceNetId, device.Address), Is.True,
+                    "The network holds the device under the address its component names.");
+                Assert.That(network.IsDeviceConnected(airlock, device), Is.True);
+                Assert.That(device.ReceiveFrequency, Is.Not.Null, "The resolved receive frequency was kept.");
+            });
+
+            await server.WaitPost(() => entMan.DeleteEntity(airlock));
+            await pair.CleanReturnAsync();
         }
     }
 }
