@@ -107,8 +107,9 @@
         <GridContainer Columns="4" HorizontalExpand="True" Margin="0 8 0 2">
             <Button Name="TargetIdButton" Access="Public"
                     StyleClasses="ButtonSquare"/>
+            <!-- Triad: the label comes from the state (Sell or Return Vessel); was Text="Sell" -->
             <controls:ConfirmButton Name="SellShipButton"
-                Text="Sell"
+                Text="{Loc 'shipyard-console-sell-button'}"
                 ConfirmationText="{Loc 'shipyard-console-confirm-unassign'}"
                 StyleClasses="ButtonSquare"
                 Disabled="True" />

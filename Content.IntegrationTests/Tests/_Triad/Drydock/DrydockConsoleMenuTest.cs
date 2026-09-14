@@ -70,6 +70,51 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             await pair.CleanReturnAsync();
         }
 
+        /// <summary>
+        /// The footer's sale button follows the deed: gone for a hull the drydock holds, Return for a
+        /// voucher hull, Sell otherwise, and greyed with nothing on the card.
+        /// </summary>
+        [Test]
+        public async Task TheFooterSaleButtonFollowsTheDeed()
+        {
+            await using var pair = await PoolManager.GetServerClient(new PoolSettings { Connected = true });
+
+            await pair.Client.WaitPost(() =>
+            {
+                var menu = new ShipyardConsoleMenu { LocalUserId = Viewer };
+                var button = (Button)Named(menu, "SellShipButton");
+
+                menu.UpdateState(State(berths: ThreeBerths(), deedShip: null, deedSale: ShipyardDeedSale.None));
+                Assert.Multiple(() =>
+                {
+                    Assert.That(button.Visible, Is.True);
+                    Assert.That(button.Disabled, Is.True, "No deed, nothing to sell.");
+                    Assert.That(button.Text, Is.EqualTo(Loc.GetString("shipyard-console-sell-button")));
+                });
+
+                menu.UpdateState(State(berths: ThreeBerths(), deedShip: Behir(minutesOut: 5), deedTitle: "Behir", deedSale: ShipyardDeedSale.StoreFirst));
+                Assert.That(button.Visible, Is.False, "A hull the drydock holds is sold from the tab, not the footer.");
+
+                menu.UpdateState(State(berths: ThreeBerths(), deedShip: null, deedTitle: "Grunder", deedSale: ShipyardDeedSale.Return));
+                Assert.Multiple(() =>
+                {
+                    Assert.That(button.Visible, Is.True);
+                    Assert.That(button.Disabled, Is.False);
+                    Assert.That(button.Text, Is.EqualTo(Loc.GetString("shipyard-console-return-button")), "A voucher hull is returned, not sold.");
+                });
+
+                menu.UpdateState(State(berths: ThreeBerths(), deedShip: null, deedTitle: "Grunder", deedSale: ShipyardDeedSale.Sell));
+                Assert.Multiple(() =>
+                {
+                    Assert.That(button.Visible, Is.True);
+                    Assert.That(button.Disabled, Is.False);
+                    Assert.That(button.Text, Is.EqualTo(Loc.GetString("shipyard-console-sell-button")), "The label goes back after a Return.");
+                });
+            });
+
+            await pair.CleanReturnAsync();
+        }
+
         /// <summary>Retrieve is the row's one button, and only on a stored ship while nothing is out.</summary>
         [Test]
         public async Task RetrieveSitsOnlyWhereItWouldWork()
@@ -470,7 +515,8 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             string? deedTitle = null,
             Guid? deedOwner = null,
             List<DrydockTransferOfferInfo>? offers = null,
-            List<DrydockImpoundedShipInfo>? impounded = null)
+            List<DrydockImpoundedShipInfo>? impounded = null,
+            ShipyardDeedSale deedSale = ShipyardDeedSale.None)
         {
             var ships = berths.Where(b => b.OccupantShipId != null)
                 .Select(b => new StoredShipInfo(b.OccupantShipId!.Value, b.OccupantName!, b.OccupantSizeClass, b.OccupantState!, b.BerthId))
@@ -502,6 +548,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                     transferOfferMinutes: 30)
                 {
                     ImpoundedShips = impounded ?? new List<DrydockImpoundedShipInfo>(),
+                    DeedSale = deedSale,
                     // The deed ship is out in the world, which is what the tab counts ships out by.
                     ShipsOut = deedShip != null
                         ? new List<DrydockReissueShipInfo> { new(NetEntity.Invalid, deedShip.Name, deedShip.SizeClass) }

@@ -121,6 +121,7 @@ drydock-error-accept-conflict = {$verb} failed: your free berth was taken at the
 ## Sale and rename
 
 drydock-error-sell-no-appraisal = {$verb} failed: that ship has no appraisal on file.
+drydock-error-sell-store-first = {$verb} failed: store the ship, then sell it from the drydock tab.
 drydock-error-rename-invalid = {$verb} failed: use 1 to {$max} letters, digits, spaces or dashes.
 
 ## Impound lot

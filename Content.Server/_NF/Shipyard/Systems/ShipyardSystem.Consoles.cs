@@ -445,6 +445,9 @@ public sealed partial class ShipyardSystem : SharedShipyardSystem
         if (RefuseDeedNotOwned(uid, component, player, deed, "sell")) // Triad: a card is not proof of ownership, the account is
             return; // Triad
 
+        if (RefuseFooterSale(uid, component, player, targetId)) // Triad: a hull the drydock holds sells from the drydock tab
+            return; // Triad
+
         var shuttleUid = deed.ShuttleUid;
 
         bool voucherUsed = deed.PurchasedWithVoucher;
@@ -562,9 +565,12 @@ public sealed partial class ShipyardSystem : SharedShipyardSystem
             _adminLogger.Add(LogType.ShipYardUsage, LogImpact.Low, $"{ToPrettyString(player):actor} used {ToPrettyString(targetId)} to sell {shuttleName} for {bill} credits via {ToPrettyString(uid)}");
 
         // No uses on the voucher left, destroy it.
-        if (voucher != null
-            && voucher!.RedemptionsLeft <= 0
-            && voucher!.DestroyOnEmpty)
+        // if (voucher != null
+        //     && voucher!.RedemptionsLeft <= 0
+        //     && voucher!.DestroyOnEmpty)
+        // Triad: returning a voucher hull always burns the voucher, whatever uses or destroyOnEmpty it
+        // carries, so a returned hull can never be traded for another one on the same card.
+        if (voucher != null && voucherUsed)
         {
             QueueDel(targetId);
             refreshId = null;

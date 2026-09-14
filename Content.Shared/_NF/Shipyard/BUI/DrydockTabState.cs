@@ -91,6 +91,13 @@ public sealed record DrydockTabState
     /// </summary>
     public bool CanReissueToCard;
 
+    /// <summary>
+    /// What the footer's sale button does with the deed on the inserted card. Filled whether or not
+    /// the drydock is on, since the footer is drawn either way. The server refuses a sale the button
+    /// would not have offered.
+    /// </summary>
+    public ShipyardDeedSale DeedSale;
+
     public DrydockTabState(
         bool drydockEnabled,
         List<StoredShipInfo> storedShips,
@@ -124,4 +131,21 @@ public sealed record DrydockTabState
         deedOwnerUserId: null,
         deedShip: null,
         transferOfferMinutes: 0);
+}
+
+/// <summary>Triad: the footer sale button's mode for the deed on the inserted card.</summary>
+[Serializable, NetSerializable]
+public enum ShipyardDeedSale : byte
+{
+    /// <summary>No deed to a live ship on the card: the button is drawn greyed.</summary>
+    None = 0,
+
+    /// <summary>A hull the drydock cannot hold (a faction hull bought with cash), or the drydock is off.</summary>
+    Sell = 1,
+
+    /// <summary>A hull issued on a voucher: handed back for nothing, and the voucher is burned.</summary>
+    Return = 2,
+
+    /// <summary>A civilian hull with the drydock on: stored, then sold from the drydock tab. No footer button.</summary>
+    StoreFirst = 3,
 }

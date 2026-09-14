@@ -22,6 +22,7 @@ using Content.Server.Shuttles.Components;
 using Content.Server.Shuttles.Systems;
 using Content.Shared._Mono.Ships.Components;
 using Content.Shared._NF.Shipyard;
+using Content.Shared._NF.Shipyard.BUI;
 using Content.Shared._NF.Shipyard.Components;
 using Content.Shared._NF.Shipyard.Prototypes;
 using Content.Shared._Triad.CCVar;
@@ -999,6 +1000,55 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             var refusals = await RunOnServer(pair, () => store.GetAuditByActor(me, 30));
             Assert.That(refusals.Any(a => a.Action == DrydockAuditAction.AccessRefused && a.ShipGuid == theirs && a.Reason == "sell"),
                 "A forged sale is the stolen-card signal and goes on the timeline.");
+
+            await pair.CleanReturnAsync();
+        }
+
+        /// <summary>
+        /// The footer's sale button follows the deed on the card, and the server refuses the one sale
+        /// the button never offers: a hull the drydock can hold. Each mode is set by flipping one
+        /// signal on the same fixture and cleared again, so the next one is read against a clean card.
+        /// </summary>
+        [Test]
+        public async Task TheFooterSaleFollowsTheDeedAndRefusesAStorableHull()
+        {
+            await using var pair = await PoolManager.GetServerClient(new PoolSettings { Connected = true });
+            using var _ = ExpectDockJointLog(pair);
+            var server = pair.Server;
+            var entMan = server.EntMan;
+
+            var playerMan = server.ResolveDependency<IPlayerManager>();
+            var shipyard = server.System<ShipyardSystem>();
+
+            var session = playerMan.Sessions.First();
+            var (_, _, ship, console, consoleComp, card, operatorEnt) = await BuildConsoleAndShip(pair, session.UserId);
+
+            await server.WaitAssertion(() =>
+            {
+                Assert.That(shipyard.DeedSaleFor(card), Is.EqualTo(ShipyardDeedSale.StoreFirst), "A civilian hull with the drydock on is stored, then sold.");
+                Assert.That(shipyard.DeedSaleFor(null), Is.EqualTo(ShipyardDeedSale.None), "No card, no sale.");
+                Assert.That(shipyard.RefuseFooterSale(console, consoleComp, operatorEnt, card), Is.True, "The footer refuses a hull the drydock holds.");
+                Assert.That(entMan.Deleted(ship), Is.False, "The refusal left the ship flying.");
+                Assert.That(entMan.HasComponent<ShuttleDeedComponent>(card), Is.True, "And left the deed on the card.");
+            });
+
+            // A faction hull the drydock refuses keeps the footer's Sell.
+            await server.WaitPost(() => entMan.EnsureComponent<ShipSavingBlacklistComponent>(ship));
+            await server.WaitAssertion(() =>
+            {
+                Assert.That(shipyard.DeedSaleFor(card), Is.EqualTo(ShipyardDeedSale.Sell));
+                Assert.That(shipyard.RefuseFooterSale(console, consoleComp, operatorEnt, card), Is.False, "Control: nothing else refuses the sale.");
+            });
+            await server.WaitPost(() => entMan.RemoveComponent<ShipSavingBlacklistComponent>(ship));
+
+            // A voucher hull is returned, whatever else is true of it.
+#pragma warning disable RA0002
+            await server.WaitPost(() => entMan.GetComponent<ShuttleDeedComponent>(card).PurchasedWithVoucher = true);
+#pragma warning restore RA0002
+            await server.WaitAssertion(() => Assert.That(shipyard.DeedSaleFor(card), Is.EqualTo(ShipyardDeedSale.Return)));
+#pragma warning disable RA0002
+            await server.WaitPost(() => entMan.GetComponent<ShuttleDeedComponent>(card).PurchasedWithVoucher = false);
+#pragma warning restore RA0002
 
             await pair.CleanReturnAsync();
         }

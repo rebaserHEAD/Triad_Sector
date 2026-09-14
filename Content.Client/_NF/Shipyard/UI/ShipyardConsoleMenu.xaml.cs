@@ -644,8 +644,18 @@ public sealed partial class ShipyardConsoleMenu : FancyWindow
             shipPrice = state.ShipSellValue;
 
         ShipAppraisalLabel.Text = $"{BankSystemExtensions.ToSpesoString(shipPrice)} ({state.SellRate * 100.0f:F1}%)";
-        SellShipButton.Disabled = state.ShipDeedTitle == null;
+        // SellShipButton.Disabled = state.ShipDeedTitle == null; // Triad: the button follows the deed, below
         // UnassignDeedButton.Disabled = state.ShipDeedTitle == null; // Triad: removed with the Unassign button
+
+        // Triad: a hull the drydock holds sells from the drydock tab, so no footer button; a voucher
+        // hull is returned rather than sold. The server refuses what the button does not offer.
+        var sale = state.Drydock.DeedSale;
+        SellShipButton.Visible = sale != ShipyardDeedSale.StoreFirst;
+        SellShipButton.Disabled = sale == ShipyardDeedSale.None;
+        SellShipButton.Text = Loc.GetString(sale == ShipyardDeedSale.Return ? "shipyard-console-return-button" : "shipyard-console-sell-button");
+        SellShipButton.ConfirmationText = Loc.GetString(sale == ShipyardDeedSale.Return ? "shipyard-console-return-confirm" : "shipyard-console-confirm-unassign");
+        SellShipButton.ToolTip = sale == ShipyardDeedSale.Return ? Loc.GetString("shipyard-console-return-tooltip") : null;
+        // End Triad
 
         // Show/hide and enable/disable rename controls based on whether there's a ship deed
         var hasShipDeed = state.ShipDeedTitle != null;

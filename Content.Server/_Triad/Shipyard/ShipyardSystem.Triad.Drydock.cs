@@ -1016,7 +1016,45 @@ public sealed partial class ShipyardSystem
             DeedOwnerUserId = DeedOwnerAccount(console),
             TransferOfferMinutes = offerMinutes,
             ImportableShips = console.CachedImportables,
+            DeedSale = DeedSaleFor(console.TargetIdSlot.ContainerSlot?.ContainedEntity),
         };
+    }
+
+    /// <summary>
+    /// What the footer's sale button does with the deed on <paramref name="card"/>. A hull the
+    /// drydock can hold sells from the drydock tab once stored, so the row stays the one record of
+    /// the sale; the footer keeps Sell only for hulls the drydock refuses, and turns into Return for
+    /// a hull issued on a voucher.
+    /// </summary>
+    internal ShipyardDeedSale DeedSaleFor(EntityUid? card)
+    {
+        if (card is not { Valid: true } id
+            || !TryComp<ShuttleDeedComponent>(id, out var deed)
+            || deed.ShuttleUid is not { Valid: true } shuttle)
+        {
+            return ShipyardDeedSale.None;
+        }
+
+        if (deed.PurchasedWithVoucher)
+            return ShipyardDeedSale.Return;
+
+        if (_configManager.GetCVar(TriadCCVars.DrydockEnabled) && !HasComp<ShipSavingBlacklistComponent>(shuttle))
+            return ShipyardDeedSale.StoreFirst;
+
+        return ShipyardDeedSale.Sell;
+    }
+
+    /// <summary>
+    /// The server half of <see cref="DeedSaleFor"/>: refuses a footer sale of a hull the drydock can
+    /// hold, which the console never offers. Writes the reason to the pressing player's chat.
+    /// </summary>
+    internal bool RefuseFooterSale(EntityUid uid, ShipyardConsoleComponent component, EntityUid player, EntityUid card)
+    {
+        if (DeedSaleFor(card) != ShipyardDeedSale.StoreFirst)
+            return false;
+
+        DenyWithReason(player, uid, component, DrydockError(DrydockConsoleVerb.Sell, "drydock-error-sell-store-first"));
+        return true;
     }
 
     /// <summary>
