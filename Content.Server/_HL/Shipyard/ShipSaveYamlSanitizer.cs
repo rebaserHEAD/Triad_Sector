@@ -136,8 +136,8 @@ public static class ShipSaveYamlSanitizer
 
     /// <summary>
     /// Strips stale nodes from a ship file on its way in: entities of removed legacy prototypes,
-    /// component nodes of removed legacy component types, and dangling entity references. Returns how
-    /// many nodes were removed.
+    /// component nodes of removed legacy component types, and dangling entity references. Then puts
+    /// back the map-init flag the old writer stripped. Returns how many nodes were removed or added.
     /// </summary>
     // Triad: ship files live on the player's machine and come back to us at load time, so inbound is
     // the only place an old one can be fixed. Files months old are still being loaded; a file the
@@ -159,7 +159,50 @@ public static class ShipSaveYamlSanitizer
 
         var removedEntityUids = new HashSet<string>(StringComparer.Ordinal);
         var scrubbed = StripLegacyRemovedNodes(protoSeq, removedEntityUids);
-        return scrubbed + PruneContainerReferencesToRemovedEntities(protoSeq, removedEntityUids);
+        return scrubbed
+               + PruneContainerReferencesToRemovedEntities(protoSeq, removedEntityUids)
+               + StampMapInitialized(root, protoSeq);
+    }
+
+    /// <summary>
+    /// Marks every entity of a format-7 document as map-initialized when the document says nothing
+    /// about it. The old save writer stripped the per-entity flag from a ship that was live when it
+    /// was saved, so the engine loaded those entities pre-init and ran every map-init handler over
+    /// them a second time, unguarded: restocked vendors, refilled guns, re-rolled randoms, and the
+    /// offset-serialized times read as zero. With the flag back the entities load as what they were,
+    /// and the drydock's map-init transaction does the runtime half on retrieve. Formats before 7
+    /// carry one flag per file, which the old writer left alone. Returns how many entities were
+    /// stamped.
+    /// </summary>
+    private static int StampMapInitialized(MappingDataNode root, SequenceDataNode protoSeq)
+    {
+        if (!root.TryGet("meta", out MappingDataNode? meta) || meta == null
+            || !meta.TryGet("format", out ValueDataNode? formatNode) || formatNode == null
+            || !int.TryParse(formatNode.Value, out var format) || format < 7)
+        {
+            return 0;
+        }
+
+        var stamped = 0;
+        foreach (var protoNode in protoSeq)
+        {
+            if (protoNode is not MappingDataNode protoMap
+                || !protoMap.TryGet("entities", out SequenceDataNode? entitiesSeq) || entitiesSeq == null)
+            {
+                continue;
+            }
+
+            foreach (var entityNode in entitiesSeq)
+            {
+                if (entityNode is not MappingDataNode entMap || entMap.TryGet("mapInit", out DataNode? _))
+                    continue;
+
+                entMap.Add("mapInit", new ValueDataNode("true"));
+                stamped++;
+            }
+        }
+
+        return stamped;
     }
 
     /// <summary>

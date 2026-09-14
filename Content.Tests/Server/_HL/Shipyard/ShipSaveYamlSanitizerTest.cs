@@ -6,6 +6,8 @@ namespace Content.Tests.Server._HL.Shipyard;
 /// <summary>
 /// Covers the load-side scrub, whose risk is the YAML parse/emit round-trip rather than the pruning
 /// itself: a ship file the owner cannot load is far worse than the log noise the scrub removes.
+/// Every fixture below carries <c>mapInit: true</c> on its entities unless the test is about that
+/// flag, since a format-7 entity without it is stamped and counted.
 /// </summary>
 [TestFixture]
 [TestOf(typeof(ShipSaveYamlSanitizer))]
@@ -19,11 +21,13 @@ entities:
 - proto: """"
   entities:
   - uid: 1
+    mapInit: true
     components:
     - type: Transform
 - proto: WallSolid
   entities:
   - uid: 2
+    mapInit: true
     components:
     - type: Transform
     - type: EmbeddedContainer
@@ -43,13 +47,30 @@ entities:
 - proto: WallSolid
   entities:
   - uid: 1
+    mapInit: true
     components:
     - type: Transform
   - uid: 2
+    mapInit: true
     components:
     - type: EmbeddedContainer
       embeddedObjects:
       - 1
+";
+
+    // What the old save writer produced from a live ship: a format-7 document with the per-entity
+    // map-init flag stripped off, which the loader reads as a ship that was never map-initialized.
+    private const string ShipSavedLiveByTheOldWriter = @"meta:
+  format: 7
+entities:
+- proto: WallSolid
+  entities:
+  - uid: 1
+    components:
+    - type: Transform
+  - uid: 2
+    components:
+    - type: Transform
 ";
 
     [Test]
@@ -84,6 +105,37 @@ entities:
     }
 
     [Test]
+    public void ScrubStampsMapInitOnAShipTheOldWriterSavedLive()
+    {
+        var result = ShipSaveYamlSanitizer.ScrubShipLoadYaml(ShipSavedLiveByTheOldWriter, out var scrubbed);
+
+        Assert.That(scrubbed, Is.EqualTo(2), "one stamp per entity without the flag");
+        Assert.That(result.Split("mapInit: true"), Has.Length.EqualTo(3), "both entities carry the flag on the way in");
+        Assert.That(result, Does.Contain("uid: 2"), "stamping changes nothing else");
+    }
+
+    [Test]
+    public void ScrubLeavesAnOlderFormatToItsFileLevelFlag()
+    {
+        // Formats before 7 say it once per file, in meta, which the old writer never touched.
+        const string ship = @"meta:
+  format: 6
+  postmapinit: true
+entities:
+- proto: WallSolid
+  entities:
+  - uid: 1
+    components:
+    - type: Transform
+";
+
+        var result = ShipSaveYamlSanitizer.ScrubShipLoadYaml(ship, out var scrubbed);
+
+        Assert.That(scrubbed, Is.EqualTo(0));
+        Assert.That(result, Is.EqualTo(ship));
+    }
+
+    [Test]
     public void ScrubReturnsInputUnchangedWhenItCannotParse()
     {
         const string garbage = "this: is: not: a: ship: file:\n\t- [unclosed";
@@ -103,11 +155,13 @@ entities:
 - proto: WallSolid
   entities:
   - uid: 1
+    mapInit: true
     components:
     - type: Transform
 - proto: VariedXenoArtifactItem
   entities:
   - uid: 2
+    mapInit: true
     components:
     - type: Transform
     - type: Artifact
@@ -121,6 +175,7 @@ entities:
 - proto: ActionArtifactActivate
   entities:
   - uid: 3
+    mapInit: true
     components:
     - type: Transform
       parent: 2
@@ -163,6 +218,7 @@ entities:
 - proto: MachineArtifactAnalyzer
   entities:
   - uid: 1
+    mapInit: true
     components:
     - type: Transform
     - type: ArtifactAnalyzer
