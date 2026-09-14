@@ -1,4 +1,5 @@
 using System.Numerics;
+using Content.Shared._Triad.Drydock; // Triad
 using Content.Shared.EntityTable;
 using Robust.Shared.Containers;
 using Robust.Shared.Map;
@@ -10,6 +11,7 @@ public sealed partial class ContainerFillSystem : EntitySystem
     [Dependency] private SharedContainerSystem _containerSystem = default!;
     [Dependency] private EntityTableSystem _entityTable = default!;
     [Dependency] private SharedTransformSystem _transform = default!;
+    [Dependency] private MapInitRefireSystem _mapInitRefire = default!; // Triad
 
     public override void Initialize()
     {
@@ -34,10 +36,10 @@ public sealed partial class ContainerFillSystem : EntitySystem
                 continue;
             }
 
-            // Triad: a container that already holds something was filled once. Map init is raised
-            // again on a retrieved ship (DrydockFidelitySystem.RefireMapInitSliced), and a second
-            // fill either duplicates the contents or fails the insert with an error.
-            if (container.ContainedEntities.Count > 0)
+            // Triad: on a map-init re-raise (a drydock retrieve) a container that already holds
+            // something was filled once, and a second fill duplicates it or fails the insert with an
+            // error. A first map init fills as upstream does, whatever a mapper put inside.
+            if (_mapInitRefire.Refiring && container.ContainedEntities.Count > 0)
                 continue;
 
             foreach (var proto in prototypes)
@@ -73,7 +75,7 @@ public sealed partial class ContainerFillSystem : EntitySystem
             }
 
             // Triad: see OnMapInit above; the same guard for the table-driven fill.
-            if (container.ContainedEntities.Count > 0)
+            if (_mapInitRefire.Refiring && container.ContainedEntities.Count > 0)
                 continue;
 
             var spawns = _entityTable.GetSpawns(table);

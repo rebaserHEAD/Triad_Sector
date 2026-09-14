@@ -6,6 +6,7 @@ using System.Reflection;
 using System.Text;
 using System.Globalization;
 using System.Threading.Tasks;
+using Content.Shared._Triad.Drydock;
 using Robust.Shared.Serialization;
 using Robust.Shared.Serialization.Manager;
 using Robust.Shared.Serialization.Manager.Attributes;
@@ -51,6 +52,12 @@ public enum DrydockMapInitMode : byte
 /// </summary>
 public sealed partial class DrydockFidelitySystem
 {
+    /// <summary>
+    /// Raises the event with its refire flag up, which is what lets a handler tell this re-raise
+    /// from a first map init and skip one-shot work the ship already carries.
+    /// </summary>
+    [Dependency] private MapInitRefireSystem _mapInitRefire = default!;
+
     /// <summary>
     /// Components the transaction never touches: what the loader owns (parents, coordinates,
     /// physics, fixtures, joints, chunks, containers, all rebuilt by design) and the drydock's own
@@ -167,7 +174,7 @@ public sealed partial class DrydockFidelitySystem
             {
                 try
                 {
-                    RaiseLocalEvent(uid, new MapInitEvent());
+                    _mapInitRefire.Raise(uid);
                     report.Fired++;
                 }
                 catch (Exception e)

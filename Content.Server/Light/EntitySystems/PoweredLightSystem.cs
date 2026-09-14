@@ -24,6 +24,7 @@ using Content.Shared.DeviceNetwork.Events;
 using Content.Shared.Power;
 using Robust.Shared.Random; // Frontier
 using Timer = Robust.Shared.Timing.Timer; // Triad
+using Content.Shared._Triad.Drydock; // Triad
 
 namespace Content.Server.Light.EntitySystems
 {
@@ -43,6 +44,7 @@ namespace Content.Server.Light.EntitySystems
         [Dependency] private PointLightSystem _pointLight = default!;
         [Dependency] private SharedAppearanceSystem _appearance = default!;
         [Dependency] private DamageOnInteractSystem _damageOnInteractSystem = default!;
+        [Dependency] private MapInitRefireSystem _mapInitRefire = default!; // Triad
 
         [Dependency] protected IRobustRandom RobustRandom = default!; // Frontier
 
@@ -85,9 +87,10 @@ namespace Content.Server.Light.EntitySystems
         private void OnMapInit(EntityUid uid, PoweredLightComponent light, MapInitEvent args)
         {
             // TODO: Use ContainerFill dog
-            // Triad: a fixture that already holds a bulb was filled once; map init is raised again
-            // on a retrieved ship, and a second bulb has nowhere to go.
-            if (light.HasLampOnSpawn != null && light.LightBulbContainer.ContainedEntity == null)
+            // Triad: on a map-init re-raise (a drydock retrieve) a fixture that already holds a bulb
+            // was filled once, and a second bulb has nowhere to go. A first map init spawns as
+            // upstream does.
+            if (light.HasLampOnSpawn != null && !(_mapInitRefire.Refiring && light.LightBulbContainer.ContainedEntity != null))
             {
                 var entity = EntityManager.SpawnEntity(light.HasLampOnSpawn, EntityManager.GetComponent<TransformComponent>(uid).Coordinates);
                 _containerSystem.Insert(entity, light.LightBulbContainer);

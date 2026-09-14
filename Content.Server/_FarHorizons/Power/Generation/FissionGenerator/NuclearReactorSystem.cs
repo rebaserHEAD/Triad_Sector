@@ -37,6 +37,7 @@ using Robust.Shared.Audio.Systems;
 using Robust.Shared.Containers;
 using Robust.Shared.Map;
 using Robust.Shared.Map.Components; // Triad
+using Content.Shared._Triad.Drydock; // Triad
 using Robust.Shared.Prototypes;
 using Robust.Shared.Random;
 using Robust.Shared.Timing;
@@ -70,6 +71,7 @@ public sealed partial class NuclearReactorSystem : EntitySystem
     [Dependency] private RadioSystem _radioSystem = default!;
     [Dependency] private ReactorPartSystem _partSystem = default!;
     [Dependency] private SharedMapSystem _map = default!; // Triad
+    [Dependency] private MapInitRefireSystem _mapInitRefire = default!; // Triad
     [Dependency] private ServerGlobalSoundSystem _soundSystem = default!;
     [Dependency] private SharedAppearanceSystem _appearance = default!;
     [Dependency] private SharedAudioSystem _audio = default!;
@@ -170,10 +172,10 @@ public sealed partial class NuclearReactorSystem : EntitySystem
     /// </summary>
     private void OnMapInit(EntityUid uid, NuclearReactorComponent comp, ref MapInitEvent args)
     {
-        // Triad: a reactor that already holds parts was laid out once. The drydock raises map init
-        // again on a retrieved ship, and the prefab starts by emptying the part storage, which is the
-        // one effect that transaction cannot undo.
-        if (comp.PartStorage.ContainedEntities.Count > 0)
+        // Triad: on a map-init re-raise (a drydock retrieve) a reactor that already holds parts was
+        // laid out once, and the prefab starts by emptying the part storage, which is the one effect
+        // that re-raise cannot undo. A first map init lays the prefab as before.
+        if (_mapInitRefire.Refiring && comp.PartStorage.ContainedEntities.Count > 0)
             return;
 
         ApplyPrefab(uid, comp);
