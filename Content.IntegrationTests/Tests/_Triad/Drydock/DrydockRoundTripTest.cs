@@ -50,6 +50,7 @@ using Content.Shared.FixedPoint;
 using Content.Shared.Hands.Components;
 using Content.Shared.Lathe;
 using Content.Shared.NodeContainer;
+using Content.Shared.Pinpointer;
 using Content.Shared.Power.Generator;
 using Content.Shared.Research.Components;
 using Content.Shared.Research.Prototypes;
@@ -1150,6 +1151,58 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                 var device = entMan.GetComponent<DeviceNetworkComponent>(retrievedAirlock!.Value);
                 Assert.That(deviceNet.IsDeviceConnected(retrievedAirlock.Value, device), Is.True,
                     "Membership is not serialized state, so this passes only because Revive re-ran the join by hand.");
+            });
+
+            await pair.CleanReturnAsync();
+        }
+
+        /// <summary>
+        /// A station beacon aboard comes back on the ship's nav map. The beacon list is rebuilt, not
+        /// serialized, when the grid joins its station; the retrieve used to join while the ship was
+        /// still frozen on its staging map, and the rebuild's paused-skipping query filled the list
+        /// with nothing (a 22-beacon hull came back with 0 until one was re-anchored, 2026-09-13).
+        /// </summary>
+        [Test]
+        public async Task AStationBeaconAboardComesBackOnTheNavMap()
+        {
+            await using var pair = await PoolManager.GetServerClient();
+            var server = pair.Server;
+            var entMan = server.EntMan;
+
+            var db = server.ResolveDependency<IServerDbManager>();
+            var drydock = server.System<DrydockSystem>();
+
+            var owner = Guid.NewGuid();
+            await DrydockTestHelpers.InsertPlayer(db, owner);
+            await server.ResolveDependency<DrydockStore>().AddBerth(owner, ShipSizeClass.SuperCapital, DrydockBerthKind.Granted, 0, null, null);
+
+            var (station, shipGrid, airlock) = await BuildShipAndStation(pair);
+
+            await server.WaitPost(() => entMan.SpawnEntity("DefaultStationBeaconBar", entMan.GetComponent<TransformComponent>(airlock).Coordinates));
+            await pair.RunTicksSync(5);
+
+            var beaconBefore = await FindChildWithComponent<NavMapBeaconComponent>(pair, shipGrid);
+            Assert.That(beaconBefore, Is.Not.Null, "The control: the beacon has to sit on the ship before it is stored.");
+
+            var (result, shipId) = await RunOnServer(pair, () => drydock.TryStoreShip(shipGrid, owner, null));
+            Assert.That(result, Is.EqualTo(DrydockStoreResult.Success));
+
+            await pair.RunTicksSync(5);
+
+            var retrieved = await RunOnServer(pair, () => drydock.TryRetrieveShip(shipId!.Value, owner, station, null));
+            Assert.That(retrieved.Result, Is.EqualTo(DrydockRetrieveResult.Success));
+
+            await pair.RunTicksSync(5);
+
+            var grid = retrieved.Grid!.Value;
+            var beacon = await FindChildWithComponent<NavMapBeaconComponent>(pair, grid);
+            Assert.That(beacon, Is.Not.Null, "The beacon entity rode the document.");
+
+            await server.WaitAssertion(() =>
+            {
+                Assert.That(entMan.TryGetComponent<NavMapComponent>(grid, out var navMap), Is.True, "Joining a station gives the grid its nav map.");
+                Assert.That(navMap!.Beacons.ContainsKey(entMan.GetNetEntity(beacon!.Value)), Is.True,
+                    "The nav map lists the beacon without anyone re-anchoring it.");
             });
 
             await pair.CleanReturnAsync();

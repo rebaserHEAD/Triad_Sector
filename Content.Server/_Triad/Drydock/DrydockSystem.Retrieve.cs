@@ -543,6 +543,12 @@ public sealed partial class DrydockSystem
                         return new DrydockRetrieveOutcome(DrydockRetrieve.Refused(DrydockRetrieveResult.StationLost));
                     }
 
+                    // The ship's own station, now that the move has thawed it. Synchronous, so it fits
+                    // the no-await span from the dock to the return. See ReviveSliced for why it
+                    // cannot run on the frozen ship.
+                    RecreateStation(grid, stored.Ship);
+                    timer.Mark("station_init");
+
                     ctx.ClaimHeld = false; // The claim is now correct: the ship really is out.
                     ctx.Presented = true;
                 }
@@ -552,6 +558,19 @@ public sealed partial class DrydockSystem
                     // the claim is released, which is the duplicate this whole gate exists to
                     // prevent. Scrap it, then let the failure travel. Synchronous on purpose: this
                     // runs on the cancellation path too, where an await could never complete.
+                    //
+                    // A throw after the dock moved the grid but before it was presented (the station
+                    // recreation above, or the dock itself) leaves the copy on the station's map, where
+                    // the staging scrap cannot see it, with the claim about to be released. The copy
+                    // is deleted for the same reason: the revision is untouched and the row goes back.
+                    if (!ctx.Presented
+                        && ctx.Grid is { } loose
+                        && Exists(loose)
+                        && Transform(loose).MapUid != ctx.StagingMap)
+                    {
+                        Del(loose);
+                    }
+
                     ScrapRetrieveStaging(ctx);
                     throw;
                 }
@@ -939,7 +958,11 @@ public sealed partial class DrydockSystem
         // the ones already sitting in the database with the blank IFF the old import minted.
         _shipyard.GrantVesselComponents(grid, ResolveVesselProto(grid, record));
 
-        RecreateStation(grid, record);
+        // The station itself is NOT recreated here: that waits for the dock's thaw, in the pipeline's
+        // tail. Joining a station raises StationGridAddedEvent and StationPostInitEvent, and their
+        // subscribers look the ship's entities up with paused-skipping queries. Run on the frozen
+        // ship, the nav map rebuilt its beacon list empty, faxes and holopads kept stale names, and
+        // the FTL system registered the scrapped staging map as a destination.
 
         timer.Mark("station");
     }
