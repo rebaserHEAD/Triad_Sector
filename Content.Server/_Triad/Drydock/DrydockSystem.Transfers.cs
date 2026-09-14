@@ -3,6 +3,7 @@ using System.Threading.Tasks;
 using Content.Server.GameTicking;
 using Content.Shared._Triad.CCVar;
 using Content.Shared.GameTicking;
+using Robust.Shared.Prototypes;
 
 namespace Content.Server._Triad.Drydock;
 
@@ -45,6 +46,7 @@ public sealed partial class DrydockSystem
         // process-local and no map of any kind exists yet at system init, so it would provably do
         // nothing, and a hook whose name implies a recovery it cannot perform is worse than none.
         SubscribeLocalEvent<RoundRestartCleanupEvent>(OnRoundRestart);
+        SubscribeLocalEvent<PrototypesReloadedEventArgs>(OnStripPrototypesReloaded);
 
         InitializeSweep();
         InitializeRebake();

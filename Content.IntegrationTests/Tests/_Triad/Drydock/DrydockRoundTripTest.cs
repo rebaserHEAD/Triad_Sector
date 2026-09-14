@@ -1157,6 +1157,106 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
         }
 
         /// <summary>
+        /// Mechs stay with the round (user, 2026-09-13): a retrieve deletes every mech, mech part and
+        /// frame, mech board and mech tech disk aboard, drops what a mech held that is not mech kit
+        /// itself onto the deck, and leaves everything else alone.
+        /// </summary>
+        [Test]
+        public async Task MechsAndMechKitDoNotRideAShip()
+        {
+            await using var pair = await PoolManager.GetServerClient();
+            var server = pair.Server;
+            var entMan = server.EntMan;
+
+            var db = server.ResolveDependency<IServerDbManager>();
+            var drydock = server.System<DrydockSystem>();
+            var containers = server.System<SharedContainerSystem>();
+
+            var owner = Guid.NewGuid();
+            await DrydockTestHelpers.InsertPlayer(db, owner);
+            await server.ResolveDependency<DrydockStore>().AddBerth(owner, ShipSizeClass.SuperCapital, DrydockBerthKind.Granted, 0, null, null);
+
+            var (station, shipGrid, airlock) = await BuildShipAndStation(pair);
+
+            // A mech itself is not here on purpose: BaseMech is save: false, so the store already leaves
+            // it out. The grabber is the holder that does reach the retrieve, carrying a wrench.
+            var stripped = new[] { "MechEquipmentGrabber", "RipleyLArm", "RipleyCentralElectronics", "TechDiskMechCiv" };
+
+            await server.WaitPost(() =>
+            {
+                var at = entMan.GetComponent<TransformComponent>(airlock).Coordinates;
+                foreach (var id in stripped)
+                {
+                    var spawned = entMan.SpawnEntity(id, at);
+                    if (id == "MechEquipmentGrabber")
+                    {
+                        var load = containers.EnsureContainer<Container>(spawned, "item-container");
+                        containers.Insert(entMan.SpawnEntity("Wrench", at), load);
+                    }
+                }
+
+                entMan.SpawnEntity("Crowbar", at);
+            });
+            await pair.RunTicksSync(5);
+
+            await server.WaitAssertion(() =>
+            {
+                var protos = drydock.StripPrototypeIds();
+                Assert.Multiple(() =>
+                {
+                    foreach (var id in new[] { "MechRipley", "RipleyChassis", "MechEquipmentGrabber", "GygaxArmorPlate", "RipleyCentralElectronics", "TechDiskMechCiv" })
+                        Assert.That(protos, Does.Contain(id), $"The strip rule covers {id}.");
+                    Assert.That(protos, Does.Not.Contain("Crowbar"), "Control: an ordinary tool is not mech kit.");
+                    Assert.That(protos, Does.Not.Contain("Wrench"), "Control: the grabber's load is not mech kit.");
+
+                    // The mech-sized thruster, air tank and IFF module are stripped; the ship-sized ones
+                    // they share a word with are ship equipment and must never be.
+                    foreach (var id in new[] { "MechThruster", "MechAirTank", "MechIFFTSF" })
+                        Assert.That(protos, Does.Contain(id), $"The strip rule covers the mech-sized {id}.");
+                    foreach (var id in new[] { "Thruster", "AirCanister", "ComputerIFF" })
+                        Assert.That(protos, Does.Not.Contain(id), $"Ship equipment {id} is not mech kit.");
+                });
+            });
+
+            var (result, shipId) = await RunOnServer(pair, () => drydock.TryStoreShip(shipGrid, owner, null));
+            Assert.That(result, Is.EqualTo(DrydockStoreResult.Success));
+
+            await pair.RunTicksSync(5);
+
+            var retrieved = await RunOnServer(pair, () => drydock.TryRetrieveShip(shipId!.Value, owner, station, null));
+            Assert.That(retrieved.Result, Is.EqualTo(DrydockRetrieveResult.Success));
+
+            await pair.RunTicksSync(5);
+
+            await server.WaitAssertion(() =>
+            {
+                var grid = retrieved.Grid!.Value;
+                var protos = drydock.StripPrototypeIds();
+                var aboard = new List<string>();
+                var stack = new Stack<EntityUid>();
+                stack.Push(grid);
+                while (stack.Count > 0)
+                {
+                    var uid = stack.Pop();
+                    if (entMan.GetComponent<MetaDataComponent>(uid).EntityPrototype is { } p)
+                        aboard.Add(p.ID);
+                    var children = entMan.GetComponent<TransformComponent>(uid).ChildEnumerator;
+                    while (children.MoveNext(out var child))
+                        stack.Push(child);
+                }
+
+                Assert.Multiple(() =>
+                {
+                    Assert.That(aboard.Where(protos.Contains), Is.Empty, "No mech kit came back aboard.");
+                    Assert.That(aboard, Does.Contain("Crowbar"), "Control: ordinary cargo rides the ship as before.");
+                    Assert.That(aboard, Does.Contain("Wrench"), "What the grabber held was dropped on the deck, not deleted with it.");
+                });
+            });
+
+            await pair.CleanReturnAsync();
+        }
+
+        /// <summary>
         /// A station beacon aboard comes back on the ship's nav map. The beacon list is rebuilt, not
         /// serialized, when the grid joins its station; the retrieve used to join while the ship was
         /// still frozen on its staging map, and the rebuild's paused-skipping query filled the list

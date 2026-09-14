@@ -918,6 +918,10 @@ public sealed partial class DrydockSystem
 
         timer.Mark("fidelity");
 
+        // First of the sweeps: what a strip rule names (mechs and everything mech) leaves before any
+        // later sweep would wake, register or revive it.
+        await StripSliced(grid, slice);
+
         await ReviveGravitySliced(grid, slice);
         await ReviveNpcsSliced(grid, slice);
         await ReviveWiresSliced(grid, slice);
