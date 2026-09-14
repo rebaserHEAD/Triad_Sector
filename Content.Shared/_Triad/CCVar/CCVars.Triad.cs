@@ -110,6 +110,16 @@ public sealed class TriadCCVars
         CVarDef.Create("triad.drydock.import_budget", 1, CVar.SERVERONLY);
 
     /// <summary>
+    /// Test servers only. On, the same legacy save imports as many times as it is pressed: the
+    /// spent-file ledger is neither checked nor written, <see cref="DrydockImportBudget"/> is ignored,
+    /// and the player's local file is never retired, whatever the tamper mode. Every press files a
+    /// separate hull with its own granted berth. Never on a server whose ships matter: this is the
+    /// duplication the ledger exists to stop.
+    /// </summary>
+    public static readonly CVarDef<bool> DrydockImportUnlimited =
+        CVarDef.Create("triad.drydock.import_unlimited", false, CVar.SERVERONLY);
+
+    /// <summary>
     /// How many milliseconds of main-thread time one drydock store or retrieve may spend per tick.
     /// The store is elastic on purpose: making the one captain who pressed the button wait longer is
     /// free, making sixty other players wait is not. Lower is safer for everyone else and slower for

@@ -82,7 +82,7 @@ public sealed partial class ShipyardSystem
         var enforcing = _tamperPolicy.IsEnforcing();
         var remaining = int.MaxValue;
 
-        if (enforcing)
+        if (enforcing && !_configManager.GetCVar(TriadCCVars.DrydockImportUnlimited))
         {
             var budget = _configManager.GetCVar(TriadCCVars.DrydockImportBudget);
             var spent = await _consumedStore.CountForPlayerAsync(operatorAccount, default);
@@ -247,11 +247,16 @@ public sealed partial class ShipyardSystem
         // its whole manifest every time the UI opens, so the file came straight back and imported
         // again for free. Reported from the 2026-09-07 play test with the same cruiser listed four
         // times over.
-        if (await _consumedStore.IsConsumedAsync(hash, default))
+        //
+        // A test server can switch both off with DrydockImportUnlimited, which then also skips the
+        // spend and the local-file retirement below, so a tester can import one save repeatedly.
+        var unlimited = _configManager.GetCVar(TriadCCVars.DrydockImportUnlimited);
+
+        if (!unlimited && await _consumedStore.IsConsumedAsync(hash, default))
             return await RefuseAsync(uid, component, player, uiKey, Loc.GetString("shipyard-console-import-error-already-imported"));
 
         var budget = _configManager.GetCVar(TriadCCVars.DrydockImportBudget);
-        if (await _consumedStore.CountForPlayerAsync(operatorAccount, default) >= budget)
+        if (!unlimited && await _consumedStore.CountForPlayerAsync(operatorAccount, default) >= budget)
             return await RefuseAsync(uid, component, player, uiKey, Loc.GetString("shipyard-console-import-error-budget"));
 
         if (TerminatingOrDeleted(uid) || TerminatingOrDeleted(player))
@@ -322,9 +327,11 @@ public sealed partial class ShipyardSystem
             return await RefuseAsync(uid, component, player, uiKey, Loc.GetString("shipyard-console-import-error-store-failed", ("reason", storeReason)));
         }
 
-        // Filed, so the save is spent. Unconditionally: the ship this produced is real and
-        // retrievable whatever the tamper mode, so the file that bought it has to be marked gone.
-        if (!await _consumedStore.TryConsumeAsync(hash, operatorAccount, result.ShipId, shipName, DrydockRoundId, default))
+        // Filed, so the save is spent, whatever the tamper mode: the ship this produced is real and
+        // retrievable, so the file that bought it has to be marked gone. The one exception is a test
+        // server running DrydockImportUnlimited, where nothing is spent.
+        if (!unlimited
+            && !await _consumedStore.TryConsumeAsync(hash, operatorAccount, result.ShipId, shipName, DrydockRoundId, default))
         {
             // Another import of the same file won the race. The ship is already filed under that
             // one, so this is a log line rather than a rollback: the unique index did its job.
@@ -335,8 +342,9 @@ public sealed partial class ShipyardSystem
         // that can no longer be imported. Enforcing only, unlike the ledger above: this is the one
         // step that reaches the player's disk, and the same file still has to load on a server that
         // is not draining saves yet. On a permissive server the file stays listed and a second press
-        // is refused by the ledger, which is the authority either way.
-        if (enforcing && !TerminatingOrDeleted(player))
+        // is refused by the ledger, which is the authority either way. Never under
+        // DrydockImportUnlimited, whose point is that the file stays importable.
+        if (enforcing && !unlimited && !TerminatingOrDeleted(player))
             RaiseNetworkEvent(new DeleteLocalShipFileMessage(fileId), session);
 
         _ = _tamperPolicy.RecordLoadAsync(
@@ -356,15 +364,21 @@ public sealed partial class ShipyardSystem
             ActorUserId = operatorAccount,
             BerthId = berthId,
             RoundId = DrydockRoundId,
-            Reason = enforcing ? null : "tamper check not enforcing",
+            Reason = unlimited
+                ? "unlimited imports: the save was not spent"
+                : enforcing ? null : "tamper check not enforcing",
         });
 
         if (TerminatingOrDeleted(uid) || TerminatingOrDeleted(player))
             return true;
 
-        // The file is spent, so drop it from the offer before the refresh redraws the list.
-        component.OfferedImports.Remove(fileId);
-        component.CachedImportables = component.CachedImportables.Where(i => i.FileId != fileId).ToList();
+        // The file is spent, so drop it from the offer before the refresh redraws the list. Under
+        // DrydockImportUnlimited it is not, and stays offered for the next press.
+        if (!unlimited)
+        {
+            component.OfferedImports.Remove(fileId);
+            component.CachedImportables = component.CachedImportables.Where(i => i.FileId != fileId).ToList();
+        }
 
         if (result.ShipId is { } importedId)
             RecordCaptain(importedId, player);
