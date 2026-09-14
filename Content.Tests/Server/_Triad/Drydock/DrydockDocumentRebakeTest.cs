@@ -247,7 +247,7 @@ public sealed class DrydockDocumentRebakeTest
     [Test]
     public void TheFingerprintIsUnchangedByTheIdRead()
     {
-        // ReadDriftMetadata now hashes what ReadDriftIds returns; the persisted value must not move.
+        // ReadDriftMetadata hashes what ReadDriftIds returns, and the value is persisted: both paths must agree with the literal hash.
         var doc = Doc(Group("Keep", 3), Group("Old", 2));
         var (ids, _) = DrydockSystem.ReadDriftIds(doc);
         var expected = System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes("Keep\nOld"));

@@ -401,20 +401,13 @@ public sealed partial class DrydockSystem
     /// the engine's own emission rather than a lookalike, which matters because the deserializer on
     /// the other end is the engine's.
     /// </summary>
-    internal static string EmitDocument(MappingDataNode data)
-    {
-        using var writer = new StringWriter();
-        var document = new YamlDocument(data.ToYamlNode());
-        var stream = new YamlStream { document };
-        stream.Save(new YamlMappingFix(new Emitter(writer)), false);
-        return writer.ToString();
-    }
+    internal static string EmitDocument(MappingDataNode data) => EmitDocument(data, EmitterSettings.Default.NewLine);
 
     /// <summary>
     /// <see cref="EmitDocument(MappingDataNode)"/> with the line ending chosen, so a document re-written
     /// on a different platform from the one that stored it keeps its own. The emitter takes its line
-    /// ending from its settings, not from the writer; every other setting is the default the
-    /// one-argument emitter uses.
+    /// ending from its settings, not from the writer; every other setting is the default
+    /// (<c>new Emitter(writer)</c> is <c>EmitterSettings.Default</c>).
     /// </summary>
     internal static string EmitDocument(MappingDataNode data, string newLine)
     {

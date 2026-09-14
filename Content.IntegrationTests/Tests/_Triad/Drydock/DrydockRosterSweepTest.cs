@@ -91,9 +91,10 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                 cfg.SetCVar(TriadCCVars.DrydockReadOnly, false);
 
                 // Slicing off, which for this cvar means no job at all rather than a job with a zero
-                // budget. This sweep runs the whole roster through a pooled pair on a nine hundred
-                // tick pump per operation; a capital hull sliced at the shipping default suspends
-                // thousands of times and would blow that ceiling on breadth alone. What slicing does
+                // budget. This sweep runs the whole roster through a pooled pair on a sixty second
+                // wall-clock pump per operation (DrydockTestHelpers.RunOnServer); a capital hull
+                // sliced at the shipping default suspends thousands of times and would blow that
+                // ceiling on breadth alone. What slicing does
                 // to a store is its own fixture's question, and it is a question about one hull.
                 cfg.SetCVar(TriadCCVars.DrydockTickBudgetMs, 0);
 
@@ -199,7 +200,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
 
                 try
                 {
-                    var (result, shipId) = await RunOnServer(pair,
+                    var (result, shipId) = await DrydockTestHelpers.RunOnServer(pair,
                         () => drydock.TryStoreShip(loaded.Value, owner, null));
 
                     if (result != DrydockStoreResult.Success || shipId == null)
@@ -211,7 +212,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
 
                     await pair.RunTicksSync(3);
 
-                    var retrieved = await RunOnServer(pair,
+                    var retrieved = await DrydockTestHelpers.RunOnServer(pair,
                         () => drydock.TryRetrieveShip(shipId.Value, owner, station, null));
 
                     if (!retrieved.Succeeded)
@@ -460,35 +461,5 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
 
             return census;
         }
-
-        /// <summary>
-        /// Starts a pipeline on the game thread and pumps until it finishes, bounded by the wall
-        /// clock rather than by a tick count.
-        ///
-        /// <para>The fixture sets <c>triad.drydock.tick_budget_ms</c> to zero, so no job is made and
-        /// the only real suspensions left in the pipeline are the store's three thread-pool hops:
-        /// hash, drift and compress. What the pump waits on is therefore real time on another
-        /// thread, which a tick count does not measure. A fixed ceiling of tick round-trips drains
-        /// in about 0.6 s on an idle pair and then calls a store that is merely parked "never
-        /// completed": measured 2026-09-09 across the roster, every hull whose hash, drift and
-        /// compress summed under 571 ms passed a 900-tick pump and every hull over 605 ms failed
-        /// it, each one logging a successful store a moment later, and the set of failing hulls
-        /// moved between runs.</para>
-        /// </summary>
-        private static async Task<T> RunOnServer<T>(TestPair pair, Func<Task<T>> start)
-        {
-            Task<T>? task = null;
-            await pair.Server.WaitPost(() => task = start());
-
-            var deadline = System.Diagnostics.Stopwatch.StartNew();
-            while (!task!.IsCompleted && deadline.Elapsed < TimeSpan.FromSeconds(60))
-            {
-                await pair.RunTicksSync(1);
-            }
-
-            Assert.That(task!.IsCompleted, Is.True, "A drydock operation never completed.");
-            return await task;
-        }
-
     }
 }

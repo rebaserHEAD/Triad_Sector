@@ -1,4 +1,3 @@
-using System.Threading;
 using Robust.Shared.ContentPack;
 using Robust.Shared.Prototypes;
 
@@ -13,23 +12,14 @@ public sealed partial class DrydockSystem
 {
     [Dependency] private IResourceManager _resources = default!;
 
-    private Lazy<DrydockMigrationTable>? _migrationTable;
+    private DrydockMigrationTable? _migrationTable;
 
     /// <summary>
     /// The four entity migration files as the loader applies them, read once on first use. Holiday
     /// renames are deliberately absent: a re-bake built on them would make a seasonal swap permanent.
+    /// Not thread-safe to build: every caller touches it on the main thread before handing work to a worker.
     /// </summary>
-    internal DrydockMigrationTable MigrationTable
-    {
-        get
-        {
-            _migrationTable ??= new Lazy<DrydockMigrationTable>(
-                () => DrydockMigrationTable.Load(_resources),
-                LazyThreadSafetyMode.ExecutionAndPublication);
-
-            return _migrationTable.Value;
-        }
-    }
+    internal DrydockMigrationTable MigrationTable => _migrationTable ??= DrydockMigrationTable.Load(_resources);
 
     /// <summary>
     /// Classifies one stored document against the mappings and the prototypes loaded now. Reads only,
@@ -40,7 +30,12 @@ public sealed partial class DrydockSystem
     internal DrydockDriftVerdict DetectDrift(string yaml, int drydockFormatVer)
     {
         var (ids, engineFormatVer) = ReadDriftIds(yaml);
+        return DetectDrift(ids, engineFormatVer, drydockFormatVer);
+    }
 
+    /// <summary><see cref="DetectDrift(string, int)"/> over ids already read with <see cref="ReadDriftIds"/>.</summary>
+    internal DrydockDriftVerdict DetectDrift(SortedSet<string> ids, int engineFormatVer, int drydockFormatVer)
+    {
         return DrydockDrift.Detect(
             ids,
             MigrationTable,

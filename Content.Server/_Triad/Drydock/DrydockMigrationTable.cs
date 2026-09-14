@@ -18,8 +18,8 @@ namespace Content.Server._Triad.Drydock;
 /// instead of reading the migration files themselves, so tests can hand them a synthetic table.
 /// </summary>
 /// <remarks>
-/// <para>This is the table <see cref="MapMigrationSystem"/> builds on each
-/// <c>BeforeEntityReadEvent</c>, and only that. <c>HolidaySystem</c> also adds renames to the same
+/// <para>This is the table <see cref="MapMigrationSystem"/> hands the loader on each
+/// <c>BeforeEntityReadEvent</c> (it calls <see cref="Load"/>), and only that. <c>HolidaySystem</c> also adds renames to the same
 /// event while a holiday runs (holiday-themed replacements, <c>TryAdd</c>); those are left out on
 /// purpose, because a re-bake that applied them would make a seasonal swap permanent.</para>
 /// </remarks>
@@ -41,16 +41,14 @@ public sealed class DrydockMigrationTable
     }
 
     /// <summary>
-    /// Builds the table from parsed mapping files, in file order, by <see cref="MapMigrationSystem"/>'s
-    /// rule: a value that is not a scalar is skipped, an empty, whitespace or <c>null</c> value is a
-    /// deletion, anything else a rename.
+    /// Builds the table from parsed mapping files, in file order: a value that is not a scalar is
+    /// skipped, an empty, whitespace or <c>null</c> value is a deletion, anything else a rename. This is
+    /// the loader's rule because it is the loader's code path (<see cref="MapMigrationSystem"/>).
     /// </summary>
     /// <exception cref="ArgumentException">
-    /// The same key is renamed twice. The engine's own read does <c>Dictionary.Add</c> and throws on
-    /// this too, which breaks every map load on the server, so a later file never overrides an earlier
-    /// one; refusing here keeps the table from quietly disagreeing with a loader that cannot run.
-    /// A key deleted twice is harmless (a set), and a key both renamed and deleted is kept in both,
-    /// again as the engine does.
+    /// The same key is renamed twice. A later file never overrides an earlier one: the throw fails
+    /// every map load on the server, loudly. A key deleted twice is harmless (a set), and a key both
+    /// renamed and deleted is kept in both, which the engine's deserializer then resolves.
     /// </exception>
     public static DrydockMigrationTable FromMappings(IEnumerable<MappingDataNode> mappings)
     {

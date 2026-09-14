@@ -156,7 +156,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                         $"{name}: the gun recipe did not fire ({ammoBefore} rounds before, {gunProbe.Value} after). Skip the recipe rather than file an unfired gun as fired.");
                 }
 
-                var (result, shipId) = await GoldenCorpus.RunOnServer(pair, () => drydock.TryStoreShip(grid, owner, null));
+                var (result, shipId) = await DrydockTestHelpers.RunOnServer(pair, () => drydock.TryStoreShip(grid, owner, null), GoldenCorpus.OperationTimeout);
                 Assert.That(result, Is.EqualTo(DrydockStoreResult.Success), $"{name}: the store refused ({result}).");
 
                 var filed = await store.LoadCurrent(shipId!.Value);

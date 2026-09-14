@@ -23,7 +23,8 @@ public sealed class DrydockRebakeCommand : ToolshedCommand
         {
             DrydockRebakeStart.Started => "drydock-rebake-command-started",
             DrydockRebakeStart.AlreadyRunning => "drydock-rebake-command-running",
-            _ => "drydock-rebake-command-disabled",
+            DrydockRebakeStart.Disabled => "drydock-rebake-command-disabled",
+            var other => throw new ArgumentOutOfRangeException(nameof(other), other, null),
         };
 
         ctx.WriteLine(Loc.GetString(key));

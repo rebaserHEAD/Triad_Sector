@@ -73,11 +73,6 @@ public static class DrydockDocumentRebake
     /// </summary>
     public static readonly IReadOnlyList<FormatStep> FormatSteps = Array.Empty<FormatStep>();
 
-    /// <summary>Every repair, run on each document whose text carries the repair's hint.</summary>
-    // A property rather than a field: static fields initialize in declaration order, and the repair
-    // it lists is declared further down.
-    public static IReadOnlyList<Repair> Repairs => RepairList;
-
     public static DrydockDocumentRebakeResult Transform(string yaml, DrydockMigrationTable table, int drydockFormatVer)
     {
         return Transform(yaml, table, drydockFormatVer, FormatSteps, Repairs);
@@ -95,8 +90,21 @@ public static class DrydockDocumentRebake
         IReadOnlyList<FormatStep> steps,
         IReadOnlyList<Repair> repairs)
     {
-        var (ids, _) = DrydockSystem.ReadDriftIds(yaml);
+        return Transform(yaml, DrydockSystem.ReadDriftIds(yaml).Ids, table, drydockFormatVer, steps, repairs);
+    }
 
+    /// <summary>
+    /// The transform over group ids the caller has already read from <paramref name="yaml"/> with
+    /// <see cref="DrydockSystem.ReadDriftIds"/>, so a caller that also needs them scans the document once.
+    /// </summary>
+    internal static DrydockDocumentRebakeResult Transform(
+        string yaml,
+        SortedSet<string> ids,
+        DrydockMigrationTable table,
+        int drydockFormatVer,
+        IReadOnlyList<FormatStep> steps,
+        IReadOnlyList<Repair> repairs)
+    {
         var needsRename = false;
         foreach (var id in ids)
         {
@@ -284,9 +292,9 @@ public static class DrydockDocumentRebake
     /// Drops the <c>TimeSpan.MaxValue</c> sentinel from <c>TriggerOnProximity.nextVisualUpdate</c>.
     /// </summary>
     /// <remarks>
-    /// The field used to park at <c>TimeSpan.MaxValue</c> for "nothing scheduled", and
-    /// <c>TimeOffsetSerializer</c> wrote that as a huge offset. It is <c>TimeSpan?</c> now, with null for
-    /// nothing scheduled, but a document written before the change still carries the number: it reads
+    /// The field is <c>TimeSpan?</c>, null for nothing scheduled. A document written while it was a plain
+    /// <c>TimeSpan</c> parked at <c>TimeSpan.MaxValue</c> carries that as a huge offset from
+    /// <c>TimeOffsetSerializer</c>: it reads
     /// back into the nullable field as a value (clamped to <c>TimeSpan.MaxValue</c> when the retrieving
     /// clock is later than the storing one), and the generated unpause handler's <c>HasValue</c> guard
     /// lets the add through and overflows. Dropping the key reads the field as its default, null, which
@@ -298,7 +306,8 @@ public static class DrydockDocumentRebake
         "nextVisualUpdate",
         DropProximitySentinel);
 
-    private static readonly Repair[] RepairList = { ProximityVisualSentinel };
+    /// <summary>Every repair, run on each document whose text carries the repair's hint. Declared after the repairs it lists: static fields initialize in textual order.</summary>
+    public static readonly IReadOnlyList<Repair> Repairs = new[] { ProximityVisualSentinel };
 
     private static bool DropProximitySentinel(MappingDataNode root)
     {

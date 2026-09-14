@@ -135,10 +135,11 @@ public sealed partial class DrydockSystem
         foreach (var uid in aboard)
         {
             var job = JobOfOccupant(uid);
-            if (!drops.TryGetValue(job?.Id ?? string.Empty, out var drop))
+            var jobKey = job?.Id ?? string.Empty;
+            if (!drops.TryGetValue(jobKey, out var drop))
             {
                 drop = FindImpoundDropOff(ctx, job);
-                drops[job?.Id ?? string.Empty] = drop;
+                drops[jobKey] = drop;
             }
 
             // Both of these keep an occupant parented to the hull, so a bare move leaves them
@@ -180,10 +181,13 @@ public sealed partial class DrydockSystem
         if (ctx.HomeMap is not { } home)
             return;
 
+        // A rare-component query like the hazard gate's, not a hull walk: this runs at every organics
+        // gate, and the server's ghosts are far fewer than a hull's entities.
         var ghosts = new List<EntityUid>();
-        foreach (var uid in _fidelity.GridTreeList(gridUid))
+        var query = AllEntityQuery<GhostComponent, TransformComponent>();
+        while (query.MoveNext(out var uid, out _, out var xform))
         {
-            if (HasComp<GhostComponent>(uid))
+            if (xform.GridUid == gridUid)
                 ghosts.Add(uid);
         }
 

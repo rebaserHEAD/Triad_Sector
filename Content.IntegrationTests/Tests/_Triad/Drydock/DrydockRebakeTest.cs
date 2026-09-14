@@ -2,7 +2,6 @@
 
 using System;
 using System.Collections.Generic;
-using System.IO;
 using System.Linq;
 using System.Numerics;
 using System.Security.Cryptography;
@@ -11,12 +10,8 @@ using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 using Content.IntegrationTests.Pair;
-using Content.Server._NF.Shipyard.Systems;
 using Content.Server._Triad.Drydock;
 using Content.Server.Database;
-using Content.Server.Shuttles.Components;
-using Content.Server.Station.Components;
-using Content.Server.Station.Systems;
 using Content.Shared._Triad.CCVar;
 using Content.Shared._Triad.ShipSize;
 using Microsoft.EntityFrameworkCore;
@@ -24,10 +19,7 @@ using Robust.Shared.Configuration;
 using Robust.Shared.ContentPack;
 using Robust.Shared.GameObjects;
 using Robust.Shared.Map;
-using Robust.Shared.Map.Components;
-using Robust.Shared.Maths;
 using Robust.Shared.Prototypes;
-using Robust.Shared.Utility;
 
 namespace Content.IntegrationTests.Tests._Triad.Drydock
 {
@@ -47,6 +39,12 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
         /// </summary>
         private const string RenamedFrom = "lantern";
         private const string RenamedTo = "Lantern";
+
+        /// <summary>
+        /// The wall-clock bound on every pumped operation here: the sweep's worker hops are real time
+        /// on another thread, not ticks.
+        /// </summary>
+        private static readonly TimeSpan SweepTimeout = TimeSpan.FromSeconds(120);
 
         [Test]
         public async Task ASweepBakesARenameIntoASystemRevisionAndKeepsTheSource()
@@ -83,7 +81,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             });
 
             // A page of one, so the walk crosses pages and the keyset cursor is exercised on this provider.
-            var report = await RunOnServer(pair, () => drydock.RunRebakeSweep(throttle: false, pageSize: 1));
+            var report = await DrydockTestHelpers.RunOnServer(pair, () => drydock.RunRebakeSweep(throttle: false, pageSize: 1), SweepTimeout);
 
             Assert.Multiple(() =>
             {
@@ -96,7 +94,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             });
 
             var current = (await store.LoadCurrent(ship))!;
-            var yaml = Encoding.UTF8.GetString(Decompress(current.Blob));
+            var yaml = Encoding.UTF8.GetString(DrydockSystem.DecompressZstd(current.Blob));
             var bytes = Encoding.UTF8.GetBytes(yaml);
             var manifest = DrydockManifest.Deserialize(current.Revision.Manifest)!;
 
@@ -136,7 +134,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             Assert.That(await Revisions(pair, control), Is.EqualTo(new[] { 1 }), "The clean control got no revision.");
 
             // Idempotent: the re-baked document needs nothing, so a second sweep files nothing.
-            var again = await RunOnServer(pair, () => drydock.RunRebakeSweep(throttle: false));
+            var again = await DrydockTestHelpers.RunOnServer(pair, () => drydock.RunRebakeSweep(throttle: false), SweepTimeout);
             Assert.Multiple(() =>
             {
                 Assert.That(Outcome(again, ship), Is.EqualTo(DrydockRebakeShipResult.Clean));
@@ -157,7 +155,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             await FileDocument(store, ship, owner, "Kestrel", Document(RenamedFrom), Manifest(RenamedFrom));
             Assert.That(await store.TrySetState(ship, DrydockShipState.Stored, DrydockShipState.CheckedOut, DrydockAuditAction.Retrieve, owner, null, null), Is.True);
 
-            var report = await RunOnServer(pair, () => drydock.RunRebakeSweep(throttle: false));
+            var report = await DrydockTestHelpers.RunOnServer(pair, () => drydock.RunRebakeSweep(throttle: false), SweepTimeout);
             Assert.Multiple(() =>
             {
                 Assert.That(report!.Completed, Is.True);
@@ -167,7 +165,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
 
             // Control: stored again, the same sweep re-bakes it.
             Assert.That(await store.TrySetState(ship, DrydockShipState.CheckedOut, DrydockShipState.Stored, DrydockAuditAction.ClaimReleased, null, null, "test"), Is.True);
-            var stored = await RunOnServer(pair, () => drydock.RunRebakeSweep(throttle: false));
+            var stored = await DrydockTestHelpers.RunOnServer(pair, () => drydock.RunRebakeSweep(throttle: false), SweepTimeout);
             Assert.That(Outcome(stored, ship), Is.EqualTo(DrydockRebakeShipResult.Filed));
             Assert.That(await Revisions(pair, ship), Is.EqualTo(new[] { 1, 2 }));
 
@@ -184,7 +182,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             await FileDocument(store, ship, owner, "Kestrel", Document(RenamedFrom), Manifest(RenamedFrom));
 
             var secondStart = (DrydockRebakeStart?) null;
-            var report = await RunOnServer(pair, () => drydock.RunRebakeSweep(throttle: false, async guid =>
+            var report = await DrydockTestHelpers.RunOnServer(pair, () => drydock.RunRebakeSweep(throttle: false, async guid =>
             {
                 if (guid != ship)
                     return;
@@ -193,7 +191,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
 
                 // The player stores again between the worker's read of revision 1 and the filing.
                 await FileDocument(store, ship, owner, "Kestrel", Document(RenamedFrom), Manifest(RenamedFrom));
-            }));
+            }), SweepTimeout);
 
             Assert.Multiple(() =>
             {
@@ -207,7 +205,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             Assert.That((await store.GetAudit(ship)).Any(a => a.Action == DrydockAuditAction.Rebake), Is.False);
 
             // Control: the next sweep derives from the store that won and files.
-            var next = await RunOnServer(pair, () => drydock.RunRebakeSweep(throttle: false));
+            var next = await DrydockTestHelpers.RunOnServer(pair, () => drydock.RunRebakeSweep(throttle: false), SweepTimeout);
             Assert.That(Outcome(next, ship), Is.EqualTo(DrydockRebakeShipResult.Filed));
             Assert.That((await store.LoadCurrent(ship))!.Revision.DerivedFromRevision, Is.EqualTo(2));
 
@@ -227,7 +225,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             try
             {
                 await pair.Server.WaitPost(() => cfg.SetCVar(TriadCCVars.DrydockReadOnly, true));
-                var readOnly = await RunOnServer(pair, () => drydock.RunRebakeSweep(throttle: false));
+                var readOnly = await DrydockTestHelpers.RunOnServer(pair, () => drydock.RunRebakeSweep(throttle: false), SweepTimeout);
                 var start = DrydockRebakeStart.Started;
                 await pair.Server.WaitPost(() => start = drydock.StartRebakeSweep("test"));
                 Assert.Multiple(() =>
@@ -242,19 +240,19 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                     cfg.SetCVar(TriadCCVars.DrydockReadOnly, false);
                     cfg.SetCVar(TriadCCVars.DrydockRebakeEnabled, false);
                 });
-                var switchedOff = await RunOnServer(pair, () => drydock.RunRebakeSweep(throttle: false));
+                var switchedOff = await DrydockTestHelpers.RunOnServer(pair, () => drydock.RunRebakeSweep(throttle: false), SweepTimeout);
                 Assert.That(switchedOff!.Ships, Is.Empty, "The re-bake switch alone stops it too.");
                 Assert.That(await Revisions(pair, ship), Is.EqualTo(new[] { 1 }));
 
                 // Mid-sweep: read-only turned on while this ship's document is ready to file.
                 await pair.Server.WaitPost(() => cfg.SetCVar(TriadCCVars.DrydockRebakeEnabled, true));
-                var stopped = await RunOnServer(pair, () => drydock.RunRebakeSweep(throttle: false, guid =>
+                var stopped = await DrydockTestHelpers.RunOnServer(pair, () => drydock.RunRebakeSweep(throttle: false, guid =>
                 {
                     if (guid == ship)
                         cfg.SetCVar(TriadCCVars.DrydockReadOnly, true);
 
                     return Task.CompletedTask;
-                }));
+                }), SweepTimeout);
                 Assert.Multiple(() =>
                 {
                     Assert.That(stopped!.Completed, Is.False, "Stopped, not finished.");
@@ -264,7 +262,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
 
                 // Control: every switch back on, the same sweep files.
                 await pair.Server.WaitPost(() => cfg.SetCVar(TriadCCVars.DrydockReadOnly, false));
-                var resumed = await RunOnServer(pair, () => drydock.RunRebakeSweep(throttle: false));
+                var resumed = await DrydockTestHelpers.RunOnServer(pair, () => drydock.RunRebakeSweep(throttle: false), SweepTimeout);
                 Assert.That(Outcome(resumed, ship), Is.EqualTo(DrydockRebakeShipResult.Filed));
             }
             finally
@@ -292,14 +290,18 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             var (store, drydock, owner) = await Setup(pair);
             await store.AddBerth(owner, ShipSizeClass.SuperCapital, DrydockBerthKind.Granted, 0, null, null);
 
-            var (station, shipGrid) = await BuildShipAndStation(pair);
-            var (stored, shipId) = await RunOnServer(pair, () => drydock.TryStoreShip(shipGrid, owner, null));
+            var (station, shipGrid, _) = await DrydockRoundTripTest.BuildShipAndStation(pair);
+            // Tile (0, 0), clear of the airlock the builder anchors on tile (1, 1).
+            await server.WaitPost(() => server.EntMan.SpawnEntity(RenamedTo, new EntityCoordinates(shipGrid, new Vector2(0.5f, 0.5f))));
+            await pair.RunTicksSync(5);
+
+            var (stored, shipId) = await DrydockTestHelpers.RunOnServer(pair, () => drydock.TryStoreShip(shipGrid, owner, null), SweepTimeout);
             Assert.That(stored, Is.EqualTo(DrydockStoreResult.Success));
             await pair.RunTicksSync(5);
 
             // Put the stored document back on the old id, as a new player revision.
             var filed = (await store.LoadCurrent(shipId!.Value))!;
-            var newYaml = Encoding.UTF8.GetString(Decompress(filed.Blob));
+            var newYaml = Encoding.UTF8.GetString(DrydockSystem.DecompressZstd(filed.Blob));
             // The engine writes the platform's line ending, so the group line is matched either way.
             var group = new Regex($@"^- proto: {RenamedTo}(\r?)$", RegexOptions.Multiline);
             Assert.That(group.Matches(newYaml), Has.Count.EqualTo(1), "Control: the stored ship carries one lantern group.");
@@ -307,7 +309,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             var oldManifest = filed.Revision.Manifest.Replace($"\"p\":\"{RenamedTo}\"", $"\"p\":\"{RenamedFrom}\"");
             await FileDocument(store, shipId.Value, owner, filed.Ship.ShipName, oldYaml, oldManifest, filed.Revision.CapturedKeyHash, filed.Ship.SizeClass);
 
-            var report = await RunOnServer(pair, () => drydock.RunRebakeSweep(throttle: false));
+            var report = await DrydockTestHelpers.RunOnServer(pair, () => drydock.RunRebakeSweep(throttle: false), SweepTimeout);
             Assert.That(Outcome(report, shipId.Value), Is.EqualTo(DrydockRebakeShipResult.Filed));
 
             var rebaked = (await store.LoadCurrent(shipId.Value))!;
@@ -318,7 +320,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                     "The manifest's renames undo exactly what was done to it.");
             });
 
-            var retrieved = await RunOnServer(pair, () => drydock.TryRetrieveShip(shipId.Value, owner, station, null));
+            var retrieved = await DrydockTestHelpers.RunOnServer(pair, () => drydock.TryRetrieveShip(shipId.Value, owner, station, null), SweepTimeout);
             Assert.That(retrieved.Result, Is.EqualTo(DrydockRetrieveResult.Success));
             await pair.RunTicksSync(5);
 
@@ -409,26 +411,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                 SizeBytes = bytes.Length,
                 AppraisedValue = 24000,
                 Manifest = manifest,
-            }, Compress(bytes), keepBlobs: 3);
-        }
-
-        private static byte[] Compress(byte[] input)
-        {
-            using var output = new MemoryStream();
-            using (var compress = new ZStdCompressStream(output, ownStream: false))
-            {
-                compress.Write(input);
-            }
-
-            return output.ToArray();
-        }
-
-        private static byte[] Decompress(byte[] input)
-        {
-            using var decompress = new ZStdDecompressStream(new MemoryStream(input));
-            using var output = new MemoryStream();
-            decompress.CopyTo(output);
-            return output.ToArray();
+            }, DrydockSystem.CompressZstd(bytes), keepBlobs: 3);
         }
 
         /// <summary>The sweep's outcome for one ship, or null when the sweep never reached it: never the enum's default by accident.</summary>
@@ -455,68 +438,5 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                     .ToArrayAsync(token), CancellationToken.None);
         }
 
-        /// <summary>A plated three-by-three grid with a lantern on it, and a station to dock it at.</summary>
-        private static async Task<(EntityUid Station, EntityUid ShipGrid)> BuildShipAndStation(TestPair pair)
-        {
-            var server = pair.Server;
-            var entMan = server.EntMan;
-            var shipyard = server.System<ShipyardSystem>();
-            var stationSys = server.System<StationSystem>();
-            var mapSys = server.System<SharedMapSystem>();
-
-            var map = await pair.CreateTestMap();
-
-            EntityUid station = default;
-            EntityUid shipGrid = default;
-
-            await server.WaitPost(() =>
-            {
-                shipyard.SetupShipyardIfNeeded();
-
-                station = entMan.Spawn();
-                entMan.AddComponent<StationDataComponent>(station);
-                stationSys.AddGridToStation(station, map.Grid.Owner);
-
-                var ship = mapSys.CreateGridEntity(map.MapId);
-                shipGrid = ship.Owner;
-
-                var tile = new Tile(1);
-                for (var x = 0; x < 3; x++)
-                {
-                    for (var y = 0; y < 3; y++)
-                    {
-                        mapSys.SetTile(ship.Owner, ship.Comp, new Vector2i(x, y), tile);
-                    }
-                }
-
-                entMan.EnsureComponent<ShuttleComponent>(shipGrid);
-                entMan.System<MetaDataSystem>().SetEntityName(shipGrid, "Kestrel");
-                entMan.SpawnEntity(RenamedTo, new EntityCoordinates(shipGrid, new Vector2(1f, 1f)));
-            });
-
-            await pair.MakeCleanupImmune(map.Grid.Owner);
-            await pair.RunTicksSync(5);
-
-            return (station, shipGrid);
-        }
-
-        /// <summary>
-        /// Starts a server-side async operation on the game thread and pumps ticks until it finishes,
-        /// bounded by the wall clock: the sweep's worker hops are real time on another thread, not ticks.
-        /// </summary>
-        private static async Task<T> RunOnServer<T>(TestPair pair, Func<Task<T>> start)
-        {
-            Task<T>? task = null;
-            await pair.Server.WaitPost(() => task = start());
-
-            var deadline = System.Diagnostics.Stopwatch.StartNew();
-            while (!task!.IsCompleted && deadline.Elapsed < TimeSpan.FromSeconds(120))
-            {
-                await pair.RunTicksSync(1);
-            }
-
-            Assert.That(task!.IsCompleted, Is.True, "The operation never completed.");
-            return await task;
-        }
     }
 }

@@ -502,14 +502,12 @@ public sealed partial class DrydockFidelitySystem : EntitySystem
 
     private bool IsSerializable(Type type, object value)
     {
-        // Emptiness is decided before the populated cache is ever read, and the order is the fix for
-        // a real defect. An empty collection writes whatever its element type is, so a populated
-        // value's "no serializer" verdict says nothing about it; consulted first, that cached false
-        // leaked onto every later empty field of the same type, which were then captured and cleared.
-        // The captured-key set is persisted in the manifest and hashed into CapturedKeyHash, so it has
-        // to be a function of the ship. With the cache read first it was a function of server history:
-        // one Medicus filed no lathe-queue key when stored before a hull with a queued lathe and one
-        // key when stored after it, found by the golden corpus 2026-09-13.
+        // Emptiness is decided before the populated cache is ever read. An empty collection writes
+        // whatever its element type is, so a populated value's "no serializer" verdict says nothing
+        // about it, and reading that cached false first would capture and clear every later empty
+        // field of the same type. The captured-key set is persisted in the manifest and hashed into
+        // CapturedKeyHash, so it must be a function of the ship alone, never of what the server probed
+        // earlier (DrydockCaptureVerdictOrderTest).
         //
         // An empty value therefore has its own memory. It cannot prove its type serializable, so its
         // success never goes into _serializable, but a type that writes when empty writes when empty

@@ -103,7 +103,7 @@ public sealed partial class DrydockStore
     /// one costs disk when it is misconfigured.</para>
     ///
     /// <para>The window is counted over the documents that exist rather than by revision arithmetic,
-    /// so a gap in a ship's documents (a prune from before the floor existed, a hand repair) cannot
+    /// so a gap in a ship's documents (a hand repair, a prune under a smaller window) cannot
     /// pull the edge past the only one left.
     /// <paramref name="keptRevision"/> is still unsaved when this runs (every caller adds it to the
     /// tracker first and saves after), which is why the count reads the table below it and reserves

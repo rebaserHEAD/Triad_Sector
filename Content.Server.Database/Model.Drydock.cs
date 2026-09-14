@@ -452,7 +452,7 @@ public sealed class DrydockRevision
 
     /// <summary>
     /// Hash over the set of prototype ids the blob references. One of the two drift classes, and
-    /// the one the re-bake ladder is designed to heal; no worker files re-bakes yet.
+    /// the one the re-bake sweep heals (<c>DrydockSystem.RunRebakeSweep</c>).
     /// </summary>
     public byte[] ProtoFingerprint { get; set; } = Array.Empty<byte>();
 

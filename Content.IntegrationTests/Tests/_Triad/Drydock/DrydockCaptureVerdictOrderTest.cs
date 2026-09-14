@@ -13,11 +13,11 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
 {
     /// <summary>
     /// The captured-key set is persisted in every manifest and hashed into every revision's
-    /// <c>captured_key_hash</c>, so it has to be a function of the ship being stored. It was a function
-    /// of server history: the capture's verdict cache is process-wide, and once a populated lathe queue
-    /// had been probed and found unserializable, that verdict was read before the empty-collection
-    /// shortcut, so every later empty queue on any ship was captured too. The golden corpus caught one
-    /// Medicus filing different keys depending on which hull the server had stored before it.
+    /// <c>captured_key_hash</c>, so it has to be a function of the ship being stored and never of server
+    /// history. The capture's verdict cache is process-wide, so the empty-collection shortcut is read
+    /// before any cached verdict: a populated lathe queue probed and found unserializable must not make
+    /// an empty queue on any other ship captured, or one hull files different keys depending on which
+    /// hull the server stored before it.
     ///
     /// <para>A fresh server, because the verdict cache lives as long as the server does and a pooled one
     /// may already have seen a populated queue. The same empty lathe is captured before and after a

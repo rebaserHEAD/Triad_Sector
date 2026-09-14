@@ -310,8 +310,10 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
         /// <summary>
         /// Files <paramref name="fixture"/> as a fresh hull, retrieves it through the real pipeline,
         /// compares the reborn grid with the fixture's own record, then stores the reborn grid again and
-        /// compares the manifest that store writes. Never asserts: it reports, so the gate can name every
-        /// failing fixture at once and a control can check which assertion went red.
+        /// compares the manifest that store writes. Never asserts on what it compares: it reports, so the
+        /// gate can name every failing fixture at once and a control can check which assertion went red.
+        /// A pipeline operation that never completes fails the test through
+        /// <see cref="DrydockTestHelpers.RunOnServer{T}"/>'s own assertion.
         /// </summary>
         /// <param name="onReborn">
         /// Runs on the game thread with the reborn grid before it is stored again. The refresh path uses
@@ -383,7 +385,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                     return report;
                 }
 
-                var retrieved = await RunOnServer(pair, () => drydock.TryRetrieveShip(shipId, owner, station, null));
+                var retrieved = await DrydockTestHelpers.RunOnServer(pair, () => drydock.TryRetrieveShip(shipId, owner, station, null), OperationTimeout);
                 if (!retrieved.Succeeded || retrieved.Grid is not { } grid)
                 {
                     report.Load.Add($"retrieve refused with {retrieved.Result}");
@@ -413,7 +415,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                 // the store lands a second revision on the same row the way a player's would.
                 await server.WaitPost(() => entMan.EnsureComponent<DrydockIdentityComponent>(grid).ShipId = shipId);
 
-                var (restored, restoredId) = await RunOnServer(pair, () => drydock.TryStoreShip(grid, owner, null));
+                var (restored, restoredId) = await DrydockTestHelpers.RunOnServer(pair, () => drydock.TryStoreShip(grid, owner, null), OperationTimeout);
                 if (restored != DrydockStoreResult.Success || restoredId != shipId)
                 {
                     report.Restore.Add($"the reborn grid would not store again ({restored}, filed as {restoredId})");
@@ -478,26 +480,10 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
         }
 
         /// <summary>
-        /// Starts a pipeline on the game thread and pumps until it finishes, bounded by the wall clock:
-        /// with slicing off, what the pump waits on is thread-pool work, which a tick count does not
-        /// measure. Same shape and reason as the roster sweep's.
+        /// The wall-clock bound on one pipeline operation against a corpus hull, passed to
+        /// <see cref="DrydockTestHelpers.RunOnServer{T}"/>.
         /// </summary>
-        public static async Task<T> RunOnServer<T>(TestPair pair, Func<Task<T>> start)
-        {
-            Task<T>? task = null;
-            await pair.Server.WaitPost(() => task = start());
-
-            var deadline = System.Diagnostics.Stopwatch.StartNew();
-            while (!task!.IsCompleted && deadline.Elapsed < TimeSpan.FromSeconds(120))
-            {
-                await pair.RunTicksSync(1);
-            }
-
-            if (!task.IsCompleted)
-                throw new TimeoutException("A drydock operation did not complete within two minutes of wall clock.");
-
-            return await task;
-        }
+        public static readonly TimeSpan OperationTimeout = TimeSpan.FromSeconds(120);
 
         /// <summary>One entity, in the terms a manifest can state and a reborn grid can be read in.</summary>
         public readonly record struct GoldenRecord(string Path, string Proto, float Damage, int Stack, string Keys)
@@ -783,27 +769,6 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
         }
 
         public static string Sha256(byte[] bytes) => Convert.ToBase64String(SHA256.HashData(bytes));
-
-        /// <summary>The drydock's own codec, for the controls that edit a document and file it again.</summary>
-        public static byte[] Decompress(byte[] blob)
-        {
-            using var decompress = new Robust.Shared.Utility.ZStdDecompressStream(new MemoryStream(blob));
-            using var output = new MemoryStream();
-            decompress.CopyTo(output);
-            return output.ToArray();
-        }
-
-        /// <inheritdoc cref="Decompress"/>
-        public static byte[] Compress(byte[] document)
-        {
-            using var output = new MemoryStream();
-            using (var compress = new Robust.Shared.Utility.ZStdCompressStream(output, ownStream: false))
-            {
-                compress.Write(document);
-            }
-
-            return output.ToArray();
-        }
 
         /// <summary>Whether a prototype id is currently <c>save: false</c>. An unknown id is not.</summary>
         public static Func<string, bool> UnsavableIn(IPrototypeManager protoMan) =>

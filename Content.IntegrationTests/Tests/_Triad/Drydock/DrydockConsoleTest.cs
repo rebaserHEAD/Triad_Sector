@@ -108,7 +108,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                 Assert.That(entMan.GetComponent<ShuttleConsoleLockComponent>(helm).ShuttleId, Is.EqualTo(ship.ToString()));
             });
 
-            var stored = await RunOnServer(pair,
+            var stored = await DrydockTestHelpers.RunOnServer(pair,
                 () => shipyard.TryDrydockStore(console, consoleComp, operatorEnt, ShipyardConsoleUiKey.Shipyard));
 
             Assert.That(stored, Is.Not.Null, "A store by the ship's own owner must reach the pipeline rather than being refused at the console.");
@@ -130,7 +130,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
 
             // Separates "the store filed nothing under this account" from "the console dropped it":
             // if this row is here and the tab does not show it, the fault is the console's filter.
-            var rows = await RunOnServer(pair, () => drydockStore.GetShipsByOwner(session.UserId.UserId));
+            var rows = await DrydockTestHelpers.RunOnServer(pair, () => drydockStore.GetShipsByOwner(session.UserId.UserId));
             var filed = rows.SingleOrDefault(r => r.ShipGuid == shipId);
             Assert.That(filed, Is.Not.Null,
                 "The store must file the ship under the operating player's own account, or nothing downstream can find it.");
@@ -139,7 +139,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
 
             // The list the drydock tab renders. It is filled by an awaited database read, so it is
             // the console's own view of what this player may retrieve.
-            await RunOnServer(pair, async () =>
+            await DrydockTestHelpers.RunOnServer(pair, async () =>
             {
                 await shipyard.RefreshDrydockState(console, consoleComp, operatorEnt, ShipyardConsoleUiKey.Shipyard);
                 return true;
@@ -153,7 +153,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                 Assert.That(listed!.Name, Is.EqualTo("Kestrel"));
             });
 
-            var retrieved = await RunOnServer(pair,
+            var retrieved = await DrydockTestHelpers.RunOnServer(pair,
                 () => shipyard.TryDrydockRetrieve(console, consoleComp, operatorEnt, shipId, ShipyardConsoleUiKey.Shipyard));
 
             Assert.That(retrieved, Is.Not.Null, "The owner must be able to take back the ship they just put away.");
@@ -223,7 +223,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                     $"Nothing has filed this hull yet, so a record found here ('{existing?.Name}') would belong to another test.");
             });
 
-            var stored = await RunOnServer(pair,
+            var stored = await DrydockTestHelpers.RunOnServer(pair,
                 () => shipyard.TryDrydockStore(console, consoleComp, operatorEnt, ShipyardConsoleUiKey.Shipyard));
 
             Assert.That(stored, Is.Not.Null, "A store of the operator's own ship must reach the pipeline.");
@@ -231,7 +231,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
 
             await pair.RunTicksSync(5);
 
-            var retrieved = await RunOnServer(pair,
+            var retrieved = await DrydockTestHelpers.RunOnServer(pair,
                 () => shipyard.TryDrydockRetrieve(console, consoleComp, operatorEnt, stored.Value.ShipId!.Value, ShipyardConsoleUiKey.Shipyard));
 
             Assert.That(retrieved, Is.Not.Null, "A hull with no grid deed still belongs to the account that filed it.");
@@ -307,7 +307,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                 Assert.That(entMan.HasComponent<StationMemberComponent>(ship), Is.False,
                     "The control: a ship that is already a station member would be answered by the station branch."));
 
-            var stored = await RunOnServer(pair,
+            var stored = await DrydockTestHelpers.RunOnServer(pair,
                 () => shipyard.TryDrydockStore(console, consoleComp, operatorEnt, ShipyardConsoleUiKey.Shipyard));
 
             Assert.That(stored, Is.Not.Null);
@@ -315,14 +315,14 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
 
             await pair.RunTicksSync(5);
 
-            var rows = await RunOnServer(pair, () => drydockStore.GetShipsByOwner(session.UserId.UserId));
+            var rows = await DrydockTestHelpers.RunOnServer(pair, () => drydockStore.GetShipsByOwner(session.UserId.UserId));
             var filed = rows.SingleOrDefault(r => r.ShipGuid == stored.Value.ShipId!.Value);
 
             Assert.That(filed, Is.Not.Null);
             Assert.That(filed!.VesselProto, Is.EqualTo(vesselId),
                 "With no station to read, the store has to take the vessel id off the grid or the row is filed blank forever.");
 
-            var retrieved = await RunOnServer(pair,
+            var retrieved = await DrydockTestHelpers.RunOnServer(pair,
                 () => shipyard.TryDrydockRetrieve(console, consoleComp, operatorEnt, stored.Value.ShipId!.Value, ShipyardConsoleUiKey.Shipyard));
 
             Assert.That(retrieved, Is.Not.Null);
@@ -385,7 +385,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                 Assert.That(blank.Color, Is.EqualTo(IFFComponent.IFFColor), "The control: the blank is the factory gold.");
             });
 
-            var stored = await RunOnServer(pair,
+            var stored = await DrydockTestHelpers.RunOnServer(pair,
                 () => shipyard.TryDrydockStore(console, consoleComp, operatorEnt, ShipyardConsoleUiKey.Shipyard));
 
             Assert.That(stored, Is.Not.Null);
@@ -393,7 +393,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
 
             await pair.RunTicksSync(5);
 
-            var retrieved = await RunOnServer(pair,
+            var retrieved = await DrydockTestHelpers.RunOnServer(pair,
                 () => shipyard.TryDrydockRetrieve(console, consoleComp, operatorEnt, stored.Value.ShipId!.Value, ShipyardConsoleUiKey.Shipyard));
 
             Assert.That(retrieved, Is.Not.Null);
@@ -452,7 +452,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                 shuttles.SetIFFColor(ship, crewColor);
             });
 
-            var stored = await RunOnServer(pair,
+            var stored = await DrydockTestHelpers.RunOnServer(pair,
                 () => shipyard.TryDrydockStore(console, consoleComp, operatorEnt, ShipyardConsoleUiKey.Shipyard));
 
             Assert.That(stored, Is.Not.Null);
@@ -460,7 +460,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
 
             await pair.RunTicksSync(5);
 
-            var retrieved = await RunOnServer(pair,
+            var retrieved = await DrydockTestHelpers.RunOnServer(pair,
                 () => shipyard.TryDrydockRetrieve(console, consoleComp, operatorEnt, stored.Value.ShipId!.Value, ShipyardConsoleUiKey.Shipyard));
 
             Assert.That(retrieved, Is.Not.Null);
@@ -538,7 +538,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
 
             var (station, stationGrid, ship, console, consoleComp, card, operatorEnt) = await BuildConsoleAndShip(pair, session.UserId);
 
-            var stored = await RunOnServer(pair,
+            var stored = await DrydockTestHelpers.RunOnServer(pair,
                 () => shipyard.TryDrydockStore(console, consoleComp, operatorEnt, ShipyardConsoleUiKey.Shipyard));
             Assert.That(stored?.Result, Is.EqualTo(DrydockStoreResult.Success));
 
@@ -548,7 +548,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
 
             await pair.RunTicksSync(5);
 
-            await RunOnServer(pair, async () =>
+            await DrydockTestHelpers.RunOnServer(pair, async () =>
             {
                 await shipyard.RefreshDrydockState(console, consoleComp, operatorEnt, ShipyardConsoleUiKey.Shipyard);
                 return true;
@@ -560,7 +560,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                     "The control: a stored ship is listed, so its later absence means something.");
             });
 
-            var first = await RunOnServer(pair,
+            var first = await DrydockTestHelpers.RunOnServer(pair,
                 () => shipyard.TryDrydockRetrieve(console, consoleComp, operatorEnt, shipId, ShipyardConsoleUiKey.Shipyard));
             Assert.That(first, Is.Not.Null, "The control: the first retrieve has to succeed, or the second proves nothing.");
 
@@ -572,7 +572,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             await server.WaitPost(() => entMan.RemoveComponent<ShipOwnershipComponent>(first!.Value));
             await pair.RunTicksSync(2);
 
-            await RunOnServer(pair, async () =>
+            await DrydockTestHelpers.RunOnServer(pair, async () =>
             {
                 await shipyard.RefreshDrydockState(console, consoleComp, operatorEnt, ShipyardConsoleUiKey.Shipyard);
                 return true;
@@ -589,7 +589,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                     "The list must say the ship is out, or the tab would offer a retrieve that the row refuses.");
             });
 
-            var second = await RunOnServer(pair,
+            var second = await DrydockTestHelpers.RunOnServer(pair,
                 () => shipyard.TryDrydockRetrieve(console, consoleComp, operatorEnt, shipId, ShipyardConsoleUiKey.Shipyard));
 
             Assert.That(second, Is.Null,
@@ -625,7 +625,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             var absentOwner = new Robust.Shared.Network.NetUserId(Guid.NewGuid());
             var (station, stationGrid, ship, console, consoleComp, card, operatorEnt) = await BuildConsoleAndShip(pair, absentOwner);
 
-            var result = await RunOnServer(pair,
+            var result = await DrydockTestHelpers.RunOnServer(pair,
                 () => shipyard.TryDrydockStore(console, consoleComp, operatorEnt, ShipyardConsoleUiKey.Shipyard));
 
             Assert.That(result, Is.Null,
@@ -647,7 +647,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
 
             // The refusal is on the timeline, filed against the account that sent it. The console
             // never offers this click, so a row here is the signal an admin reads a stolen card by.
-            var refusals = await RunOnServer(pair, () => store.GetAuditByActor(session.UserId.UserId, 20));
+            var refusals = await DrydockTestHelpers.RunOnServer(pair, () => store.GetAuditByActor(session.UserId.UserId, 20));
             var refusal = refusals.FirstOrDefault(a => a.Action == DrydockAuditAction.AccessRefused && a.Reason == "store");
             Assert.That(refusal, Is.Not.Null, "A refused store by a non-owner must be written to the timeline.");
             Assert.That(refusal!.SubjectUserId, Is.EqualTo(absentOwner.UserId), "The row names whose ship was asked for.");
@@ -683,7 +683,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             var me = session.UserId.UserId;
             var (station, stationGrid, ship, console, consoleComp, card, operatorEnt) = await BuildConsoleAndShip(pair, session.UserId);
 
-            var stored = await RunOnServer(pair,
+            var stored = await DrydockTestHelpers.RunOnServer(pair,
                 () => shipyard.TryDrydockStore(console, consoleComp, operatorEnt, ShipyardConsoleUiKey.Shipyard));
             Assert.That(stored?.Result, Is.EqualTo(DrydockStoreResult.Success));
             var shipId = stored!.Value.ShipId!.Value;
@@ -720,7 +720,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
 
             // The recipient gate: the stranger is not online, so the console refuses before any
             // row is written. The ownership check passed, so nothing is on the timeline for it.
-            var offline = await RunOnServer(pair,
+            var offline = await DrydockTestHelpers.RunOnServer(pair,
                 () => shipyard.TryOfferTransfer(console, consoleComp, operatorEnt, shipId, stranger, ShipyardConsoleUiKey.Shipyard));
             Assert.That(offline, Is.False, "An offer to a captain who is not online is refused.");
             Assert.That((await store.GetShipHeader(shipId))!.State, Is.EqualTo(DrydockShipState.Stored));
@@ -728,11 +728,11 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             // A ship this account does not own: refused, and the refusal is on the timeline with
             // both accounts named. This is the only way a console ever writes such a row, since
             // the tab never offers the click.
-            var forged = await RunOnServer(pair,
+            var forged = await DrydockTestHelpers.RunOnServer(pair,
                 () => shipyard.TryOfferTransfer(console, consoleComp, operatorEnt, theirs, stranger, ShipyardConsoleUiKey.Shipyard));
             Assert.That(forged, Is.False, "A session that does not own the row cannot offer it, whatever card is in the slot.");
 
-            var refusals = await RunOnServer(pair, () => store.GetAuditByActor(me, 20));
+            var refusals = await DrydockTestHelpers.RunOnServer(pair, () => store.GetAuditByActor(me, 20));
             var refusal = refusals.FirstOrDefault(a => a.Action == DrydockAuditAction.AccessRefused && a.ShipGuid == theirs);
             Assert.That(refusal, Is.Not.Null, "A refused offer must be on the timeline: it is the stolen-card signal.");
             Assert.Multiple(() =>
@@ -752,22 +752,22 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                 Assert.That(inEscrow.BerthId, Is.Not.Null, "A ship in escrow keeps its berth.");
             });
 
-            var retrieved = await RunOnServer(pair,
+            var retrieved = await DrydockTestHelpers.RunOnServer(pair,
                 () => shipyard.TryDrydockRetrieve(console, consoleComp, operatorEnt, shipId, ShipyardConsoleUiKey.Shipyard));
             Assert.That(retrieved, Is.Null, "A ship in escrow does not come out.");
             Assert.That((await store.GetShipHeader(shipId))!.State, Is.EqualTo(DrydockShipState.InEscrow));
 
             // The wrong party answering: the owner cannot decline their own offer, and the
             // attempt is written down against the ship.
-            var selfDecline = await RunOnServer(pair,
+            var selfDecline = await DrydockTestHelpers.RunOnServer(pair,
                 () => shipyard.TryDeclineTransfer(console, consoleComp, operatorEnt, transfer!.Id, ShipyardConsoleUiKey.Shipyard));
             Assert.That(selfDecline, Is.False);
-            refusals = await RunOnServer(pair, () => store.GetAuditByActor(me, 20));
+            refusals = await DrydockTestHelpers.RunOnServer(pair, () => store.GetAuditByActor(me, 20));
             Assert.That(refusals.Any(a => a.Action == DrydockAuditAction.AccessRefused && a.ShipGuid == shipId && a.Reason == "decline offer"),
                 "Declining an offer you made is a forged message and goes on the timeline.");
 
             // The owner withdraws it from the console: the ship is stored again.
-            var cancelled = await RunOnServer(pair,
+            var cancelled = await DrydockTestHelpers.RunOnServer(pair,
                 () => shipyard.TryCancelTransfer(console, consoleComp, operatorEnt, transfer!.Id, ShipyardConsoleUiKey.Shipyard));
             Assert.That(cancelled, Is.True);
             Assert.That((await store.GetShipHeader(shipId))!.State, Is.EqualTo(DrydockShipState.Stored));
@@ -778,7 +778,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             var (offeredBack, incoming) = await store.TryOfferTransfer(theirs, stranger, me, TimeSpan.FromMinutes(30), null);
             Assert.That(offeredBack, Is.EqualTo(DrydockBerthResult.Success));
 
-            var accepted = await RunOnServer(pair,
+            var accepted = await DrydockTestHelpers.RunOnServer(pair,
                 () => shipyard.TryAcceptTransfer(console, consoleComp, operatorEnt, incoming!.Id, ShipyardConsoleUiKey.Shipyard));
             Assert.That(accepted, Is.True, "The account the offer names accepts it; the character's mind is not consulted.");
             var mine = (await store.GetShipHeader(theirs))!;
@@ -830,7 +830,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             // one instead and check the request wins over the preference.
             var named = await store.AddBerth(session.UserId.UserId, ShipSizeClass.Capital, DrydockBerthKind.Granted, 0, null, null);
 
-            await RunOnServer(pair, async () =>
+            await DrydockTestHelpers.RunOnServer(pair, async () =>
             {
                 await shipyard.RefreshDrydockState(console, consoleComp, operatorEnt, ShipyardConsoleUiKey.Shipyard);
                 return true;
@@ -846,15 +846,15 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                 Assert.That(deedShip.FittingBerthIds, Does.Contain(named), "Every free berth the hull fits is offered, including the one about to be named.");
             });
 
-            var stored = await RunOnServer(pair,
+            var stored = await DrydockTestHelpers.RunOnServer(pair,
                 () => shipyard.TryDrydockStore(console, consoleComp, operatorEnt, ShipyardConsoleUiKey.Shipyard, named));
             Assert.That(stored?.Result, Is.EqualTo(DrydockStoreResult.Success));
             await pair.RunTicksSync(5);
 
-            var header = await RunOnServer(pair, () => store.GetShipHeader(stored!.Value.ShipId!.Value));
+            var header = await DrydockTestHelpers.RunOnServer(pair, () => store.GetShipHeader(stored!.Value.ShipId!.Value));
             Assert.That(header!.BerthId, Is.EqualTo(named), "A store that names a berth lands in that berth.");
 
-            await RunOnServer(pair, async () =>
+            await DrydockTestHelpers.RunOnServer(pair, async () =>
             {
                 await shipyard.RefreshDrydockState(console, consoleComp, operatorEnt, ShipyardConsoleUiKey.Shipyard);
                 return true;
@@ -898,35 +898,35 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             var me = session.UserId.UserId;
             var (station, stationGrid, ship, console, consoleComp, card, operatorEnt) = await BuildConsoleAndShip(pair, session.UserId);
 
-            var stored = await RunOnServer(pair,
+            var stored = await DrydockTestHelpers.RunOnServer(pair,
                 () => shipyard.TryDrydockStore(console, consoleComp, operatorEnt, ShipyardConsoleUiKey.Shipyard));
             Assert.That(stored?.Result, Is.EqualTo(DrydockStoreResult.Success));
             var shipId = stored!.Value.ShipId!.Value;
             await pair.RunTicksSync(5);
 
             // Rename: the shape is enforced, then the row changes and nothing else does yet.
-            var badName = await RunOnServer(pair,
+            var badName = await DrydockTestHelpers.RunOnServer(pair,
                 () => shipyard.TryRenameStoredShip(console, consoleComp, operatorEnt, shipId, "Falcon!!", ShipyardConsoleUiKey.Shipyard));
             Assert.That(badName, Is.False, "Punctuation outside the allowed shape is refused.");
 
-            var renamed = await RunOnServer(pair,
+            var renamed = await DrydockTestHelpers.RunOnServer(pair,
                 () => shipyard.TryRenameStoredShip(console, consoleComp, operatorEnt, shipId, "Falcon", ShipyardConsoleUiKey.Shipyard));
             Assert.That(renamed, Is.True);
             Assert.That((await store.GetShipHeader(shipId))!.ShipName, Is.EqualTo("Falcon"));
 
-            var renames = await RunOnServer(pair, () => store.GetAuditByActor(me, 20));
+            var renames = await DrydockTestHelpers.RunOnServer(pair, () => store.GetAuditByActor(me, 20));
             Assert.That(renames.Any(a => a.Action == DrydockAuditAction.Renamed && a.ShipGuid == shipId && a.ShipName == "Kestrel"),
                 "The rename row carries the OLD name, so the old name stays searchable.");
 
             // Move: into a berth the store would not have picked on its own.
             var named = await store.AddBerth(me, ShipSizeClass.Capital, DrydockBerthKind.Granted, 0, null, null);
-            var moved = await RunOnServer(pair,
+            var moved = await DrydockTestHelpers.RunOnServer(pair,
                 () => shipyard.TryMoveStoredShip(console, consoleComp, operatorEnt, shipId, named, ShipyardConsoleUiKey.Shipyard));
             Assert.That(moved, Is.True);
             Assert.That((await store.GetShipHeader(shipId))!.BerthId, Is.EqualTo(named));
 
             // Retrieve: the hull comes back wearing the row's name.
-            var grid = await RunOnServer(pair,
+            var grid = await DrydockTestHelpers.RunOnServer(pair,
                 () => shipyard.TryDrydockRetrieve(console, consoleComp, operatorEnt, shipId, ShipyardConsoleUiKey.Shipyard));
             Assert.That(grid, Is.Not.Null);
             await server.WaitAssertion(() =>
@@ -937,7 +937,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             await pair.RunTicksSync(5);
 
             // Store again, which captures the appraisal the sale quotes from.
-            var restored = await RunOnServer(pair,
+            var restored = await DrydockTestHelpers.RunOnServer(pair,
                 () => shipyard.TryDrydockStore(console, consoleComp, operatorEnt, ShipyardConsoleUiKey.Shipyard));
             Assert.That(restored?.Result, Is.EqualTo(DrydockStoreResult.Success));
             Assert.That(restored!.Value.ShipId, Is.EqualTo(shipId), "The same hull files a new revision, not a new ship.");
@@ -949,12 +949,12 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             await server.WaitPost(() => entMan.EnsureComponent<Content.Shared._NF.Bank.Components.BankAccountComponent>(operatorEnt));
 
             // Sell: the typed name is the safety. The old name no longer matches.
-            var wrongName = await RunOnServer(pair,
+            var wrongName = await DrydockTestHelpers.RunOnServer(pair,
                 () => shipyard.TrySellStoredShip(console, consoleComp, operatorEnt, shipId, "Kestrel", ShipyardConsoleUiKey.Shipyard));
             Assert.That(wrongName.Sold, Is.False, "A sale needs the ship's exact current name typed.");
             Assert.That((await store.GetShipHeader(shipId))!.State, Is.EqualTo(DrydockShipState.Stored));
 
-            var sale = await RunOnServer(pair,
+            var sale = await DrydockTestHelpers.RunOnServer(pair,
                 () => shipyard.TrySellStoredShip(console, consoleComp, operatorEnt, shipId, "Falcon", ShipyardConsoleUiKey.Shipyard));
             Assert.That(sale.Sold, Is.True);
             var soldHeader = (await store.GetShipHeader(shipId))!;
@@ -965,7 +965,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                 Assert.That(soldHeader.LastBerthId, Is.Not.Null, "But remembers it, for an admin restore.");
             });
 
-            var audit = await RunOnServer(pair, () => store.GetAuditByActor(me, 30));
+            var audit = await DrydockTestHelpers.RunOnServer(pair, () => store.GetAuditByActor(me, 30));
             var soldRow = audit.FirstOrDefault(a => a.Action == DrydockAuditAction.ShipSold && a.ShipGuid == shipId);
             Assert.That(soldRow, Is.Not.Null);
             Assert.That(soldRow!.Reason, Does.Contain($"sold for {sale.Price}"), "The price paid is on the timeline for the reversal to read.");
@@ -992,12 +992,12 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                 AppraisedValue = 1000,
             }, new byte[] { 1 }, 3);
 
-            var forged = await RunOnServer(pair,
+            var forged = await DrydockTestHelpers.RunOnServer(pair,
                 () => shipyard.TrySellStoredShip(console, consoleComp, operatorEnt, theirs, "NotYours", ShipyardConsoleUiKey.Shipyard));
             Assert.That(forged.Sold, Is.False);
             Assert.That((await store.GetShipHeader(theirs))!.State, Is.EqualTo(DrydockShipState.Stored));
 
-            var refusals = await RunOnServer(pair, () => store.GetAuditByActor(me, 30));
+            var refusals = await DrydockTestHelpers.RunOnServer(pair, () => store.GetAuditByActor(me, 30));
             Assert.That(refusals.Any(a => a.Action == DrydockAuditAction.AccessRefused && a.ShipGuid == theirs && a.Reason == "sell"),
                 "A forged sale is the stolen-card signal and goes on the timeline.");
 
@@ -1129,14 +1129,14 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
 
             // The character: the same component the job stamps on TDF and TFA crews.
             await server.WaitPost(() => entMan.EnsureComponent<ShipSavingBlacklistComponent>(operatorEnt));
-            var barredOperator = await RunOnServer(pair,
+            var barredOperator = await DrydockTestHelpers.RunOnServer(pair,
                 () => shipyard.TryDrydockStore(console, consoleComp, operatorEnt, ShipyardConsoleUiKey.Shipyard));
             Assert.That(barredOperator, Is.Null, "A character the job has blacklisted from ship saving cannot store either.");
             await server.WaitPost(() => entMan.RemoveComponent<ShipSavingBlacklistComponent>(operatorEnt));
 
             // The vessel: a faction hull carries the blacklist on its grid.
             await server.WaitPost(() => entMan.EnsureComponent<ShipSavingBlacklistComponent>(ship));
-            var barredShip = await RunOnServer(pair,
+            var barredShip = await DrydockTestHelpers.RunOnServer(pair,
                 () => shipyard.TryDrydockStore(console, consoleComp, operatorEnt, ShipyardConsoleUiKey.Shipyard));
             Assert.That(barredShip, Is.Null, "A faction vessel cannot be stored, whoever is at the console.");
             await server.WaitPost(() => entMan.RemoveComponent<ShipSavingBlacklistComponent>(ship));
@@ -1146,7 +1146,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
 #pragma warning disable RA0002
             await server.WaitPost(() => entMan.GetComponent<ShuttleDeedComponent>(card).PurchasedWithVoucher = true);
 #pragma warning restore RA0002
-            var voucherShip = await RunOnServer(pair,
+            var voucherShip = await DrydockTestHelpers.RunOnServer(pair,
                 () => shipyard.TryDrydockStore(console, consoleComp, operatorEnt, ShipyardConsoleUiKey.Shipyard));
             Assert.That(voucherShip, Is.Null, "A ship issued on a voucher cannot be stored.");
 #pragma warning disable RA0002
@@ -1160,7 +1160,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             });
 
             // Control: with all three cleared the same store goes through.
-            var stored = await RunOnServer(pair,
+            var stored = await DrydockTestHelpers.RunOnServer(pair,
                 () => shipyard.TryDrydockStore(console, consoleComp, operatorEnt, ShipyardConsoleUiKey.Shipyard));
             Assert.That(stored?.Result, Is.EqualTo(DrydockStoreResult.Success), "Control: nothing else about the fixture was refusing.");
             var shipId = stored!.Value.ShipId!.Value;
@@ -1168,13 +1168,13 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
 
             // The way back: the barred character first, then a voucher where the ID card goes.
             await server.WaitPost(() => entMan.EnsureComponent<ShipSavingBlacklistComponent>(operatorEnt));
-            var barredRetrieve = await RunOnServer(pair,
+            var barredRetrieve = await DrydockTestHelpers.RunOnServer(pair,
                 () => shipyard.TryDrydockRetrieve(console, consoleComp, operatorEnt, shipId, ShipyardConsoleUiKey.Shipyard));
             Assert.That(barredRetrieve, Is.Null, "A blacklisted character cannot call a ship in either.");
             await server.WaitPost(() => entMan.RemoveComponent<ShipSavingBlacklistComponent>(operatorEnt));
 
             await server.WaitPost(() => entMan.EnsureComponent<ShipyardVoucherComponent>(card));
-            var voucherRetrieve = await RunOnServer(pair,
+            var voucherRetrieve = await DrydockTestHelpers.RunOnServer(pair,
                 () => shipyard.TryDrydockRetrieve(console, consoleComp, operatorEnt, shipId, ShipyardConsoleUiKey.Shipyard));
             Assert.That(voucherRetrieve, Is.Null, "A voucher is not a card a stored ship can be called in on.");
             await server.WaitPost(() => entMan.RemoveComponent<ShipyardVoucherComponent>(card));
@@ -1182,7 +1182,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             Assert.That((await store.GetShipHeader(shipId))!.State, Is.EqualTo(DrydockShipState.Stored),
                 "Every refused retrieve left the row stored; none of them reached the claim.");
 
-            var retrieved = await RunOnServer(pair,
+            var retrieved = await DrydockTestHelpers.RunOnServer(pair,
                 () => shipyard.TryDrydockRetrieve(console, consoleComp, operatorEnt, shipId, ShipyardConsoleUiKey.Shipyard));
             Assert.That(retrieved, Is.Not.Null, "Control: the same retrieve succeeds once the gates are clear.");
             await pair.RunTicksSync(5);
@@ -1209,7 +1209,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             var session = playerMan.Sessions.First();
             var (station, stationGrid, ship, console, consoleComp, card, operatorEnt) = await BuildConsoleAndShip(pair, session.UserId, docked: false);
 
-            await RunOnServer(pair, async () =>
+            await DrydockTestHelpers.RunOnServer(pair, async () =>
             {
                 await shipyard.RefreshDrydockState(console, consoleComp, operatorEnt, ShipyardConsoleUiKey.Shipyard);
                 return true;
@@ -1220,7 +1220,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                 Assert.That(consoleComp.CachedDrydock.DeedShip!.Docked, Is.False, "The card at the top of the tab says the ship is not docked here, which is what greys Store.");
             });
 
-            var loose = await RunOnServer(pair,
+            var loose = await DrydockTestHelpers.RunOnServer(pair,
                 () => shipyard.TryDrydockStore(console, consoleComp, operatorEnt, ShipyardConsoleUiKey.Shipyard));
             Assert.That(loose, Is.Null, "A ship out in space is refused before the pipeline is entered.");
             await server.WaitAssertion(() =>
@@ -1237,7 +1237,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             });
             await pair.RunTicksSync(5);
 
-            await RunOnServer(pair, async () =>
+            await DrydockTestHelpers.RunOnServer(pair, async () =>
             {
                 await shipyard.RefreshDrydockState(console, consoleComp, operatorEnt, ShipyardConsoleUiKey.Shipyard);
                 return true;
@@ -1247,7 +1247,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                 Assert.That(consoleComp.CachedDrydock.DeedShip!.Docked, Is.True, "Docked now, so the tab offers the store.");
             });
 
-            var stored = await RunOnServer(pair,
+            var stored = await DrydockTestHelpers.RunOnServer(pair,
                 () => shipyard.TryDrydockStore(console, consoleComp, operatorEnt, ShipyardConsoleUiKey.Shipyard));
             Assert.That(stored?.Result, Is.EqualTo(DrydockStoreResult.Success), "Control: docked, the same store succeeds.");
             await pair.RunTicksSync(5);
@@ -1278,7 +1278,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             var admin = Guid.NewGuid();
             var (station, stationGrid, ship, console, consoleComp, card, operatorEnt) = await BuildConsoleAndShip(pair, session.UserId);
 
-            var stored = await RunOnServer(pair,
+            var stored = await DrydockTestHelpers.RunOnServer(pair,
                 () => shipyard.TryDrydockStore(console, consoleComp, operatorEnt, ShipyardConsoleUiKey.Shipyard));
             Assert.That(stored?.Result, Is.EqualTo(DrydockStoreResult.Success));
             var shipId = stored!.Value.ShipId!.Value;
@@ -1330,7 +1330,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             var squat = await store.FileRevision(Revision(squatter, me, "Pelican", appraisal: 1000, berthId: occupied), new byte[] { 1 }, 3);
             Assert.That(squat.BerthId, Is.EqualTo(occupied), "Control: the berth about to be named is taken.");
 
-            var refused = await RunOnServer(pair,
+            var refused = await DrydockTestHelpers.RunOnServer(pair,
                 () => shipyard.TryRedeemImpound(console, consoleComp, operatorEnt, shipId, occupied, ShipyardConsoleUiKey.Shipyard));
             Assert.That(refused, Is.False);
             await server.WaitAssertion(() =>
@@ -1338,7 +1338,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             Assert.That((await store.GetShipHeader(shipId))!.State, Is.EqualTo(DrydockShipState.Impounded));
 
             // Reclaimed into the default berth: the fee leaves the account once and the row is stored there.
-            var reclaimed = await RunOnServer(pair,
+            var reclaimed = await DrydockTestHelpers.RunOnServer(pair,
                 () => shipyard.TryRedeemImpound(console, consoleComp, operatorEnt, shipId, defaultBerth, ShipyardConsoleUiKey.Shipyard));
             Assert.That(reclaimed, Is.True);
             await server.WaitAssertion(() =>
@@ -1356,9 +1356,9 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             await RefreshTab(pair, shipyard, console, consoleComp, operatorEnt);
             await server.WaitAssertion(() =>
                 Assert.That(consoleComp.CachedDrydock.ImpoundedShips.Single(i => i.ShipId == shipId).Redeemable, Is.False, "The card says an admin holds it."));
-            Assert.That(await RunOnServer(pair,
+            Assert.That(await DrydockTestHelpers.RunOnServer(pair,
                 () => shipyard.TryRedeemImpound(console, consoleComp, operatorEnt, shipId, defaultBerth, ShipyardConsoleUiKey.Shipyard)), Is.False);
-            Assert.That(await RunOnServer(pair,
+            Assert.That(await DrydockTestHelpers.RunOnServer(pair,
                 () => shipyard.TryAbandonShip(console, consoleComp, operatorEnt, shipId, "Kestrel", ShipyardConsoleUiKey.Shipyard)), Is.False);
             Assert.That((await store.GetShipHeader(shipId))!.State, Is.EqualTo(DrydockShipState.Impounded));
 
@@ -1366,10 +1366,10 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             Assert.That((await store.TryReleaseImpound(shipId, null, admin, null, "cleared")).Outcome, Is.EqualTo(DrydockBerthResult.Success));
             Assert.That((await store.TryImpoundStored(shipId, new DrydockImpound(50, "left out", Redeemable: true, ActorUserId: admin), null)).Outcome,
                 Is.EqualTo(DrydockBerthResult.Success));
-            Assert.That(await RunOnServer(pair,
+            Assert.That(await DrydockTestHelpers.RunOnServer(pair,
                 () => shipyard.TryAbandonShip(console, consoleComp, operatorEnt, shipId, "Falcon", ShipyardConsoleUiKey.Shipyard)), Is.False, "The wrong name is refused.");
             Assert.That((await store.GetShipHeader(shipId))!.State, Is.EqualTo(DrydockShipState.Impounded));
-            Assert.That(await RunOnServer(pair,
+            Assert.That(await DrydockTestHelpers.RunOnServer(pair,
                 () => shipyard.TryAbandonShip(console, consoleComp, operatorEnt, shipId, "Kestrel", ShipyardConsoleUiKey.Shipyard)), Is.True);
             Assert.That((await store.GetShipHeader(shipId))!.State, Is.EqualTo(DrydockShipState.Abandoned));
             await server.WaitAssertion(() =>
@@ -1384,12 +1384,12 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             Assert.That((await store.TryImpoundStored(theirs, new DrydockImpound(50, "left out", Redeemable: true, ActorUserId: admin), null)).Outcome,
                 Is.EqualTo(DrydockBerthResult.Success));
 
-            Assert.That(await RunOnServer(pair,
+            Assert.That(await DrydockTestHelpers.RunOnServer(pair,
                 () => shipyard.TryRedeemImpound(console, consoleComp, operatorEnt, theirs, defaultBerth, ShipyardConsoleUiKey.Shipyard)), Is.False);
-            Assert.That(await RunOnServer(pair,
+            Assert.That(await DrydockTestHelpers.RunOnServer(pair,
                 () => shipyard.TryAbandonShip(console, consoleComp, operatorEnt, theirs, "NotYours", ShipyardConsoleUiKey.Shipyard)), Is.False);
 
-            var refusals = await RunOnServer(pair, () => store.GetAuditByActor(me, 30));
+            var refusals = await DrydockTestHelpers.RunOnServer(pair, () => store.GetAuditByActor(me, 30));
             Assert.Multiple(() =>
             {
                 Assert.That(refusals.Any(a => a.Action == DrydockAuditAction.AccessRefused && a.ShipGuid == theirs && a.Reason == "reclaim"),
@@ -1449,7 +1449,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             });
 
             // An admin takes the live hull. No console is involved, so nothing cleans up the card.
-            var (result, shipId) = await RunOnServer(pair, () => drydock.TryImpoundShip(
+            var (result, shipId) = await DrydockTestHelpers.RunOnServer(pair, () => drydock.TryImpoundShip(
                 ship, me, null, new DrydockImpound(50, "left in a traffic lane", Redeemable: true, ActorUserId: admin), inline: true));
             Assert.Multiple(() =>
             {
@@ -1519,7 +1519,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
         /// <summary>Re-reads the drydock tab the way a console handler does after acting.</summary>
         private static Task RefreshTab(TestPair pair, ShipyardSystem shipyard, EntityUid console, ShipyardConsoleComponent consoleComp, EntityUid operatorEnt)
         {
-            return RunOnServer(pair, async () =>
+            return DrydockTestHelpers.RunOnServer(pair, async () =>
             {
                 await shipyard.RefreshDrydockState(console, consoleComp, operatorEnt, ShipyardConsoleUiKey.Shipyard);
                 return true;
@@ -1670,12 +1670,12 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             // The sentinel did not leak. This is what the marker exists for now that it no longer
             // blocks container insertion, and it is the assertion that fails if a store forgets to
             // take it back off: the ship would be storable exactly once, ever.
-            var retrieved = await RunOnServer(pair,
+            var retrieved = await DrydockTestHelpers.RunOnServer(pair,
                 () => shipyard.TryDrydockRetrieve(console, consoleComp, operatorEnt, shipId, ShipyardConsoleUiKey.Shipyard));
             Assert.That(retrieved, Is.Not.Null, "Control: the ship comes back, or there is nothing to store again.");
             await pair.RunTicksSync(5);
 
-            var again = await RunOnServer(pair,
+            var again = await DrydockTestHelpers.RunOnServer(pair,
                 () => shipyard.TryDrydockStore(console, consoleComp, operatorEnt, ShipyardConsoleUiKey.Shipyard));
             Assert.That(again?.Result, Is.EqualTo(DrydockStoreResult.Success),
                 "The same hull stores again once the first store is over; an InProgress here would mean the sentinel was never removed.");
@@ -1725,8 +1725,8 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
 
                 // Slicing off, which for this cvar means no job and no queue at all rather than a
                 // job with a zero budget. These tests are about what a person at a console can and
-                // cannot reach, and the six hundred tick pump in RunOnServer is sized for a pipeline
-                // that only ever waits on the database. What slicing costs is a different fixture's
+                // cannot reach, and the wall-clock pump in DrydockTestHelpers.RunOnServer is sized for
+                // a pipeline that only ever waits on the database. What slicing costs is a different fixture's
                 // question; the one thing the console cares about, that a second press during a
                 // store is refused, holds at any budget and is asserted below.
                 cfg.SetCVar(TriadCCVars.DrydockTickBudgetMs, 0);
@@ -1802,31 +1802,6 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             }
 
             return (station, map.Grid.Owner, ship, console, comp, card, operatorEnt);
-        }
-
-        /// <summary>
-        /// Starts a console operation on the game thread and pumps until it finishes, bounded by the
-        /// wall clock rather than by a tick count.
-        ///
-        /// <para><see cref="BuildConsoleAndShip"/> sets <c>triad.drydock.tick_budget_ms</c> to zero,
-        /// so no job is made and the only real suspensions left are the store's three thread-pool
-        /// hops. Those are real time on another thread, which ticks here do not measure: a fixed
-        /// tick ceiling drains in well under a second on an idle pair and then calls a store that is
-        /// merely parked "never completed".</para>
-        /// </summary>
-        private static async Task<T> RunOnServer<T>(TestPair pair, Func<Task<T>> start)
-        {
-            Task<T>? task = null;
-            await pair.Server.WaitPost(() => task = start());
-
-            var deadline = System.Diagnostics.Stopwatch.StartNew();
-            while (!task!.IsCompleted && deadline.Elapsed < TimeSpan.FromSeconds(60))
-            {
-                await pair.RunTicksSync(1);
-            }
-
-            Assert.That(task!.IsCompleted, Is.True, "A drydock console operation never completed.");
-            return await task;
         }
     }
 }

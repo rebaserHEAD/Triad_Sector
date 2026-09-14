@@ -10,6 +10,7 @@ using Robust.Shared.Serialization.Markdown;
 using Robust.Shared.Serialization.Markdown.Mapping;
 using Robust.Shared.Serialization.Markdown.Value;
 using Robust.Shared.Utility;
+using Content.Server._Triad.Drydock; // Triad
 
 namespace Content.Server.Maps;
 
@@ -89,23 +90,32 @@ public sealed partial class MapMigrationSystem : EntitySystem
 
     private void OnBeforeReadEvent(BeforeEntityReadEvent ev)
     {
-        if (!TryReadFiles(out var mappings))
-            return;
+        // Triad: removed [the drydock drift detector and re-bake must apply this exact rule, so the loader and the drydock both build DrydockMigrationTable]
+        // if (!TryReadFiles(out var mappings))
+        //     return;
+        //
+        // // Delta-V: apply a set of mappings
+        // foreach (var mapping in mappings)
+        // {
+        //     foreach (var (key, value) in mapping)
+        //     {
+        //         if (value is not ValueDataNode valueNode)
+        //             continue;
+        //
+        //         if (string.IsNullOrWhiteSpace(valueNode.Value) || valueNode.Value == "null")
+        //             ev.DeletedPrototypes.Add(key);
+        //         else
+        //             ev.RenamedPrototypes.Add(key, valueNode.Value);
+        //     }
+        // }
+        // // End Delta-V
 
-        // Delta-V: apply a set of mappings
-        foreach (var mapping in mappings)
-        {
-            foreach (var (key, value) in mapping)
-            {
-                if (value is not ValueDataNode valueNode)
-                    continue;
+        // Triad: read fresh per load, as upstream does; a key renamed twice throws, as Dictionary.Add did
+        var table = DrydockMigrationTable.Load(_resMan); // Triad
+        foreach (var id in table.Deleted) // Triad
+            ev.DeletedPrototypes.Add(id); // Triad
 
-                if (string.IsNullOrWhiteSpace(valueNode.Value) || valueNode.Value == "null")
-                    ev.DeletedPrototypes.Add(key);
-                else
-                    ev.RenamedPrototypes.Add(key, valueNode.Value);
-            }
-        }
-        // End Delta-V
+        foreach (var (from, to) in table.Renamed) // Triad
+            ev.RenamedPrototypes.Add(from, to); // Triad
     }
 }

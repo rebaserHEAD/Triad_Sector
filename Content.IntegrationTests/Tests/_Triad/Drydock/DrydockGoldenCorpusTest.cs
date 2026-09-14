@@ -7,7 +7,6 @@ using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using Content.Server._Triad.Drydock;
-using Robust.Shared.Log;
 
 namespace Content.IntegrationTests.Tests._Triad.Drydock
 {
@@ -101,18 +100,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             // level lowered. What turns (a) red here is therefore the refused retrieve itself, which is
             // the stronger half of the assertion: the error lines are gone from the report with the level.
             var missing = Corrupt(basis, yaml => RenameProtoGroup(yaml, "WallReinforced", "GoldenCorpusControlNoSuchPrototype"));
-            var failureLevel = pair.ServerLogHandler.FailureLevel;
-            pair.ServerLogHandler.FailureLevel = LogLevel.Fatal;
-            GoldenReport missingReport;
-            try
-            {
-                missingReport = await GoldenCorpus.Verify(pair, missing, owner, station);
-            }
-            finally
-            {
-                pair.ServerLogHandler.FailureLevel = failureLevel;
-            }
-
+            var missingReport = await DrydockTestHelpers.Quietly(pair, () => GoldenCorpus.Verify(pair, missing, owner, station));
             await TestContext.Out.WriteLineAsync($"[golden-control] missing prototype: {missingReport}");
 
             var flipped = Corrupt(basis, yaml => FlipStackCount(yaml, "SheetSteel", 17, 16));
@@ -140,12 +128,12 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             var copy = basis.Clone();
             // The document's line endings are the storing machine's, so they are normalized for the
             // edits below; the loader reads either.
-            var yaml = Encoding.UTF8.GetString(GoldenCorpus.Decompress(copy.Blob)).Replace("\r\n", "\n");
+            var yaml = Encoding.UTF8.GetString(DrydockSystem.DecompressZstd(copy.Blob)).Replace("\r\n", "\n");
             var edited = edit(yaml);
             Assert.That(edited, Is.Not.EqualTo(yaml), "The corruption changed nothing, so the control would prove nothing.");
 
             var bytes = Encoding.UTF8.GetBytes(edited);
-            copy.Blob = GoldenCorpus.Compress(bytes);
+            copy.Blob = DrydockSystem.CompressZstd(bytes);
             copy.BlobFileSha256 = GoldenCorpus.Sha256(copy.Blob);
             copy.BlobFileBytes = copy.Blob.Length;
             copy.Revision.Checksum = Convert.ToBase64String(SHA256.HashData(bytes));

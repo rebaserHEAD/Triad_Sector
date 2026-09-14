@@ -9,7 +9,7 @@ namespace Content.Shared._Triad.Drydock;
 /// the hull exists. DrydockVesselClassTableTest loads every hull and fails on a row that disagrees
 /// with the grid.
 /// </summary>
-[Prototype("drydockVesselClass")]
+[Prototype]
 public sealed partial class DrydockVesselClassPrototype : IPrototype
 {
     [IdDataField]

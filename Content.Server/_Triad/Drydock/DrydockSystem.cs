@@ -1612,7 +1612,8 @@ public sealed partial class DrydockSystem : EntitySystem
         }
     }
 
-    private static byte[] CompressZstd(byte[] input)
+    /// <summary>The <c>drydock_blob.blob</c> codec. Tests that doctor a stored document use this pair, never a copy.</summary>
+    internal static byte[] CompressZstd(byte[] input)
     {
         using var output = new MemoryStream();
         using (var compress = new ZStdCompressStream(output, ownStream: false))

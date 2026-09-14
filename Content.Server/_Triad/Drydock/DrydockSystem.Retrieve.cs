@@ -316,9 +316,8 @@ public sealed partial class DrydockSystem
             if (current == null)
                 return new DrydockRetrieveOutcome(DrydockRetrieve.Refused(DrydockRetrieveResult.NotFound));
 
-            // The ladder walks the documents that exist rather than counting keep-N down from
-            // the current revision. The count missed a pinned document below the window, which is
-            // the one a pin exists to keep reachable, and walked revisions already pruned.
+            // The ladder walks the documents that exist, newest first, so a pinned document below the
+            // keep-N window stays reachable and a pruned revision is never asked for.
             var revisions = await slice.Await(_store.ListRetrievableRevisions(ctx.ShipId));
             GuardRetrieveResume(ctx);
 
@@ -369,11 +368,13 @@ public sealed partial class DrydockSystem
                 // loader. Off the main thread for the same reason the parse is: it reads the whole
                 // document. A throw here is a document the parser cannot read either, and the load
                 // below is what decides about that, so it is logged and the gate stands aside.
+                // The text is decoded once, inside the drift hop, and handed to the load.
                 DrydockDriftVerdict? verdict = null;
+                string? yaml = null;
                 try
                 {
                     var formatVer = stored.Revision.DrydockFormatVer;
-                    verdict = await slice.Await(Task.Run(() => DetectDrift(Encoding.UTF8.GetString(yamlBytes), formatVer)));
+                    verdict = await slice.Await(Task.Run(() => DetectDrift(yaml = Encoding.UTF8.GetString(yamlBytes), formatVer)));
                 }
                 catch (Exception e) when (e is not OperationCanceledException)
                 {
@@ -412,7 +413,7 @@ public sealed partial class DrydockSystem
                 await slice.Begin(DrydockPhase.Load, 0);
                 GuardRetrieveResume(ctx);
 
-                if (!await TryLoadOntoStagingMap(ctx, slice, revision, yamlBytes))
+                if (!await TryLoadOntoStagingMap(ctx, slice, revision, yaml, yamlBytes))
                 {
                     await PinSteppedPast(ctx, slice, revision, "it passed its checksum and would not load");
                     continue;
@@ -635,10 +636,11 @@ public sealed partial class DrydockSystem
     /// spacing could not have covered, and a private map has nothing to overlap with.</para>
     /// </summary>
     private async Task<bool> TryLoadOntoStagingMap(
-        DrydockRetrieveContext ctx, IDrydockSlice slice, int revision, byte[] yamlBytes)
+        DrydockRetrieveContext ctx, IDrydockSlice slice, int revision, string? yaml, byte[] yamlBytes)
     {
-        // The parse alone, off-thread: no entity is touched until the data node comes back.
-        var data = await slice.Await(Task.Run(() => ParseDocument(Encoding.UTF8.GetString(yamlBytes))));
+        // The parse alone, off-thread: no entity is touched until the data node comes back. The
+        // bytes are decoded here only when the drift hop never got as far as decoding them.
+        var data = await slice.Await(Task.Run(() => ParseDocument(yaml ?? Encoding.UTF8.GetString(yamlBytes))));
         GuardRetrieveResume(ctx);
         ctx.Timer.Mark("load_parse");
 
@@ -963,10 +965,9 @@ public sealed partial class DrydockSystem
         _shipyard.GrantVesselComponents(grid, ResolveVesselProto(grid, record));
 
         // The station itself is NOT recreated here: that waits for the dock's thaw, in the pipeline's
-        // tail. Joining a station raises StationGridAddedEvent and StationPostInitEvent, and their
-        // subscribers look the ship's entities up with paused-skipping queries. Run on the frozen
-        // ship, the nav map rebuilt its beacon list empty, faxes and holopads kept stale names, and
-        // the FTL system registered the scrapped staging map as a destination.
+        // tail. Joining a station raises StationGridAddedEvent and StationPostInitEvent, whose
+        // subscribers register the ship with the world: on the frozen ship they would read paused
+        // entities and register the staging map (the FTL system takes it as a destination).
 
         timer.Mark("station");
     }
@@ -1447,7 +1448,8 @@ public sealed partial class DrydockSystem
             EnsureComp<ExtraShuttleInformationComponent>(station).Vessel = vesselProto;
     }
 
-    private static byte[] DecompressZstd(byte[] input)
+    /// <summary>The inverse of <see cref="CompressZstd"/>.</summary>
+    internal static byte[] DecompressZstd(byte[] input)
     {
         using var decompress = new Robust.Shared.Utility.ZStdDecompressStream(new MemoryStream(input));
         using var output = new MemoryStream();

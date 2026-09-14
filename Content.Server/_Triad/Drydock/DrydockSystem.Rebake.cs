@@ -110,15 +110,15 @@ public sealed partial class DrydockSystem
 
     private bool _rebakeRunning;
 
-    /// <summary>Whether a sweep is in flight.</summary>
-    internal bool RebakeRunning => _rebakeRunning;
-
     /// <summary>The switches every step of the sweep re-reads.</summary>
     private bool RebakeAllowed => DrydockWritable && _cfg.GetCVar(TriadCCVars.DrydockRebakeEnabled);
 
+    /// <summary>The switches plus a non-zero pace: what a throttled sweep needs to start or keep going.</summary>
+    private bool RebakeThrottledAllowed => RebakeAllowed && _cfg.GetCVar(TriadCCVars.DrydockRebakeShipsPerMinute) > 0;
+
     private void InitializeRebake()
     {
-        if (!RebakeAllowed || _cfg.GetCVar(TriadCCVars.DrydockRebakeShipsPerMinute) <= 0)
+        if (!RebakeThrottledAllowed)
             return;
 
         Timer.Spawn(TimeSpan.FromSeconds(RebakeBootDelaySeconds), () => StartRebakeSweep("boot"));
@@ -134,7 +134,7 @@ public sealed partial class DrydockSystem
         if (_rebakeRunning)
             return DrydockRebakeStart.AlreadyRunning;
 
-        if (!RebakeAllowed || _cfg.GetCVar(TriadCCVars.DrydockRebakeShipsPerMinute) <= 0)
+        if (!RebakeThrottledAllowed)
             return DrydockRebakeStart.Disabled;
 
         Log.Info($"Drydock: re-bake sweep starting ({trigger}).");
@@ -167,7 +167,7 @@ public sealed partial class DrydockSystem
 
         try
         {
-            if (!RebakeAllowed || throttle && _cfg.GetCVar(TriadCCVars.DrydockRebakeShipsPerMinute) <= 0)
+            if (throttle ? !RebakeThrottledAllowed : !RebakeAllowed)
             {
                 Log.Info("Drydock: re-bake sweep not run; the drydock is off or read-only, the re-bake switch is off, or its pace is zero.");
                 return report;
@@ -306,9 +306,11 @@ public sealed partial class DrydockSystem
                 case DrydockRebakeResult.WrongState:
                     Log.Info($"Drydock: re-bake of {ship} ({candidate.ShipName}) not filed; it left storage meanwhile.");
                     return DrydockRebakeShipResult.WrongState;
-                default:
+                case DrydockRebakeResult.NotFound:
                     Log.Info($"Drydock: re-bake of {ship} ({candidate.ShipName}) not filed; the ship or its revision is gone.");
                     return DrydockRebakeShipResult.NotFound;
+                default:
+                    throw new ArgumentOutOfRangeException(nameof(filed.Outcome), filed.Outcome, null);
             }
         }
         catch (Exception e)
@@ -341,8 +343,15 @@ public sealed partial class DrydockSystem
                 return DrydockRebakePlan.Skip(DrydockRebakeShipResult.Corrupt, "the document failed its checksum");
 
             var yaml = Encoding.UTF8.GetString(bytes);
-            var transform = DrydockDocumentRebake.Transform(yaml, MigrationTable, load.Revision.DrydockFormatVer);
-            var drift = DetectDrift(transform.Yaml, transform.DrydockFormatVer);
+            var (ids, engineFormat) = ReadDriftIds(yaml);
+            var transform = DrydockDocumentRebake.Transform(
+                yaml, ids, MigrationTable, load.Revision.DrydockFormatVer, DrydockDocumentRebake.FormatSteps, DrydockDocumentRebake.Repairs);
+
+            // One scan per distinct text: an unchanged document keeps the ids already read.
+            if (!ReferenceEquals(transform.Yaml, yaml))
+                (ids, engineFormat) = ReadDriftIds(transform.Yaml);
+
+            var drift = DetectDrift(ids, engineFormat, transform.DrydockFormatVer);
 
             if (!transform.Changed)
                 return new DrydockRebakePlan(DrydockRebakeShipResult.Clean, null, null, transform, drift, null);
@@ -371,7 +380,7 @@ public sealed partial class DrydockSystem
             }
 
             var rebaked = ReferenceEquals(transform.Yaml, yaml) ? bytes : Encoding.UTF8.GetBytes(transform.Yaml);
-            var (fingerprint, engineFormat) = ReadDriftMetadata(transform.Yaml);
+            var fingerprint = DriftFingerprint(ids);
 
             var request = new DrydockRebakeRequest
             {
@@ -417,7 +426,8 @@ public sealed partial class DrydockSystem
         DrydockRebakeShipResult.Stale => "stale",
         DrydockRebakeShipResult.WrongState => "wrongstate",
         DrydockRebakeShipResult.NotFound => "notfound",
-        _ => "failed",
+        DrydockRebakeShipResult.Failed => "failed",
+        _ => throw new ArgumentOutOfRangeException(nameof(result), result, null),
     };
 }
 

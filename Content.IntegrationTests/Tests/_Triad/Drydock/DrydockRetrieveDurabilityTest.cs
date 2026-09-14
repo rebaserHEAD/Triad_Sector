@@ -1,7 +1,6 @@
 #nullable enable
 
 using System;
-using System.IO;
 using System.Linq;
 using System.Numerics;
 using System.Security.Cryptography;
@@ -16,10 +15,8 @@ using Content.Shared._NF.Market;
 using Content.Shared._Triad.ShipSize;
 using Microsoft.EntityFrameworkCore;
 using Robust.Shared.GameObjects;
-using Robust.Shared.Log;
 using Robust.Shared.Map;
 using Robust.Shared.Prototypes;
-using Robust.Shared.Utility;
 
 namespace Content.IntegrationTests.Tests._Triad.Drydock
 {
@@ -63,7 +60,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             await server.WaitPost(() => entMan.SpawnEntity(ItemProtoId, new EntityCoordinates(shipGrid, new Vector2(0.5f, 0.5f))));
             await pair.RunTicksSync(2);
 
-            var (result, shipId) = await DrydockRoundTripTest.RunOnServer(pair, () => drydock.TryStoreShip(shipGrid, owner, null));
+            var (result, shipId) = await DrydockTestHelpers.RunOnServer(pair, () => drydock.TryStoreShip(shipGrid, owner, null));
             Assert.That(result, Is.EqualTo(DrydockStoreResult.Success));
             await pair.RunTicksSync(5);
 
@@ -80,7 +77,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             await server.WaitPost(() => stagingBefore = DrydockRoundTripTest.CountStagingMaps(entMan));
             var refusalsBefore = DrydockMetrics.DriftRefusals.Value;
 
-            var refused = await Quietly(pair, () => DrydockRoundTripTest.RunOnServer(pair, () => drydock.TryRetrieveShip(ship, owner, station, null)));
+            var refused = await DrydockTestHelpers.Quietly(pair, () => DrydockTestHelpers.RunOnServer(pair, () => drydock.TryRetrieveShip(ship, owner, station, null)));
 
             var header = await store.GetShipHeader(ship);
             var audit = await store.GetAudit(ship);
@@ -123,7 +120,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
 
             await WriteDocument(db, ship, revision, original.Replace(group, $"- proto: {rename.Key}{newline}"));
 
-            var healed = await DrydockRoundTripTest.RunOnServer(pair, () => drydock.TryRetrieveShip(ship, owner, station, null));
+            var healed = await DrydockTestHelpers.RunOnServer(pair, () => drydock.TryRetrieveShip(ship, owner, station, null));
             await pair.RunTicksSync(5);
 
             Assert.Multiple(() =>
@@ -161,16 +158,16 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
 
             var (station, shipGrid, _) = await DrydockRoundTripTest.BuildShipAndStation(pair);
 
-            var (first, shipId) = await DrydockRoundTripTest.RunOnServer(pair, () => drydock.TryStoreShip(shipGrid, owner, null));
+            var (first, shipId) = await DrydockTestHelpers.RunOnServer(pair, () => drydock.TryStoreShip(shipGrid, owner, null));
             Assert.That(first, Is.EqualTo(DrydockStoreResult.Success));
             await pair.RunTicksSync(5);
             var ship = shipId!.Value;
 
-            var out1 = await DrydockRoundTripTest.RunOnServer(pair, () => drydock.TryRetrieveShip(ship, owner, station, null));
+            var out1 = await DrydockTestHelpers.RunOnServer(pair, () => drydock.TryRetrieveShip(ship, owner, station, null));
             Assert.That(out1.Result, Is.EqualTo(DrydockRetrieveResult.Success));
             await pair.RunTicksSync(5);
 
-            var (second, _) = await DrydockRoundTripTest.RunOnServer(pair, () => drydock.TryStoreShip(out1.Grid!.Value, owner, null));
+            var (second, _) = await DrydockTestHelpers.RunOnServer(pair, () => drydock.TryStoreShip(out1.Grid!.Value, owner, null));
             Assert.That(second, Is.EqualTo(DrydockStoreResult.Success));
             await pair.RunTicksSync(5);
 
@@ -183,7 +180,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             await WriteDocument(db, ship, current, doctored);
 
             var fallbacksBefore = DrydockMetrics.RetrieveFallbacks.Value;
-            var retrieved = await Quietly(pair, () => DrydockRoundTripTest.RunOnServer(pair, () => drydock.TryRetrieveShip(ship, owner, station, null)));
+            var retrieved = await DrydockTestHelpers.Quietly(pair, () => DrydockTestHelpers.RunOnServer(pair, () => drydock.TryRetrieveShip(ship, owner, station, null)));
             await pair.RunTicksSync(5);
 
             var pinned = await PinnedRevisions(db, ship);
@@ -231,16 +228,16 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             await server.WaitPost(() => entMan.SpawnEntity(ItemProtoId, new EntityCoordinates(shipGrid, new Vector2(0.5f, 0.5f))));
             await pair.RunTicksSync(2);
 
-            var (first, shipId) = await DrydockRoundTripTest.RunOnServer(pair, () => drydock.TryStoreShip(shipGrid, owner, null));
+            var (first, shipId) = await DrydockTestHelpers.RunOnServer(pair, () => drydock.TryStoreShip(shipGrid, owner, null));
             Assert.That(first, Is.EqualTo(DrydockStoreResult.Success));
             await pair.RunTicksSync(5);
             var ship = shipId!.Value;
 
-            var out1 = await DrydockRoundTripTest.RunOnServer(pair, () => drydock.TryRetrieveShip(ship, owner, station, null));
+            var out1 = await DrydockTestHelpers.RunOnServer(pair, () => drydock.TryRetrieveShip(ship, owner, station, null));
             Assert.That(out1.Result, Is.EqualTo(DrydockRetrieveResult.Success));
             await pair.RunTicksSync(5);
 
-            var (second, _) = await DrydockRoundTripTest.RunOnServer(pair, () => drydock.TryStoreShip(out1.Grid!.Value, owner, null));
+            var (second, _) = await DrydockTestHelpers.RunOnServer(pair, () => drydock.TryStoreShip(out1.Grid!.Value, owner, null));
             Assert.That(second, Is.EqualTo(DrydockStoreResult.Success));
             await pair.RunTicksSync(5);
 
@@ -258,7 +255,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                 await context.DrydockBlob.Where(b => b.ShipGuid == ship && b.Revision == current)
                     .ExecuteUpdateAsync(set => set.SetProperty(b => b.Blob, new byte[] { 1, 2, 3 }), token), CancellationToken.None);
 
-            var refused = await Quietly(pair, () => DrydockRoundTripTest.RunOnServer(pair, () => drydock.TryRetrieveShip(ship, owner, station, null)));
+            var refused = await DrydockTestHelpers.Quietly(pair, () => DrydockTestHelpers.RunOnServer(pair, () => drydock.TryRetrieveShip(ship, owner, station, null)));
 
             var header = await store.GetShipHeader(ship);
             var audit = await store.GetAudit(ship);
@@ -309,7 +306,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             });
             await pair.RunTicksSync(5);
 
-            var (result, shipId) = await DrydockRoundTripTest.RunOnServer(pair, () => drydock.TryStoreShip(shipGrid, owner, null));
+            var (result, shipId) = await DrydockTestHelpers.RunOnServer(pair, () => drydock.TryStoreShip(shipGrid, owner, null));
             Assert.That(result, Is.EqualTo(DrydockStoreResult.Success));
             await pair.RunTicksSync(5);
             var ship = shipId!.Value;
@@ -322,7 +319,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             await WriteDocument(db, ship, revision, document.Replace(CapturedKey, renamed));
 
             var skippedBefore = DrydockMetrics.SkippedStateKeys.WithLabels("captured").Value;
-            var retrieved = await Quietly(pair, () => DrydockRoundTripTest.RunOnServer(pair, () => drydock.TryRetrieveShip(ship, owner, station, null)));
+            var retrieved = await DrydockTestHelpers.Quietly(pair, () => DrydockTestHelpers.RunOnServer(pair, () => drydock.TryRetrieveShip(ship, owner, station, null)));
             await pair.RunTicksSync(5);
 
             var rows = (await store.GetAudit(ship)).Where(a => a.Action == DrydockAuditAction.StateSkipped).ToList();
@@ -339,21 +336,6 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             });
 
             await pair.CleanReturnAsync();
-        }
-
-        /// <summary>Runs a retrieve that is meant to log errors, without the pair failing on them.</summary>
-        private static async Task<T> Quietly<T>(TestPair pair, Func<Task<T>> run)
-        {
-            var failureLevel = pair.ServerLogHandler.FailureLevel;
-            pair.ServerLogHandler.FailureLevel = LogLevel.Fatal;
-            try
-            {
-                return await run();
-            }
-            finally
-            {
-                pair.ServerLogHandler.FailureLevel = failureLevel;
-            }
         }
 
         private static int CountLiveCopies(IEntityManager entMan, Guid ship)
@@ -378,10 +360,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                     .Select(b => b.Blob)
                     .SingleAsync(token);
 
-                using var decompress = new ZStdDecompressStream(new MemoryStream(blob));
-                using var output = new MemoryStream();
-                decompress.CopyTo(output);
-                return Encoding.UTF8.GetString(output.ToArray());
+                return Encoding.UTF8.GetString(DrydockSystem.DecompressZstd(blob));
             }, CancellationToken.None);
         }
 
@@ -393,14 +372,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
         {
             var bytes = Encoding.UTF8.GetBytes(yaml);
             var checksum = SHA256.HashData(bytes);
-
-            using var output = new MemoryStream();
-            using (var compress = new ZStdCompressStream(output, ownStream: false))
-            {
-                compress.Write(bytes);
-            }
-
-            var payload = output.ToArray();
+            var payload = DrydockSystem.CompressZstd(bytes);
 
             return db.RunTriadDbCommand(async (context, token) =>
             {

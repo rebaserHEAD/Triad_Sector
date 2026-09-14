@@ -2,7 +2,6 @@
 
 using System;
 using System.Collections.Generic;
-using System.IO;
 using System.Linq;
 using System.Net;
 using System.Numerics;
@@ -22,7 +21,6 @@ using Robust.Shared.Configuration;
 using Robust.Shared.GameObjects;
 using Robust.Shared.Map;
 using Robust.Shared.Maths;
-using Robust.Shared.Utility;
 
 namespace Content.IntegrationTests.Tests._Triad.Drydock
 {
@@ -111,7 +109,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             // current revision is the document that store filed.
             var unslicedLoad = await store.LoadCurrent(unslicedShipId);
             Assert.That(unslicedLoad, Is.Not.Null, "The unsliced store filed a readable current revision.");
-            var unslicedDocument = Encoding.UTF8.GetString(Decompress(unslicedLoad!.Blob));
+            var unslicedDocument = Encoding.UTF8.GetString(DrydockSystem.DecompressZstd(unslicedLoad!.Blob));
 
             var firstBack = await RunOnServer(pair, () => drydock.TryRetrieveShip(unslicedShipId, owner, station, null));
             Assert.That(firstBack.Result.Result, Is.EqualTo(DrydockRetrieveResult.Success), "Control: the unsliced round trip has to complete.");
@@ -145,7 +143,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             Assert.That(slicedLoad, Is.Not.Null, "The sliced store filed a readable current revision.");
             Assert.That(slicedLoad!.Revision.Revision, Is.GreaterThan(unslicedLoad.Revision.Revision),
                 "The control on which document is which: the sliced store filed a later revision of the same hull, so the two documents below really are the two stores.");
-            var slicedDocument = Encoding.UTF8.GetString(Decompress(slicedLoad.Blob));
+            var slicedDocument = Encoding.UTF8.GetString(DrydockSystem.DecompressZstd(slicedLoad.Blob));
 
             var secondBack = await RunOnServer(pair, () => drydock.TryRetrieveShip(slicedShipId, owner, station, null));
             Assert.That(secondBack.Result.Result, Is.EqualTo(DrydockRetrieveResult.Success), "A sliced store's ship still comes back.");
@@ -307,15 +305,5 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
 
             return (await task, ticks);
         }
-
-        /// <summary>The same zstd stream the pipeline writes with, so the test reads the document as filed.</summary>
-        private static byte[] Decompress(byte[] blob)
-        {
-            using var decompress = new ZStdDecompressStream(new MemoryStream(blob));
-            using var output = new MemoryStream();
-            decompress.CopyTo(output);
-            return output.ToArray();
-        }
-
     }
 }

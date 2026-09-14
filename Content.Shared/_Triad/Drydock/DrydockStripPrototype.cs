@@ -9,7 +9,7 @@ namespace Content.Shared._Triad.Drydock;
 /// descends from one of <see cref="Parents"/>, or is one of <see cref="Prototypes"/>. What a matched
 /// entity holds that does not match itself is dropped onto the deck first.
 /// </summary>
-[Prototype("drydockStrip")]
+[Prototype]
 public sealed partial class DrydockStripPrototype : IPrototype
 {
     [IdDataField]
