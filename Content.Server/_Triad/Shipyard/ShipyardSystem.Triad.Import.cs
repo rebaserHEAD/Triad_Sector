@@ -286,6 +286,10 @@ public sealed partial class ShipyardSystem
             return Refuse(uid, component, player, Loc.GetString("shipyard-console-import-error-already-filed"));
         }
 
+        // The file loaded map-initialized, so its first map init happens here, before the store:
+        // fills the old writer never saved (door electronics above all) are kept and filed with it.
+        _drydock.InitializeImportedShip(grid);
+
         var sizeClass = _drydockSizes.GetSizeClass((grid, mapGrid));
 
         var berthId = await _drydockStore.AddBerth(

@@ -864,6 +864,28 @@ public sealed partial class DrydockSystem
     }
 
     /// <summary>
+    /// A legacy import's first map init, run on the staged hull before it is filed. The import
+    /// stamps every entity map-initialized so the loader does not re-run authoring over a live
+    /// ship, which also means nothing fills what the old writer never saved: an airlock's door
+    /// electronics, without which the door refuses everyone. This raises map init under
+    /// <see cref="DrydockMapInitMode.Import"/>, keeping those spawns so the store files them.
+    ///
+    /// <para>On one tick, not sliced: the hull is live and docked here, not frozen, so a system
+    /// update between the snapshot and the reconcile would be reverted as if map init had done it.
+    /// Honours <see cref="TriadCCVars.DrydockMapInitRefire"/>: off raises nothing, report only
+    /// reports.</para>
+    /// </summary>
+    public DrydockMapInitReport InitializeImportedShip(EntityUid grid)
+    {
+        var mode = DrydockFidelitySystem.ParseMapInitMode(_cfg.GetCVar(TriadCCVars.DrydockMapInitRefire));
+        if (mode == DrydockMapInitMode.Revert)
+            mode = DrydockMapInitMode.Import;
+
+        // A sync slice never suspends, so the task has already completed when it returns.
+        return _fidelity.RefireMapInitSliced(grid, new DrydockSyncSlice(DrydockPhases.Retrieve), mode).GetAwaiter().GetResult();
+    }
+
+    /// <summary>
     /// Puts back everything a normal spawn would have set up but a restored entity never gets, a
     /// few milliseconds of main-thread time at a time.
     ///

@@ -206,6 +206,10 @@ public sealed class TriadCCVars
     /// <para><c>report</c> lands the damage on the ship; it is the soak mode for a test server.
     /// <c>off</c> is the rollback: the retrieve's named sweeps then redo the handful of map-init
     /// jobs they know about and nothing else.</para>
+    ///
+    /// <para>A legacy import reads the same knob before it files the hull: <c>revert</c> there puts
+    /// persisted fields back but keeps every entity map init spawned, since an old save never
+    /// carried its fills (door electronics among them).</para>
     /// </summary>
     public static readonly CVarDef<string> DrydockMapInitRefire =
         CVarDef.Create("triad.drydock.mapinit_refire", "revert", CVar.SERVERONLY);

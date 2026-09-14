@@ -170,7 +170,8 @@ public static class ShipSaveYamlSanitizer
     /// was saved, so the engine loaded those entities pre-init and ran every map-init handler over
     /// them a second time, unguarded: restocked vendors, refilled guns, re-rolled randoms, and the
     /// offset-serialized times read as zero. With the flag back the entities load as what they were,
-    /// and the drydock's map-init transaction does the runtime half on retrieve. Formats before 7
+    /// and the drydock's map-init transaction does the rest: once at import, keeping the fills the
+    /// old writer never saved, then on every retrieve. Formats before 7
     /// carry one flag per file, which the old writer left alone. Returns how many entities were
     /// stamped.
     /// </summary>

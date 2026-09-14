@@ -16,13 +16,24 @@ using Robust.Shared.Serialization.TypeSerializers.Interfaces;
 
 namespace Content.Server._Triad.Drydock;
 
-/// <summary>What the retrieve does with <c>MapInitEvent</c>: nothing, raise it and only report, or
-/// raise it and undo what it did to persisted state.</summary>
+/// <summary>What the transaction does with <c>MapInitEvent</c>: nothing, raise it and only report,
+/// raise it and undo what it did to persisted state, or (for a legacy import only) undo its field
+/// writes but keep what it spawned.</summary>
 public enum DrydockMapInitMode : byte
 {
     Off,
     Report,
     Revert,
+
+    /// <summary>
+    /// A legacy import's first map init. The old save writer relied on the loader map-initializing
+    /// a ship, so its documents never carried what a fill spawns: an airlock's door electronics, a
+    /// light's bulb. Those are kept, and the store files them as the document's own. Persisted
+    /// fields are still put back, so a vendor does not restock and a gun does not refill, and the
+    /// fill guards still hold, so a container the file did fill gets nothing on top. Never a cvar
+    /// value: the import picks it.
+    /// </summary>
+    Import,
 }
 
 /// <summary>
@@ -206,6 +217,9 @@ public sealed partial class DrydockFidelitySystem
             }
             else
             {
+                // Import keeps it: a legacy document never carried what a fill spawns, and deleting
+                // it on the way in is what left imported airlocks with no electronics to read access
+                // from, locked to everyone.
                 report.Count(report.Appeared, ProtoOf(uid));
                 if (mode == DrydockMapInitMode.Revert)
                     QueueDel(uid);
@@ -292,7 +306,7 @@ public sealed partial class DrydockFidelitySystem
 
                 report.Count(report.Changed, key);
 
-                if (mode != DrydockMapInitMode.Revert || MapInitKeepLive.Contains(key))
+                if (mode is not (DrydockMapInitMode.Revert or DrydockMapInitMode.Import) || MapInitKeepLive.Contains(key))
                     continue;
 
                 try
@@ -412,8 +426,9 @@ public sealed partial class DrydockFidelitySystem
 
 /// <summary>
 /// What one map-init transaction saw. <see cref="Changed"/> is the list that matters: every
-/// persisted field a map-init handler rewrote, which in <see cref="DrydockMapInitMode.Revert"/> was
-/// put back. Deletions and removed components are the part no revert covers, so they are the lines
+/// persisted field a map-init handler rewrote, which in <see cref="DrydockMapInitMode.Revert"/> and
+/// <see cref="DrydockMapInitMode.Import"/> was put back. <see cref="Appeared"/> was deleted in the
+/// first and kept in the second. Deletions and removed components are the part no revert covers, so they are the lines
 /// to read first.
 /// </summary>
 public sealed class DrydockMapInitReport
