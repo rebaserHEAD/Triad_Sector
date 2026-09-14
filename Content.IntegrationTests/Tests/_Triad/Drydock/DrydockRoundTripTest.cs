@@ -1257,6 +1257,132 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
         }
 
         /// <summary>
+        /// An impound puts each occupant down by role (user, 2026-09-13): someone whose mind holds a
+        /// job lands on that job's spawn point even when a plain one is nearer, someone with no job
+        /// lands on the nearest, and an admin ghost aboard is lifted off rather than deleted with the
+        /// hull.
+        /// </summary>
+        [Test]
+        public async Task AnImpoundPutsOccupantsDownByRoleAndLiftsGhosts()
+        {
+            await using var pair = await PoolManager.GetServerClient();
+            var server = pair.Server;
+            var entMan = server.EntMan;
+
+            var db = server.ResolveDependency<IServerDbManager>();
+            var protoMan = server.ResolveDependency<IPrototypeManager>();
+            var drydock = server.System<DrydockSystem>();
+            var minds = server.System<MindSystem>();
+            var roles = server.System<Content.Server.Roles.RoleSystem>();
+            var stationSys = server.System<StationSystem>();
+            var mapSys = server.System<SharedMapSystem>();
+
+            var owner = Guid.NewGuid();
+            await DrydockTestHelpers.InsertPlayer(db, owner);
+
+            var (station, shipGrid, _) = await BuildShipAndStation(pair);
+            var job = protoMan.EnumeratePrototypes<Content.Shared.Roles.JobPrototype>().First().ID;
+
+            EntityUid stationGrid = default, farGrid = default, crew = default, drifter = default, ghost = default;
+
+            await server.WaitPost(() =>
+            {
+                stationGrid = stationSys.GetLargestGrid(entMan.GetComponent<StationDataComponent>(station))!.Value;
+                var map = entMan.GetComponent<TransformComponent>(shipGrid).MapUid!.Value;
+
+                // The plain spawn point sits on the station grid, near; the job's sits far out on a
+                // grid of its own, so only the role can explain choosing it.
+                var plain = entMan.SpawnEntity(null, new EntityCoordinates(stationGrid, new Vector2(0.5f, 0.5f)));
+                entMan.EnsureComponent<Content.Server.Spawners.Components.SpawnPointComponent>(plain).SpawnType =
+                    Content.Server.Spawners.Components.SpawnPointType.LateJoin;
+
+                var far = mapSys.CreateGridEntity(entMan.GetComponent<MapComponent>(map).MapId);
+                farGrid = far.Owner;
+                entMan.GetComponent<TransformComponent>(farGrid).LocalPosition = new Vector2(200f, 200f);
+                mapSys.SetTile(far, Vector2i.Zero, new Tile(1));
+                var jobPoint = entMan.EnsureComponent<Content.Server.Spawners.Components.SpawnPointComponent>(
+                    entMan.SpawnEntity(null, new EntityCoordinates(farGrid, new Vector2(0.5f, 0.5f))));
+                jobPoint.SpawnType = Content.Server.Spawners.Components.SpawnPointType.Job;
+                jobPoint.Job = job;
+
+                crew = entMan.SpawnEntity("MobHuman", new EntityCoordinates(shipGrid, new Vector2(0.5f, 0.5f)));
+                var crewMind = minds.CreateMind(null, "Crew");
+                minds.TransferTo(crewMind, crew);
+                roles.MindAddJobRole(crewMind, crewMind.Comp, silent: true, jobPrototype: job);
+
+                drifter = entMan.SpawnEntity("MobHuman", new EntityCoordinates(shipGrid, new Vector2(1.5f, 0.5f)));
+                minds.TransferTo(minds.CreateMind(null, "Drifter"), drifter);
+
+                ghost = entMan.SpawnEntity("AdminObserver", new EntityCoordinates(shipGrid, new Vector2(2.5f, 0.5f)));
+            });
+
+            await pair.MakeCleanupImmune(farGrid);
+            await pair.RunTicksSync(5);
+
+            await server.WaitAssertion(() =>
+            {
+                Assert.That(entMan.GetComponent<TransformComponent>(ghost).GridUid, Is.EqualTo(shipGrid), "The control: the ghost starts aboard.");
+                Assert.That(entMan.GetComponent<TransformComponent>(crew).GridUid, Is.EqualTo(shipGrid), "The control: the crew starts aboard.");
+            });
+
+            var (result, _) = await RunOnServer(pair, () => drydock.TryImpoundShip(
+                shipGrid, owner, null, new DrydockImpound(0, "test", Redeemable: true, ActorUserId: null), inline: true));
+            Assert.That(result, Is.EqualTo(DrydockStoreResult.Success));
+
+            await pair.RunTicksSync(5);
+
+            await server.WaitAssertion(() =>
+            {
+                Assert.Multiple(() =>
+                {
+                    Assert.That(entMan.Deleted(shipGrid), Is.True, "The control: the hull went into the lot.");
+                    Assert.That(entMan.GetComponent<TransformComponent>(crew).GridUid, Is.EqualTo(farGrid),
+                        "Someone with a job is put down at that job's spawn point, far as it is.");
+                    Assert.That(entMan.GetComponent<TransformComponent>(drifter).GridUid, Is.EqualTo(stationGrid),
+                        "Someone with no job is put down at the nearest spawn point.");
+                    Assert.That(entMan.Deleted(ghost), Is.False, "The admin ghost was lifted off, not deleted with the hull.");
+                });
+            });
+
+            await pair.CleanReturnAsync();
+        }
+
+        /// <summary>A ghost aboard an ordinary store is lifted off too, not frozen and deleted with the hull.</summary>
+        [Test]
+        public async Task AStoreLiftsAGhostOffTheHull()
+        {
+            await using var pair = await PoolManager.GetServerClient();
+            var server = pair.Server;
+            var entMan = server.EntMan;
+
+            var db = server.ResolveDependency<IServerDbManager>();
+            var drydock = server.System<DrydockSystem>();
+
+            var owner = Guid.NewGuid();
+            await DrydockTestHelpers.InsertPlayer(db, owner);
+            await server.ResolveDependency<DrydockStore>().AddBerth(owner, ShipSizeClass.SuperCapital, DrydockBerthKind.Granted, 0, null, null);
+
+            var (_, shipGrid, _) = await BuildShipAndStation(pair);
+
+            EntityUid ghost = default;
+            await server.WaitPost(() => ghost = entMan.SpawnEntity("AdminObserver", new EntityCoordinates(shipGrid, new Vector2(1.5f, 1.5f))));
+            await pair.RunTicksSync(5);
+
+            var (result, _) = await RunOnServer(pair, () => drydock.TryStoreShip(shipGrid, owner, null));
+            Assert.That(result, Is.EqualTo(DrydockStoreResult.Success), "A ghost never blocks a store.");
+
+            await pair.RunTicksSync(5);
+
+            await server.WaitAssertion(() =>
+            {
+                Assert.That(entMan.Deleted(shipGrid), Is.True, "The control: the hull was stored and left the world.");
+                Assert.That(entMan.Deleted(ghost), Is.False, "The ghost survived the store.");
+            });
+
+            await pair.CleanReturnAsync();
+        }
+
+        /// <summary>
         /// A station beacon aboard comes back on the ship's nav map. The beacon list is rebuilt, not
         /// serialized, when the grid joins its station; the retrieve used to join while the ship was
         /// still frozen on its staging map, and the rebuild's paused-skipping query filled the list

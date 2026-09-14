@@ -4,13 +4,21 @@ using System.Threading.Tasks;
 using Content.Server._NF.PublicTransit;
 using Content.Server.Nuke;
 using Content.Server.Spawners.Components;
+using Content.Server.Station.Components;
+using Content.Server.Station.Systems;
+using Content.Shared._NF.Shipyard.Components;
 using Content.Shared.Anomaly.Components;
 using Content.Shared.Buckle;
 using Content.Shared.Explosion.Components;
+using Content.Shared.Ghost;
+using Content.Shared.Mind;
 using Content.Shared.Mobs.Components;
 using Content.Shared.Nuke;
+using Content.Shared.Roles;
+using Content.Shared.Roles.Jobs;
 using Content.Shared.Singularity.Components;
 using Robust.Shared.Map;
+using Robust.Shared.Prototypes;
 
 namespace Content.Server._Triad.Drydock;
 
@@ -34,6 +42,9 @@ public sealed partial class DrydockSystem
 {
     [Dependency] private SharedBuckleSystem _buckle = default!;
     [Dependency] private PublicTransitSystem _transit = default!;
+    [Dependency] private SharedMindSystem _minds = default!;
+    [Dependency] private SharedJobSystem _jobs = default!;
+    [Dependency] private StationJobsSystem _stationJobs = default!;
 
     /// <summary>
     /// Takes a live hull into the impound lot: the ordinary store pipeline with its two refusal
@@ -118,10 +129,18 @@ public sealed partial class DrydockSystem
         if (aboard.Count == 0)
             return 0;
 
-        var drop = FindImpoundDropOff(ctx);
+        // One search per job, not per occupant: a crew of five deckhands shares one answer.
+        var drops = new Dictionary<string, EntityCoordinates>();
 
         foreach (var uid in aboard)
         {
+            var job = JobOfOccupant(uid);
+            if (!drops.TryGetValue(job?.Id ?? string.Empty, out var drop))
+            {
+                drop = FindImpoundDropOff(ctx, job);
+                drops[job?.Id ?? string.Empty] = drop;
+            }
+
             // Both of these keep an occupant parented to the hull, so a bare move leaves them
             // aboard and the gate refuses a hull that has already been emptied on paper. Forced,
             // because every ordinary reason to say no to a removal is outranked here.
@@ -138,10 +157,59 @@ public sealed partial class DrydockSystem
     }
 
     /// <summary>
+    /// The job an occupant's mind holds, or null for a body with no mind or no job (a mob, a pet,
+    /// a borg brain nobody is in).
+    /// </summary>
+    private ProtoId<JobPrototype>? JobOfOccupant(EntityUid uid)
+    {
+        return _minds.TryGetMind(uid, out var mindId, out _) && _jobs.MindTryGetJobId(mindId, out var job)
+            ? job
+            : null;
+    }
+
+    /// <summary>
+    /// Lifts every ghost off the hull, admin ghosts included, on every store and not only an impound.
+    /// A ghost never blocks a store (the organics gate skips it by design), but one still parented to
+    /// the hull rides the freeze onto the private staging map and is deleted with the grid, which
+    /// strands an admin mid-aghost. Put down where it floated, on the home map, or where the hull was
+    /// when the hull has already left.
+    /// </summary>
+    private void EvictGhostsAboard(DrydockStoreContext ctx)
+    {
+        var gridUid = ctx.GridUid;
+        if (ctx.HomeMap is not { } home)
+            return;
+
+        var ghosts = new List<EntityUid>();
+        foreach (var uid in _fidelity.GridTreeList(gridUid))
+        {
+            if (HasComp<GhostComponent>(uid))
+                ghosts.Add(uid);
+        }
+
+        if (ghosts.Count == 0)
+            return;
+
+        var gridStillHome = Transform(gridUid).MapUid == home;
+
+        foreach (var uid in ghosts)
+        {
+            _containers.TryRemoveFromContainer(uid, force: true);
+            var position = gridStillHome ? _xform.GetWorldPosition(uid) : ctx.HomePosition;
+            _xform.SetCoordinates(uid, new EntityCoordinates(home, position));
+        }
+
+        Log.Info($"Drydock: lifted {ghosts.Count} ghost(s) off {ToPrettyString(gridUid)} before it was stored.");
+    }
+
+    /// <summary>
     /// Where an evicted occupant lands: a spawn point on the map the hull came from, and on that
-    /// map only. Bus service outranks distance, because somewhere close with no way to leave is
-    /// worse than somewhere further along a route: the whole point of putting a player down rather
-    /// than deleting them is that they can carry on playing.
+    /// map only, chosen for the occupant's role. A spawn point for their own job comes first, then any
+    /// spawn point on a station that offers their job, so a faction crew lands at their own base and
+    /// a contractor at the civilian outpost, and only then anywhere at all. Within a tier bus service
+    /// outranks distance, because somewhere close with no way to leave is worse than somewhere
+    /// further along a route: the whole point of putting a player down rather than deleting them is
+    /// that they can carry on playing. Player ships are never a drop-off, whatever jobs they list.
     ///
     /// <para>The home map is read off the context, never the grid, because after the freeze the grid
     /// is on a private staging map and a query keyed on its transform would either find nothing or,
@@ -158,12 +226,12 @@ public sealed partial class DrydockSystem
     /// hull's own position: whatever they are wearing, wherever they were, which is survivable and
     /// reversible. Being written into the document is neither.</para>
     /// </summary>
-    private EntityCoordinates FindImpoundDropOff(DrydockStoreContext ctx)
+    private EntityCoordinates FindImpoundDropOff(DrydockStoreContext ctx, ProtoId<JobPrototype>? job)
     {
         var gridUid = ctx.GridUid;
 
         EntityCoordinates? best = null;
-        var bestRank = (Unserved: 0, Distance: 0f);
+        var bestRank = (Role: 0, Unserved: 0, Distance: 0f);
 
         if (ctx.HomeMap is { } home)
         {
@@ -182,7 +250,12 @@ public sealed partial class DrydockSystem
                 if (HasComp<DrydockInProgressComponent>(grid))
                     continue;
 
+                // Somebody's ship lists crew jobs too, and is no place to put a stranger down.
+                if (HasComp<ShipOwnershipComponent>(grid) || HasComp<ShuttleDeedComponent>(grid))
+                    continue;
+
                 var rank = (
+                    Role: RoleTier(uid, spawn, xform, job),
                     Unserved: _transit.StationList.Contains(grid) ? 0 : 1,
                     Distance: (_xform.GetWorldPosition(uid) - ctx.HomePosition).Length());
 
@@ -202,5 +275,25 @@ public sealed partial class DrydockSystem
         return ctx.HomeMap is { } map
             ? new EntityCoordinates(map, ctx.HomePosition)
             : EntityCoordinates.Invalid;
+    }
+
+    /// <summary>
+    /// How well a spawn point fits an occupant's role, lower is better: 0 is a spawn point for their
+    /// job, 1 is any spawn point on a station that offers their job, 2 is anything else. An occupant
+    /// with no job ranks every point 2, which is the pre-role behaviour.
+    /// </summary>
+    private int RoleTier(EntityUid spawnUid, SpawnPointComponent spawn, TransformComponent xform, ProtoId<JobPrototype>? job)
+    {
+        if (job is not { } id)
+            return 2;
+
+        if (spawn.SpawnType == SpawnPointType.Job && spawn.Job == id)
+            return 0;
+
+        return _station.GetOwningStation(spawnUid, xform) is { } station
+               && TryComp<StationJobsComponent>(station, out var jobs)
+               && _stationJobs.GetJobs(station, jobs).ContainsKey(id)
+            ? 1
+            : 2;
     }
 }

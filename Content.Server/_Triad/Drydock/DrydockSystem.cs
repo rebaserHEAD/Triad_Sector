@@ -1406,9 +1406,10 @@ public sealed partial class DrydockSystem : EntitySystem
 
     /// <summary>
     /// The organics gate, run three times across the freeze pipeline because occupancy can change
-    /// between database awaits. An impound evicts first and folds the count into <see
-    /// cref="DrydockStoreContext.Evicted"/>; either path then refuses if anyone board-able is still
-    /// found. Each call site's own comment says why that particular point still needs asking.
+    /// between database awaits. Every store first lifts any ghost off the hull; an impound then evicts
+    /// and folds the count into <see cref="DrydockStoreContext.Evicted"/>; either path then refuses if
+    /// anyone board-able is still found. Each call site's own comment says why that particular point
+    /// still needs asking.
     /// </summary>
     private bool GateOrganics(
         DrydockStoreContext ctx,
@@ -1416,6 +1417,10 @@ public sealed partial class DrydockSystem : EntitySystem
         EntityQuery<MobStateComponent> mobQuery,
         EntityQuery<TransformComponent> xformQuery)
     {
+        // Every store, not only an impound: a ghost never blocks, but one left aboard is deleted with
+        // the grid. Asked at each gate for the same reason the organics are, since one can drift aboard.
+        EvictGhostsAboard(ctx);
+
         if (ctx.Impound != null)
             ctx.Evicted += EvictOrganicsAboard(ctx);
 
