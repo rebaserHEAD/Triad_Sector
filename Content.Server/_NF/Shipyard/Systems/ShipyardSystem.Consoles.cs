@@ -1,4 +1,4 @@
-﻿using Content.Server.Access.Systems;
+using Content.Server.Access.Systems;
 using Content.Server.Popups;
 using Content.Server.Radio.EntitySystems;
 using Content.Server._NF.Bank;
@@ -1125,83 +1125,84 @@ public sealed partial class ShipyardSystem : SharedShipyardSystem
         }
     }
 
-    public void OnUnassignDeedMessage(EntityUid uid, ShipyardConsoleComponent component, ShipyardConsoleUnassignDeedMessage args)
-    {
-        if (args.Actor is not { Valid: true } player)
-            return;
-
-        if (component.TargetIdSlot.ContainerSlot?.ContainedEntity is not { Valid: true } targetId)
-        {
-            ConsolePopup(player, Loc.GetString("shipyard-console-no-idcard"));
-            PlayDenySound(player, uid, component);
-            return;
-        }
-
-        if (!TryComp<ShuttleDeedComponent>(targetId, out var deed) || deed.ShuttleUid == null)
-        {
-            ConsolePopup(player, Loc.GetString("shipyard-console-no-deed"));
-            PlayDenySound(player, uid, component);
-            return;
-        }
-
-        if (RefuseDeedNotOwned(uid, component, player, deed, "unassign deed")) // Triad: a card is not proof of ownership, the account is
-            return; // Triad
-
-        // Check if the player is on cooldown
-        var cooldown = EnsureComp<ShipyardUnassignCooldownComponent>(player);
-        var currentTime = _timing.CurTime;
-
-        if (currentTime < cooldown.NextUnassignTime)
-        {
-            // Calculate remaining time
-            var timeRemaining = cooldown.NextUnassignTime - currentTime;
-            var hoursRemaining = (int)timeRemaining.TotalHours;
-            var minutesRemaining = (int)timeRemaining.TotalMinutes % 60;
-
-            // Display cooldown message
-            var cooldownMessage = Loc.GetString(
-                "shipyard-console-unassign-cooldown",
-                ("hours", hoursRemaining),
-                ("minutes", minutesRemaining)
-            );
-            ConsolePopup(player, cooldownMessage);
-            PlayDenySound(player, uid, component);
-            return;
-        }
-
-        // Get the name of the ship before we remove the component
-        var shipName = GetFullName(deed);
-
-        // Remove the deed component from the ID card
-        RemComp<ShuttleDeedComponent>(targetId);
-
-        // Clear the deed holder on the ship's deed and any other deeds
-        var query = EntityQueryEnumerator<ShuttleDeedComponent>();
-        while (query.MoveNext(out var deedEntity, out var otherDeed))
-        {
-            if (otherDeed.ShuttleUid == deed.ShuttleUid)
-            {
-                otherDeed.DeedHolder = null;
-                Dirty(deedEntity, otherDeed);
-            }
-        }
-
-        // Set the cooldown
-        cooldown.NextUnassignTime = currentTime + cooldown.CooldownDuration;
-
-        // ConsolePopup(player, Loc.GetString("shipyard-console-deed-unassigned")); // Triad: success is shown by the console, chat carries failures only
-        PlayConfirmSound(player, uid, component);
-
-        // Get the player's balance or use 0 if they don't have a bank account
-        int balance = 0;
-        if (TryComp<BankAccountComponent>(player, out var bank))
-            balance = bank.Balance;
-
-        // Update the UI
-        RefreshState(uid, balance, true, null, 0, targetId, (ShipyardConsoleUiKey)args.UiKey, false);
-        KickDrydockRefresh(uid, component, player, (ShipyardConsoleUiKey)args.UiKey); // Triad: drydock tab
-
-        _adminLogger.Add(LogType.ShipYardUsage, LogImpact.Low,
-            $"{ToPrettyString(player):actor} unassigned deed for ship '{shipName}' from {ToPrettyString(targetId)} via {ToPrettyString(uid)}");
-    }
+    // Triad: removed. Unassign stripped a deed off its card with no way back for a voucher hull or on a server with the drydock off, and it has no job left: one civilian ship out per account, a store settles deeds itself, and the drydock tab's reissue is the sanctioned way to move a deed.
+    // public void OnUnassignDeedMessage(EntityUid uid, ShipyardConsoleComponent component, ShipyardConsoleUnassignDeedMessage args)
+    // {
+    //     if (args.Actor is not { Valid: true } player)
+    //         return;
+    //
+    //     if (component.TargetIdSlot.ContainerSlot?.ContainedEntity is not { Valid: true } targetId)
+    //     {
+    //         ConsolePopup(player, Loc.GetString("shipyard-console-no-idcard"));
+    //         PlayDenySound(player, uid, component);
+    //         return;
+    //     }
+    //
+    //     if (!TryComp<ShuttleDeedComponent>(targetId, out var deed) || deed.ShuttleUid == null)
+    //     {
+    //         ConsolePopup(player, Loc.GetString("shipyard-console-no-deed"));
+    //         PlayDenySound(player, uid, component);
+    //         return;
+    //     }
+    //
+    //     if (RefuseDeedNotOwned(uid, component, player, deed, "unassign deed")) // Triad: a card is not proof of ownership, the account is
+    //         return; // Triad
+    //
+    //     // Check if the player is on cooldown
+    //     var cooldown = EnsureComp<ShipyardUnassignCooldownComponent>(player);
+    //     var currentTime = _timing.CurTime;
+    //
+    //     if (currentTime < cooldown.NextUnassignTime)
+    //     {
+    //         // Calculate remaining time
+    //         var timeRemaining = cooldown.NextUnassignTime - currentTime;
+    //         var hoursRemaining = (int)timeRemaining.TotalHours;
+    //         var minutesRemaining = (int)timeRemaining.TotalMinutes % 60;
+    //
+    //         // Display cooldown message
+    //         var cooldownMessage = Loc.GetString(
+    //             "shipyard-console-unassign-cooldown",
+    //             ("hours", hoursRemaining),
+    //             ("minutes", minutesRemaining)
+    //         );
+    //         ConsolePopup(player, cooldownMessage);
+    //         PlayDenySound(player, uid, component);
+    //         return;
+    //     }
+    //
+    //     // Get the name of the ship before we remove the component
+    //     var shipName = GetFullName(deed);
+    //
+    //     // Remove the deed component from the ID card
+    //     RemComp<ShuttleDeedComponent>(targetId);
+    //
+    //     // Clear the deed holder on the ship's deed and any other deeds
+    //     var query = EntityQueryEnumerator<ShuttleDeedComponent>();
+    //     while (query.MoveNext(out var deedEntity, out var otherDeed))
+    //     {
+    //         if (otherDeed.ShuttleUid == deed.ShuttleUid)
+    //         {
+    //             otherDeed.DeedHolder = null;
+    //             Dirty(deedEntity, otherDeed);
+    //         }
+    //     }
+    //
+    //     // Set the cooldown
+    //     cooldown.NextUnassignTime = currentTime + cooldown.CooldownDuration;
+    //
+    //     // ConsolePopup(player, Loc.GetString("shipyard-console-deed-unassigned")); // Triad: success is shown by the console, chat carries failures only
+    //     PlayConfirmSound(player, uid, component);
+    //
+    //     // Get the player's balance or use 0 if they don't have a bank account
+    //     int balance = 0;
+    //     if (TryComp<BankAccountComponent>(player, out var bank))
+    //         balance = bank.Balance;
+    //
+    //     // Update the UI
+    //     RefreshState(uid, balance, true, null, 0, targetId, (ShipyardConsoleUiKey)args.UiKey, false);
+    //     KickDrydockRefresh(uid, component, player, (ShipyardConsoleUiKey)args.UiKey); // Triad: drydock tab
+    //
+    //     _adminLogger.Add(LogType.ShipYardUsage, LogImpact.Low,
+    //         $"{ToPrettyString(player):actor} unassigned deed for ship '{shipName}' from {ToPrettyString(targetId)} via {ToPrettyString(uid)}");
+    // }
 }

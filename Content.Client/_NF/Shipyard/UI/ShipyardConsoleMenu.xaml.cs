@@ -33,7 +33,7 @@ public sealed partial class ShipyardConsoleMenu : FancyWindow
 
     public event Action<ButtonEventArgs>? OnSellShip;
     public event Action<ButtonEventArgs>? OnOrderApproved;
-    public event Action<ButtonEventArgs>? OnUnassignDeed;
+    // public event Action<ButtonEventArgs>? OnUnassignDeed; // Triad: removed with the Unassign button
     public event Action<string>? OnRenameShip;
     // Triad: drydock tab. Store carries only the berth to land in, because the server resolves the
     // ship from the card in the slot; retrieve carries the id of the row that was clicked.
@@ -239,7 +239,7 @@ public sealed partial class ShipyardConsoleMenu : FancyWindow
         Classes.OnItemSelected += OnClassItemSelected;
         Engines.OnItemSelected += OnEngineItemSelected;
         SellShipButton.OnPressed += (args) => { OnSellShip?.Invoke(args); };
-        UnassignDeedButton.OnPressed += (args) => { OnUnassignDeed?.Invoke(args); };
+        // UnassignDeedButton.OnPressed += (args) => { OnUnassignDeed?.Invoke(args); }; // Triad: removed with the Unassign button
         RenameButton.OnPressed += OnRenameButtonPressed;
 
         // Triad: drydock tab
@@ -645,7 +645,7 @@ public sealed partial class ShipyardConsoleMenu : FancyWindow
 
         ShipAppraisalLabel.Text = $"{BankSystemExtensions.ToSpesoString(shipPrice)} ({state.SellRate * 100.0f:F1}%)";
         SellShipButton.Disabled = state.ShipDeedTitle == null;
-        UnassignDeedButton.Disabled = state.ShipDeedTitle == null;
+        // UnassignDeedButton.Disabled = state.ShipDeedTitle == null; // Triad: removed with the Unassign button
 
         // Show/hide and enable/disable rename controls based on whether there's a ship deed
         var hasShipDeed = state.ShipDeedTitle != null;

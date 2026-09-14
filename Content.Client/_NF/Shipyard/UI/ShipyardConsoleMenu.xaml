@@ -103,7 +103,8 @@
                 <PanelContainer.PanelOverride>
                     <gfx:StyleBoxFlat BorderThickness="3" BorderColor="#636363" BackgroundColor="#141414"/>
                 </PanelContainer.PanelOverride>
-        <GridContainer Columns="5" HorizontalExpand="True" Margin="0 8 0 2">
+        <!-- Triad: Columns 5 to 4, with the Unassign button removed. -->
+        <GridContainer Columns="4" HorizontalExpand="True" Margin="0 8 0 2">
             <Button Name="TargetIdButton" Access="Public"
                     StyleClasses="ButtonSquare"/>
             <controls:ConfirmButton Name="SellShipButton"
@@ -111,11 +112,13 @@
                 ConfirmationText="{Loc 'shipyard-console-confirm-unassign'}"
                 StyleClasses="ButtonSquare"
                 Disabled="True" />
+            <!-- Triad: removed. Unassign could strand a deed with no way back; the drydock tab's reissue moves deeds now.
             <controls:ConfirmButton Name="UnassignDeedButton"
                 Text="{Loc 'shipyard-console-unassign-deed'}"
                 ConfirmationText="{Loc 'shipyard-console-confirm-unassign'}"
                 StyleClasses="ButtonSquare ButtonCaution"
                 Disabled="True" />
+            -->
 
             <BoxContainer Orientation="Vertical">
                 <Label Text="{Loc 'shipyard-console-deed-label'}" />

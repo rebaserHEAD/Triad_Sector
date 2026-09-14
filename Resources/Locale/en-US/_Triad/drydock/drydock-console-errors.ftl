@@ -20,7 +20,6 @@ drydock-error-verb-move = Move
 drydock-error-verb-reclaim = Reclaim
 drydock-error-verb-abandon = Abandon
 drydock-error-verb-reissue-deed = Deed transfer
-drydock-error-verb-unassign-deed = Unassign
 drydock-error-verb-deed-action = Deed action
 
 ## Shared
