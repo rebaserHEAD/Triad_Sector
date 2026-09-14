@@ -1,33 +1,32 @@
 using Content.Server.Administration;
 using Content.Server.EUI;
 using Content.Shared.Administration;
-using Robust.Shared.Toolshed;
-using Robust.Shared.Toolshed.Errors;
+using Robust.Shared.Console;
 
 namespace Content.Server._Triad.Drydock.Admin;
 
 /// <summary>
-/// Opens the drydock admin panel for the admin who ran it. The Admin menu's Drydock button runs
-/// this by name. The description and help ride the command attributes, but Toolshed's loc test
-/// reads a Fluent key regardless, so `command-description-drydockadmin` in the drydock admin
-/// locale file has to say the same thing and move whenever this does.
+/// Opens the drydock admin panel for the admin who ran it. The Admin menu's Drydock button runs this
+/// by name, and must stay a classic console command: the button's visibility check reads the command
+/// list <c>AdminManager.UpdateAdminStatus</c> sends the client, which carries classic commands only,
+/// so a Toolshed command hides the button from every admin but a host.
 /// </summary>
-[ToolshedCommand(Name = "drydockadmin"), AdminCommand(AdminFlags.Admin)]
-public sealed partial class DrydockAdminCommand : ToolshedCommand
+[AdminCommand(AdminFlags.Admin)]
+public sealed class DrydockAdminCommand : IConsoleCommand
 {
-    [Dependency] private EuiManager _eui = default!;
+    public string Command => "drydockadmin";
+    public string Description => "Opens the drydock admin panel: stored ships, berths, history, restore.";
+    public string Help => $"Usage: {Command}";
 
-    [CommandImplementation]
-    [CommandDescription("Opens the drydock admin panel: stored ships, berths, history, restore.")]
-    [CommandHelp("Usage: drydockadmin")]
-    public void Open([CommandInvocationContext] IInvocationContext ctx)
+    public void Execute(IConsoleShell shell, string argStr, string[] args)
     {
-        if (ctx.Session is not { } player)
+        if (shell.Player is not { } player)
         {
-            ctx.ReportError(new NotForServerConsoleError());
+            shell.WriteError(Loc.GetString("shell-cannot-run-command-from-server"));
             return;
         }
 
-        _eui.OpenEui(new DrydockAdminEui(), player);
+        var eui = IoCManager.Resolve<EuiManager>();
+        eui.OpenEui(new DrydockAdminEui(), player);
     }
 }

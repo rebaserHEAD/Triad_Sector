@@ -165,7 +165,3 @@ drydock-admin-action-RevisionPinned = Revision pinned
 drydock-admin-action-RevisionUnpinned = Revision unpinned
 drydock-admin-action-DriftRefused = Retrieve refused, content missing
 drydock-admin-action-StateSkipped = Retrieved with state skipped
-
-# The Toolshed loc test requires a description key for every command, whatever the command's own
-# CommandDescription attribute says, so this is the one the test reads.
-command-description-drydockadmin = Opens the drydock admin panel: stored ships, berths, history, restore.
