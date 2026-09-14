@@ -34,6 +34,12 @@ public sealed partial class ContainerFillSystem : EntitySystem
                 continue;
             }
 
+            // Triad: a container that already holds something was filled once. Map init is raised
+            // again on a retrieved ship (DrydockFidelitySystem.RefireMapInitSliced), and a second
+            // fill either duplicates the contents or fails the insert with an error.
+            if (container.ContainedEntities.Count > 0)
+                continue;
+
             foreach (var proto in prototypes)
             {
                 var ent = Spawn(proto, coords);
@@ -65,6 +71,10 @@ public sealed partial class ContainerFillSystem : EntitySystem
                 Log.Error($"Entity {ToPrettyString(ent)} with a {nameof(EntityTableContainerFillComponent)} is missing a container ({containerId}).");
                 continue;
             }
+
+            // Triad: see OnMapInit above; the same guard for the table-driven fill.
+            if (container.ContainedEntities.Count > 0)
+                continue;
 
             var spawns = _entityTable.GetSpawns(table);
             foreach (var proto in spawns)

@@ -86,6 +86,7 @@ public sealed partial class DrydockFidelitySystem : EntitySystem
         base.Initialize();
         _capture = new DrydockReflectiveCapture(_serialization);
         _probe = new DrydockEntityRefProbe(_serialization);
+        _refWriter = new DrydockEntityRefWriter(_serialization);
     }
 
     /// <summary>

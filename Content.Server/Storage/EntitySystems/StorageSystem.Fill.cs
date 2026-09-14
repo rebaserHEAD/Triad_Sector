@@ -18,12 +18,21 @@ public sealed partial class StorageSystem
         if (component.Contents.Count == 0)
             return;
 
+        // Triad: a storage that already holds something was filled once. Map init is raised again
+        // on a retrieved ship (DrydockFidelitySystem.RefireMapInitSliced), and refilling on top of
+        // the contents fails every insert with an error per item.
         if (TryComp<StorageComponent>(uid, out var storageComp))
         {
+            if (storageComp.Container.ContainedEntities.Count > 0) // Triad
+                return;
+
             FillStorage((uid, component, storageComp));
         }
         else if (TryComp<EntityStorageComponent>(uid, out var entityStorageComp))
         {
+            if (entityStorageComp.Contents.ContainedEntities.Count > 0) // Triad
+                return;
+
             FillEntityStorage((uid, component, entityStorageComp));
         }
         else

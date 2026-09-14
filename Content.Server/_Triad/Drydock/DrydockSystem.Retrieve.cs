@@ -868,9 +868,12 @@ public sealed partial class DrydockSystem
     /// few milliseconds of main-thread time at a time.
     ///
     /// <para>This is the map-init boundary made concrete. A restored entity comes back already
-    /// marked initialized, so <c>MapInitEvent</c> never fires for it again. That is deliberate and
-    /// necessary, since re-firing it would re-run every one-shot spawner aboard. The cost is that
-    /// anything a system only ever does on map init has to be done again here, by name.</para>
+    /// marked initialized, so the engine never raises <c>MapInitEvent</c> for it again. The
+    /// transaction (<see cref="DrydockFidelitySystem.RefireMapInitSliced"/>, behind
+    /// <see cref="TriadCCVars.DrydockMapInitRefire"/>) raises it anyway and undoes what it did to
+    /// persisted state, so every system's runtime registration comes back without being named
+    /// here. The sweeps below that redo a system's own map-init job run only with the transaction
+    /// off; the rest are policy or edge work no map init does, and always run.</para>
     ///
     /// <para>Each step below is a system whose runtime registration lives entirely behind that
     /// event or the purchase path. Without them a retrieved ship comes back with dead machines that
@@ -924,28 +927,61 @@ public sealed partial class DrydockSystem
         // later sweep would wake, register or revive it.
         await StripSliced(grid, slice);
 
+        // Map init for everything that survived the strip, before the sweeps: a sweep that runs
+        // after it corrects against the state the ship actually has (the lathe scrub reads the
+        // producing marker the fire may have touched), and the research reset below still clears
+        // whatever a client's registration synced.
+        var mapInitMode = DrydockFidelitySystem.ParseMapInitMode(_cfg.GetCVar(TriadCCVars.DrydockMapInitRefire));
+        ctx.MapInitReport = await _fidelity.RefireMapInitSliced(grid, slice, mapInitMode);
+
+        timer.Mark("mapinit");
+
         await ReviveGravitySliced(grid, slice);
         await ReviveNpcsSliced(grid, slice);
-        await ReviveWiresSliced(grid, slice);
-        await ReviveDeviceNetworkSliced(grid, slice);
+
+        // The sweeps that redo a system's own map-init handler run only when the transaction did
+        // not: with the event raised, a second wire layout doubles the wire list and a second
+        // device-network connect reassigns the address. They are the rollback for the cvar's off
+        // setting, not a second pass.
+        var mapInitRaised = mapInitMode != DrydockMapInitMode.Off;
+        if (!mapInitRaised)
+        {
+            await ReviveWiresSliced(grid, slice);
+            await ReviveDeviceNetworkSliced(grid, slice);
+        }
+
         // Before the clients register, so a lathe syncing from its server copies the empty database.
+        // With the event raised the clients registered during the fire and synced a live database,
+        // and this resets every database aboard after the fact, lathes included.
         await ResetResearchSliced(grid, slice);
-        await ReviveResearchClientsSliced(grid, slice);
+        if (!mapInitRaised)
+            await ReviveResearchClientsSliced(grid, slice);
+
         await ReviveConsoleLocksSliced(grid, slice);
         await ReviveGeneratorsSliced(grid, slice);
-        await ReviveSmartFridgesSliced(grid, slice);
-        await ReviveArtifactAnalyzersSliced(grid, slice);
+
+        if (!mapInitRaised)
+        {
+            await ReviveSmartFridgesSliced(grid, slice);
+            await ReviveArtifactAnalyzersSliced(grid, slice);
+        }
+
         await ReviveFilledHandsSliced(grid, slice);
-        await ReviveDispenserSlotsSliced(grid, slice);
-        await ReviveCabinetLocksSliced(grid, slice);
+
+        if (!mapInitRaised)
+        {
+            await ReviveDispenserSlotsSliced(grid, slice);
+            await ReviveCabinetLocksSliced(grid, slice);
+        }
+
         await ScrubStaleLatheProductionSliced(grid, slice);
 
         timer.Mark("sweeps");
 
         await RehydrateDamageSliced(grid, slice);
 
-        // The repair baseline is derived state, stripped at store. Retrieve fires neither map init
-        // nor the purchase event, and the repair system subscribes only to the latter.
+        // The repair baseline is derived state, stripped at store. The repair system builds it only on
+        // the purchase event, which a retrieve never raises.
         _shipRepair.GenerateRepairData(grid);
 
         timer.Mark("damage");
@@ -1186,8 +1222,8 @@ public sealed partial class DrydockSystem
 
     /// <summary>
     /// A smart fridge's stock listing is an index over its container, rebuilt on map init because
-    /// its key type cannot be a YAML mapping key. No map init here, so rebuild it by hand, or a
-    /// stocked fridge reports itself empty and its contents are unreachable.
+    /// its key type cannot be a YAML mapping key. With the map-init transaction off nothing rebuilds
+    /// it, so this does, or a stocked fridge reports itself empty and its contents are unreachable.
     /// </summary>
     private Task ReviveSmartFridgesSliced(EntityUid grid, IDrydockSlice slice)
     {

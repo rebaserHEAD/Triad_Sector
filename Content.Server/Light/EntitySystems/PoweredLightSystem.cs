@@ -85,7 +85,9 @@ namespace Content.Server.Light.EntitySystems
         private void OnMapInit(EntityUid uid, PoweredLightComponent light, MapInitEvent args)
         {
             // TODO: Use ContainerFill dog
-            if (light.HasLampOnSpawn != null)
+            // Triad: a fixture that already holds a bulb was filled once; map init is raised again
+            // on a retrieved ship, and a second bulb has nowhere to go.
+            if (light.HasLampOnSpawn != null && light.LightBulbContainer.ContainedEntity == null)
             {
                 var entity = EntityManager.SpawnEntity(light.HasLampOnSpawn, EntityManager.GetComponent<TransformComponent>(uid).Coordinates);
                 _containerSystem.Insert(entity, light.LightBulbContainer);

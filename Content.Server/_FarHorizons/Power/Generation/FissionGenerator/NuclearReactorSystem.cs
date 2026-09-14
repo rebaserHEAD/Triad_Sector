@@ -170,6 +170,12 @@ public sealed partial class NuclearReactorSystem : EntitySystem
     /// </summary>
     private void OnMapInit(EntityUid uid, NuclearReactorComponent comp, ref MapInitEvent args)
     {
+        // Triad: a reactor that already holds parts was laid out once. The drydock raises map init
+        // again on a retrieved ship, and the prefab starts by emptying the part storage, which is the
+        // one effect that transaction cannot undo.
+        if (comp.PartStorage.ContainedEntities.Count > 0)
+            return;
+
         ApplyPrefab(uid, comp);
         comp.ApplyPrefab = false;
     }

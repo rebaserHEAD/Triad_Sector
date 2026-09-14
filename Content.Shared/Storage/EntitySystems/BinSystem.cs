@@ -54,6 +54,12 @@ public sealed partial class BinSystem : EntitySystem
         if (_net.IsClient)
             return;
 
+        // Triad: a bin that holds anything was filled once. Map init is raised again on a retrieved
+        // ship (DrydockFidelitySystem.RefireMapInitSliced), and a full bin fails the first insert
+        // with an error.
+        if (component.Items.Count > 0)
+            return;
+
         var xform = Transform(uid);
         foreach (var id in component.InitialContents)
         {

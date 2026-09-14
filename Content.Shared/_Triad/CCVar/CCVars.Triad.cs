@@ -197,6 +197,20 @@ public sealed class TriadCCVars
         CVarDef.Create("triad.drydock.serialize_shadow_compare", false, CVar.SERVERONLY);
 
     /// <summary>
+    /// What a retrieve does with <c>MapInitEvent</c>, which the engine never raises for a restored
+    /// entity: <c>off</c> leaves it unraised, <c>report</c> raises it on every entity of the ship and
+    /// logs every persisted field it rewrote and every entity it spawned or deleted, <c>revert</c>
+    /// raises it and puts every rewritten persisted field back and deletes every spawned entity, so
+    /// the ship keeps what its document said and gains what map init builds at runtime.
+    ///
+    /// <para><c>report</c> lands the damage on the ship; it is the soak mode for a test server.
+    /// <c>off</c> is the rollback: the retrieve's named sweeps then redo the handful of map-init
+    /// jobs they know about and nothing else.</para>
+    /// </summary>
+    public static readonly CVarDef<string> DrydockMapInitRefire =
+        CVarDef.Create("triad.drydock.mapinit_refire", "revert", CVar.SERVERONLY);
+
+    /// <summary>
     /// The share of a hull's appraisal the round-end sweep charges to reclaim a ship it impounded,
     /// 0 to 1. Frozen onto the row at impound, so changing this never moves a fee already quoted.
     /// The admin impound dialog opens at this rate too, so an impound by hand charges what the sweep

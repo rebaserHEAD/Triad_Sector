@@ -23,6 +23,8 @@ public enum DrydockPhase : byte
     Fetch, Load, Fidelity, Sweeps, Damage, Station, Dock, Release,
     // both
     Unwind,
+    // retrieve, between Fidelity and Sweeps; declared last so no earlier value moves
+    MapInit,
 }
 
 /// <summary>
@@ -56,6 +58,7 @@ public static class DrydockPhases
         DrydockPhase.Fetch,
         DrydockPhase.Load,
         DrydockPhase.Fidelity,
+        DrydockPhase.MapInit,
         DrydockPhase.Sweeps,
         DrydockPhase.Damage,
         DrydockPhase.Station,
@@ -102,6 +105,8 @@ public static class DrydockPhases
             DrydockPhase.Fetch => 5,
             DrydockPhase.Load => 40,
             DrydockPhase.Fidelity => 15,
+            // Two renders of every persisted field on the hull, so about the fidelity restore twice.
+            DrydockPhase.MapInit => 25,
             DrydockPhase.Sweeps => 20,
             DrydockPhase.Damage => 5,
             DrydockPhase.Station => 3,
@@ -628,6 +633,9 @@ public sealed class DrydockRetrieveContext
 
     /// <inheritdoc cref="LoadedRevision"/>
     public DrydockFidelityRestore? AppearanceRestore;
+
+    /// <summary>The map-init transaction's report, null when the mode was off.</summary>
+    public DrydockMapInitReport? MapInitReport;
 
     public readonly DrydockPhaseTimer Timer = new();
 }
