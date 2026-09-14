@@ -11,3 +11,6 @@ trait-neanderthal-accent-desc = Ugh. You talk small. Big word hard. Club good.
 
 # Triad: shown on a paid accent a Dwarf/Goblin can't take until they clear their native accent with Accentless
 trait-condition-free-accent-slot = Requires the Accentless trait (your species already speaks a strong native accent)
+
+# Triad: a trait switched off for now; its selection is kept on the profile
+trait-condition-disabled = Unavailable for now
