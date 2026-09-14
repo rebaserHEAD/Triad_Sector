@@ -234,9 +234,10 @@ shipyard-console-import-prompt-body = [color=#e0e0e0]{ $ship }[/color] files int
 shipyard-console-error-vessel-unavailable = Purchase failed: that vessel is not available to you.
 shipyard-console-error-vessel-load-failed = Purchase failed: the vessel's ship file could not be loaded.
 shipyard-console-error-sale-loaded-from-save = Sale failed: this vessel was loaded from a saved manifest and cannot be sold.
-shipyard-console-error-rename-empty = Rename failed: ship name cannot be empty.
-shipyard-console-error-rename-too-long = Rename failed: ship name cannot exceed {$max} characters.
-shipyard-console-error-rename-failed = Rename failed: the ship could not be renamed.
+# Triad: removed with the footer Rename. The drydock tab's rename reads drydock-error-* keys.
+# shipyard-console-error-rename-empty = Rename failed: ship name cannot be empty.
+# shipyard-console-error-rename-too-long = Rename failed: ship name cannot exceed {$max} characters.
+# shipyard-console-error-rename-failed = Rename failed: the ship could not be renamed.
 
 # Triad: legacy import failure reasons.
 shipyard-console-import-error-in-progress = Import failed: another import is already running.

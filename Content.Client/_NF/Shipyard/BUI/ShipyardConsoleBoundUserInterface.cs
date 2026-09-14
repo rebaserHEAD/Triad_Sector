@@ -50,7 +50,7 @@ public sealed partial class ShipyardConsoleBoundUserInterface : BoundUserInterfa
         _menu.OnOrderApproved += ApproveOrder;
         _menu.OnSellShip += SellShip;
         // _menu.OnUnassignDeed += UnassignDeed; // Triad: removed with the Unassign button
-        _menu.OnRenameShip += RenameShip;
+        // _menu.OnRenameShip += RenameShip; // Triad: removed with the footer Rename
         // Triad: drydock tab
         _menu.LocalUserId = _player.LocalSession?.UserId.UserId;
         _menu.OnStore += berthId => SendMessage(new ShipyardConsoleStoreMessage(berthId));
@@ -174,9 +174,10 @@ public sealed partial class ShipyardConsoleBoundUserInterface : BoundUserInterfa
     //     SendMessage(new ShipyardConsoleUnassignDeedMessage());
     // }
 
-    private void RenameShip(string newName)
-    {
-        SendMessage(new ShipyardConsoleRenameMessage(newName));
-    }
+    // Triad: removed with the footer Rename
+    // private void RenameShip(string newName)
+    // {
+    //     SendMessage(new ShipyardConsoleRenameMessage(newName));
+    // }
 
 }

@@ -129,6 +129,7 @@
         </GridContainer>
             </PanelContainer>
         </PanelContainer>
+        <!-- Triad: removed. A hull is renamed from the drydock tab while it is stored, where the new name reaches hull and deed on the next retrieve.
         <BoxContainer Orientation="Horizontal" Margin="0 2 0 2" Name="RenameContainer" Visible="False">
             <LineEdit Name="RenameLineEdit"
                       PlaceHolder="Name"
@@ -138,6 +139,7 @@
                     Text="Rename"
                     Disabled="True" />
         </BoxContainer>
+        -->
 
         <!-- Footer -->
         <BoxContainer Orientation="Vertical" Margin="0 5 0 0" >

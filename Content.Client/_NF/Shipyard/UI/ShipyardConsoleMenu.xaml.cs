@@ -34,7 +34,7 @@ public sealed partial class ShipyardConsoleMenu : FancyWindow
     public event Action<ButtonEventArgs>? OnSellShip;
     public event Action<ButtonEventArgs>? OnOrderApproved;
     // public event Action<ButtonEventArgs>? OnUnassignDeed; // Triad: removed with the Unassign button
-    public event Action<string>? OnRenameShip;
+    // public event Action<string>? OnRenameShip; // Triad: removed with the footer Rename
     // Triad: drydock tab. Store carries only the berth to land in, because the server resolves the
     // ship from the card in the slot; retrieve carries the id of the row that was clicked.
     public event Action<int?>? OnStore;
@@ -240,7 +240,7 @@ public sealed partial class ShipyardConsoleMenu : FancyWindow
         Engines.OnItemSelected += OnEngineItemSelected;
         SellShipButton.OnPressed += (args) => { OnSellShip?.Invoke(args); };
         // UnassignDeedButton.OnPressed += (args) => { OnUnassignDeed?.Invoke(args); }; // Triad: removed with the Unassign button
-        RenameButton.OnPressed += OnRenameButtonPressed;
+        // RenameButton.OnPressed += OnRenameButtonPressed; // Triad: removed with the footer Rename
 
         // Triad: drydock tab
         ReissueButton.OnPressed += _ =>
@@ -385,21 +385,22 @@ public sealed partial class ShipyardConsoleMenu : FancyWindow
         PopulateProducts(_lastAvailableProtos, _lastUnavailableProtos, _freeListings, _validId);
     }
 
-    private void OnRenameButtonPressed(ButtonEventArgs args)
-    {
-        var newName = RenameLineEdit.Text.Trim();
-        if (string.IsNullOrEmpty(newName))
-            return;
-
-        // Validate length (30 characters max, matching ShuttleDeedComponent.MaxNameLength)
-        if (newName.Length > 30)
-        {
-            newName = newName[..30];
-        }
-
-        OnRenameShip?.Invoke(newName);
-        RenameLineEdit.Text = "";
-    }
+    // Triad: removed with the footer Rename
+    // private void OnRenameButtonPressed(ButtonEventArgs args)
+    // {
+    //     var newName = RenameLineEdit.Text.Trim();
+    //     if (string.IsNullOrEmpty(newName))
+    //         return;
+    //
+    //     // Validate length (30 characters max, matching ShuttleDeedComponent.MaxNameLength)
+    //     if (newName.Length > 30)
+    //     {
+    //         newName = newName[..30];
+    //     }
+    //
+    //     OnRenameShip?.Invoke(newName);
+    //     RenameLineEdit.Text = "";
+    // }
 
     private void OnSearchBarTextChanged(LineEdit.LineEditEventArgs args)
     {
@@ -657,11 +658,12 @@ public sealed partial class ShipyardConsoleMenu : FancyWindow
         SellShipButton.ToolTip = sale == ShipyardDeedSale.Return ? Loc.GetString("shipyard-console-return-tooltip") : null;
         // End Triad
 
-        // Show/hide and enable/disable rename controls based on whether there's a ship deed
-        var hasShipDeed = state.ShipDeedTitle != null;
-        RenameContainer.Visible = hasShipDeed;
-        RenameLineEdit.Editable = hasShipDeed;
-        RenameButton.Disabled = !hasShipDeed;
+        // Triad: removed with the footer Rename
+        // // Show/hide and enable/disable rename controls based on whether there's a ship deed
+        // var hasShipDeed = state.ShipDeedTitle != null;
+        // RenameContainer.Visible = hasShipDeed;
+        // RenameLineEdit.Editable = hasShipDeed;
+        // RenameButton.Disabled = !hasShipDeed;
 
         TargetIdButton.Text = state.IsTargetIdPresent
             ? Loc.GetString("id-card-console-window-eject-button")

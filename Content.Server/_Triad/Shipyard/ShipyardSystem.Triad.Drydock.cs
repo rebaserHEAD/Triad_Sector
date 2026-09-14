@@ -640,7 +640,7 @@ public sealed partial class ShipyardSystem
     }
 
     /// <summary>
-    /// The server half of the lockout for the upstream deed verbs (sell, rename). A deed is a holder
+    /// The server half of the lockout for the upstream deed verb (sell). A deed is a holder
     /// claim and cards get lent, lost and stolen, so a card is never proof of ownership: the account
     /// behind the press has to own the hull. A hull issued on a voucher, or one no account owns, is
     /// left to upstream's rules. Both refusals write their reason to the pressing player's chat, so a
@@ -658,7 +658,6 @@ public sealed partial class ShipyardSystem
         var chatVerb = verb switch
         {
             "sell" => DrydockConsoleVerb.Sell,
-            "rename" => DrydockConsoleVerb.Rename,
             // A new upstream caller: still refused and still reported, under a neutral label.
             _ => DrydockConsoleVerb.DeedAction,
         };
