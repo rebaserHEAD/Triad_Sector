@@ -43,8 +43,7 @@ shipyard-console-guidebook = Manual
 # shipyard-console-unassign-deed = Unassign
 # shipyard-console-deed-unassigned = Deed unassigned from ID card successfully.
 shipyard-console-confirm-unassign = Are you sure?
-# Triad: the footer sale button for a hull issued on a voucher
-shipyard-console-sell-button = Sell
+# Triad: the footer sale button for a hull issued on a voucher (its Sell label is shipyard-console-sell-button, further down)
 shipyard-console-return-button = Return Vessel
 shipyard-console-return-confirm = Burn voucher?
 shipyard-console-return-tooltip = Hands the vessel back for nothing. The voucher is used up.
