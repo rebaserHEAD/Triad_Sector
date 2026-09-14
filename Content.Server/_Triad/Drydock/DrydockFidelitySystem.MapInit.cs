@@ -1,4 +1,5 @@
 using System;
+using System.Collections;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
@@ -28,9 +29,12 @@ public enum DrydockMapInitMode : byte
     /// <summary>
     /// A legacy import's first map init. The old save writer relied on the loader map-initializing
     /// a ship, so its documents never carried what a fill spawns: an airlock's door electronics, a
-    /// light's bulb. Those are kept, and the store files them as the document's own. Persisted
-    /// fields are still put back, so a vendor does not restock and a gun does not refill, and the
-    /// fill guards still hold, so a container the file did fill gets nothing on top. Never a cvar
+    /// light's bulb. Those are kept, and the store files them as the document's own. A persisted
+    /// field the file left null or empty keeps what map init put in it, for the same reason: a
+    /// dispenser's storage slots, a mob's combat-mode action, a radio's channels (and a vending
+    /// machine the old file saved with no stock at all is stocked). Any other persisted field is
+    /// put back, so a gun does not refill and a rolled value keeps the file's roll, and the fill
+    /// guards still hold, so a container the file did fill gets nothing on top. Never a cvar
     /// value: the import picks it.
     /// </summary>
     Import,
@@ -322,6 +326,11 @@ public sealed partial class DrydockFidelitySystem
                 if (mode is not (DrydockMapInitMode.Revert or DrydockMapInitMode.Import) || MapInitKeepLive.Contains(key))
                     continue;
 
+                // Import keeps what map init filled into a field the document left unset: a legacy
+                // file never carried it, so there is nothing of the player's to put back.
+                if (mode == DrydockMapInitMode.Import && IsUnset(was.Value))
+                    continue;
+
                 try
                 {
                     SetMember(comp, member, was.Value);
@@ -339,6 +348,30 @@ public sealed partial class DrydockFidelitySystem
         {
             if (!present.Contains(compType))
                 report.Count(report.ComponentsRemoved, $"{compType.Name} on {snapshot.Proto}");
+        }
+    }
+
+    /// <summary>
+    /// Whether a captured value is the shape of a field a document never carried: null (a nullable
+    /// reference or value type) or an empty collection. A string, a plain value type, a false or a
+    /// zero never counts, because a player's switch turned off stores exactly that.
+    /// </summary>
+    private static bool IsUnset(object? value)
+    {
+        if (value == null)
+            return true;
+
+        if (value is string || value is not IEnumerable enumerable)
+            return false;
+
+        var enumerator = enumerable.GetEnumerator();
+        try
+        {
+            return !enumerator.MoveNext();
+        }
+        finally
+        {
+            (enumerator as IDisposable)?.Dispose();
         }
     }
 

@@ -10,6 +10,8 @@ using Content.Shared._Triad.CCVar;
 using Content.Shared.Access;
 using Content.Shared.Access.Components;
 using Content.Shared.Access.Systems;
+using Content.Shared.Actions;
+using Content.Shared.CombatMode;
 using Content.Shared.StationRecords;
 using Robust.Shared.Configuration;
 using Robust.Shared.Containers;
@@ -30,6 +32,87 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
     {
         private const string AirlockProto = "AirlockExternalGlass";
         private const string BoardContainer = "board";
+
+        [TestPrototypes]
+        private const string Prototypes = @"
+- type: entity
+  id: TriadImportCombatant
+  components:
+  - type: CombatMode
+";
+
+        /// <summary>
+        /// A field a legacy document left unset keeps what an import's map init put in it. A mob's
+        /// combat-mode toggle is the shape: map init spawns the action and writes its uid into a null
+        /// field. The retrieve's revert nulls the field and deletes the action; the import keeps both,
+        /// so the store files a mob that can still toggle combat mode.
+        /// </summary>
+        [Test]
+        public async Task AnImportKeepsWhatMapInitFillsIntoAnUnsetField()
+        {
+            await using var pair = await PoolManager.GetServerClient();
+            var server = pair.Server;
+            var entMan = server.EntMan;
+            var cfg = server.ResolveDependency<IConfigurationManager>();
+            var drydock = server.System<DrydockSystem>();
+            var fidelity = server.System<DrydockFidelitySystem>();
+            var actions = server.System<SharedActionsSystem>();
+
+            var map = await pair.CreateTestMap();
+            await pair.MakeCleanupImmune(map.Grid.Owner);
+            var grid = map.Grid.Owner;
+
+            EntityUid mob = default;
+            await server.WaitPost(() =>
+            {
+                cfg.SetCVar(TriadCCVars.DrydockMapInitRefire, "revert");
+                mob = entMan.SpawnEntity("TriadImportCombatant", map.GridCoords);
+            });
+            await pair.RunTicksSync(5);
+
+            await server.WaitAssertion(() =>
+                Assert.That(Toggle(), Is.Not.Null, "The control: a first map init gives the mob its combat-mode action."));
+
+            // The legacy document: the action was never saved, so the field loads null.
+            await server.WaitPost(() =>
+            {
+                var combat = entMan.GetComponent<CombatModeComponent>(mob);
+                var action = combat.CombatToggleActionEntity!.Value;
+                actions.RemoveAction(mob, action);
+                entMan.DeleteEntity(action);
+                typeof(CombatModeComponent).GetField(nameof(CombatModeComponent.CombatToggleActionEntity))!.SetValue(combat, null);
+            });
+            await pair.RunTicksSync(2);
+
+            await server.WaitAssertion(() => Assert.That(Toggle(), Is.Null));
+
+            await server.WaitPost(() =>
+                fidelity.RefireMapInitSliced(grid, new DrydockSyncSlice(DrydockPhases.Retrieve), DrydockMapInitMode.Revert)
+                    .GetAwaiter().GetResult());
+            await pair.RunTicksSync(2);
+
+            await server.WaitAssertion(() =>
+                Assert.That(Toggle(), Is.Null, "Revert put the unset field back and deleted the action: the retrieve alone cannot heal this."));
+
+            DrydockMapInitReport import = default!;
+            await server.WaitPost(() => import = drydock.InitializeImportedShip(grid));
+            await pair.RunTicksSync(2);
+
+            await server.WaitAssertion(() =>
+            {
+                Assert.That(import.Changed.ContainsKey("CombatModeComponent.CombatToggleActionEntity"), Is.True,
+                    "The control: the import's map init wrote the field.");
+                var toggle = Toggle();
+                Assert.That(toggle, Is.Not.Null, "The import kept the action map init wrote into the unset field.");
+                Assert.That(entMan.EntityExists(toggle!.Value), Is.True, "The field points at a live action, not a deleted one.");
+                Assert.That(import.HasLeaks, Is.False, import.Detail());
+            });
+
+            await server.WaitPost(() => entMan.DeleteEntity(mob));
+            await pair.CleanReturnAsync();
+
+            EntityUid? Toggle() => entMan.GetComponent<CombatModeComponent>(mob).CombatToggleActionEntity;
+        }
 
         [Test]
         public async Task AnImportKeepsTheDoorElectronicsTheRetrieveWouldDelete()
