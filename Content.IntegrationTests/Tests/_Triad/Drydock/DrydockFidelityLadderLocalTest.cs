@@ -285,8 +285,8 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
         /// <summary>
         /// Puts the hull into states a lived-in ship has and a shuttle file does not: damage on a wall and
         /// a thruster, cargo in a closed locker, a loose item and a wheelchair (a <c>save: false</c> vehicle) on
-        /// the deck, an interior door open, a wires panel open, a lathe queue, a restocked vendor, and a
-        /// sidearm fired. Each recipe takes the first
+        /// the deck, an interior door open, a wires panel open, a gravity generator switched off, a lathe queue
+        /// (not in engine mode, which cannot write one), a restocked vendor, and a sidearm fired. Each recipe takes the first
         /// matching entity in tree order (the deck spot is a chair, else a computer) and is skipped when
         /// the hull has none. Returns the ones applied.
         /// </summary>
@@ -381,7 +381,9 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                 applied.Add("gravity-off");
             }
 
-            if (First((uid, _) => entMan.HasComponent<LatheComponent>(uid)) is { } lathe)
+            // The engine serializer has no writer for LatheRecipeBatch (DrydockSerializationGap.CapturedTypes), so a
+            // queued job fails the whole grid save and an engine-mode rung would measure nothing.
+            if (!EngineMode && First((uid, _) => entMan.HasComponent<LatheComponent>(uid)) is { } lathe)
             {
                 var batch = new LatheRecipeBatch(protoMan.Index<LatheRecipePrototype>("SheetSteel"), itemsPrinted: 1, itemsRequested: 5, actor: null);
                 entMan.GetComponent<LatheComponent>(lathe).Queue.Add(batch);
@@ -724,7 +726,9 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                 if (!protoMan.TryIndex<EntityPrototype>(proto, out var entity))
                     continue;
 
-                if (entity.Components.ContainsKey("SavingContraband")
+                // A save: false contraband entity (a ship shield) is runtime state its owner respawns, not player
+                // property the purge takes, so its loss is left to the unsaved and recovery checks.
+                if ((entity.Components.ContainsKey("SavingContraband") && entity.MapSavable)
                     || entity.Components.ContainsKey("MechEquipment")
                     || entity.Components.ContainsKey("Mech")
                     || proto == "StationAiBrainVessel"
