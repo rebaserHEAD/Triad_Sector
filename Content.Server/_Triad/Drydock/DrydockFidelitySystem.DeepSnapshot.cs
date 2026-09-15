@@ -206,10 +206,10 @@ public sealed partial class DrydockFidelitySystem
     /// <summary>
     /// A unique path for every entity on the grid. A direct child of the grid is named by its prototype
     /// and tile; a contained entity by its container and prototype; any other child by its prototype.
-    /// Siblings that share a name are suffixed <c>#n</c> in container order when contained, else in
-    /// local-position order, so removing one entity renumbers only its own prototype's siblings.
-    /// Uncontained siblings whose positions tie are paired by walk order and counted in
-    /// <see cref="DrydockStateSnapshot.TieBroken"/>.
+    /// Siblings that share a name are suffixed <c>#n</c> in container order when contained, else anchored
+    /// first and then in local-position order, so removing one entity renumbers only its own prototype's
+    /// siblings. Uncontained siblings whose anchoring and position both tie are paired by walk order and
+    /// counted in <see cref="DrydockStateSnapshot.TieBroken"/>.
     /// </summary>
     private Dictionary<EntityUid, string> DeepPaths(EntityUid grid, DrydockStateSnapshot snapshot)
     {
@@ -237,12 +237,13 @@ public sealed partial class DrydockFidelitySystem
             var parentUid = nodes[index].Uid;
             var parentPath = pathOf[parentUid];
 
-            var named = new List<(int Node, string Base, int Slot, System.Numerics.Vector2 Pos)>(kids.Count);
+            var named = new List<(int Node, string Base, int Slot, bool Anchored, System.Numerics.Vector2 Pos)>(kids.Count);
             foreach (var kid in kids)
             {
                 var uid = nodes[kid].Uid;
                 var proto = MetaData(uid).EntityPrototype?.ID ?? "?";
-                var local = Transform(uid).LocalPosition;
+                var xform = Transform(uid);
+                var local = xform.LocalPosition;
 
                 if (_containers.TryGetContainingContainer((uid, null, null), out var container)
                     && container.Owner == parentUid)
@@ -251,32 +252,35 @@ public sealed partial class DrydockFidelitySystem
                     while (slot < container.ContainedEntities.Count && container.ContainedEntities[slot] != uid)
                         slot++;
 
-                    named.Add((kid, $"{parentPath}/{container.ID}/{proto}", slot, local));
+                    named.Add((kid, $"{parentPath}/{container.ID}/{proto}", slot, xform.Anchored, local));
                 }
                 else if (index == 0)
                 {
-                    named.Add((kid, $"{proto}@{(int) MathF.Floor(local.X)},{(int) MathF.Floor(local.Y)}", -1, local));
+                    named.Add((kid, $"{proto}@{(int) MathF.Floor(local.X)},{(int) MathF.Floor(local.Y)}", -1, xform.Anchored, local));
                 }
                 else
                 {
-                    named.Add((kid, $"{parentPath}/{proto}", -1, local));
+                    named.Add((kid, $"{parentPath}/{proto}", -1, xform.Anchored, local));
                 }
             }
 
             foreach (var group in named.GroupBy(n => n.Base))
             {
+                // Anchored first: two of one prototype on one tile, one anchored and one loose, share a
+                // position, and pairing them by walk order swaps their states across a round trip.
                 var ordered = group
                     .OrderBy(n => n.Slot)
+                    .ThenBy(n => n.Anchored ? 0 : 1)
                     .ThenBy(n => n.Pos.X)
                     .ThenBy(n => n.Pos.Y)
                     .ToList();
 
                 for (var i = 0; i < ordered.Count; i++)
                 {
-                    var (node, baseName, slot, pos) = ordered[i];
+                    var (node, baseName, slot, anchored, pos) = ordered[i];
                     pathOf[nodes[node].Uid] = ordered.Count == 1 ? baseName : $"{baseName}#{i}";
 
-                    if (i > 0 && slot < 0 && ordered[i - 1].Pos == pos)
+                    if (i > 0 && slot < 0 && ordered[i - 1].Anchored == anchored && ordered[i - 1].Pos == pos)
                         snapshot.TieBroken++;
 
                     frontier.Enqueue(node);

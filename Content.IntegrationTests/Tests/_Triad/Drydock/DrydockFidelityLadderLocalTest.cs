@@ -7,6 +7,10 @@ using System.Text;
 using System.Threading.Tasks;
 using Content.IntegrationTests.Pair;
 using Content.Server._Triad.Drydock;
+using Content.Server.Atmos.Components;
+using Content.Server.Atmos.EntitySystems;
+using Content.Server.Power.Components;
+using Content.Server.Station.Components;
 using Content.Server.Storage.Components;
 using Content.Server.Storage.EntitySystems;
 using Content.Server.VendingMachines;
@@ -14,10 +18,13 @@ using Content.Server.Weapons.Ranged.Systems;
 using Content.Shared._Mono.Ships.Components;
 using Content.Shared._NF.Shipyard.Prototypes;
 using Content.Shared.Damage;
+using Content.Shared.Atmos;
 using Content.Shared.Damage.Prototypes;
+using Content.Shared.Doors.Components;
 using Content.Shared.Doors.Systems;
 using Content.Shared.FixedPoint;
 using Content.Shared.Lathe;
+using Content.Shared.Power;
 using Content.Shared.Research.Prototypes;
 using Content.Shared.Stacks;
 using Content.Shared.VendingMachines;
@@ -53,8 +60,9 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
     /// storing. A key that changed between those two is live simulation (power ramps, heat, atmos
     /// timers) and its round-trip difference is reported under "live" rather than as a finding.</para>
     ///
-    /// <para>What remains is sorted against <see cref="Registry"/> ("classified"), the store's contraband
-    /// purge ("policy"), <c>save: false</c> entities the store deleted ("unsaved", unless
+    /// <para>What remains is sorted against loose entities that settled onto a neighbouring tile ("moved"),
+    /// <see cref="Registry"/> ("classified"), removals by rule: contraband, the mech strip, emptied AI cores
+    /// ("policy"), <c>save: false</c> entities the store deleted ("unsaved", unless
     /// <see cref="TransientUnsaved"/> expects the loss), and the late snapshot below; only unexplained,
     /// unrecovered lines are findings.</para>
     ///
@@ -78,7 +86,8 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
     [TestOf(typeof(DrydockFidelitySystem))]
     public sealed class DrydockFidelityLadderLocalTest
     {
-        private const int PreSettleTicks = 60;
+        /// <summary>Long enough for a capital hull's power to come up from its file before the first snapshot.</summary>
+        private const int PreSettleTicks = 600;
         private const int SettleTicks = 10;
         private const int LiveWindowTicks = 90;
         private const double ClockGapSeconds = 10;
@@ -88,7 +97,8 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
         /// <summary>
         /// Components the retrieve adds or rewrites on purpose because a purchase would have: the
         /// station join, ownership, repair baseline and console locks. Keyed <c>Component</c>,
-        /// <c>Component.member</c>, or <c>Prototype:Component</c> for a grant only one prototype gets.
+        /// <c>Component.member</c>, or <c>Prototype:Component</c> for a grant only one prototype gets
+        /// (<c>Prefix*:Component</c> for a family of prototypes).
         /// Round trip 1 only; on round trip 2 the ship already carries them and any difference is a finding.
         /// </summary>
         private static readonly HashSet<string> RetrieveGrants = new(StringComparer.Ordinal)
@@ -103,8 +113,9 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             "ShipGridLockComponent",
             "ShuttleConsoleLockComponent",
             "ShipActivityComponent",
-            "NFHolopadShip:LabelComponent",
-            "NFHolopadShip:NameModifierComponent",
+            "NFHolopadShip*:LabelComponent",
+            "NFHolopadShip*:NameModifierComponent",
+            "VesselInfoComponent",
             "JointComponent",
             "grid:MetaDataComponent",
         };
@@ -157,6 +168,12 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             ["GridPathfindingComponent.~Chunks"] = (StateClass.Derived, "pathfinding graph, rebuilt after load"),
             ["GasCanisterComponent.~LastPressure"] = (StateClass.Derived, "canister UI and appearance cache"),
             ["Appearance.ApcVisuals.ChargeState"] = (StateClass.Derived, "follows the APC battery, which the retrieve brownout drains"),
+            ["SmesComponent.~LastChargeLevel"] = (StateClass.Derived, "SMES visual and UI update throttle cache"),
+            ["PowerNetworkBatteryComponent.~NetworkBattery"] = (StateClass.Derived, "the power solver's battery record, rebuilt with the net"),
+            ["PowerSupplierComponent.~NetworkSupply"] = (StateClass.Derived, "the power solver's supplier record, rebuilt with the net"),
+            ["RadiationReceiverComponent.~CurrentRadiation"] = (StateClass.Volatile, "radiation reading, recomputed every radiation update"),
+            ["StorageComponent.~OccupiedGrid"] = (StateClass.Derived, "grid inventory occupancy, rebuilt from the stored items"),
+            ["TimedDespawnComponent.Lifetime"] = (StateClass.Live, "countdown to despawn"),
             ["GunComponent.~ShootCoordinates"] = (StateClass.Volatile, "the last shot's aim point"),
             ["AppearanceComponent.~AppearanceData"] = (StateClass.Derived, "the same data the Appearance.* keys compare"),
         };
@@ -198,6 +215,19 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
 
             var (owner, station) = await GoldenCorpus.PrepareHarness(pair, 3);
             var map = await pair.CreateTestMap();
+
+            // A sector map carries a space atmosphere; a test map does not, and a firelock on a hull presented
+            // beside the harness station asks its map for one and logs an error when it is missing.
+            await server.WaitPost(() =>
+            {
+                var atmos = server.System<AtmosphereSystem>();
+                var stationGrid = entMan.GetComponent<StationDataComponent>(station).Grids.First();
+                foreach (var mapUid in new[] { map.MapUid, entMan.GetComponent<TransformComponent>(stationGrid).MapUid!.Value })
+                {
+                    if (!entMan.HasComponent<MapAtmosphereComponent>(mapUid))
+                        atmos.SetMapAtmosphere(mapUid, space: true, new GasMixture());
+                }
+            });
 
             Assert.That(protoMan.TryIndex<VesselPrototype>(vesselId, out var vessel), Is.True,
                 $"Rung {rung}: vessel {vesselId} no longer exists; regenerate the ladder.");
@@ -309,9 +339,10 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                 applied.Add("unsaved-vehicle");
             }
 
-            var door = First((_, id) => id.StartsWith("Airlock", StringComparison.Ordinal)
-                                        && !id.Contains("Shuttle", StringComparison.Ordinal)
-                                        && !id.Contains("External", StringComparison.Ordinal));
+            var door = First((uid, id) => id.StartsWith("Airlock", StringComparison.Ordinal)
+                                          && !id.Contains("Shuttle", StringComparison.Ordinal)
+                                          && !id.Contains("External", StringComparison.Ordinal)
+                                          && entMan.HasComponent<DoorComponent>(uid));
             if (door is { } interior)
             {
                 // TryOpen refuses an unpowered or bolted door; forcing the open is still a state a door can be stored in.
@@ -325,6 +356,14 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                 && server.System<SharedWiresSystem>().TogglePanel(paneled, entMan.GetComponent<WiresPanelComponent>(paneled), true))
             {
                 applied.Add("open-panel");
+            }
+
+            if (First((uid, id) => id.StartsWith("GravityGenerator", StringComparison.Ordinal)
+                                   && entMan.HasComponent<PowerChargeComponent>(uid)) is { } gravity)
+            {
+                // The console's switch message: the only public path to a charged machine's on switch.
+                entMan.EventBus.RaiseLocalEvent(gravity, new SwitchChargingMachineMessage(false));
+                applied.Add("gravity-off");
             }
 
             if (First((uid, _) => entMan.HasComponent<LatheComponent>(uid)) is { } lathe)
@@ -495,11 +534,21 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             var classifiedLines = new List<string>();
             var settledLines = new List<string>();
             var settlingLines = new List<string>();
+            var movedLines = new List<string>();
             var timeKept = 0;
 
-            foreach (var line in DrydockStateSnapshot.Diff(result.Before, result.After))
+            var diff = DrydockStateSnapshot.Diff(result.Before, result.After);
+            var moved = MovedLines(diff);
+
+            foreach (var line in diff)
             {
                 var key = KeyOf(line);
+
+                if (moved.Contains(line))
+                {
+                    movedLines.Add(line);
+                    continue;
+                }
 
                 if (line.StartsWith("CHANGED") && key != null && key.EndsWith(DrydockFidelitySystem.TimeSuffix)
                     && DrydockFidelitySystem.TimeKeepsItsMeaning(result.Before.Values[key], result.After.Values[key], TimeToleranceSeconds))
@@ -514,7 +563,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                     liveLines.Add(line);
                 else if (grants != null && IsGrant(line, grants))
                     grantLines.Add(line);
-                else if (IsContrabandPurge(line, key, protoMan))
+                else if (IsRemovedByRule(line, key, protoMan))
                     policyLines.Add(line);
                 else if (UnsavedAncestor(line, key, result.Before) is { } unsaved)
                 {
@@ -555,6 +604,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             AppendKinds(sb, rung, vesselId, trip, "classified", classifiedLines, examples: 0);
             AppendKinds(sb, rung, vesselId, trip, "policy", policyLines, examples: 1);
             AppendKinds(sb, rung, vesselId, trip, "unsaved", unsavedLines, examples: 1);
+            AppendKinds(sb, rung, vesselId, trip, "moved", movedLines, examples: 1);
             AppendKinds(sb, rung, vesselId, trip, "live", liveLines, examples: 0);
             if (grants != null)
                 AppendKinds(sb, rung, vesselId, trip, "grant", grantLines, examples: 0);
@@ -591,10 +641,12 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
         }
 
         /// <summary>
-        /// A whole entity the store removed as saving contraband: its own prototype carries
-        /// <c>SavingContraband</c>, or one of its ancestors' does, so it left with that ancestor.
+        /// A whole entity the store or retrieve removed by rule, with everything inside it: saving contraband
+        /// (the purge), mech parts and equipment (the drydock strip rule in
+        /// <c>Resources/Prototypes/_Triad/Drydock/strip.yml</c>), or an unoccupied AI core's brain vessel
+        /// (emptied at store, <c>DrydockSystem.StationAi.cs</c>). Matched on the entity or any ancestor.
         /// </summary>
-        private static bool IsContrabandPurge(string line, string? key, IPrototypeManager protoMan)
+        private static bool IsRemovedByRule(string line, string? key, IPrototypeManager protoMan)
         {
             if (!line.StartsWith("GONE") || key == null || !key.Contains("|<entity:"))
                 return false;
@@ -604,14 +656,98 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                 var cut = segment.IndexOfAny(new[] { '@', '#' });
                 var proto = cut < 0 ? segment : segment[..cut];
 
-                if (protoMan.TryIndex<EntityPrototype>(proto, out var entity)
-                    && entity.Components.ContainsKey("SavingContraband"))
+                if (!protoMan.TryIndex<EntityPrototype>(proto, out var entity))
+                    continue;
+
+                if (entity.Components.ContainsKey("SavingContraband")
+                    || entity.Components.ContainsKey("MechEquipment")
+                    || entity.Components.ContainsKey("Mech")
+                    || proto == "StationAiBrainVessel"
+                    || protoMan.EnumerateParents<EntityPrototype>(proto).Any(p => p.ID is "BaseMechPart" or "BaseExosuitParts"))
                 {
                     return true;
                 }
             }
 
             return false;
+        }
+
+        /// <summary>
+        /// Whole-entity lines for loose entities on the deck that did not vanish but settled onto a
+        /// neighbouring tile: a GONE <c>Proto@x,y</c> paired with an APPEARED <c>Proto@x',y'</c> of the same
+        /// prototype at most one tile away, and every GONE and APPEARED line inside either. Returns the lines
+        /// so paired.
+        /// </summary>
+        private static HashSet<string> MovedLines(List<string> lines)
+        {
+            var gone = new List<(string Line, string Path, string Proto, int X, int Y)>();
+            var appeared = new List<(string Line, string Path, string Proto, int X, int Y)>();
+
+            foreach (var line in lines)
+            {
+                var key = KeyOf(line);
+                if (key == null || !key.Contains("|<entity:"))
+                    continue;
+
+                var path = key[..key.IndexOf('|')];
+                if (path.Contains('/') || !TryTile(path, out var proto, out var x, out var y))
+                    continue;
+
+                if (line.StartsWith("GONE"))
+                    gone.Add((line, path, proto, x, y));
+                else if (line.StartsWith("APPEARED"))
+                    appeared.Add((line, path, proto, x, y));
+            }
+
+            var moved = new HashSet<string>();
+            var pairs = new List<(string From, string To)>();
+            foreach (var g in gone)
+            {
+                var match = appeared.FirstOrDefault(a => !moved.Contains(a.Line) && a.Proto == g.Proto
+                                                         && Math.Abs(a.X - g.X) <= 1 && Math.Abs(a.Y - g.Y) <= 1);
+                if (match.Line == null)
+                    continue;
+
+                moved.Add(g.Line);
+                moved.Add(match.Line);
+                pairs.Add((g.Path + "/", match.Path + "/"));
+            }
+
+            foreach (var line in lines)
+            {
+                var key = KeyOf(line);
+                if (key == null || !key.Contains("|<entity:"))
+                    continue;
+
+                var path = key[..key.IndexOf('|')];
+                if (pairs.Any(p => (line.StartsWith("GONE") && path.StartsWith(p.From, StringComparison.Ordinal))
+                                   || (line.StartsWith("APPEARED") && path.StartsWith(p.To, StringComparison.Ordinal))))
+                {
+                    moved.Add(line);
+                }
+            }
+
+            return moved;
+
+            static bool TryTile(string path, out string proto, out int x, out int y)
+            {
+                proto = "";
+                x = y = 0;
+                var at = path.IndexOf('@');
+                if (at < 0)
+                    return false;
+
+                proto = path[..at];
+                var coords = path[(at + 1)..];
+                var hash = coords.IndexOf('#');
+                if (hash >= 0)
+                    coords = coords[..hash];
+
+                var comma = coords.IndexOf(',');
+                return comma > 0
+                       && int.TryParse(coords[..comma], out x)
+                       && int.TryParse(coords[(comma + 1)..], out y);
+            }
         }
 
         /// <summary>
@@ -721,10 +857,26 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                 ? member[..^DrydockFidelitySystem.TimeSuffix.Length]
                 : member;
 
-            var key = KeyOf(line);
-            var scoped = key == null ? null : $"{ProtoOfPath(key[..key.IndexOf('|')])}:{component}";
+            if (grants.Contains(component) || grants.Contains(trimmed))
+                return true;
 
-            return grants.Contains(component) || grants.Contains(trimmed) || (scoped != null && grants.Contains(scoped));
+            var key = KeyOf(line);
+            if (key == null)
+                return false;
+
+            var proto = ProtoOfPath(key[..key.IndexOf('|')]);
+            foreach (var grant in grants)
+            {
+                var colon = grant.IndexOf(':');
+                if (colon < 0 || grant[(colon + 1)..] != component)
+                    continue;
+
+                var scope = grant[..colon];
+                if (scope.EndsWith('*') ? proto.StartsWith(scope[..^1], StringComparison.Ordinal) : proto == scope)
+                    return true;
+            }
+
+            return false;
         }
 
         /// <summary>The prototype a deep-snapshot path names: its last segment, without tile or sibling suffix.</summary>
