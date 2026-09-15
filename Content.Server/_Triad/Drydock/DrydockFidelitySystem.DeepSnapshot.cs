@@ -5,6 +5,9 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
 using System.Reflection;
+using Content.Server.NodeContainer.NodeGroups;
+using Content.Shared.NodeContainer;
+using Content.Shared.NodeContainer.NodeGroups;
 using Robust.Shared.Containers;
 using Robust.Shared.Map;
 using Robust.Shared.Map.Components;
@@ -45,6 +48,9 @@ namespace Content.Server._Triad.Drydock;
 /// where relative is the value minus <c>CurTime</c>. A duration keeps its raw value across a round
 /// trip and an absolute time keeps its relative one, so a time that keeps neither is the finding;
 /// <see cref="TimeKeepsItsMeaning"/> is that comparison.</item>
+/// <item><c>NodeContainerComponent.node.NAME.group</c>, <c>grid|NodeGroup.*</c> and
+/// <c>grid|PipeNetAir.*</c>: the node networks' shape and pipe gas, which no component holds
+/// (<see cref="RenderNetworks"/>).</item>
 /// </list>
 ///
 /// <para>The components the loader rebuilds by design (<see cref="Normalized"/>) are rendered through
@@ -200,7 +206,64 @@ public sealed partial class DrydockFidelitySystem
             RenderDeep(uid, path, snapshot, writer, pathOf, now);
         }
 
+        RenderNetworks(pathOf, snapshot);
         return snapshot;
+    }
+
+    /// <summary>
+    /// The shape of every node network on the grid, which no component field holds: node groups live in
+    /// <c>NodeGroupSystem</c> and are remade on load (<c>EntityDeserializer.SetPaused</c> notes node nets are
+    /// not serialized). A group has no identity across a rebuild, so it is named by its first member in
+    /// ordinal order, <c>path:node</c>.
+    /// <list type="bullet">
+    /// <item><c>path|NodeContainerComponent.node.NAME.group</c>: the group that node belongs to, or null.</item>
+    /// <item><c>grid|NodeGroup.LABEL</c>: the group's type, its members on this grid, and its members in total
+    /// (a docked pipe can join a group across grids).</item>
+    /// <item><c>grid|PipeNetAir.LABEL.moles</c> and <c>.temperature</c>: a pipe net's gas.</item>
+    /// </list>
+    /// </summary>
+    private void RenderNetworks(Dictionary<EntityUid, string> pathOf, DrydockStateSnapshot snapshot)
+    {
+        var members = new Dictionary<INodeGroup, List<string>>();
+        var nodeKeys = new List<(string Key, INodeGroup? Group)>();
+
+        foreach (var (uid, path) in pathOf)
+        {
+            if (!TryComp<NodeContainerComponent>(uid, out var container))
+                continue;
+
+            foreach (var (name, node) in container.Nodes)
+            {
+                nodeKeys.Add(($"{path}|{nameof(NodeContainerComponent)}.node.{name}.group", node.NodeGroup));
+                if (node.NodeGroup is not { } group)
+                    continue;
+
+                if (!members.TryGetValue(group, out var list))
+                    members[group] = list = new List<string>();
+
+                list.Add($"{path}:{name}");
+            }
+        }
+
+        var labels = new Dictionary<INodeGroup, string>(members.Count);
+        foreach (var (group, list) in members)
+        {
+            list.Sort(StringComparer.Ordinal);
+            var label = list[0];
+            labels[group] = label;
+
+            snapshot.Values[$"grid|NodeGroup.{label}"] = $"{group.GetType().Name} here={list.Count} total={group.Nodes.Count}";
+
+            if (group is PipeNet pipeNet)
+            {
+                var air = pipeNet.Air;
+                snapshot.Values[$"grid|PipeNetAir.{label}.moles"] = air.TotalMoles.ToString("F2", CultureInfo.InvariantCulture);
+                snapshot.Values[$"grid|PipeNetAir.{label}.temperature"] = air.Temperature.ToString("F1", CultureInfo.InvariantCulture);
+            }
+        }
+
+        foreach (var (key, group) in nodeKeys)
+            snapshot.Values[key] = group == null ? "null" : labels[group];
     }
 
     /// <summary>

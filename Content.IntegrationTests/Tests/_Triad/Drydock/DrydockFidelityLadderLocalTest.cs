@@ -32,8 +32,10 @@ using Content.Shared.Weapons.Ranged.Components;
 using Content.Shared.Wires;
 using Robust.Shared.EntitySerialization.Systems;
 using Robust.Shared.GameObjects;
+using Robust.Shared.Map;
 using Robust.Shared.Prototypes;
 using Robust.Shared.Timing;
+using Robust.Shared.Utility;
 
 namespace Content.IntegrationTests.Tests._Triad.Drydock
 {
@@ -61,7 +63,8 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
     /// timers) and its round-trip difference is reported under "live" rather than as a finding.</para>
     ///
     /// <para>What remains is sorted against loose entities that settled onto a neighbouring tile ("moved"),
-    /// <see cref="Registry"/> ("classified"), removals by rule: contraband, the mech strip, emptied AI cores
+    /// <see cref="Registry"/> ("classified"), removals by rule: contraband, the mech strip, emptied AI cores,
+    /// and the containers and components those removals reach (<see cref="PolicyConsequences"/>)
     /// ("policy"), <c>save: false</c> entities the store deleted ("unsaved", unless
     /// <see cref="TransientUnsaved"/> expects the loss), and the late snapshot below; only unexplained,
     /// unrecovered lines are findings.</para>
@@ -73,6 +76,9 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
     ///
     /// <para>The clock advances <see cref="ClockGapSeconds"/> between store and retrieve, so an
     /// absolute time that is not re-based comes back off by at least that much.</para>
+    ///
+    /// <para>Set <c>LADDER_MODE=engine</c> to round-trip through the engine serializer instead of the drydock
+    /// (<see cref="EngineMode"/>).</para>
     ///
     /// <para>Rungs are ordered by the <c>entityCount</c> in each vessel's shuttle file and exclude
     /// vessels whose prototype chain grants <c>ShipSavingBlacklist</c>.</para>
@@ -93,6 +99,13 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
         private const double ClockGapSeconds = 10;
         private const double TimeToleranceSeconds = 1;
         private const double LateSeconds = 10;
+
+        /// <summary>
+        /// <c>LADDER_MODE=engine</c> round-trips through the engine serializer alone (<see cref="EngineRoundTrip"/>)
+        /// instead of the drydock, which separates what the engine loses from what the drydock's own steps change.
+        /// Nothing is granted on the way back, so no line is sorted under "grant".
+        /// </summary>
+        private static readonly bool EngineMode = Environment.GetEnvironmentVariable("LADDER_MODE") == "engine";
 
         /// <summary>
         /// Components the retrieve adds or rewrites on purpose because a purchase would have: the
@@ -176,6 +189,8 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             ["TimedDespawnComponent.Lifetime"] = (StateClass.Live, "countdown to despawn"),
             ["GunComponent.~ShootCoordinates"] = (StateClass.Volatile, "the last shot's aim point"),
             ["AppearanceComponent.~AppearanceData"] = (StateClass.Derived, "the same data the Appearance.* keys compare"),
+            ["PowerChargeComponent.~NeedUIUpdate"] = (StateClass.Volatile, "UI refresh flag, cleared only when an open UI updates (PowerChargeSystem.UpdateUI)"),
+            ["PipeNetAir.*"] = (StateClass.Live, "pipe-net gas moves while pumps, vents and mixers run"),
         };
 
         /// <summary>Derived members whose per-entity values may reshuffle but whose sum over the grid may not.</summary>
@@ -253,9 +268,9 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             var second = await RoundTrip(pair, first.Retrieved, owner, station);
 
             var sb = new StringBuilder();
-            sb.AppendLine($"[ladder] rung {rung} {vesselId}");
+            sb.AppendLine($"[ladder] rung {rung} {vesselId} through {(EngineMode ? "the engine serializer" : "the drydock")}");
             sb.AppendLine($"[ladder] lived-in recipes applied: {(recipes.Count == 0 ? "none" : string.Join(", ", recipes))}");
-            Report(sb, rung, vesselId, 1, first, RetrieveGrants, protoMan);
+            Report(sb, rung, vesselId, 1, first, EngineMode ? null : RetrieveGrants, protoMan);
             Report(sb, rung, vesselId, 2, second, null, protoMan);
             await TestContext.Out.WriteLineAsync(sb.ToString());
 
@@ -407,7 +422,6 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
         {
             var server = pair.Server;
             var timing = server.ResolveDependency<IGameTiming>();
-            var drydock = server.System<DrydockSystem>();
             var fidelity = server.System<DrydockFidelitySystem>();
 
             DrydockStateSnapshot early = default!;
@@ -417,30 +431,80 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             DrydockStateSnapshot before = default!;
             await server.WaitPost(() => before = fidelity.DeepSnapshotGrid(grid));
 
-            var (storeResult, shipId) = await DrydockTestHelpers.RunOnServer(pair,
-                () => drydock.TryStoreShip(grid, owner, null));
-            Assert.That(storeResult, Is.EqualTo(DrydockStoreResult.Success), "store refused.");
-
             var clockBefore = timing.CurTime;
-            await pair.RunTicksSync((int) Math.Ceiling(ClockGapSeconds / timing.TickPeriod.TotalSeconds));
-
-            var retrieved = await DrydockTestHelpers.RunOnServer(pair,
-                () => drydock.TryRetrieveShip(shipId!.Value, owner, station, null));
-            Assert.That(retrieved.Succeeded, Is.True, $"retrieve failed with {retrieved.Result}.");
-            var mapInit = fidelity.LastMapInitReport;
+            var (retrieved, mapInit) = EngineMode
+                ? (await EngineRoundTrip(pair, grid), null)
+                : await DrydockRoundTrip(pair, grid, owner, station);
 
             await pair.RunTicksSync(SettleTicks);
 
             DrydockStateSnapshot after = default!;
-            await server.WaitPost(() => after = fidelity.DeepSnapshotGrid(retrieved.Grid!.Value));
+            await server.WaitPost(() => after = fidelity.DeepSnapshotGrid(retrieved));
             var elapsed = (timing.CurTime - clockBefore).TotalSeconds;
 
             await pair.RunTicksSync((int) Math.Ceiling(LateSeconds / timing.TickPeriod.TotalSeconds));
 
             DrydockStateSnapshot late = default!;
-            await server.WaitPost(() => late = fidelity.DeepSnapshotGrid(retrieved.Grid!.Value));
+            await server.WaitPost(() => late = fidelity.DeepSnapshotGrid(retrieved));
 
-            return new RoundTripResult(early, before, after, late, retrieved.Grid!.Value, elapsed, mapInit);
+            return new RoundTripResult(early, before, after, late, retrieved, elapsed, mapInit);
+        }
+
+        private static async Task<(EntityUid Grid, DrydockMapInitReport? MapInit)> DrydockRoundTrip(
+            TestPair pair,
+            EntityUid grid,
+            Guid owner,
+            EntityUid station)
+        {
+            var server = pair.Server;
+            var timing = server.ResolveDependency<IGameTiming>();
+            var drydock = server.System<DrydockSystem>();
+
+            var (storeResult, shipId) = await DrydockTestHelpers.RunOnServer(pair,
+                () => drydock.TryStoreShip(grid, owner, null));
+            Assert.That(storeResult, Is.EqualTo(DrydockStoreResult.Success), "store refused.");
+
+            await pair.RunTicksSync((int) Math.Ceiling(ClockGapSeconds / timing.TickPeriod.TotalSeconds));
+
+            var retrieved = await DrydockTestHelpers.RunOnServer(pair,
+                () => drydock.TryRetrieveShip(shipId!.Value, owner, station, null));
+            Assert.That(retrieved.Succeeded, Is.True, $"retrieve failed with {retrieved.Result}.");
+
+            return (retrieved.Grid!.Value, server.System<DrydockFidelitySystem>().LastMapInitReport);
+        }
+
+        /// <summary>
+        /// The same round trip through nothing but the engine: <c>MapLoaderSystem.TrySaveGrid</c> to user data,
+        /// the grid deleted, the clock advanced, and <c>TryLoadGrid</c> back onto the same map. A post-init file's
+        /// entities are flagged map-initialized without a <c>MapInitEvent</c> (<c>EntityDeserializer.SetMapInitLifestage</c>),
+        /// so this measures what a plain engine save and load keeps, with no drydock step on either side.
+        /// </summary>
+        private static async Task<EntityUid> EngineRoundTrip(TestPair pair, EntityUid grid)
+        {
+            var server = pair.Server;
+            var entMan = server.EntMan;
+            var timing = server.ResolveDependency<IGameTiming>();
+            var mapLoader = server.System<MapLoaderSystem>();
+            var file = new ResPath($"/DrydockLadder/{Guid.NewGuid():N}.yml");
+
+            var mapId = MapId.Nullspace;
+            await server.WaitPost(() =>
+            {
+                mapId = entMan.GetComponent<TransformComponent>(grid).MapID;
+                Assert.That(mapLoader.TrySaveGrid(grid, file), Is.True, "engine save refused.");
+                entMan.DeleteEntity(grid);
+            });
+
+            await pair.RunTicksSync((int) Math.Ceiling(ClockGapSeconds / timing.TickPeriod.TotalSeconds));
+
+            EntityUid loaded = default;
+            await server.WaitPost(() =>
+            {
+                Assert.That(mapLoader.TryLoadGrid(mapId, file, out var result), Is.True, "engine load failed.");
+                loaded = result!.Value.Owner;
+            });
+
+            return loaded;
         }
 
         private enum Recovery
@@ -539,6 +603,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
 
             var diff = DrydockStateSnapshot.Diff(result.Before, result.After);
             var moved = MovedLines(diff);
+            var consequences = PolicyConsequences(diff, result.Before, protoMan);
 
             foreach (var line in diff)
             {
@@ -563,7 +628,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                     liveLines.Add(line);
                 else if (grants != null && IsGrant(line, grants))
                     grantLines.Add(line);
-                else if (IsRemovedByRule(line, key, protoMan))
+                else if (IsRemovedByRule(line, key, protoMan) || IsPolicyConsequence(key, consequences))
                     policyLines.Add(line);
                 else if (UnsavedAncestor(line, key, result.Before) is { } unsaved)
                 {
@@ -667,6 +732,85 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                 {
                     return true;
                 }
+            }
+
+            return false;
+        }
+
+        /// <summary>
+        /// Where a removal by rule reaches other entities: the container that held a removed entity
+        /// (<c>path|ContainerManagerComponent.container.ID</c> prefixes, as <c>path/ID/</c>), and every component
+        /// whose stored values named a removed entity (<c>path|Component.</c> prefixes). The second covers state
+        /// the removed entity's owner system tears down with it, such as an AI core holo's movement relay, which
+        /// <c>SharedMoverController.OnRelayShutdown</c> strips when the brain that sourced it goes.
+        /// </summary>
+        private static (HashSet<string> Containers, HashSet<string> Components) PolicyConsequences(
+            List<string> diff,
+            DrydockStateSnapshot before,
+            IPrototypeManager protoMan)
+        {
+            var removed = new List<string>();
+            foreach (var line in diff)
+            {
+                var key = KeyOf(line);
+                if (key != null && key.Contains("|<entity:") && IsRemovedByRule(line, key, protoMan))
+                    removed.Add(key[..key.IndexOf('|')]);
+            }
+
+            var containers = new HashSet<string>(StringComparer.Ordinal);
+            var components = new HashSet<string>(StringComparer.Ordinal);
+            if (removed.Count == 0)
+                return (containers, components);
+
+            foreach (var path in removed)
+            {
+                var slash = path.LastIndexOf('/');
+                if (slash > 0)
+                    containers.Add(path[..(slash + 1)]);
+            }
+
+            foreach (var (key, value) in before.Values)
+            {
+                if (!removed.Any(path => Names(value, path)))
+                    continue;
+
+                var bar = key.IndexOf('|');
+                var dot = key.IndexOf('.', bar + 1);
+                if (bar > 0 && dot > bar)
+                    components.Add(key[..(dot + 1)]);
+            }
+
+            return (containers, components);
+        }
+
+        private static bool IsPolicyConsequence(string? key, (HashSet<string> Containers, HashSet<string> Components) consequences)
+        {
+            if (key == null || (consequences.Components.Count == 0 && consequences.Containers.Count == 0))
+                return false;
+
+            const string containerMember = "|ContainerManagerComponent.container.";
+            var at = key.IndexOf(containerMember, StringComparison.Ordinal);
+            if (at > 0 && consequences.Containers.Contains($"{key[..at]}/{key[(at + containerMember.Length)..]}/"))
+                return true;
+
+            var bar = key.IndexOf('|');
+            var dot = key.IndexOf('.', bar + 1);
+            return bar > 0 && dot > bar && consequences.Components.Contains(key[..(dot + 1)]);
+        }
+
+        /// <summary>
+        /// Whether a rendered value names the entity at <paramref name="path"/> or something inside it: the
+        /// path must not continue into a longer name or a sibling suffix (<c>#n</c>, <c>@x,y</c>).
+        /// </summary>
+        private static bool Names(string value, string path)
+        {
+            for (var at = value.IndexOf(path, StringComparison.Ordinal); at >= 0; at = value.IndexOf(path, at + 1, StringComparison.Ordinal))
+            {
+                var end = at + path.Length;
+                var startsClean = at == 0 || !char.IsLetterOrDigit(value[at - 1]);
+                var endsClean = end == value.Length || value[end] is not ('#' or '@') && !char.IsLetterOrDigit(value[end]);
+                if (startsClean && endsClean)
+                    return true;
             }
 
             return false;
