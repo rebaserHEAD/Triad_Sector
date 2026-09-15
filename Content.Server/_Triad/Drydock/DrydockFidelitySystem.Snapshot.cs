@@ -271,6 +271,12 @@ public sealed class DrydockStateSnapshot
     public int Uncapturable;
 
     /// <summary>
+    /// Deep snapshot only: siblings whose name and local position both tied, so they were paired by
+    /// walk order. A large number here means some pairings may be two different objects.
+    /// </summary>
+    public int TieBroken;
+
+    /// <summary>
     /// Every field that changed, appeared or vanished across the round trip, most interesting first
     /// in the sense that a vanished field usually means a whole component or entity went missing.
     /// </summary>
