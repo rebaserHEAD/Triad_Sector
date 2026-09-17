@@ -28,6 +28,10 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
     /// <c>object</c>, interface or delegate holds, so those are counted apart: as a system's field, by kind, and inside
     /// the game types a walk passes through, listed at the end of the output.</para>
     ///
+    /// <para>Every field that is not excluded is written with its kind, a field the walk judged unreachable included,
+    /// so a blind spot is in the data rather than absent from it; <see cref="Controls"/> are written with their
+    /// result.</para>
+    ///
     /// <para>Run: <c>CENSUS_OUT=path.tsv dotnet test Content.IntegrationTests --no-build --filter "FullyQualifiedName~DrydockSystemStateCensusLocalTest"</c>.</para>
     /// </summary>
     [TestFixture]
@@ -38,6 +42,18 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
         private const int MaxDepth = 8;
 
         private static readonly Type[] Seeds = { typeof(INodeGroup), typeof(Contact), typeof(Joint) };
+
+        /// <summary>
+        /// Fields whose sort is known from reading them, written with what the census made of each. The last is a
+        /// negative control: the power solver keeps each machine's record under its own node ids, so no entity type
+        /// appears in its graph and a type walk cannot see it.
+        /// </summary>
+        private static readonly (string Type, string Field, string Expected)[] Controls =
+        {
+            ("Content.Server.NodeContainer.EntitySystems.NodeGroupSystem", "_nodeGroups", "reaches"),
+            ("Content.Server.DeviceNetwork.Systems.DeviceNetworkSystem", "_networks", "reaches"),
+            ("Content.Server.Power.EntitySystems.PowerNetSystem", "_powerState", "none (entity state behind the solver's node ids)"),
+        };
 
         private readonly Dictionary<Type, string?> _memo = new();
         private readonly HashSet<string> _opaqueInner = new(StringComparer.Ordinal);
@@ -55,8 +71,9 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             var systemTypes = pair.Server.ResolveDependency<IEntitySystemManager>().GetEntitySystemTypes().ToList();
 
             var rows = new List<string>();
-            var seen = new HashSet<(Type, string)>();
+            var sorted = new Dictionary<(Type, string), (string Kind, string Reach)>();
             var counts = new Dictionary<string, int>(StringComparer.Ordinal);
+            var systemCounts = new Dictionary<string, int>(StringComparer.Ordinal);
 
             const BindingFlags flags = BindingFlags.Instance | BindingFlags.Static | BindingFlags.Public
                                        | BindingFlags.NonPublic | BindingFlags.DeclaredOnly;
@@ -68,39 +85,68 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
 
             foreach (var system in systemTypes)
             {
+                var kinds = new HashSet<string>(StringComparer.Ordinal);
+
                 for (var level = system; level != null && level != typeof(EntitySystem) && level != typeof(object); level = level.BaseType)
                 {
                     foreach (var field in level.GetFields(flags))
                     {
-                        if (field.IsLiteral || !seen.Add((field.DeclaringType!, field.Name)))
+                        if (field.IsLiteral)
                             continue;
 
-                        var (kind, reach) = Sort(field);
-                        counts[kind] = counts.GetValueOrDefault(kind) + 1;
+                        // A field declared on a shared base type is sorted and counted once, and still counts toward
+                        // every system that inherits it.
+                        var id = (field.DeclaringType!, field.Name);
+                        if (!sorted.TryGetValue(id, out var result))
+                        {
+                            sorted[id] = result = Sort(field);
+                            counts[result.Kind] = counts.GetValueOrDefault(result.Kind) + 1;
 
-                        if (kind.StartsWith("excluded:", StringComparison.Ordinal) || kind == "none")
-                            continue;
+                            if (!result.Kind.StartsWith("excluded:", StringComparison.Ordinal))
+                            {
+                                rows.Add(string.Join('\t',
+                                    level.Assembly.GetName().Name,
+                                    level.FullName,
+                                    field.Name,
+                                    field.IsStatic ? "static" : "instance",
+                                    Pretty(field.FieldType),
+                                    result.Kind,
+                                    result.Reach));
+                            }
+                        }
 
-                        rows.Add(string.Join('\t',
-                            level.Assembly.GetName().Name,
-                            level.FullName,
-                            field.Name,
-                            field.IsStatic ? "static" : "instance",
-                            Pretty(field.FieldType),
-                            kind,
-                            reach));
+                        kinds.Add(result.Kind);
                     }
                 }
+
+                var shape = kinds.Count == 0 ? "no fields"
+                    : kinds.Contains("reaches") ? "a field reaches an entity"
+                    : kinds.Any(k => k.StartsWith("opaque:", StringComparison.Ordinal)) ? "opaque fields, none reaching"
+                    : kinds.Contains("none") ? "fields that reach nothing by type"
+                    : "only excluded fields";
+                systemCounts[shape] = systemCounts.GetValueOrDefault(shape) + 1;
             }
 
             rows.Sort(StringComparer.Ordinal);
             var sb = new StringBuilder();
-            sb.AppendLine($"# systems\t{systemTypes.Count}");
+            sb.AppendLine($"# systems walked\t{systemTypes.Count}");
+            foreach (var (shape, count) in systemCounts.OrderBy(c => c.Key, StringComparer.Ordinal))
+                sb.AppendLine($"# systems with {shape}\t{count}");
+            sb.AppendLine($"# fields, each counted once on its declaring type\t{counts.Values.Sum()}");
             foreach (var (kind, count) in counts.OrderBy(c => c.Key, StringComparer.Ordinal))
                 sb.AppendLine($"# fields {kind}\t{count}");
             sb.AppendLine($"# walks stopped at depth {MaxDepth}\t{_capHits}");
             sb.AppendLine($"# walks stopped on a cycle\t{_cycleHits}");
             sb.AppendLine($"# opaque members inside walked game types\t{_opaqueInner.Count}");
+
+            sb.AppendLine("# controls: declaring_type.field\texpected\tcensus kind\treach");
+            foreach (var (type, name, expected) in Controls)
+            {
+                var hit = sorted.FirstOrDefault(s => s.Key.Item1.FullName == type && s.Key.Item2 == name);
+                var actual = hit.Key.Item1 == null ? "not walked" : hit.Value.Kind;
+                sb.AppendLine($"{type}.{name}\t{expected}\t{actual}\t{hit.Value.Reach}");
+            }
+
             sb.AppendLine("assembly\tdeclaring_type\tfield\tscope\ttype\tkind\treach");
             foreach (var row in rows)
                 sb.AppendLine(row);
@@ -111,7 +157,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
 
             File.WriteAllText(output!, sb.ToString());
             await TestContext.Out.WriteLineAsync(
-                $"[census] {systemTypes.Count} systems, {rows.Count} rows, {counts.GetValueOrDefault("reaches")} reaching an entity, written to {output}");
+                $"[census] {systemTypes.Count} systems, {rows.Count} fields written, {counts.GetValueOrDefault("reaches")} reaching an entity, to {output}");
 
             Assert.That(systemTypes, Is.Not.Empty, "The control: the census saw no systems.");
             Assert.That(counts.GetValueOrDefault("reaches"), Is.GreaterThan(0), "The control: no field reached an entity.");
