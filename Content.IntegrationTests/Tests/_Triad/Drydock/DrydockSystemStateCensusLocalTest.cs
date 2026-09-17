@@ -12,6 +12,7 @@ using Robust.Shared.GameObjects;
 using Robust.Shared.IoC;
 using Robust.Shared.Physics.Dynamics.Contacts;
 using Robust.Shared.Physics.Dynamics.Joints;
+using Robust.Shared.Prototypes;
 
 namespace Content.IntegrationTests.Tests._Triad.Drydock
 {
@@ -223,6 +224,15 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
 
         private string? ReachUncached(Type type, int depth)
         {
+            // A prototype is static data, never per-entity state, and a prototype id holds only its string
+            // (ProtoId.cs:20, EntProtoId.cs:62): following its type argument would reach a prototype's fields.
+            if (typeof(IPrototype).IsAssignableFrom(type)
+                || type.IsGenericType && (type.GetGenericTypeDefinition() == typeof(ProtoId<>)
+                                          || type.GetGenericTypeDefinition() == typeof(EntProtoId<>)))
+            {
+                return null;
+            }
+
             if (type == typeof(EntityUid))
                 return "EntityUid";
             if (type == typeof(NetEntity))
