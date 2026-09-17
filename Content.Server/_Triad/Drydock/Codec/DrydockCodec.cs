@@ -44,7 +44,7 @@ public sealed class DrydockCodec
     {
         _serialization = serialization;
         Context = new DrydockCodecContext(serialization, allocate, resolve);
-        _pass = new DrydockCodecFieldPass(entMan, timing);
+        _pass = new DrydockCodecFieldPass(serialization, Context, entMan, timing);
     }
 
     /// <summary>
