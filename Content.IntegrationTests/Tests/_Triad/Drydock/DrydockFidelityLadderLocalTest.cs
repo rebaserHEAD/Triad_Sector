@@ -435,8 +435,9 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
         /// <summary>
         /// Puts the deck's gas into states a lived-in ship has and a shuttle file does not: a sealed room vented to
         /// vacuum, one pressurized to three times its moles, and one heated to 400 K. A room is the tiles air flows
-        /// between (<c>TileAtmosphere.AdjacentBits</c>), at least <see cref="MinRoomTiles"/> of them, with none open to
-        /// space or the map's atmosphere. The vented room is the largest with no atmos device on any tile, so no vent
+        /// between (<c>TileAtmosphere.AdjacentBits</c>), at least <see cref="MinRoomTiles"/> of them holding at least a mole
+        /// each on average, with none open to space or the map's atmosphere. The vented room is the largest with no atmos
+        /// device on any tile, so no vent
         /// refills it; the other two are the largest rooms left. Each is skipped when the hull has no such room. Returns
         /// each one applied with its room's tiles, for the report's gas control.
         /// </summary>
@@ -457,6 +458,9 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             var seen = new HashSet<Vector2i>();
             var rooms = new List<(List<Vector2i> Tiles, bool HasDevice)>();
 
+            // A room already at vacuum measures nothing: venting it changes no value and tripling it stays zero.
+            const float minMolesPerTile = 1f;
+
             static bool Interior(TileAtmosphere tile) =>
                 tile.Air is { Immutable: false } && !tile.Space && !tile.MapAtmosphere && !tile.NoGridTile;
 
@@ -468,12 +472,14 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                 var tiles = new List<Vector2i>();
                 var open = false;
                 var hasDevice = false;
+                var moles = 0f;
                 var frontier = new Stack<TileAtmosphere>();
                 frontier.Push(startTile);
 
                 while (frontier.TryPop(out var tile))
                 {
                     tiles.Add(tile.GridIndices);
+                    moles += tile.Air!.TotalMoles;
 
                     anchored.Clear();
                     maps.GetAnchoredEntities((grid, mapGrid), tile.GridIndices, anchored);
@@ -491,7 +497,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                     }
                 }
 
-                if (!open && tiles.Count >= MinRoomTiles)
+                if (!open && tiles.Count >= MinRoomTiles && moles >= tiles.Count * minMolesPerTile)
                     rooms.Add((tiles, hasDevice));
             }
 
