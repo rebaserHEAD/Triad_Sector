@@ -61,7 +61,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
     /// <list type="bullet">
     /// <item><b>Round trip 1</b> starts from the shuttle file. Its findings are state a first store
     /// loses. What the retrieve grants a hull on purpose (<see cref="RetrieveGrants"/>) is reported
-    /// apart.</item>
+    /// apart, as is what every retrieve re-stamps (<see cref="RetrieveRestamps"/>) on both round trips.</item>
     /// <item><b>Round trip 2</b> starts from the ship round trip 1 returned. A ship that has been
     /// through the drydock once must come back identical every time after, so every finding here is
     /// the drydock changing a ship it already produced.</item>
@@ -125,7 +125,8 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
         /// station join, ownership, repair baseline and console locks. Keyed <c>Component</c>,
         /// <c>Component.member</c>, or <c>Prototype:Component</c> for a grant only one prototype gets
         /// (<c>Prefix*:Component</c> for a family of prototypes).
-        /// Round trip 1 only; on round trip 2 the ship already carries them and any difference is a finding.
+        /// Round trip 1 only; on round trip 2 the ship already carries them, so a difference is a finding unless
+        /// every retrieve rewrites it (<see cref="RetrieveRestamps"/>).
         /// </summary>
         private static readonly HashSet<string> RetrieveGrants = new(StringComparer.Ordinal)
         {
@@ -146,10 +147,21 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             "grid:MetaDataComponent",
         };
 
+        /// <summary>
+        /// What every drydock retrieve rewrites whether or not the ship already carries it, keyed as
+        /// <see cref="RetrieveGrants"/> is: the ownership status time (<c>DrydockSystem.Retrieve.cs:1392-1400</c>).
+        /// Sorted under "grant" on round trip 2, where <see cref="RetrieveGrants"/> no longer applies.
+        /// </summary>
+        private static readonly HashSet<string> RetrieveRestamps = new(StringComparer.Ordinal)
+        {
+            "ShipOwnershipComponent.LastStatusChangeTime",
+        };
+
         private enum StateClass
         {
             /// <summary>Simulation state that moves on its own. Accepted while it is settling, settled or within
-            /// <see cref="LiveTolerance"/> of its stored value; a jump past that stays a finding.</summary>
+            /// <see cref="LiveTolerance"/> of its stored value; a jump past that stays a finding. A time is a
+            /// repeating timer whose phase moves by firing, accepted on its entry, whose reason names the period.</summary>
             Live,
 
             /// <summary>Runtime bookkeeping with no meaning across a reload (cursors, in-flight jobs).</summary>
@@ -213,6 +225,14 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             ["PipeNetAir.*"] = (StateClass.Live, "pipe-net gas moves while pumps, vents and mixers run"),
             ["GridAtmosphereComponent.Tiles.moles"] = (StateClass.Live, "deck gas moves while atmos processes active tiles"),
             ["GridAtmosphereComponent.Tiles.temperature"] = (StateClass.Live, "deck gas temperature moves while atmos processes active tiles"),
+            ["ThrusterComponent.NextFire"] = (StateClass.Live, "burn tick repeating every FireCooldown, 2 s, advanced one cooldown when due (ThrusterSystem.cs:522-525)"),
+            ["SpamEmitSoundComponent.NextSound"] = (StateClass.Live, "fires when due and re-rolls its interval (EmitSoundSystem.cs:26-33)"),
+            ["DeepFryerComponent.NextFryTime"] = (StateClass.Live, "fry tick repeating every FryInterval, 5 s, while powered, re-armed on a power change (DeepFryerSystem.Update.cs:20-26, DeepFryerSystem.cs:481-486)"),
+            ["PoweredLightComponent.~LastThunk"] = (StateClass.Volatile, "turn-on sound throttle (PoweredLightSystem.cs:287-289)"),
+            ["SpeechComponent.~LastTimeSoundPlayed"] = (StateClass.Volatile, "speech sound cooldown (SpeechNoiseSystem.cs:70-74)"),
+            ["GridPathfindingComponent.~NextUpdate"] = (StateClass.Volatile, "graph update gate, set when a chunk is dirtied (PathfindingSystem.Grid.cs:329-330, :344-345)"),
+            ["SmesComponent.~LastChargeLevelTime"] = (StateClass.Derived, "SMES visual throttle, stamped at startup (SmesSystem.cs:32)"),
+            ["SmesComponent.~LastChargeStateTime"] = (StateClass.Derived, "SMES visual throttle, stamped at startup (SmesSystem.cs:36)"),
         };
 
         /// <summary>Derived members whose per-entity values may reshuffle but whose sum over the grid may not.</summary>
@@ -300,7 +320,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             sb.AppendLine($"[ladder] rung {rung} {vesselId} through {(EngineMode ? "the engine serializer" : "the drydock")}");
             sb.AppendLine($"[ladder] lived-in recipes applied: {(recipes.Count == 0 ? "none" : string.Join(", ", recipes))}");
             Report(sb, rung, vesselId, 1, first, EngineMode ? null : RetrieveGrants, gasRooms, protoMan);
-            Report(sb, rung, vesselId, 2, second, null, gasRooms, protoMan);
+            Report(sb, rung, vesselId, 2, second, EngineMode ? null : RetrieveRestamps, gasRooms, protoMan);
             await TestContext.Out.WriteLineAsync(sb.ToString());
 
             Assert.That(first.Before.Entities, Is.GreaterThan(0), "The control: round trip 1 compared no entities.");
@@ -857,7 +877,8 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
         /// <summary>
         /// The registry entry that explains a key's difference, or null. A Live entry explains it only while
         /// the value is settling, settled, or within <see cref="LiveTolerance"/> of its stored value, or within
-        /// <see cref="LiveFloor"/>, which sets <paramref name="belowFloor"/>.
+        /// <see cref="LiveFloor"/>, which sets <paramref name="belowFloor"/>. A Live entry for a time explains it
+        /// outright.
         /// </summary>
         private static StateClass? Classify(string key, RoundTripResult result, Recovery recovery, out bool belowFloor)
         {
@@ -869,7 +890,8 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             if (colon >= 0)
                 member = member[..colon];
 
-            if (member.EndsWith(DrydockFidelitySystem.TimeSuffix))
+            var time = member.EndsWith(DrydockFidelitySystem.TimeSuffix);
+            if (time)
                 member = member[..^DrydockFidelitySystem.TimeSuffix.Length];
 
             var dot = member.IndexOf('.');
@@ -878,7 +900,9 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             if (!Registry.TryGetValue(member, out var entry) && !Registry.TryGetValue(component + ".*", out entry))
                 return null;
 
-            if (entry.Class != StateClass.Live || recovery != Recovery.Persistent)
+            // A Live time is a repeating timer: one that fired between two snapshots fails TimeKeepsItsMeaning by its
+            // phase alone, so its entry, whose reason carries the period, explains it. A time render is not a number.
+            if (entry.Class != StateClass.Live || recovery != Recovery.Persistent || time)
                 return entry.Class;
 
             if (!result.Before.Values.TryGetValue(key, out var was)
