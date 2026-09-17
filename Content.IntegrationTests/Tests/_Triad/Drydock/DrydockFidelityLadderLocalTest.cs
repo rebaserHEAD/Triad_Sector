@@ -71,7 +71,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
     /// timers) and its round-trip difference is reported under "live" rather than as a finding.</para>
     ///
     /// <para>What remains is sorted against loose entities that settled onto a neighbouring tile ("moved"),
-    /// <see cref="Registry"/> ("classified"), removals by rule: contraband, the mech strip, emptied AI cores,
+    /// <see cref="Registry"/> ("classified", or "below-floor" when only <see cref="LiveFloor"/> admits it), removals by rule: contraband, the mech strip, emptied AI cores,
     /// and the containers and components those removals reach (<see cref="PolicyConsequences"/>)
     /// ("policy"), <c>save: false</c> entities the store deleted ("unsaved", unless
     /// <see cref="TransientUnsaved"/> expects the loss), and the late snapshot below; only unexplained,
@@ -160,6 +160,13 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
         }
 
         private const double LiveTolerance = 0.05;
+
+        /// <summary>
+        /// The smallest difference a Live value may show beyond <see cref="LiveTolerance"/>: the resolution tile gas
+        /// renders at (moles to two decimals), so a trace amount that only crossed a rounding boundary is not a finding.
+        /// A line only this floor admits is reported under "below-floor", never as classified.
+        /// </summary>
+        private const double LiveFloor = 0.01;
 
         /// <summary>
         /// The ladder's classification registry, keyed <c>Component.member</c> or <c>Component.*</c>. Every
@@ -725,6 +732,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             var policyLines = new List<string>();
             var unsavedLines = new List<string>();
             var classifiedLines = new List<string>();
+            var belowFloorLines = new List<string>();
             var settledLines = new List<string>();
             var settlingLines = new List<string>();
             var movedLines = new List<string>();
@@ -766,8 +774,8 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                     else
                         unsavedLines.Add(line);
                 }
-                else if (key != null && Classify(key, result, recovery) is { } _)
-                    classifiedLines.Add(line);
+                else if (key != null && Classify(key, result, recovery, out var belowFloor) is { } _)
+                    (belowFloor ? belowFloorLines : classifiedLines).Add(line);
                 else if (recovery == Recovery.Settled)
                     settledLines.Add(line);
                 else if (recovery == Recovery.Settling)
@@ -797,13 +805,15 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             foreach (var (recipe, tiles) in gasRooms)
             {
                 var at = tiles.Select(tile => $"{tile.X},{tile.Y}").ToHashSet();
-                sb.AppendLine($"[ladder] gas control {recipe}: before {RoomGas(result.Before, at)}; after {RoomGas(result.After, at)}; late {RoomGas(result.Late, at)}");
+                var anchor = tiles.OrderBy(tile => tile.X).ThenBy(tile => tile.Y).First();
+                sb.AppendLine($"[ladder] gas control {recipe} at {anchor.X},{anchor.Y}: before {RoomGas(result.Before, at)}; after {RoomGas(result.After, at)}; late {RoomGas(result.Late, at)}");
             }
 
             AppendKinds(sb, rung, vesselId, trip, "finding", findings, examples: 2);
             AppendKinds(sb, rung, vesselId, trip, "settling", settlingLines, examples: 1);
             AppendKinds(sb, rung, vesselId, trip, "settled", settledLines, examples: 1);
             AppendKinds(sb, rung, vesselId, trip, "classified", classifiedLines, examples: 0);
+            AppendKinds(sb, rung, vesselId, trip, "below-floor", belowFloorLines, examples: 1);
             AppendKinds(sb, rung, vesselId, trip, "policy", policyLines, examples: 1);
             AppendKinds(sb, rung, vesselId, trip, "unsaved", unsavedLines, examples: 1);
             AppendKinds(sb, rung, vesselId, trip, "moved", movedLines, examples: 1);
@@ -817,10 +827,13 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
 
         /// <summary>
         /// The registry entry that explains a key's difference, or null. A Live entry explains it only while
-        /// the value is settling, settled, or within <see cref="LiveTolerance"/> of its stored value.
+        /// the value is settling, settled, or within <see cref="LiveTolerance"/> of its stored value, or within
+        /// <see cref="LiveFloor"/>, which sets <paramref name="belowFloor"/>.
         /// </summary>
-        private static StateClass? Classify(string key, RoundTripResult result, Recovery recovery)
+        private static StateClass? Classify(string key, RoundTripResult result, Recovery recovery, out bool belowFloor)
         {
+            belowFloor = false;
+
             // A colon separates a member from the instance it was rendered for (a tile, a node group), as in KindOf.
             var member = key[(key.IndexOf('|') + 1)..];
             var colon = member.IndexOf(':');
@@ -839,12 +852,24 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             if (entry.Class != StateClass.Live || recovery != Recovery.Persistent)
                 return entry.Class;
 
-            return result.Before.Values.TryGetValue(key, out var was)
-                   && result.After.Values.TryGetValue(key, out var now)
-                   && Number(was) is { } b && Number(now) is { } a
-                   && Math.Abs(a - b) <= Math.Abs(b) * LiveTolerance
-                ? entry.Class
-                : null;
+            if (!result.Before.Values.TryGetValue(key, out var was)
+                || !result.After.Values.TryGetValue(key, out var now)
+                || Number(was) is not { } b
+                || Number(now) is not { } a)
+            {
+                return null;
+            }
+
+            var difference = Math.Abs(a - b);
+            if (difference <= Math.Abs(b) * LiveTolerance)
+                return entry.Class;
+
+            // Rounded, because two rendered decimals subtract to a hair over the floor (0.10 - 0.09 = 0.010000000000000009).
+            if (Math.Round(difference, 9) > LiveFloor)
+                return null;
+
+            belowFloor = true;
+            return entry.Class;
         }
 
         /// <summary>
