@@ -211,7 +211,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                 await TestContext.Out.WriteLineAsync(
                     $"[keyorder] the floor is {floor} key(s) the seed does not reach, subtracted from every comparison. "
                     + "Ranked by member below. A time renders with its clock-relative half, which moves every tick, so every time key sits here whatever the seed does; anything else here is randomness the seed cannot reach:");
-                foreach (var (member, count) in unseeded.OrderByDescending(pair => pair.Value).Take(25))
+                foreach (var (member, count) in unseeded.OrderByDescending(pair => pair.Value).ThenBy(pair => pair.Key, StringComparer.Ordinal))
                     await TestContext.Out.WriteLineAsync($"[keyorder] unseeded {count,6}  {member}");
             }
 
