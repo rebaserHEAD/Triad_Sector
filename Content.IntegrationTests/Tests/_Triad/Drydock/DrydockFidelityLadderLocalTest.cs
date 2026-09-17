@@ -6,6 +6,7 @@ using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
 using Content.IntegrationTests.Pair;
+using Content.Server._NF.Trade;
 using Content.Server._Triad.Drydock;
 using Content.Server.Atmos;
 using Content.Server.Atmos.Components;
@@ -312,8 +313,8 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
 
         /// <summary>
         /// Puts the hull into states a lived-in ship has and a shuttle file does not: damage on a wall and
-        /// a thruster, cargo in a closed locker, a loose item and a wheelchair (a <c>save: false</c> vehicle) on
-        /// the deck, an interior door open, a wires panel open, a gravity generator switched off, a lathe queue
+        /// a thruster, cargo in a closed locker, a loose item, a wheelchair (a <c>save: false</c> vehicle) and a trade crate
+        /// with an express deadline on the deck, an interior door open, a wires panel open, a gravity generator switched off, a lathe queue
         /// (not in engine mode, which cannot write one), a restocked vendor, and a sidearm fired. Each recipe takes the first
         /// matching entity in tree order (the deck spot is a chair, else a computer) and is skipped when
         /// the hull has none. Returns the ones applied.
@@ -380,6 +381,22 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                 // save: false player property: the store deletes it, and the report must say so every time.
                 entMan.SpawnEntity("VehicleWheelchair", spot);
                 applied.Add("unsaved-vehicle");
+            }
+
+            if (chair is { } crateSpot)
+            {
+                // A trade crate draws its destination and express deadline at component init. Four destinations off the
+                // grid, each on its own prototype, make a re-draw show in the path the crate's destination renders as.
+                var mapId = entMan.GetComponent<TransformComponent>(grid).MapID;
+                var destinations = new[] { ("Crowbar", "CargoA"), ("Wrench", "CargoB"), ("Screwdriver", "CargoC"), ("Wirecutter", "Beacon") };
+                for (var i = 0; i < destinations.Length; i++)
+                {
+                    var marker = entMan.SpawnEntity(destinations[i].Item1, new MapCoordinates(new System.Numerics.Vector2(5000f + i * 10f, 5000f), mapId));
+                    entMan.AddComponent(marker, new TradeCrateDestinationComponent { DestinationProto = destinations[i].Item2 });
+                }
+
+                entMan.SpawnEntity("CrateTradeSecureNormal", entMan.GetComponent<TransformComponent>(crateSpot).Coordinates);
+                applied.Add("trade-crate");
             }
 
             var door = First((uid, id) => id.StartsWith("Airlock", StringComparison.Ordinal)
@@ -721,9 +738,11 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             List<(string Recipe, List<Vector2i> Tiles)> gasRooms,
             IPrototypeManager protoMan)
         {
+            // A time's render carries its clock-relative half, which moves every tick, so a time key is live only when its
+            // meaning moved during the window; any other key is live when its rendered value moved.
             var live = DrydockStateSnapshot.Diff(result.Early, result.Before)
                 .Select(KeyOf)
-                .Where(k => k != null)
+                .Where(k => k != null && !TimeHeldDuringWindow(k, result))
                 .ToHashSet();
 
             var findings = new List<string>();
@@ -801,6 +820,16 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                           + $"{timeKept} time change(s) kept their meaning.");
 
             AppendUncapturable(sb, rung, vesselId, trip, result);
+
+            foreach (var key in result.Before.Values.Keys
+                         .Where(k => k.EndsWith("|TradeCrateComponent.~DestinationStation", StringComparison.Ordinal))
+                         .OrderBy(k => k, StringComparer.Ordinal))
+            {
+                var path = key[..key.IndexOf('|')];
+                var express = $"{path}|TradeCrateComponent.~ExpressDeliveryTime{DrydockFidelitySystem.TimeSuffix}";
+                sb.AppendLine($"[ladder] trade control {path}: destination {ValueIn(result.Before, key)}, {ValueIn(result.After, key)}, {ValueIn(result.Late, key)}; "
+                              + $"express {ValueIn(result.Before, express)}, {ValueIn(result.After, express)}, {ValueIn(result.Late, express)}");
+            }
 
             foreach (var (recipe, tiles) in gasRooms)
             {
@@ -1146,6 +1175,18 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             System.IO.File.WriteAllText(
                 System.IO.Path.Combine(directory, $"rung{rung:000}_{vesselId}_trip{trip}.txt"), sb.ToString());
         }
+
+        /// <summary>
+        /// Whether a time key held its meaning across the live window, so its rendered change is only the clock moving.
+        /// </summary>
+        private static bool TimeHeldDuringWindow(string key, RoundTripResult result) =>
+            key.EndsWith(DrydockFidelitySystem.TimeSuffix, StringComparison.Ordinal)
+            && result.Early.Values.TryGetValue(key, out var early)
+            && result.Before.Values.TryGetValue(key, out var before)
+            && DrydockFidelitySystem.TimeKeepsItsMeaning(early, before, TimeToleranceSeconds);
+
+        private static string ValueIn(DrydockStateSnapshot snapshot, string key) =>
+            snapshot.Values.GetValueOrDefault(key, "<absent>");
 
         /// <summary>
         /// A gas recipe's room as one snapshot saw it: the moles over its tiles and their mean temperature. The control
