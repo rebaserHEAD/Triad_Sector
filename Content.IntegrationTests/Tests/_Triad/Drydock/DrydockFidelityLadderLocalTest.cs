@@ -7,8 +7,10 @@ using System.Text;
 using System.Threading.Tasks;
 using Content.IntegrationTests.Pair;
 using Content.Server._Triad.Drydock;
+using Content.Server.Atmos;
 using Content.Server.Atmos.Components;
 using Content.Server.Atmos.EntitySystems;
+using Content.Server.Atmos.Piping.Components;
 using Content.Server.Power.Components;
 using Content.Server.Station.Components;
 using Content.Server.Storage.Components;
@@ -33,6 +35,8 @@ using Content.Shared.Wires;
 using Robust.Shared.EntitySerialization.Systems;
 using Robust.Shared.GameObjects;
 using Robust.Shared.Map;
+using Robust.Shared.Map.Components;
+using Robust.Shared.Maths;
 using Robust.Shared.Prototypes;
 using Robust.Shared.Timing;
 using Robust.Shared.Utility;
@@ -47,7 +51,11 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
     ///
     /// <para>Before round trip 1 the hull is put into lived-in states (<see cref="ApplyLivedIn"/>), so the
     /// comparison covers damage, cargo, open doors and panels, queues and fired guns, not only a hull
-    /// as its file describes it.</para>
+    /// as its file describes it. Once atmos has settled, rooms are vented, pressurized and heated
+    /// (<see cref="ApplyLivedInAtmos"/>).</para>
+    ///
+    /// <para>Members the detector cannot render at all are listed under "uncapturable"
+    /// (<see cref="AppendUncapturable"/>): their round trip is unmeasured, not clean.</para>
     ///
     /// <list type="bullet">
     /// <item><b>Round trip 1</b> starts from the shuttle file. Its findings are state a first store
@@ -99,6 +107,10 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
         private const double ClockGapSeconds = 10;
         private const double TimeToleranceSeconds = 1;
         private const double LateSeconds = 10;
+        private const double AtmosSettleSeconds = 5;
+
+        /// <summary>The smallest sealed room a gas recipe takes, so a door frame or a window bay is not a room.</summary>
+        private const int MinRoomTiles = 4;
 
         /// <summary>
         /// <c>LADDER_MODE=engine</c> round-trips through the engine serializer alone (<see cref="EngineRoundTrip"/>)
@@ -191,6 +203,8 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             ["AppearanceComponent.~AppearanceData"] = (StateClass.Derived, "the same data the Appearance.* keys compare"),
             ["PowerChargeComponent.~NeedUIUpdate"] = (StateClass.Volatile, "UI refresh flag, cleared only when an open UI updates (PowerChargeSystem.UpdateUI)"),
             ["PipeNetAir.*"] = (StateClass.Live, "pipe-net gas moves while pumps, vents and mixers run"),
+            ["GridAtmosphereComponent.Tiles.moles"] = (StateClass.Live, "deck gas moves while atmos processes active tiles"),
+            ["GridAtmosphereComponent.Tiles.temperature"] = (StateClass.Live, "deck gas temperature moves while atmos processes active tiles"),
         };
 
         /// <summary>Derived members whose per-entity values may reshuffle but whose sum over the grid may not.</summary>
@@ -264,14 +278,21 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
 
             await pair.RunTicksSync(PreSettleTicks);
 
+            // Rooms are the tiles air flows between, which atmos sets (TileAtmosphere.AdjacentBits) only once it has
+            // processed the hull, so the gas recipes wait for the settle and then settle on their own.
+            var gasRooms = new List<(string Recipe, List<Vector2i> Tiles)>();
+            await server.WaitPost(() => gasRooms = ApplyLivedInAtmos(pair, grid));
+            recipes.AddRange(gasRooms.Select(room => room.Recipe));
+            await pair.RunTicksSync((int) Math.Ceiling(AtmosSettleSeconds / server.ResolveDependency<IGameTiming>().TickPeriod.TotalSeconds));
+
             var first = await RoundTrip(pair, grid, owner, station);
             var second = await RoundTrip(pair, first.Retrieved, owner, station);
 
             var sb = new StringBuilder();
             sb.AppendLine($"[ladder] rung {rung} {vesselId} through {(EngineMode ? "the engine serializer" : "the drydock")}");
             sb.AppendLine($"[ladder] lived-in recipes applied: {(recipes.Count == 0 ? "none" : string.Join(", ", recipes))}");
-            Report(sb, rung, vesselId, 1, first, EngineMode ? null : RetrieveGrants, protoMan);
-            Report(sb, rung, vesselId, 2, second, null, protoMan);
+            Report(sb, rung, vesselId, 1, first, EngineMode ? null : RetrieveGrants, gasRooms, protoMan);
+            Report(sb, rung, vesselId, 2, second, null, gasRooms, protoMan);
             await TestContext.Out.WriteLineAsync(sb.ToString());
 
             Assert.That(first.Before.Entities, Is.GreaterThan(0), "The control: round trip 1 compared no entities.");
@@ -406,6 +427,105 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
 
                 server.System<GunSystem>().AttemptShoot(pistol, entMan.GetComponent<GunComponent>(pistol));
                 applied.Add("fire-gun");
+            }
+
+            return applied;
+        }
+
+        /// <summary>
+        /// Puts the deck's gas into states a lived-in ship has and a shuttle file does not: a sealed room vented to
+        /// vacuum, one pressurized to three times its moles, and one heated to 400 K. A room is the tiles air flows
+        /// between (<c>TileAtmosphere.AdjacentBits</c>), at least <see cref="MinRoomTiles"/> of them, with none open to
+        /// space or the map's atmosphere. The vented room is the largest with no atmos device on any tile, so no vent
+        /// refills it; the other two are the largest rooms left. Each is skipped when the hull has no such room. Returns
+        /// each one applied with its room's tiles, for the report's gas control.
+        /// </summary>
+        private static List<(string Recipe, List<Vector2i> Tiles)> ApplyLivedInAtmos(TestPair pair, EntityUid grid)
+        {
+            var server = pair.Server;
+            var entMan = server.EntMan;
+            var applied = new List<(string Recipe, List<Vector2i> Tiles)>();
+
+            if (!entMan.TryGetComponent<GridAtmosphereComponent>(grid, out var gridAtmos)
+                || !entMan.TryGetComponent<MapGridComponent>(grid, out var mapGrid))
+            {
+                return applied;
+            }
+
+            var maps = server.System<SharedMapSystem>();
+            var anchored = new List<EntityUid>();
+            var seen = new HashSet<Vector2i>();
+            var rooms = new List<(List<Vector2i> Tiles, bool HasDevice)>();
+
+            static bool Interior(TileAtmosphere tile) =>
+                tile.Air is { Immutable: false } && !tile.Space && !tile.MapAtmosphere && !tile.NoGridTile;
+
+            foreach (var (start, startTile) in gridAtmos.Tiles)
+            {
+                if (!Interior(startTile) || !seen.Add(start))
+                    continue;
+
+                var tiles = new List<Vector2i>();
+                var open = false;
+                var hasDevice = false;
+                var frontier = new Stack<TileAtmosphere>();
+                frontier.Push(startTile);
+
+                while (frontier.TryPop(out var tile))
+                {
+                    tiles.Add(tile.GridIndices);
+
+                    anchored.Clear();
+                    maps.GetAnchoredEntities((grid, mapGrid), tile.GridIndices, anchored);
+                    hasDevice |= anchored.Any(uid => entMan.HasComponent<AtmosDeviceComponent>(uid));
+
+                    for (var i = 0; i < Atmospherics.Directions; i++)
+                    {
+                        if (!tile.AdjacentBits.IsFlagSet((AtmosDirection) (1 << i)))
+                            continue;
+
+                        if (tile.AdjacentTiles[i] is not { } next || !Interior(next))
+                            open = true;
+                        else if (seen.Add(next.GridIndices))
+                            frontier.Push(next);
+                    }
+                }
+
+                if (!open && tiles.Count >= MinRoomTiles)
+                    rooms.Add((tiles, hasDevice));
+            }
+
+            rooms.Sort((a, b) => b.Tiles.Count.CompareTo(a.Tiles.Count));
+            var atmos = server.System<AtmosphereSystem>();
+
+            void Apply(List<Vector2i> tiles, Action<GasMixture> change)
+            {
+                foreach (var indices in tiles)
+                {
+                    if (atmos.GetTileMixture(grid, null, indices, excite: true) is { } air)
+                        change(air);
+                }
+            }
+
+            var vented = rooms.FindIndex(room => !room.HasDevice);
+            if (vented >= 0)
+            {
+                Apply(rooms[vented].Tiles, air => air.Clear());
+                applied.Add(("vent-room", rooms[vented].Tiles));
+                rooms.RemoveAt(vented);
+            }
+
+            if (rooms.Count > 0)
+            {
+                Apply(rooms[0].Tiles, air => air.Multiply(3f));
+                applied.Add(("pressurize-room", rooms[0].Tiles));
+                rooms.RemoveAt(0);
+            }
+
+            if (rooms.Count > 0)
+            {
+                Apply(rooms[0].Tiles, air => air.Temperature = 400f);
+                applied.Add(("heat-room", rooms[0].Tiles));
             }
 
             return applied;
@@ -585,6 +705,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             int trip,
             RoundTripResult result,
             HashSet<string>? grants,
+            List<(string Recipe, List<Vector2i> Tiles)> gasRooms,
             IPrototypeManager protoMan)
         {
             var live = DrydockStateSnapshot.Diff(result.Early, result.Before)
@@ -665,6 +786,14 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                           + $"{result.Before.Values.Count} keys, {live.Count} live key(s), clock advanced {result.ElapsedSeconds:F1}s, "
                           + $"{timeKept} time change(s) kept their meaning.");
 
+            AppendUncapturable(sb, rung, vesselId, trip, result);
+
+            foreach (var (recipe, tiles) in gasRooms)
+            {
+                var at = tiles.Select(tile => $"{tile.X},{tile.Y}").ToHashSet();
+                sb.AppendLine($"[ladder] gas control {recipe}: before {RoomGas(result.Before, at)}; after {RoomGas(result.After, at)}; late {RoomGas(result.Late, at)}");
+            }
+
             AppendKinds(sb, rung, vesselId, trip, "finding", findings, examples: 2);
             AppendKinds(sb, rung, vesselId, trip, "settling", settlingLines, examples: 1);
             AppendKinds(sb, rung, vesselId, trip, "settled", settledLines, examples: 1);
@@ -686,7 +815,12 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
         /// </summary>
         private static StateClass? Classify(string key, RoundTripResult result, Recovery recovery)
         {
+            // A colon separates a member from the instance it was rendered for (a tile, a node group), as in KindOf.
             var member = key[(key.IndexOf('|') + 1)..];
+            var colon = member.IndexOf(':');
+            if (colon >= 0)
+                member = member[..colon];
+
             if (member.EndsWith(DrydockFidelitySystem.TimeSuffix))
                 member = member[..^DrydockFidelitySystem.TimeSuffix.Length];
 
@@ -980,6 +1114,71 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
 
             System.IO.File.WriteAllText(
                 System.IO.Path.Combine(directory, $"rung{rung:000}_{vesselId}_trip{trip}.txt"), sb.ToString());
+        }
+
+        /// <summary>
+        /// A gas recipe's room as one snapshot saw it: the moles over its tiles and their mean temperature. The control
+        /// that the recipe held until the store, and the measure of what the round trip kept, since a room kept exactly
+        /// produces no difference line at all.
+        /// </summary>
+        private static string RoomGas(DrydockStateSnapshot snapshot, HashSet<string> tiles)
+        {
+            const string moles = "grid|GridAtmosphereComponent.Tiles.moles:";
+            const string temperature = "grid|GridAtmosphereComponent.Tiles.temperature:";
+            var total = 0.0;
+            var heat = 0.0;
+            var measured = 0;
+
+            foreach (var (key, value) in snapshot.Values)
+            {
+                if (key.StartsWith(moles, StringComparison.Ordinal))
+                {
+                    var tile = key[moles.Length..];
+                    var dot = tile.IndexOf('.');
+                    if (dot > 0 && tiles.Contains(tile[..dot]))
+                        total += Number(value) ?? 0;
+                }
+                else if (key.StartsWith(temperature, StringComparison.Ordinal) && tiles.Contains(key[temperature.Length..]))
+                {
+                    heat += Number(value) ?? 0;
+                    measured++;
+                }
+            }
+
+            var culture = System.Globalization.CultureInfo.InvariantCulture;
+            return measured == 0
+                ? $"no air on {tiles.Count} tile(s)"
+                : $"{total.ToString("F1", culture)} mol, {(heat / measured).ToString("F1", culture)} K over {measured}/{tiles.Count} tile(s)";
+        }
+
+        /// <summary>
+        /// One <c>[ladder-kind]</c> line per member the detector could not render on either side, counted before the
+        /// store, with the count after the retrieve, the first failure's reason, and one value as the reflection
+        /// render compared it, so a reader can see how much of the member the comparison covered.
+        /// </summary>
+        private static void AppendUncapturable(StringBuilder sb, int rung, string vesselId, int trip, RoundTripResult result)
+        {
+            var members = result.Before.UncapturableMembers.Keys
+                .Union(result.After.UncapturableMembers.Keys)
+                .OrderBy(member => member, StringComparer.Ordinal)
+                .ToList();
+
+            sb.AppendLine($"[ladder] uncapturable: {result.Before.Uncapturable}/{result.After.Uncapturable} value(s) in {members.Count} member(s)");
+
+            foreach (var member in members)
+            {
+                result.Before.UncapturableMembers.TryGetValue(member, out var before);
+                result.After.UncapturableMembers.TryGetValue(member, out var after);
+                var reason = before.Count > 0 ? before.Reason : after.Reason;
+
+                var sample = result.Before.Values.FirstOrDefault(kv => kv.Key.EndsWith("|" + member, StringComparison.Ordinal)).Value;
+                if (sample is { Length: > 160 })
+                    sample = sample[..160] + "…";
+
+                sb.AppendLine($"[ladder-kind] rung={rung} vessel={vesselId} trip={trip} bucket=uncapturable count={before.Count} kind=UNCAPTURABLE {member}");
+                sb.AppendLine($"         after: {after.Count}; e.g. {reason}");
+                sb.AppendLine($"         compared as: {sample ?? "<no value>"}");
+            }
         }
 
         private static void AppendKinds(StringBuilder sb, int rung, string vesselId, int trip, string bucket, List<string> lines, int examples)

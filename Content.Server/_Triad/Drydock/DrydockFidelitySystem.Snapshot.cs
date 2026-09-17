@@ -160,7 +160,7 @@ public sealed partial class DrydockFidelitySystem
 
                 if (RenderValue(value) is not { } rendered)
                 {
-                    snapshot.Uncapturable++;
+                    snapshot.NoteUncapturable($"{compType.Name}.{member.Name}", $"no render for {value.GetType().Name}");
                     continue;
                 }
 
@@ -177,7 +177,7 @@ public sealed partial class DrydockFidelitySystem
             {
                 if (RenderValue(value) is not { } rendered)
                 {
-                    snapshot.Uncapturable++;
+                    snapshot.NoteUncapturable($"Appearance.{dataKey.GetType().Name}.{dataKey}", $"no render for {value.GetType().Name}");
                     continue;
                 }
 
@@ -269,6 +269,21 @@ public sealed class DrydockStateSnapshot
 
     /// <summary>How many populated fields could not be rendered to text at all.</summary>
     public int Uncapturable;
+
+    /// <summary>
+    /// The members behind <see cref="Uncapturable"/>, keyed <c>Component.member</c>, with how many values each
+    /// lost and the first failure's reason. The narrow snapshot compares none of them; the deep snapshot compares
+    /// them only one level deep, by reflection.
+    /// </summary>
+    public readonly Dictionary<string, (int Count, string Reason)> UncapturableMembers = new();
+
+    public void NoteUncapturable(string member, string reason)
+    {
+        Uncapturable++;
+        UncapturableMembers[member] = UncapturableMembers.TryGetValue(member, out var seen)
+            ? (seen.Count + 1, seen.Reason)
+            : (1, reason);
+    }
 
     /// <summary>
     /// Deep snapshot only: siblings whose name and local position both tied, so they were paired by

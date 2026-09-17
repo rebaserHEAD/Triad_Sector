@@ -5,6 +5,8 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
 using System.Reflection;
+using Content.Server.Atmos;
+using Content.Server.Atmos.Components;
 using Content.Server.NodeContainer.NodeGroups;
 using Content.Shared.NodeContainer;
 using Content.Shared.NodeContainer.NodeGroups;
@@ -13,6 +15,7 @@ using Robust.Shared.Map;
 using Robust.Shared.Map.Components;
 using Robust.Shared.Physics;
 using Robust.Shared.Physics.Components;
+using Robust.Shared.Prototypes;
 using Robust.Shared.Serialization;
 using Robust.Shared.Serialization.Manager;
 using Robust.Shared.Serialization.Manager.Attributes;
@@ -39,7 +42,10 @@ namespace Content.Server._Triad.Drydock;
 /// <list type="bullet">
 /// <item><c>Component.&lt;present&gt;</c>: one key per component, so a component with no data
 /// fields that vanishes still produces a line.</item>
-/// <item><c>Component.Member</c>: a data field, rendered as the serializer writes it.</item>
+/// <item><c>Component.Member</c>: a data field, rendered as the serializer writes it (<see cref="WriteField"/>).
+/// A field neither its type nor its own serializer can write is named in
+/// <see cref="DrydockStateSnapshot.UncapturableMembers"/> and rendered by reflection (<see cref="RenderByReflection"/>).</item>
+/// <item><c>GridAtmosphereComponent.Tiles.*</c>: the deck's gas, tile by tile (<see cref="RenderTileAtmos"/>).</item>
 /// <item><c>Component.~member</c>: a field that is not a data field and not engine plumbing
 /// (<see cref="IsBookkeeping"/>). Scalars render in full; collections of up to
 /// <see cref="CollectionCap"/> elements render element by element (sorted when unordered); other
@@ -190,7 +196,8 @@ public sealed partial class DrydockFidelitySystem
     {
         type = Nullable.GetUnderlyingType(type) ?? type;
         return type.IsPrimitive || type.IsEnum || type == typeof(string) || type == typeof(decimal)
-               || type == typeof(TimeSpan) || type == typeof(EntityUid) || type == typeof(NetEntity);
+               || type == typeof(TimeSpan) || type == typeof(EntityUid) || type == typeof(NetEntity)
+               || typeof(IPrototype).IsAssignableFrom(type);
     }
 
     public DrydockStateSnapshot DeepSnapshotGrid(EntityUid grid)
@@ -264,6 +271,100 @@ public sealed partial class DrydockFidelitySystem
 
         foreach (var (key, group) in nodeKeys)
             snapshot.Values[key] = group == null ? "null" : labels[group];
+    }
+
+    /// <summary>
+    /// The deck's gas, which <c>TileAtmosCollectionSerializer</c> saves per tile and no data definition can render,
+    /// since <c>TileAtmosphere</c> is a plain class. The tile follows a colon, so one facet over every tile is one
+    /// report kind.
+    /// <list type="bullet">
+    /// <item><c>GridAtmosphereComponent.Tiles.moles:X,Y.GAS</c>: each gas the tile holds at 0.005 mol or more, to two decimals.</item>
+    /// <item><c>GridAtmosphereComponent.Tiles.temperature:X,Y</c>: the tile's gas temperature.</item>
+    /// <item><c>GridAtmosphereComponent.Tiles.flags:X,Y</c>: whichever of blocked (no air), immutable, space and
+    /// map-atmosphere hold, present only when one does. The serializer saves the air alone; atmos rebuilds these.</item>
+    /// </list>
+    /// </summary>
+    private static void RenderTileAtmos(string path, Dictionary<Vector2i, TileAtmosphere> tiles, DrydockStateSnapshot snapshot)
+    {
+        const string prefix = $"{nameof(GridAtmosphereComponent)}.{nameof(GridAtmosphereComponent.Tiles)}";
+        var flags = new List<string>(4);
+
+        foreach (var (indices, tile) in tiles)
+        {
+            var at = $"{indices.X},{indices.Y}";
+            flags.Clear();
+
+            if (tile.Air is { } air)
+            {
+                snapshot.Values[$"{path}|{prefix}.temperature:{at}"] = air.Temperature.ToString("F1", CultureInfo.InvariantCulture);
+                foreach (var (gas, moles) in air)
+                {
+                    if (moles >= 0.005f)
+                        snapshot.Values[$"{path}|{prefix}.moles:{at}.{gas}"] = moles.ToString("F2", CultureInfo.InvariantCulture);
+                }
+
+                if (air.Immutable)
+                    flags.Add("immutable");
+            }
+            else
+            {
+                flags.Add("blocked");
+            }
+
+            if (tile.Space)
+                flags.Add("space");
+            if (tile.MapAtmosphere)
+                flags.Add("map-atmosphere");
+
+            if (flags.Count > 0)
+                snapshot.Values[$"{path}|{prefix}.flags:{at}"] = string.Join(',', flags);
+        }
+    }
+
+    private static readonly ConcurrentDictionary<(Type Value, Type Serializer), MethodInfo> SerializerWrites = new();
+
+    /// <summary>
+    /// A data field written by its runtime type or, when that fails, through the field's own
+    /// <c>customTypeSerializer</c>: the only writer a field has when its type is not a data definition.
+    /// </summary>
+    private DataNode WriteField(MemberInfo member, object value, DrydockEntityPathWriter writer)
+    {
+        try
+        {
+            return _serialization.WriteValue(value.GetType(), value, alwaysWrite: true, context: writer);
+        }
+        catch (Exception byType) when (member.GetCustomAttribute<DataFieldBaseAttribute>()?.CustomTypeSerializer is { } serializer)
+        {
+            try
+            {
+                var write = SerializerWrites.GetOrAdd((MemberType(member), serializer), static key =>
+                    typeof(ISerializationManager).GetMethods()
+                        .First(m => m.Name == nameof(ISerializationManager.WriteValue) && m.GetGenericArguments().Length == 2)
+                        .MakeGenericMethod(key.Value, key.Serializer));
+
+                return (DataNode) write.Invoke(_serialization, new object?[] { value, true, writer, false })!;
+            }
+            catch (Exception bySerializer)
+            {
+                throw new InvalidOperationException(
+                    $"by type: {Reason(byType)}; by {serializer.Name}: {Reason(bySerializer)}", bySerializer);
+            }
+        }
+    }
+
+    /// <summary>A failure's type and the first line of its message, unwrapped from reflection and cut to 200 characters.</summary>
+    private static string Reason(Exception e)
+    {
+        if (e is TargetInvocationException { InnerException: { } inner })
+            e = inner;
+
+        var message = e.Message;
+        var newline = message.IndexOf('\n');
+        if (newline >= 0)
+            message = message[..newline];
+
+        var reason = $"{e.GetType().Name}: {message.TrimEnd()}";
+        return reason.Length <= 200 ? reason : reason[..200];
     }
 
     /// <summary>
@@ -392,15 +493,21 @@ public sealed partial class DrydockFidelitySystem
 
             foreach (var member in AllDataFields(compType))
             {
+                if (comp is GridAtmosphereComponent gridAtmos && member.Name == nameof(GridAtmosphereComponent.Tiles))
+                {
+                    RenderTileAtmos(path, gridAtmos.Tiles, snapshot);
+                    continue;
+                }
+
                 var key = $"{path}|{compType.Name}.{member.Name}";
                 object? value;
                 try
                 {
                     value = GetMember(comp, member);
                 }
-                catch
+                catch (Exception e)
                 {
-                    snapshot.Uncapturable++;
+                    snapshot.NoteUncapturable($"{compType.Name}.{member.Name}", $"read: {Reason(e)}");
                     continue;
                 }
 
@@ -432,13 +539,12 @@ public sealed partial class DrydockFidelitySystem
 
                 try
                 {
-                    snapshot.Values[key] = _serialization
-                        .WriteValue(value.GetType(), value, alwaysWrite: true, context: writer)
-                        .ToString();
+                    snapshot.Values[key] = WriteField(member, value, writer).ToString();
                 }
-                catch
+                catch (Exception e)
                 {
-                    snapshot.Uncapturable++;
+                    snapshot.NoteUncapturable($"{compType.Name}.{member.Name}", Reason(e));
+                    snapshot.Values[key] = RenderByReflection(value, pathOf);
                 }
             }
 
@@ -467,10 +573,11 @@ public sealed partial class DrydockFidelitySystem
         {
             foreach (var (dataKey, value) in LiveAppearance(appearance))
             {
-                if (RenderValue(value) is not { } rendered)
+                var rendered = RenderValue(value);
+                if (rendered == null)
                 {
-                    snapshot.Uncapturable++;
-                    continue;
+                    snapshot.NoteUncapturable($"Appearance.{dataKey.GetType().Name}.{dataKey}", $"no render for {value.GetType().Name}");
+                    rendered = RenderByReflection(value, pathOf);
                 }
 
                 snapshot.Values[$"{path}|Appearance.{dataKey.GetType().Name}.{dataKey}"] = rendered;
@@ -566,6 +673,30 @@ public sealed partial class DrydockFidelitySystem
 
     private static string Bool(bool value) => value ? "true" : "false";
 
+    /// <summary>
+    /// A value no writer accepts, rendered by reflection so its differences still surface: a list or set element by
+    /// element with each element's scalar fields, anything else with its own, one level deep. State below that level
+    /// is not compared, which is why the member stays in <see cref="DrydockStateSnapshot.UncapturableMembers"/>.
+    /// </summary>
+    private string RenderByReflection(object value, Dictionary<EntityUid, string> pathOf)
+    {
+        if (value is not ICollection collection || value is IDictionary)
+            return RenderRuntime(value, pathOf, nested: true);
+
+        if (collection.Count > CollectionCap)
+            return $"count={collection.Count}";
+
+        var items = new List<string>(collection.Count);
+        foreach (var item in collection)
+            items.Add(RenderRuntime(item, pathOf, nested: true));
+
+        var type = collection.GetType();
+        if (type.IsGenericType && type.GetGenericTypeDefinition() == typeof(HashSet<>))
+            items.Sort(StringComparer.Ordinal);
+
+        return $"count={collection.Count} [{string.Join(", ", items)}]";
+    }
+
     private string RenderRuntime(object? value, Dictionary<EntityUid, string> pathOf, bool nested)
     {
         switch (value)
@@ -574,6 +705,8 @@ public sealed partial class DrydockFidelitySystem
                 return "null";
             case string s:
                 return s;
+            case IPrototype prototype:
+                return prototype.ID;
             case EntityUid ent:
                 return RefPath(ent, pathOf);
             case NetEntity net:
