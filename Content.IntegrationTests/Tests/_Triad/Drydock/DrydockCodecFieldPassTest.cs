@@ -2,6 +2,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Threading.Tasks;
 using Content.Server._Triad.Drydock.Codec;
 using Content.Shared.Containers.ItemSlots;
@@ -9,11 +10,13 @@ using Content.Shared.Damage;
 using Content.Shared.Damage.Prototypes;
 using Content.Shared.Doors.Components;
 using Content.Shared.FixedPoint;
+using Content.Shared.Weapons.Melee;
 using Robust.Shared.GameObjects;
 using Robust.Shared.Map;
 using Robust.Shared.Prototypes;
 using Robust.Shared.Serialization.Manager;
 using Robust.Shared.Serialization.Markdown.Mapping;
+using Robust.Shared.Serialization.Markdown.Value;
 using Robust.Shared.Timing;
 
 namespace Content.IntegrationTests.Tests._Triad.Drydock
@@ -42,6 +45,29 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
   components:
   - type: Damageable
     damageContainer: Biological
+
+# Damage authored as a group, so the specifier's private group dictionary is non-null and the
+# engine's own writer emits a groups key beside whatever else is written.
+- type: entity
+  id: DrydockCodecGroupDamageDummy
+  name: DrydockCodecGroupDamageDummy
+  components:
+  - type: Damageable
+    damageContainer: Biological
+    damage:
+      groups:
+        Brute: 30
+
+# The same authored damage on a member that is not readOnly, which is the reach the walk has to
+# have: nothing on the path from the component to DamageDict is readOnly until DamageDict itself.
+- type: entity
+  id: DrydockCodecWeaponDummy
+  name: DrydockCodecWeaponDummy
+  components:
+  - type: MeleeWeapon
+    damage:
+      groups:
+        Brute: 9
 ";
 
         private const string Blunt = "Blunt";
@@ -109,6 +135,141 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
 
                 Assert.That(restored, Is.EqualTo(FixedPoint2.New(37)),
                     "The engine's generated reader must read that key back into DamageDict: a readOnly field is skipped by the writer, never by the reader.");
+            });
+
+            await pair.CleanReturnAsync();
+        }
+
+        /// <summary>
+        /// The other key the same reader consumes. A specifier's <c>groups</c> is distributed across
+        /// that group's own damage types and added to the dictionary the reader just filled from
+        /// <c>types</c> (<c>Content.Shared/Damage/DamageSpecifierDictionarySerializer.cs:58-72</c>),
+        /// and the live dictionary is already that flattened total. The prototype's authored groups
+        /// survive in the specifier's private field, which the generated writer emits whenever it is
+        /// non-null, so a row carrying both grows by the group's damage on every single re-read.
+        /// </summary>
+        [Test]
+        public async Task AuthoredDamageGroupsAreNotCountedTwicePerRoundTrip()
+        {
+            await using var pair = await PoolManager.GetServerClient();
+            var server = pair.Server;
+            var entMan = server.EntMan;
+            var serialization = server.ResolveDependency<ISerializationManager>();
+            var timing = server.ResolveDependency<IGameTiming>();
+
+            var codec = Codec(serialization, entMan, timing);
+            var map = await pair.CreateTestMap();
+
+            var specifier = new MappingDataNode();
+            var written = new MappingDataNode();
+            var live = FixedPoint2.Zero;
+            var once = FixedPoint2.Zero;
+            var twice = FixedPoint2.Zero;
+
+            await server.WaitPost(() =>
+            {
+                var uid = entMan.SpawnEntity("DrydockCodecGroupDamageDummy", new EntityCoordinates(map.MapUid, default));
+                var component = entMan.GetComponent<DamageableComponent>(uid);
+                var entity = (uid, entMan.GetComponent<MetaDataComponent>(uid));
+
+                live = component.Damage.GetTotal();
+
+                // The control, and it is the specifier rather than the component: the component's
+                // Damage is readOnly, so the engine's whole-component writer skips it and there is
+                // nothing there to compare. What the pass actually starts from is this node, the
+                // engine's own write of the specifier, and it is where the authored group survives.
+                specifier = serialization.WriteValueAs<MappingDataNode>(
+                    typeof(DamageSpecifier), component.Damage, alwaysWrite: true, context: codec.Context);
+
+                written = codec.Write(entity, component);
+
+                // Two round trips, because one is not enough to see it: the double count compounds,
+                // so a second pass is what tells a wrong constant from a growing one.
+                var first = codec.Read<DamageableComponent>(written);
+                once = first.Damage.GetTotal();
+
+                var second = codec.Read<DamageableComponent>(codec.Write(entity, first));
+                twice = second.Damage.GetTotal();
+            });
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(live, Is.EqualTo(FixedPoint2.New(30)),
+                    "The control: the entity has to carry the authored group damage before anything is measured about writing it.");
+
+                Assert.That(SumIn(specifier, "groups"), Is.Not.Null,
+                    "The control: the node the pass starts from carries the authored group, which is the key that would be read a second time.");
+
+                Assert.That(Groups(written), Is.Null,
+                    "The pass must remove it beside the flattened total it writes.");
+
+                Assert.That(Types(written), Is.EqualTo(live),
+                    "And what it writes must be the live dictionary.");
+
+                Assert.That(once, Is.EqualTo(live), "One round trip must not change the total.");
+                Assert.That(twice, Is.EqualTo(live), "And neither must the next: a double count compounds rather than settling.");
+            });
+
+            await pair.CleanReturnAsync();
+        }
+
+        /// <summary>
+        /// Reach, not depth. <c>MeleeWeaponComponent.Damage</c> is an ordinary
+        /// <c>[DataField(required: true)]</c> (<c>Content.Shared/Weapons/Melee/MeleeWeaponComponent.cs:79-81</c>),
+        /// so nothing on the path from the component down to <c>DamageDict</c> is readOnly until
+        /// <c>DamageDict</c> itself. A pass that only descended from readOnly members would write
+        /// this specifier's private authored fields and nothing a player did to it, in silence.
+        /// </summary>
+        [Test]
+        public async Task AWeaponsDamageIsWrittenThoughNothingAboveItIsReadOnly()
+        {
+            await using var pair = await PoolManager.GetServerClient();
+            var server = pair.Server;
+            var entMan = server.EntMan;
+            var serialization = server.ResolveDependency<ISerializationManager>();
+            var timing = server.ResolveDependency<IGameTiming>();
+
+            var codec = Codec(serialization, entMan, timing);
+            var map = await pair.CreateTestMap();
+
+            var written = new MappingDataNode();
+            var bare = new MappingDataNode();
+            var live = FixedPoint2.Zero;
+            var restored = FixedPoint2.Zero;
+
+            await server.WaitPost(() =>
+            {
+                var uid = entMan.SpawnEntity("DrydockCodecWeaponDummy", new EntityCoordinates(map.MapUid, default));
+                var component = entMan.GetComponent<MeleeWeaponComponent>(uid);
+
+                live = component.Damage.GetTotal();
+
+                written = codec.Write((uid, entMan.GetComponent<MetaDataComponent>(uid)), component);
+
+                bare = serialization.WriteValueAs<MappingDataNode>(
+                    typeof(MeleeWeaponComponent), component, alwaysWrite: true, context: codec.Context);
+
+                restored = codec.Read<MeleeWeaponComponent>(written).Damage.GetTotal();
+            });
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(live, Is.EqualTo(FixedPoint2.New(9)),
+                    "The control: the weapon has to carry the authored damage before anything is measured about writing it.");
+
+                Assert.That(Types(bare), Is.Null,
+                    "The control: the engine's own write carries no flattened damage, only what the prototype authored.");
+
+                Assert.That(Groups(bare), Is.Not.Null,
+                    "The control: what it carries instead is the authored group.");
+
+                Assert.That(Types(written), Is.EqualTo(live),
+                    "The codec must write the live dictionary, reached through a member that is not readOnly.");
+
+                Assert.That(Groups(written), Is.Null,
+                    "And must not leave the authored group beside it, or the next read counts it again.");
+
+                Assert.That(restored, Is.EqualTo(live), "The round trip must keep the weapon's damage.");
             });
 
             await pair.CleanReturnAsync();
@@ -293,19 +454,46 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
         }
 
         /// <summary>
-        /// The Blunt entry of a written damageable component, or null when the write carries no
-        /// damage dictionary at all.
+        /// The Blunt entry of a written damage mapping, or null when the write carries no damage
+        /// dictionary at all.
         /// </summary>
         private static FixedPoint2? Blunted(MappingDataNode component)
         {
             if (!component.TryGet<MappingDataNode>("damage", out var damage)
                 || !damage.TryGet<MappingDataNode>("types", out var types)
-                || !types.TryGet<Robust.Shared.Serialization.Markdown.Value.ValueDataNode>(Blunt, out var value))
+                || !types.TryGet<ValueDataNode>(Blunt, out var value))
             {
                 return null;
             }
 
-            return FixedPoint2.New(double.Parse(value.Value, System.Globalization.CultureInfo.InvariantCulture));
+            return Amount(value);
         }
+
+        /// <summary>The sum under a written damage mapping's flattened key, or null when it has none.</summary>
+        private static FixedPoint2? Types(MappingDataNode component) => Sum(component, "types");
+
+        /// <summary>The sum under its authored group key, or null when it has none.</summary>
+        private static FixedPoint2? Groups(MappingDataNode component) => Sum(component, "groups");
+
+        private static FixedPoint2? Sum(MappingDataNode component, string key) =>
+            component.TryGet<MappingDataNode>("damage", out var damage) ? SumIn(damage, key) : null;
+
+        /// <summary>The same, on a written specifier rather than on the component holding one.</summary>
+        private static FixedPoint2? SumIn(MappingDataNode specifier, string key)
+        {
+            if (!specifier.TryGet<MappingDataNode>(key, out var entries))
+                return null;
+
+            var total = FixedPoint2.Zero;
+            foreach (var (_, node) in entries)
+            {
+                total += Amount((ValueDataNode) node);
+            }
+
+            return total;
+        }
+
+        private static FixedPoint2 Amount(ValueDataNode node) =>
+            FixedPoint2.New(double.Parse(node.Value, CultureInfo.InvariantCulture));
     }
 }

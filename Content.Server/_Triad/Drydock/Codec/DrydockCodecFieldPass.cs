@@ -69,6 +69,12 @@ public sealed class DrydockCodecFieldPass
     private readonly ConcurrentDictionary<Type, ImmutableArray<Computed>> _computedCache = new();
     private readonly ConcurrentDictionary<(Type Value, Type Serializer), MethodInfo?> _writers = new();
 
+    /// <summary>
+    /// Reachability by declared type, which is a fact about the code rather than about a codec, so
+    /// it is shared and answered once per type.
+    /// </summary>
+    private static readonly ConcurrentDictionary<Type, bool> CarriesReadOnlyCache = new();
+
     public DrydockCodecFieldPass(
         ISerializationManager serialization,
         DrydockCodecContext context,
@@ -98,7 +104,7 @@ public sealed class DrydockCodecFieldPass
             ? _timing.CurTime - _metaData.GetPauseTime(entity.Owner, entity.Comp)
             : (TimeSpan?) null;
 
-        var walk = new Walk(entity.Comp.EntityLifeStage, _timing.CurTime, pauseTime);
+        var walk = new WalkState(entity.Comp.EntityLifeStage, _timing.CurTime, pauseTime);
 
         foreach (var entry in entries)
         {
@@ -127,6 +133,10 @@ public sealed class DrydockCodecFieldPass
 
                 case FieldCase.ReadOnly:
                     WriteReadOnly(entry, component, mapping, walk, component.GetType().Name);
+                    break;
+
+                case FieldCase.Walk:
+                    WalkMember(entry, component, mapping, walk, component.GetType().Name);
                     break;
             }
         }
@@ -191,7 +201,7 @@ public sealed class DrydockCodecFieldPass
         }
     }
 
-    private void WriteTimeOffset(Entry entry, object owner, MappingDataNode into, Walk walk)
+    private void WriteTimeOffset(Entry entry, object owner, MappingDataNode into, WalkState walk)
     {
         // A null deadline means there is no deadline, which the engine already writes correctly.
         // Only a live one needs the offset.
@@ -205,22 +215,56 @@ public sealed class DrydockCodecFieldPass
     /// A <c>readOnly</c> member, written by us because the generated writer will not, and then
     /// walked for whatever <c>readOnly</c> members its own value holds.
     /// </summary>
-    private void WriteReadOnly(Entry entry, object owner, MappingDataNode into, Walk walk, string path)
+    private void WriteReadOnly(Entry entry, object owner, MappingDataNode into, WalkState walk, string path)
     {
         var value = entry.Get(owner);
         var node = WriteMember(entry, value, path);
 
-        if (entry.AsymmetricKey is { } named)
-            into[named] = node;
+        if (entry.Asymmetric is { } asymmetric)
+        {
+            into[asymmetric.Key] = node;
+
+            // The other keys this member's reader consumes. The live value already holds everything
+            // they would contribute, so leaving one in the row has it counted a second time at every
+            // read, and again at every write after that.
+            foreach (var absent in asymmetric.AbsentKeys)
+            {
+                into.Remove(absent);
+            }
+        }
         else if (!entry.Inline)
+        {
             into[entry.Key] = node;
+        }
         else if (value != null)
+        {
             MergeInline(node, into, path);
+        }
 
         // Where the value landed is where its own readOnly members belong: an inline member's are
         // the owner's mapping, everything else's are the node just written.
-        var inlined = entry.Inline && entry.AsymmetricKey == null;
+        var inlined = entry.Inline && entry.Asymmetric == null;
         WalkValue(value, inlined ? into : node, walk, path);
+    }
+
+    /// <summary>
+    /// A member the engine wrote correctly, descended into for the <c>readOnly</c> members its value
+    /// holds. Only what the engine wrote is walked: this case never writes the member itself.
+    /// </summary>
+    private void WalkMember(Entry entry, object owner, MappingDataNode into, WalkState walk, string path)
+    {
+        if (entry.Get(owner) is not { } value)
+            return;
+
+        // An inline member's value was written into the owner's own mapping, under no key.
+        var node = entry.Inline
+            ? into
+            : into.TryGet(entry.Key, out var written) ? written : null;
+
+        if (node == null)
+            return;
+
+        WalkValue(value, node, walk, $"{path}.{entry.Member.Name}");
     }
 
     /// <summary>
@@ -228,7 +272,7 @@ public sealed class DrydockCodecFieldPass
     /// dictionary by the key's own written form. Anything that is neither is left alone, because
     /// only a data definition can carry a <c>readOnly</c> member.
     /// </summary>
-    private void WalkValue(object? value, DataNode node, Walk walk, string path)
+    private void WalkValue(object? value, DataNode node, WalkState walk, string path)
     {
         if (value == null || value is string)
             return;
@@ -261,7 +305,11 @@ public sealed class DrydockCodecFieldPass
                         break;
 
                     case FieldCase.ReadOnly:
-                        WriteReadOnly(member, value, mapping, walk, $"{path}.{Name(member.Member)}");
+                        WriteReadOnly(member, value, mapping, walk, $"{path}.{member.Member.Name}");
+                        break;
+
+                    case FieldCase.Walk:
+                        WalkMember(member, value, mapping, walk, path);
                         break;
                 }
             }
@@ -282,7 +330,7 @@ public sealed class DrydockCodecFieldPass
         }
     }
 
-    private void WalkDictionary(IDictionary dictionary, DataNode node, Walk walk, string path)
+    private void WalkDictionary(IDictionary dictionary, DataNode node, WalkState walk, string path)
     {
         if (dictionary.Count == 0)
             return;
@@ -309,7 +357,7 @@ public sealed class DrydockCodecFieldPass
         }
     }
 
-    private void WalkSequence(IEnumerable enumerable, DataNode node, Walk walk, string path)
+    private void WalkSequence(IEnumerable enumerable, DataNode node, WalkState walk, string path)
     {
         if (node is not SequenceDataNode sequence)
         {
@@ -497,12 +545,16 @@ public sealed class DrydockCodecFieldPass
 
         foreach (var (member, attribute) in DataMembers(type))
         {
-            if (!attribute.ReadOnly)
+            if (Classify(member, attribute) is not { } fieldCase)
                 continue;
 
-            var fieldCase = Classify(member, attribute) ?? FieldCase.ReadOnly;
             if (fieldCase is FieldCase.GridChunks or FieldCase.GridFixtures)
                 throw new InvalidOperationException($"Drydock codec: {Name(member)} is a grid field below a component, where one cannot occur.");
+
+            // A member that is not readOnly and carries nothing readOnly below it was written whole
+            // by this definition's own generated writer, so the pass has nothing to do with it.
+            if (fieldCase == FieldCase.TimeOffset && !attribute.ReadOnly)
+                continue;
 
             entries.Add(EntryFor(member, attribute, fieldCase));
         }
@@ -537,7 +589,7 @@ public sealed class DrydockCodecFieldPass
             ? data.Tag ?? DataDefinitionUtility.AutoGenerateTag(member.Name)
             : string.Empty;
 
-        if (inline && fieldCase != FieldCase.ReadOnly)
+        if (inline && fieldCase is not (FieldCase.ReadOnly or FieldCase.Walk))
             throw new InvalidOperationException($"Drydock codec: {Name(member)} is an inline field, and the pass has no rule for one carrying {fieldCase}.");
 
         return new Entry(
@@ -547,7 +599,7 @@ public sealed class DrydockCodecFieldPass
             MemberType(member),
             attribute.CustomTypeSerializer,
             inline,
-            DrydockCodecManifest.AsymmetricKey(member));
+            DrydockCodecManifest.Asymmetric(member));
     }
 
     private static FieldCase? Classify(MemberInfo member, DataFieldBaseAttribute data)
@@ -566,7 +618,58 @@ public sealed class DrydockCodecFieldPass
         if (data.ReadOnly)
             return FieldCase.ReadOnly;
 
+        // Not a correction of this member, but a way down to one. Decided per declared member type
+        // and cached, so no component pays the reflection walk twice.
+        if (CarriesReadOnly(MemberType(member)))
+            return FieldCase.Walk;
+
         return null;
+    }
+
+    /// <summary>
+    /// Does this type, or anything a collection of it holds, carry a <c>readOnly</c> data field
+    /// anywhere below it? The question is asked of the declared type, once, because it decides
+    /// whether a member is worth descending into at all.
+    /// </summary>
+    private static bool CarriesReadOnly(Type? type)
+    {
+        if (type == null)
+            return false;
+
+        if (CarriesReadOnlyCache.TryGetValue(type, out var known))
+            return known;
+
+        var carries = Carries(type, new HashSet<Type>());
+        CarriesReadOnlyCache[type] = carries;
+        return carries;
+    }
+
+    private static bool Carries(Type? type, HashSet<Type> seen)
+    {
+        if (type == null || type.IsPrimitive || type == typeof(string) || type.IsEnum || !seen.Add(type))
+            return false;
+
+        // A collection is transparent: what matters is what it holds, and a dictionary's value type
+        // is as much a way down as a field's type is.
+        foreach (var argument in type.GetGenericArguments())
+        {
+            if (Carries(argument, seen))
+                return true;
+        }
+
+        if (type.IsArray && Carries(type.GetElementType(), seen))
+            return true;
+
+        if (!IsDataDefinition(type))
+            return false;
+
+        foreach (var (member, attribute) in DataMembers(type))
+        {
+            if (attribute.ReadOnly || Carries(MemberType(member), seen))
+                return true;
+        }
+
+        return false;
     }
 
     /// <summary>
@@ -604,13 +707,21 @@ public sealed class DrydockCodecFieldPass
         GridChunks,
         GridFixtures,
         ReadOnly,
+
+        /// <summary>
+        /// Not a correction of its own: a member the engine writes correctly whose value holds a
+        /// readOnly member somewhere below it. The pass descends into the node the engine wrote and
+        /// fills those in, because "every readOnly field, per field" cannot mean only the ones
+        /// reachable through another readOnly field.
+        /// </summary>
+        Walk,
     }
 
     /// <summary>
     /// The state one component's write shares with everything under it: the owning entity's pause
     /// state, which a deadline at any depth is measured against, and what the walk has already seen.
     /// </summary>
-    private sealed class Walk(EntityLifeStage lifeStage, TimeSpan curTime, TimeSpan? pauseTime)
+    private sealed class WalkState(EntityLifeStage lifeStage, TimeSpan curTime, TimeSpan? pauseTime)
     {
         public readonly EntityLifeStage LifeStage = lifeStage;
         public readonly TimeSpan CurTime = curTime;
@@ -648,7 +759,7 @@ public sealed class DrydockCodecFieldPass
         Type? DeclaredType = null,
         Type? CustomSerializer = null,
         bool Inline = false,
-        string? AsymmetricKey = null)
+        DrydockCodecManifest.AsymmetricInlineField? Asymmetric = null)
     {
         public object? Get(object target) => GetValue(Member, target);
 

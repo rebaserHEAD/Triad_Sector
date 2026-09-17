@@ -25,7 +25,11 @@ public static class DrydockCodecManifest
     /// <param name="Owner">The data definition or component declaring the member.</param>
     /// <param name="Member">The member holding the live value.</param>
     /// <param name="Key">The key in the owner's mapping that the member's reader consumes.</param>
-    public sealed record AsymmetricInlineField(Type Owner, string Member, string Key);
+    /// <param name="AbsentKeys">
+    /// The other keys that reader consumes, which the pass removes. The live member already holds
+    /// everything they would contribute, so a row carrying one is read twice.
+    /// </param>
+    public sealed record AsymmetricInlineField(Type Owner, string Member, string Key, ImmutableArray<string> AbsentKeys);
 
     /// <summary>
     /// <para><c>DamageSpecifier.DamageDict</c> is an <c>IncludeDataField(readOnly)</c> carrying
@@ -36,17 +40,23 @@ public static class DrydockCodecManifest
     /// sub-mapping (<c>:38</c>, <c>:43</c>), so inlined pairs would be read by nobody and the damage
     /// would come back zero.</para>
     ///
-    /// <para>Only <c>types</c> is written. The reader distributes a group's total across the group's
-    /// members and adds it to the same dictionary (<c>:58-72</c>), and the live dictionary is
-    /// already that flattened total, so writing both would count the damage twice.</para>
+    /// <para>Only <c>types</c> is written, and <c>groups</c> is removed. The reader distributes a
+    /// group's total across that group's own damage types and adds it to the same dictionary it just
+    /// filled from <c>types</c> (<c>:58-72</c>), while the live dictionary is already that flattened
+    /// total. A row carrying both is therefore read as the group's damage twice, and it grows again
+    /// on every re-read, because the prototype's authored <c>groups</c> survives in
+    /// <c>_damageGroupDictionary</c> and the generated writer emits it whenever it is non-null.</para>
     ///
-    /// <para>The pass owns the key. The generated writer emits one only when
-    /// <c>_damageTypeDictionary</c> is non-null, and that field has no writer anywhere in the tree,
-    /// so today there is nothing to overwrite; if it is ever populated, the live value still wins.</para>
+    /// <para>The pass owns both keys. It writes <c>types</c> whether or not the generated writer
+    /// emitted one, and removes <c>groups</c> whether or not it did.</para>
     /// </summary>
     public static readonly ImmutableArray<AsymmetricInlineField> AsymmetricInlineFields =
         ImmutableArray.Create(
-            new AsymmetricInlineField(typeof(DamageSpecifier), nameof(DamageSpecifier.DamageDict), "types"));
+            new AsymmetricInlineField(
+                typeof(DamageSpecifier),
+                nameof(DamageSpecifier.DamageDict),
+                "types",
+                ImmutableArray.Create("groups")));
 
     /// <summary>
     /// A data field that is a computed property over a backing member, so the value the getter
@@ -85,15 +95,14 @@ public static class DrydockCodecManifest
                 DrydockCodecFieldPass.FieldCase.TimeOffset));
 
     /// <summary>
-    /// The key this member's value is written under, or null when the member is written the ordinary
-    /// way.
+    /// The entry for this member, or null when the member is written the ordinary way.
     /// </summary>
-    public static string? AsymmetricKey(MemberInfo member)
+    public static AsymmetricInlineField? Asymmetric(MemberInfo member)
     {
         foreach (var entry in AsymmetricInlineFields)
         {
             if (entry.Owner == member.DeclaringType && entry.Member == member.Name)
-                return entry.Key;
+                return entry;
         }
 
         return null;
