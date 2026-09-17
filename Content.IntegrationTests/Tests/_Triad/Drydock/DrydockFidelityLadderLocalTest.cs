@@ -12,6 +12,9 @@ using Content.Server.Atmos;
 using Content.Server.Atmos.Components;
 using Content.Server.Atmos.EntitySystems;
 using Content.Server.Atmos.Piping.Components;
+using Content.Server.Light.Components;
+using Content.Server.Light.EntitySystems;
+using Content.Server.Nutrition.EntitySystems;
 using Content.Server.Power.Components;
 using Content.Server.Station.Components;
 using Content.Server.Storage.Components;
@@ -27,8 +30,10 @@ using Content.Shared.Doors.Components;
 using Content.Shared.Doors.Systems;
 using Content.Shared.FixedPoint;
 using Content.Shared.Lathe;
+using Content.Shared.Nutrition.Components;
 using Content.Shared.Power;
 using Content.Shared.Research.Prototypes;
+using Content.Shared.Smoking;
 using Content.Shared.Stacks;
 using Content.Shared.VendingMachines;
 using Content.Shared.Weapons.Ranged.Components;
@@ -51,7 +56,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
     /// comparison saw something.
     ///
     /// <para>Before round trip 1 the hull is put into lived-in states (<see cref="ApplyLivedIn"/>), so the
-    /// comparison covers damage, cargo, open doors and panels, queues and fired guns, not only a hull
+    /// comparison covers damage, cargo, open doors and panels, queues, fired guns and lit smokables, not only a hull
     /// as its file describes it. Once atmos has settled, rooms are vented, pressurized and heated
     /// (<see cref="ApplyLivedInAtmos"/>).</para>
     ///
@@ -69,7 +74,9 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
     ///
     /// <para>Each round trip snapshots the live ship twice, <see cref="LiveWindowTicks"/> apart, before
     /// storing. A key that changed between those two is live simulation (power ramps, heat, atmos
-    /// timers) and its round-trip difference is reported under "live" rather than as a finding.</para>
+    /// timers) and its round-trip difference is reported under "live" rather than as a finding. A recipe
+    /// that changes state inside that window sorts live by design, as the match lit in the tick the store
+    /// is claimed does, and its control line is where the round trip is read instead.</para>
     ///
     /// <para>What remains is sorted against loose entities that settled onto a neighbouring tile ("moved"),
     /// <see cref="Registry"/> ("classified", or "below-floor" when only <see cref="LiveFloor"/> admits it), removals by rule: contraband, the mech strip, emptied AI cores,
@@ -314,7 +321,8 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
 
             var recipes = new List<string>();
             string? doorPath = null;
-            await server.WaitPost(() => recipes = ApplyLivedIn(pair, grid, out doorPath));
+            EntityUid? litMatch = null;
+            await server.WaitPost(() => recipes = ApplyLivedIn(pair, grid, out doorPath, out litMatch));
 
             await pair.RunTicksSync(PreSettleTicks);
 
@@ -325,8 +333,8 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             recipes.AddRange(gasRooms.Select(room => room.Recipe));
             await pair.RunTicksSync((int) Math.Ceiling(AtmosSettleSeconds / server.ResolveDependency<IGameTiming>().TickPeriod.TotalSeconds));
 
-            var first = await RoundTrip(pair, grid, owner, station);
-            var second = await RoundTrip(pair, first.Retrieved, owner, station);
+            var first = await RoundTrip(pair, grid, owner, station, litMatch);
+            var second = await RoundTrip(pair, first.Retrieved, owner, station, null);
 
             var sb = new StringBuilder();
             sb.AppendLine($"[ladder] rung {rung} {vesselId} through {(EngineMode ? "the engine serializer" : "the drydock")}");
@@ -346,12 +354,15 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
         /// <summary>
         /// Puts the hull into states a lived-in ship has and a shuttle file does not: damage on a wall and
         /// a thruster, cargo in a closed locker, a loose item, a wheelchair (a <c>save: false</c> vehicle) and a trade crate
-        /// with an express deadline on the deck, an interior door open, a wires panel open, a gravity generator switched off, a lathe queue
+        /// with an express deadline on the deck, a lit cigarette and a match beside their unlit controls and a match left to
+        /// burn out, an interior door open,
+        /// a wires panel open, a gravity generator switched off, a lathe queue
         /// (not in engine mode, which cannot write one), a restocked vendor, and a sidearm fired. Each recipe takes the first
         /// matching entity in tree order (the deck spot is a chair, else a computer) and is skipped when
-        /// the hull has none. Returns the ones applied, and the path the detector names the opened door by.
+        /// the hull has none. Returns the ones applied, the path the detector names the opened door by, and the match
+        /// <see cref="RoundTrip"/> lights in the tick the store is claimed.
         /// </summary>
-        private static List<string> ApplyLivedIn(TestPair pair, EntityUid grid, out string? doorPath)
+        private static List<string> ApplyLivedIn(TestPair pair, EntityUid grid, out string? doorPath, out EntityUid? litMatch)
         {
             var server = pair.Server;
             var entMan = server.EntMan;
@@ -359,6 +370,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             var tree = server.System<DrydockFidelitySystem>().GridTreeList(grid);
             var applied = new List<string>();
             doorPath = null;
+            litMatch = null;
 
             EntityUid? First(Func<EntityUid, string, bool> match)
             {
@@ -430,6 +442,30 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
 
                 entMan.SpawnEntity("CrateTradeSecureNormal", entMan.GetComponent<TransformComponent>(crateSpot).Coordinates);
                 applied.Add("trade-crate");
+            }
+
+            if (chair is { } smokingSpot)
+            {
+                // A lit smokable burns its own solution down (SmokingSystem.cs:151-156), which the store saves, so it
+                // is lit here and still lit at the store: 10 u of nicotine at 0.05 u/s. A match burns out on a timer
+                // instead (MatchstickSystem.cs:91-98) and lasts 10 s, shorter than the settle, so the match is lit in
+                // the tick the store is claimed (<see cref="RoundTrip"/>). The unlit pair beside them is the control.
+                var spot = entMan.GetComponent<TransformComponent>(smokingSpot).Coordinates;
+                litMatch = entMan.SpawnEntity("Matchstick", spot.Offset(new System.Numerics.Vector2(-0.2f, -0.2f)));
+                entMan.SpawnEntity("Matchstick", spot.Offset(new System.Numerics.Vector2(0.2f, -0.2f)));
+                applied.Add("match-lit-at-store");
+
+                // The control for the burn-out itself: a match lit here has the whole settle to burn out, so it must
+                // read Burnt before the store. If it does not, no burn-out timer fired in this harness at all and the
+                // lit match coming back lit proves nothing.
+                var burning = entMan.SpawnEntity("Matchstick", spot.Offset(new System.Numerics.Vector2(0f, -0.2f)));
+                server.System<MatchstickSystem>().Ignite((burning, entMan.GetComponent<MatchstickComponent>(burning)), burning);
+                applied.Add("match-burns-out-control");
+
+                var cigarette = entMan.SpawnEntity("Cigarette", spot.Offset(new System.Numerics.Vector2(-0.2f, 0.2f)));
+                entMan.SpawnEntity("Cigarette", spot.Offset(new System.Numerics.Vector2(0.2f, 0.2f)));
+                server.System<SmokingSystem>().SetSmokableState(cigarette, SmokableState.Lit);
+                applied.Add("light-cigarette");
             }
 
             var door = First((uid, id) => id.StartsWith("Airlock", StringComparison.Ordinal)
@@ -616,7 +652,9 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             double TickSeconds,
             DrydockMapInitReport? MapInit);
 
-        private static async Task<RoundTripResult> RoundTrip(TestPair pair, EntityUid grid, Guid owner, EntityUid station)
+        /// <param name="lightAtClaim">A match lit in the tick the store is claimed, so its whole 10 s burn is ahead of
+        /// the store: lighting it any earlier burns it out before the snapshot, since the settle is longer than that.</param>
+        private static async Task<RoundTripResult> RoundTrip(TestPair pair, EntityUid grid, Guid owner, EntityUid station, EntityUid? lightAtClaim)
         {
             var server = pair.Server;
             var timing = server.ResolveDependency<IGameTiming>();
@@ -627,7 +665,13 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             await pair.RunTicksSync(LiveWindowTicks);
 
             DrydockStateSnapshot before = default!;
-            await server.WaitPost(() => before = fidelity.DeepSnapshotGrid(grid));
+            await server.WaitPost(() =>
+            {
+                if (lightAtClaim is { } match && server.EntMan.TryGetComponent<MatchstickComponent>(match, out var stick))
+                    server.System<MatchstickSystem>().Ignite((match, stick), match);
+
+                before = fidelity.DeepSnapshotGrid(grid);
+            });
 
             var clockBefore = timing.CurTime;
             var (retrieved, mapInit, shipTicks) = EngineMode
@@ -937,6 +981,31 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                 var state = $"{path}|DoorComponent.State";
                 sb.AppendLine($"[ladder] door control {path}: state {ValueIn(result.Before, state)}, {ValueIn(result.After, state)}, {ValueIn(result.Late, state)}; "
                               + $"next change {ValueIn(result.Before, path + nextChange)}, {ValueIn(result.After, path + nextChange)}, {ValueIn(result.Late, path + nextChange)}");
+            }
+
+            // Every match and smokable the hull carries: the recipe's lit pair and the unlit pair beside them. A lit one
+            // comes back lit, so the late column is the measurement: a match's burn-out is a timer no store records
+            // (MatchstickSystem.cs:91-98) and a smokable burns down only while the system holds it (SmokingSystem.cs:151-156).
+            foreach (var key in result.Before.Values.Keys
+                         .Where(k => k.EndsWith("|MatchstickComponent.CurrentState", StringComparison.Ordinal)
+                                     || k.EndsWith("|SmokableComponent.State", StringComparison.Ordinal))
+                         .OrderBy(k => k, StringComparer.Ordinal))
+            {
+                var path = key[..key.IndexOf('|')];
+                var duration = ValueIn(result.Before, $"{path}|MatchstickComponent.Duration");
+                sb.AppendLine($"[ladder] smoking control {path}: {key[(key.IndexOf('|') + 1)..]} early {ValueIn(result.Early, key)}, "
+                              + $"before {ValueIn(result.Before, key)}, after {ValueIn(result.After, key)}, late {ValueIn(result.Late, key)}"
+                              + (duration == "<absent>" ? "" : $"; burns out {duration}s after it is lit"));
+
+                var solution = result.Before.Values.Keys.FirstOrDefault(k =>
+                    k.StartsWith(path + "/", StringComparison.Ordinal)
+                    && k.EndsWith("|SolutionComponent.Solution", StringComparison.Ordinal));
+                if (solution == null)
+                    continue;
+
+                sb.AppendLine($"         compared as {solution[(path.Length + 1)..]}: early {OneLine(ValueIn(result.Early, solution))}; "
+                              + $"before {OneLine(ValueIn(result.Before, solution))}; after {OneLine(ValueIn(result.After, solution))}; "
+                              + $"late {OneLine(ValueIn(result.Late, solution))}");
             }
 
             foreach (var (recipe, tiles) in gasRooms)
@@ -1330,6 +1399,14 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
 
         private static string ValueIn(DrydockStateSnapshot snapshot, string key) =>
             snapshot.Values.GetValueOrDefault(key, "<absent>");
+
+        /// <summary>A rendered value folded onto one line and cut short, so a control line stays one line. Long enough
+        /// for a solution, whose reagent quantity the serializer writes last.</summary>
+        private static string OneLine(string value, int max = 160)
+        {
+            var flat = string.Join(' ', value.Split((char[]?) null, StringSplitOptions.RemoveEmptyEntries));
+            return flat.Length <= max ? flat : flat[..max] + "…";
+        }
 
         /// <summary>
         /// A gas recipe's room as one snapshot saw it: the moles over its tiles and their mean temperature. The control
