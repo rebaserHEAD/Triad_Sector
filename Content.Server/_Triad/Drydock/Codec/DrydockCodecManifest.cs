@@ -2,6 +2,7 @@ using System;
 using System.Collections.Immutable;
 using System.Reflection;
 using Content.Shared.Damage;
+using Content.Shared.Doors.Components;
 using Robust.Shared.Serialization.TypeSerializers.Interfaces;
 
 namespace Content.Server._Triad.Drydock.Codec;
@@ -46,6 +47,42 @@ public static class DrydockCodecManifest
     public static readonly ImmutableArray<AsymmetricInlineField> AsymmetricInlineFields =
         ImmutableArray.Create(
             new AsymmetricInlineField(typeof(DamageSpecifier), nameof(DamageSpecifier.DamageDict), "types"));
+
+    /// <summary>
+    /// A data field that is a computed property over a backing member, so the value the getter
+    /// returns is not the value the setter accepts and the field does not survive its own round
+    /// trip. The codec stores the backing member and skips the computed one.
+    /// </summary>
+    /// <param name="Component">The component declaring both members.</param>
+    /// <param name="ComputedMember">The data field the engine writes and this pass removes.</param>
+    /// <param name="BackingMember">The member actually holding the value, which is stored instead.</param>
+    /// <param name="BackingCase">How the backing member is written, since it is not a data field and has no serializer of its own.</param>
+    public sealed record ComputedField(
+        Type Component,
+        string ComputedMember,
+        string BackingMember,
+        DrydockCodecFieldPass.FieldCase BackingCase);
+
+    /// <summary>
+    /// <para>A door writes its pending state change as <c>SecondsUntilStateChange</c>, seconds from
+    /// now, and its setter returns on null or on any positive value
+    /// (<c>Content.Shared/Doors/Components/DoorComponent.cs:233-255</c>), so a change still in the
+    /// future is dropped on read and only one already due is restored. That is finding F9: the field
+    /// round-trips in form and not in value, which looks exactly like a field that works.</para>
+    ///
+    /// <para>The backing member is <c>NextStateChange</c> (<c>:70</c>), an absolute game time that
+    /// is neither a data field nor <c>[AutoPausedField]</c>, so it is written through the
+    /// time-offset adapter and the pause shift the engine applies to marked fields does not apply to
+    /// it. Nothing in reflection can tell the codec any of this, which is why it is an entry rather
+    /// than a rule.</para>
+    /// </summary>
+    public static readonly ImmutableArray<ComputedField> ComputedFields =
+        ImmutableArray.Create(
+            new ComputedField(
+                typeof(DoorComponent),
+                "SecondsUntilStateChange",
+                nameof(DoorComponent.NextStateChange),
+                DrydockCodecFieldPass.FieldCase.TimeOffset));
 
     /// <summary>
     /// The key this member's value is written under, or null when the member is written the ordinary

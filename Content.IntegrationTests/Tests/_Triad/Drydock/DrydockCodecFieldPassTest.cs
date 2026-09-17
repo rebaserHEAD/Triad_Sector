@@ -7,6 +7,7 @@ using Content.Server._Triad.Drydock.Codec;
 using Content.Shared.Containers.ItemSlots;
 using Content.Shared.Damage;
 using Content.Shared.Damage.Prototypes;
+using Content.Shared.Doors.Components;
 using Content.Shared.FixedPoint;
 using Robust.Shared.GameObjects;
 using Robust.Shared.Map;
@@ -185,6 +186,96 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                 Assert.That(restored.ContainsKey(SlotId), Is.True, "The slot must come back.");
                 Assert.That(restored[SlotId].Locked, Is.True, "A locked slot must come back locked.");
                 Assert.That(restored[SlotId].Name, Is.EqualTo("codec"), "And with the rest of its readOnly state.");
+            });
+
+            await pair.CleanReturnAsync();
+        }
+
+        /// <summary>
+        /// The computed-field case, finding F9. A door's pending state change is a data field over a
+        /// computed property, <c>SecondsUntilStateChange</c>, whose setter returns on null or on any
+        /// positive value (<c>Content.Shared/Doors/Components/DoorComponent.cs:233-255</c>), so a
+        /// change still in the future is written, read, and dropped. The value lives in
+        /// <c>NextStateChange</c> (<c>:70</c>), which is not a data field at all, so the codec stores
+        /// that instead, through the time-offset adapter because it is an absolute game time.
+        ///
+        /// <para>This is the one case the round trip cannot catch by shape: a computed field that
+        /// round-trips wrongly looks exactly like a field that round-trips, which is why the engine's
+        /// own result is asserted here beside ours.</para>
+        /// </summary>
+        [Test]
+        public async Task ADoorsPendingStateChangeSurvivesTheCodec()
+        {
+            await using var pair = await PoolManager.GetServerClient();
+            var server = pair.Server;
+            var entMan = server.EntMan;
+            var serialization = server.ResolveDependency<ISerializationManager>();
+            var timing = server.ResolveDependency<IGameTiming>();
+
+            var codec = Codec(serialization, entMan, timing);
+            var map = await pair.CreateTestMap();
+
+            var written = new MappingDataNode();
+            var bare = new MappingDataNode();
+            var expected = TimeSpan.Zero;
+            TimeSpan? restored = null;
+            TimeSpan? bareRestored = null;
+            var refusedTheEnginesRow = false;
+
+            await server.WaitPost(() =>
+            {
+                // On the grid, not the bare map: an airlock anchors itself at spawn, and anchoring
+                // to a map with no grid logs an error the pool refuses the pair over.
+                var uid = entMan.SpawnEntity("Airlock", map.GridCoords);
+                var door = entMan.GetComponent<DoorComponent>(uid);
+
+                expected = timing.CurTime + TimeSpan.FromMinutes(5);
+                door.NextStateChange = expected;
+
+                written = codec.Write((uid, entMan.GetComponent<MetaDataComponent>(uid)), door);
+
+                // The control: the engine's own write, which carries the getter's answer under the
+                // computed field's own key.
+                bare = serialization.WriteValueAs<MappingDataNode>(
+                    typeof(DoorComponent), door, alwaysWrite: true, context: codec.Context);
+
+                restored = codec.Read<DoorComponent>(written).NextStateChange;
+
+                bareRestored = ((DoorComponent) serialization.Read(
+                    typeof(DoorComponent), bare, context: codec.Context, notNullableOverride: true)!).NextStateChange;
+
+                // A row carrying the computed key was not written by the codec, and reading it would
+                // lose the value silently, so it is refused.
+                try
+                {
+                    codec.Read<DoorComponent>(bare);
+                }
+                catch (FormatException)
+                {
+                    refusedTheEnginesRow = true;
+                }
+            });
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(bare.Has("secondsUntilStateChange"), Is.True,
+                    "The control: the engine writes the computed field, which is what makes it the thing to replace.");
+
+                Assert.That(bareRestored, Is.Null,
+                    "The control: the engine's own round trip drops a change still in the future, because the setter refuses a positive value.");
+
+                Assert.That(written.Has("secondsUntilStateChange"), Is.False,
+                    "The codec must not write the computed field at all.");
+
+                Assert.That(written.Has("nextStateChange"), Is.True,
+                    "The codec must write the backing member in its place.");
+
+                Assert.That(restored, Is.Not.Null, "The backing member must come back.");
+                Assert.That(restored!.Value, Is.EqualTo(expected).Within(TimeSpan.FromSeconds(1)),
+                    "And come back as the same deadline, measured against the clock at load.");
+
+                Assert.That(refusedTheEnginesRow, Is.True,
+                    "A row carrying the computed field is not one the codec wrote, and reading it would lose the value.");
             });
 
             await pair.CleanReturnAsync();

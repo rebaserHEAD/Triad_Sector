@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using System.Reflection;
 using Content.Server._Triad.Drydock.Codec;
 using Content.Shared.Damage;
+using Content.Shared.Doors.Components;
 using Content.Shared.FixedPoint;
 using NUnit.Framework;
 using Robust.Shared.IoC;
@@ -83,6 +84,74 @@ public sealed class DrydockCodecManifestTest
             Assert.That(DrydockCodecManifest.CanWrite(typeof(Dictionary<string, FixedPoint2>), typeof(DamageSpecifierDictionarySerializer)), Is.False,
                 "The check claimed a reader-only serializer can write.");
         });
+    }
+
+    [Test]
+    public void EveryComputedEntryStillDescribesItsComponent()
+    {
+        Assert.That(DrydockCodecManifest.ComputedFields, Is.Not.Empty,
+            "The audit asserts against the entries, so an empty manifest would pass it by doing nothing.");
+
+        foreach (var entry in DrydockCodecManifest.ComputedFields)
+        {
+            Assert.That(Wrong(entry), Is.Null);
+        }
+    }
+
+    /// <summary>
+    /// The control. Every assertion above is that a check found nothing, which is also what a broken
+    /// check reports, so the same check is run against entries corrupted one way each.
+    /// </summary>
+    [Test]
+    public void TheComputedCheckCatchesACorruptedEntry()
+    {
+        var real = DrydockCodecManifest.ComputedFields[0];
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(Wrong(real with { ComputedMember = "SecondsUntilNothing" }), Is.Not.Null,
+                "A computed member that does not exist went unreported.");
+
+            Assert.That(Wrong(real with { ComputedMember = nameof(DoorComponent.Partial) }), Is.Not.Null,
+                "A computed member that is a field rather than a property with a setter went unreported.");
+
+            Assert.That(Wrong(real with { BackingMember = nameof(DoorComponent.Partial) }), Is.Not.Null,
+                "A backing member that is itself a data field went unreported, and it would be written twice.");
+
+            Assert.That(Wrong(real with { BackingMember = "NextStateChangeThatIsNot" }), Is.Not.Null,
+                "A backing member that does not exist went unreported.");
+        });
+    }
+
+    /// <summary>
+    /// What is wrong with this entry, or null when nothing is. A computed field is a property whose
+    /// setter refuses what its getter returns, so the entry has to name one; the backing member has
+    /// to be something the generated writer does not already write, or the codec would store the
+    /// value twice and the second write would win.
+    /// </summary>
+    private static string? Wrong(DrydockCodecManifest.ComputedField entry)
+    {
+        var computed = Member(entry.Component, entry.ComputedMember);
+        if (computed == null)
+            return $"{entry.Component.Name}.{entry.ComputedMember} does not exist.";
+
+        if (computed.GetCustomAttribute<DataFieldAttribute>() == null)
+            return $"{entry.Component.Name}.{entry.ComputedMember} is not a data field, so the engine never writes it and there is nothing to replace.";
+
+        if (computed is not PropertyInfo property)
+            return $"{entry.Component.Name}.{entry.ComputedMember} is not a property, so it is not computed over anything.";
+
+        if (property.SetMethod == null)
+            return $"{entry.Component.Name}.{entry.ComputedMember} has no setter, so the engine could not read it back either way.";
+
+        var backing = Member(entry.Component, entry.BackingMember);
+        if (backing == null)
+            return $"{entry.Component.Name}.{entry.BackingMember} does not exist.";
+
+        if (backing.GetCustomAttribute<DataFieldBaseAttribute>() != null)
+            return $"{entry.Component.Name}.{entry.BackingMember} is itself a data field, so the pass would write it twice.";
+
+        return null;
     }
 
     private static MemberInfo? Member(Type owner, string name)

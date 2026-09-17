@@ -66,6 +66,7 @@ public sealed class DrydockCodecFieldPass
 
     private readonly ConcurrentDictionary<Type, ImmutableArray<Entry>> _cache = new();
     private readonly ConcurrentDictionary<Type, ImmutableArray<Entry>> _readOnlyCache = new();
+    private readonly ConcurrentDictionary<Type, ImmutableArray<Computed>> _computedCache = new();
     private readonly ConcurrentDictionary<(Type Value, Type Serializer), MethodInfo?> _writers = new();
 
     public DrydockCodecFieldPass(
@@ -87,7 +88,8 @@ public sealed class DrydockCodecFieldPass
     public void AfterWrite(Entity<MetaDataComponent> entity, IComponent component, MappingDataNode mapping)
     {
         var entries = EntriesFor(component.GetType());
-        if (entries.Length == 0)
+        var computedFields = ComputedFor(component.GetType());
+        if (entries.Length == 0 && computedFields.Length == 0)
             return;
 
         // The engine's write subtracts the clock reading at which the entity paused. Content cannot
@@ -128,6 +130,24 @@ public sealed class DrydockCodecFieldPass
                     break;
             }
         }
+
+        foreach (var computed in computedFields)
+        {
+            // The engine wrote the computed field, and what it wrote is the getter's answer, which
+            // the setter will refuse. The backing member goes in its place, under its own name.
+            mapping.Remove(computed.ComputedKey);
+
+            switch (computed.Case)
+            {
+                case FieldCase.TimeOffset:
+                    if (GetValue(computed.Backing, component) is TimeSpan deadline)
+                        mapping[computed.BackingKey] = DrydockTimeOffsetAdapter.Write(deadline, walk.LifeStage, walk.CurTime, walk.PauseTime);
+                    break;
+
+                default:
+                    throw new InvalidOperationException($"Drydock codec: {Name(computed.Backing)} is a backing member the pass has no rule for writing as {computed.Case}.");
+            }
+        }
     }
 
     /// <summary>
@@ -151,6 +171,23 @@ public sealed class DrydockCodecFieldPass
                 continue;
 
             entry.Set(component, DrydockTimeOffsetAdapter.Read(node, _timing.CurTime));
+        }
+
+        foreach (var computed in ComputedFor(component.GetType()))
+        {
+            // The codec never writes the computed key, so a row carrying one was not written by us.
+            // Reading it would hand the setter a value it refuses and leave the field at nothing,
+            // which is the very failure the entry exists to prevent, so it fails loudly instead.
+            if (mapping.Has(computed.ComputedKey))
+                throw new FormatException($"Drydock codec: a stored row carries '{computed.ComputedKey}', which is a computed field the codec never writes.");
+
+            if (computed.Case != FieldCase.TimeOffset)
+                throw new InvalidOperationException($"Drydock codec: {Name(computed.Backing)} is a backing member the pass has no rule for reading as {computed.Case}.");
+
+            if (!mapping.TryGet<ValueDataNode>(computed.BackingKey, out var backing) || backing.IsNull)
+                continue;
+
+            SetValue(computed.Backing, component, DrydockTimeOffsetAdapter.Read(backing, _timing.CurTime));
         }
     }
 
@@ -370,6 +407,55 @@ public sealed class DrydockCodecFieldPass
     private ImmutableArray<Entry> ReadOnlyMembersFor(Type type) =>
         _readOnlyCache.GetOrAdd(type, static walked => BuildReadOnly(walked));
 
+    private ImmutableArray<Computed> ComputedFor(Type componentType) =>
+        _computedCache.GetOrAdd(componentType, static type => BuildComputed(type));
+
+    /// <summary>
+    /// The manifest's entries for one component, resolved to members. A missing member throws here
+    /// rather than going quiet, and the build-time audit catches it long before a store does.
+    /// </summary>
+    private static ImmutableArray<Computed> BuildComputed(Type componentType)
+    {
+        var entries = ImmutableArray.CreateBuilder<Computed>();
+
+        foreach (var field in DrydockCodecManifest.ComputedFields)
+        {
+            if (field.Component != componentType)
+                continue;
+
+            var computed = FindMember(componentType, field.ComputedMember)
+                           ?? throw new InvalidOperationException($"Drydock codec: {componentType.Name}.{field.ComputedMember} is in the computed-field manifest and does not exist.");
+
+            var backing = FindMember(componentType, field.BackingMember)
+                          ?? throw new InvalidOperationException($"Drydock codec: {componentType.Name}.{field.BackingMember} is in the computed-field manifest and does not exist.");
+
+            var computedKey = computed.GetCustomAttribute<DataFieldAttribute>()?.Tag
+                              ?? DataDefinitionUtility.AutoGenerateTag(computed.Name);
+
+            entries.Add(new Computed(
+                computedKey,
+                DataDefinitionUtility.AutoGenerateTag(backing.Name),
+                backing,
+                field.BackingCase));
+        }
+
+        return entries.ToImmutable();
+    }
+
+    private static MemberInfo? FindMember(Type type, string name)
+    {
+        for (var declaring = type; declaring != null && declaring != typeof(object); declaring = declaring.BaseType)
+        {
+            var member = (MemberInfo?) declaring.GetField(name, MemberFlags)
+                         ?? declaring.GetProperty(name, MemberFlags);
+
+            if (member != null)
+                return member;
+        }
+
+        return null;
+    }
+
     private static ImmutableArray<Entry> Build(Type componentType)
     {
         var entries = ImmutableArray.CreateBuilder<Entry>();
@@ -508,9 +594,11 @@ public sealed class DrydockCodecFieldPass
 
     /// <summary>
     /// The exceptions this pass knows about. Each one is a field the engine writes correctly for a
-    /// map file and incorrectly for an image row.
+    /// map file and incorrectly for an image row. Public because
+    /// <see cref="DrydockCodecManifest.ComputedFields"/> names the case a backing field is written
+    /// through.
     /// </summary>
-    private enum FieldCase : byte
+    public enum FieldCase : byte
     {
         TimeOffset,
         GridChunks,
@@ -530,6 +618,29 @@ public sealed class DrydockCodecFieldPass
         public readonly HashSet<object> Seen = new(ReferenceEqualityComparer.Instance);
     }
 
+    /// <summary>One manifest entry, resolved against the component it names.</summary>
+    private readonly record struct Computed(string ComputedKey, string BackingKey, MemberInfo Backing, FieldCase Case);
+
+    private static object? GetValue(MemberInfo member, object target) => member switch
+    {
+        FieldInfo field => field.GetValue(target),
+        PropertyInfo property => property.GetValue(target),
+        _ => null,
+    };
+
+    private static void SetValue(MemberInfo member, object target, object? value)
+    {
+        switch (member)
+        {
+            case FieldInfo field:
+                field.SetValue(target, value);
+                break;
+            case PropertyInfo property:
+                property.SetValue(target, value);
+                break;
+        }
+    }
+
     private readonly record struct Entry(
         string Key,
         MemberInfo Member,
@@ -539,24 +650,8 @@ public sealed class DrydockCodecFieldPass
         bool Inline = false,
         string? AsymmetricKey = null)
     {
-        public object? Get(object target) => Member switch
-        {
-            FieldInfo field => field.GetValue(target),
-            PropertyInfo property => property.GetValue(target),
-            _ => null,
-        };
+        public object? Get(object target) => GetValue(Member, target);
 
-        public void Set(object target, object? value)
-        {
-            switch (Member)
-            {
-                case FieldInfo field:
-                    field.SetValue(target, value);
-                    break;
-                case PropertyInfo property:
-                    property.SetValue(target, value);
-                    break;
-            }
-        }
+        public void Set(object target, object? value) => SetValue(Member, target, value);
     }
 }
