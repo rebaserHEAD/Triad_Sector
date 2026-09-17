@@ -75,7 +75,8 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
     /// <see cref="Registry"/> ("classified", or "below-floor" when only <see cref="LiveFloor"/> admits it), removals by rule: contraband, the mech strip, emptied AI cores,
     /// and the containers and components those removals reach (<see cref="PolicyConsequences"/>)
     /// ("policy"), <c>save: false</c> entities the store deleted ("unsaved", unless
-    /// <see cref="TransientUnsaved"/> expects the loss), and the late snapshot below; only unexplained,
+    /// <see cref="TransientUnsaved"/> expects the loss), a transient its owner made again after the retrieve
+    /// ("recreated", <see cref="RecreatedTransient"/>), and the late snapshot below; only unexplained,
     /// unrecovered lines are findings.</para>
     ///
     /// <para>A third snapshot <see cref="LateSeconds"/> after the retrieve sorts each remaining
@@ -235,6 +236,16 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             ["SmesComponent.~LastChargeStateTime"] = (StateClass.Derived, "SMES visual throttle, stamped at startup (SmesSystem.cs:36)"),
         };
 
+        /// <summary>
+        /// Live members that count down in seconds while the ship runs. One that fell by no more than the clock the ship
+        /// ran between the before and after snapshots (<see cref="RoundTripResult.ShipSeconds"/>, plus a tick) is explained,
+        /// since a countdown that started after the live control cannot be sorted live.
+        /// </summary>
+        private static readonly HashSet<string> LiveCountdowns = new(StringComparer.Ordinal)
+        {
+            "TimedDespawnComponent.Lifetime",
+        };
+
         /// <summary>Derived members whose per-entity values may reshuffle but whose sum over the grid may not.</summary>
         private static readonly HashSet<string> TotalChecked = new(StringComparer.Ordinal)
         {
@@ -302,7 +313,8 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             });
 
             var recipes = new List<string>();
-            await server.WaitPost(() => recipes = ApplyLivedIn(pair, grid));
+            string? doorPath = null;
+            await server.WaitPost(() => recipes = ApplyLivedIn(pair, grid, out doorPath));
 
             await pair.RunTicksSync(PreSettleTicks);
 
@@ -319,8 +331,8 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             var sb = new StringBuilder();
             sb.AppendLine($"[ladder] rung {rung} {vesselId} through {(EngineMode ? "the engine serializer" : "the drydock")}");
             sb.AppendLine($"[ladder] lived-in recipes applied: {(recipes.Count == 0 ? "none" : string.Join(", ", recipes))}");
-            Report(sb, rung, vesselId, 1, first, EngineMode ? null : RetrieveGrants, gasRooms, protoMan);
-            Report(sb, rung, vesselId, 2, second, EngineMode ? null : RetrieveRestamps, gasRooms, protoMan);
+            Report(sb, rung, vesselId, 1, first, EngineMode ? null : RetrieveGrants, gasRooms, doorPath, protoMan);
+            Report(sb, rung, vesselId, 2, second, EngineMode ? null : RetrieveRestamps, gasRooms, doorPath, protoMan);
             await TestContext.Out.WriteLineAsync(sb.ToString());
 
             Assert.That(first.Before.Entities, Is.GreaterThan(0), "The control: round trip 1 compared no entities.");
@@ -337,15 +349,16 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
         /// with an express deadline on the deck, an interior door open, a wires panel open, a gravity generator switched off, a lathe queue
         /// (not in engine mode, which cannot write one), a restocked vendor, and a sidearm fired. Each recipe takes the first
         /// matching entity in tree order (the deck spot is a chair, else a computer) and is skipped when
-        /// the hull has none. Returns the ones applied.
+        /// the hull has none. Returns the ones applied, and the path the detector names the opened door by.
         /// </summary>
-        private static List<string> ApplyLivedIn(TestPair pair, EntityUid grid)
+        private static List<string> ApplyLivedIn(TestPair pair, EntityUid grid, out string? doorPath)
         {
             var server = pair.Server;
             var entMan = server.EntMan;
             var protoMan = server.ResolveDependency<IPrototypeManager>();
             var tree = server.System<DrydockFidelitySystem>().GridTreeList(grid);
             var applied = new List<string>();
+            doorPath = null;
 
             EntityUid? First(Func<EntityUid, string, bool> match)
             {
@@ -430,6 +443,14 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                 if (!doors.TryOpen(interior))
                     doors.StartOpening(interior);
                 applied.Add("open-door");
+
+                // The detector names a direct child of the grid by prototype and tile (DrydockFidelitySystem.DeepPaths).
+                var xform = entMan.GetComponent<TransformComponent>(interior);
+                if (xform.ParentUid == grid)
+                {
+                    var proto = entMan.GetComponent<MetaDataComponent>(interior).EntityPrototype!.ID;
+                    doorPath = $"{proto}@{(int) MathF.Floor(xform.LocalPosition.X)},{(int) MathF.Floor(xform.LocalPosition.Y)}";
+                }
             }
 
             if (First((uid, _) => uid != door && entMan.HasComponent<WiresPanelComponent>(uid)) is { } paneled
@@ -581,6 +602,9 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             return applied;
         }
 
+        /// <param name="ShipSeconds">The clock the ship ran between the before and after snapshots: the ticks its grid
+        /// ended unpaused, the old grid through the store and the new one through the retrieve and the settle.</param>
+        /// <param name="TickSeconds">One tick, the slack for the tick a grid was unpaused partway through.</param>
         private sealed record RoundTripResult(
             DrydockStateSnapshot Early,
             DrydockStateSnapshot Before,
@@ -588,6 +612,8 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             DrydockStateSnapshot Late,
             EntityUid Retrieved,
             double ElapsedSeconds,
+            double ShipSeconds,
+            double TickSeconds,
             DrydockMapInitReport? MapInit);
 
         private static async Task<RoundTripResult> RoundTrip(TestPair pair, EntityUid grid, Guid owner, EntityUid station)
@@ -604,25 +630,36 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             await server.WaitPost(() => before = fidelity.DeepSnapshotGrid(grid));
 
             var clockBefore = timing.CurTime;
-            var (retrieved, mapInit) = EngineMode
-                ? (await EngineRoundTrip(pair, grid), null)
+            var (retrieved, mapInit, shipTicks) = EngineMode
+                ? (await EngineRoundTrip(pair, grid), null, 0)
                 : await DrydockRoundTrip(pair, grid, owner, station);
 
             await pair.RunTicksSync(SettleTicks);
 
             DrydockStateSnapshot after = default!;
-            await server.WaitPost(() => after = fidelity.DeepSnapshotGrid(retrieved));
+            var running = false;
+            await server.WaitPost(() =>
+            {
+                after = fidelity.DeepSnapshotGrid(retrieved);
+                running = !server.EntMan.GetComponent<MetaDataComponent>(retrieved).EntityPaused;
+            });
             var elapsed = (timing.CurTime - clockBefore).TotalSeconds;
+            var tickSeconds = timing.TickPeriod.TotalSeconds;
+
+            // An engine round trip saves and loads between ticks, so the settle is all the clock its ship runs.
+            var shipSeconds = (shipTicks + (running ? SettleTicks : 0)) * tickSeconds;
 
             await pair.RunTicksSync((int) Math.Ceiling(LateSeconds / timing.TickPeriod.TotalSeconds));
 
             DrydockStateSnapshot late = default!;
             await server.WaitPost(() => late = fidelity.DeepSnapshotGrid(retrieved));
 
-            return new RoundTripResult(early, before, after, late, retrieved, elapsed, mapInit);
+            return new RoundTripResult(early, before, after, late, retrieved, elapsed, shipSeconds, tickSeconds, mapInit);
         }
 
-        private static async Task<(EntityUid Grid, DrydockMapInitReport? MapInit)> DrydockRoundTrip(
+        /// <returns>The retrieved grid, the map-init report, and the ticks the ship's grid ended unpaused
+        /// during the store and the retrieve.</returns>
+        private static async Task<(EntityUid Grid, DrydockMapInitReport? MapInit, int ShipTicks)> DrydockRoundTrip(
             TestPair pair,
             EntityUid grid,
             Guid owner,
@@ -631,18 +668,49 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             var server = pair.Server;
             var timing = server.ResolveDependency<IGameTiming>();
             var drydock = server.System<DrydockSystem>();
+            var ran = new Dictionary<EntityUid, int>();
 
-            var (storeResult, shipId) = await DrydockTestHelpers.RunOnServer(pair,
-                () => drydock.TryStoreShip(grid, owner, null));
+            var (storeResult, shipId) = await PumpCountingGridTicks(pair,
+                () => drydock.TryStoreShip(grid, owner, null), ran);
             Assert.That(storeResult, Is.EqualTo(DrydockStoreResult.Success), "store refused.");
 
             await pair.RunTicksSync((int) Math.Ceiling(ClockGapSeconds / timing.TickPeriod.TotalSeconds));
 
-            var retrieved = await DrydockTestHelpers.RunOnServer(pair,
-                () => drydock.TryRetrieveShip(shipId!.Value, owner, station, null));
+            var retrieved = await PumpCountingGridTicks(pair,
+                () => drydock.TryRetrieveShip(shipId!.Value, owner, station, null), ran);
             Assert.That(retrieved.Succeeded, Is.True, $"retrieve failed with {retrieved.Result}.");
 
-            return (retrieved.Grid!.Value, server.System<DrydockFidelitySystem>().LastMapInitReport);
+            var shipTicks = ran.GetValueOrDefault(grid) + ran.GetValueOrDefault(retrieved.Grid!.Value);
+            return (retrieved.Grid!.Value, server.System<DrydockFidelitySystem>().LastMapInitReport, shipTicks);
+        }
+
+        /// <summary>
+        /// Runs a server-side operation as <see cref="DrydockTestHelpers.RunOnServer{T}"/> does, a tick at a time
+        /// under the same wall-clock bound, and adds to <paramref name="ran"/> each grid that ended a tick unpaused.
+        /// </summary>
+        private static async Task<T> PumpCountingGridTicks<T>(TestPair pair, Func<Task<T>> start, Dictionary<EntityUid, int> ran)
+        {
+            var server = pair.Server;
+            Task<T>? task = null;
+            await server.WaitPost(() => task = start());
+
+            var deadline = System.Diagnostics.Stopwatch.StartNew();
+            while (!task!.IsCompleted && deadline.Elapsed < TimeSpan.FromSeconds(60))
+            {
+                await pair.RunTicksSync(1);
+                await server.WaitPost(() =>
+                {
+                    var grids = server.EntMan.AllEntityQueryEnumerator<MapGridComponent, MetaDataComponent>();
+                    while (grids.MoveNext(out var uid, out _, out var meta))
+                    {
+                        if (!meta.EntityPaused)
+                            ran[uid] = ran.GetValueOrDefault(uid) + 1;
+                    }
+                });
+            }
+
+            Assert.That(task!.IsCompleted, Is.True, "The drydock operation never completed.");
+            return await task;
         }
 
         /// <summary>
@@ -756,6 +824,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             RoundTripResult result,
             HashSet<string>? grants,
             List<(string Recipe, List<Vector2i> Tiles)> gasRooms,
+            string? doorPath,
             IPrototypeManager protoMan)
         {
             // A time's render carries its clock-relative half, which moves every tick, so a time key is live only when its
@@ -770,6 +839,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             var grantLines = new List<string>();
             var policyLines = new List<string>();
             var unsavedLines = new List<string>();
+            var recreatedLines = new List<string>();
             var classifiedLines = new List<string>();
             var belowFloorLines = new List<string>();
             var settledLines = new List<string>();
@@ -813,6 +883,8 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                     else
                         unsavedLines.Add(line);
                 }
+                else if (RecreatedTransient(line, key, result, protoMan) != null)
+                    recreatedLines.Add(line);
                 else if (key != null && Classify(key, result, recovery, out var belowFloor) is { } _)
                     (belowFloor ? belowFloorLines : classifiedLines).Add(line);
                 else if (recovery == Recovery.Settled)
@@ -837,7 +909,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                           + $"({result.Before.TieBroken}/{result.After.TieBroken} tie-broken, "
                           + $"{result.Before.Uncapturable}/{result.After.Uncapturable} uncapturable), "
                           + $"{result.Before.Values.Count} keys, {live.Count} live key(s), clock advanced {result.ElapsedSeconds:F1}s, "
-                          + $"{timeKept} time change(s) kept their meaning.");
+                          + $"ship ran {result.ShipSeconds:F3}s, {timeKept} time change(s) kept their meaning.");
 
             AppendUncapturable(sb, rung, vesselId, trip, result);
 
@@ -849,6 +921,22 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                 var express = $"{path}|TradeCrateComponent.~ExpressDeliveryTime{DrydockFidelitySystem.TimeSuffix}";
                 sb.AppendLine($"[ladder] trade control {path}: destination {ValueIn(result.Before, key)}, {ValueIn(result.After, key)}, {ValueIn(result.Late, key)}; "
                               + $"express {ValueIn(result.Before, express)}, {ValueIn(result.After, express)}, {ValueIn(result.Late, express)}");
+            }
+
+            // The recipe's door, and every door with a state change pending before the store, which is F9's case.
+            var nextChange = $"|DoorComponent.~NextStateChange{DrydockFidelitySystem.TimeSuffix}";
+            var doors = result.Before.Values
+                .Where(kv => kv.Key.EndsWith(nextChange, StringComparison.Ordinal) && kv.Value != "null")
+                .Select(kv => kv.Key[..kv.Key.IndexOf('|')])
+                .ToHashSet();
+            if (doorPath != null)
+                doors.Add(doorPath);
+
+            foreach (var path in doors.OrderBy(p => p, StringComparer.Ordinal))
+            {
+                var state = $"{path}|DoorComponent.State";
+                sb.AppendLine($"[ladder] door control {path}: state {ValueIn(result.Before, state)}, {ValueIn(result.After, state)}, {ValueIn(result.Late, state)}; "
+                              + $"next change {ValueIn(result.Before, path + nextChange)}, {ValueIn(result.After, path + nextChange)}, {ValueIn(result.Late, path + nextChange)}");
             }
 
             foreach (var (recipe, tiles) in gasRooms)
@@ -865,6 +953,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             AppendKinds(sb, rung, vesselId, trip, "below-floor", belowFloorLines, examples: 1);
             AppendKinds(sb, rung, vesselId, trip, "policy", policyLines, examples: 1);
             AppendKinds(sb, rung, vesselId, trip, "unsaved", unsavedLines, examples: 1);
+            AppendKinds(sb, rung, vesselId, trip, "recreated", recreatedLines, examples: 1);
             AppendKinds(sb, rung, vesselId, trip, "moved", movedLines, examples: 1);
             AppendKinds(sb, rung, vesselId, trip, "live", liveLines, examples: 0);
             if (grants != null)
@@ -878,7 +967,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
         /// The registry entry that explains a key's difference, or null. A Live entry explains it only while
         /// the value is settling, settled, or within <see cref="LiveTolerance"/> of its stored value, or within
         /// <see cref="LiveFloor"/>, which sets <paramref name="belowFloor"/>. A Live entry for a time explains it
-        /// outright.
+        /// outright, and one of <see cref="LiveCountdowns"/> explains a fall no longer than the clock the ship ran.
         /// </summary>
         private static StateClass? Classify(string key, RoundTripResult result, Recovery recovery, out bool belowFloor)
         {
@@ -915,6 +1004,10 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
 
             var difference = Math.Abs(a - b);
             if (difference <= Math.Abs(b) * LiveTolerance)
+                return entry.Class;
+
+            // A countdown runs only while the ship does, so it may fall by the clock the ship ran and no further.
+            if (LiveCountdowns.Contains(member) && a <= b && b - a <= result.ShipSeconds + result.TickSeconds)
                 return entry.Class;
 
             // Rounded, because two rendered decimals subtract to a hair over the floor (0.10 - 0.09 = 0.010000000000000009).
@@ -1145,6 +1238,32 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                 var prefix = string.Join('/', segments, 0, i);
                 if (before.Values.TryGetValue(prefix + "|MetaDataComponent.savable", out var savable) && savable == "false")
                     return prefix;
+            }
+
+            return null;
+        }
+
+        /// <summary>
+        /// For a changed field, the path of the nearest entity at or above it whose prototype is <c>save: false</c>, when
+        /// that entity is on both sides and <see cref="IsTransient"/>: the store deleted it and its owner made it again
+        /// after the retrieve, as an alarm plays its sound again. Null otherwise, so a recreated entity that is not
+        /// transient, such as a shield its emitter respawns, stays a finding.
+        /// </summary>
+        private static string? RecreatedTransient(string line, string? key, RoundTripResult result, IPrototypeManager protoMan)
+        {
+            if (!line.StartsWith("CHANGED") || key == null)
+                return null;
+
+            var segments = key[..key.IndexOf('|')].Split('/');
+            for (var i = segments.Length; i > 0; i--)
+            {
+                var prefix = string.Join('/', segments, 0, i);
+                if (!result.Before.Values.TryGetValue(prefix + "|MetaDataComponent.savable", out var savable) || savable != "false")
+                    continue;
+
+                return result.After.Values.ContainsKey(prefix + "|MetaDataComponent.savable") && IsTransient(prefix, result.Before, protoMan)
+                    ? prefix
+                    : null;
             }
 
             return null;
