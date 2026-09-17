@@ -27,35 +27,8 @@ public abstract partial class SharedOreSiloSystem : EntitySystem
         SubscribeLocalEvent<OreSiloClientComponent, GetStoredMaterialsEvent>(OnGetStoredMaterials);
         SubscribeLocalEvent<OreSiloClientComponent, ConsumeStoredMaterialsEvent>(OnConsumeStoredMaterials);
         SubscribeLocalEvent<OreSiloClientComponent, ComponentShutdown>(OnClientShutdown);
-        SubscribeLocalEvent<OreSiloClientComponent, ComponentStartup>(OnClientStartup); // Triad: rebuild the silo's client set
 
         _clientQuery = GetEntityQuery<OreSiloClientComponent>();
-    }
-
-    // Triad: the client half is the only half that is persisted, so it is also the only half that can
-    // arrive pointing at nothing. Validate it once here and rebuild the silo's client set from it.
-    //
-    // This replaces a pair of MapInitEvent handlers that pruned dead uids out of both halves after the
-    // fact. ComponentStartup is the better hook for two reasons: it fires for every entity on every
-    // load path, where MapInit only fires for pre-init content, and the deserializer allocates every
-    // entity before starting any of them, so the silo is guaranteed to exist by the time its clients
-    // start. It is also the hook SharedDeviceLinkSystem.OnSourceStartup already uses to do exactly
-    // this job for device links.
-    private void OnClientStartup(Entity<OreSiloClientComponent> ent, ref ComponentStartup args)
-    {
-        if (ent.Comp.Silo is not { } silo)
-            return;
-
-        // A link saved without the other end, or a silo deleted while this client was not loaded.
-        if (!TryComp<OreSiloComponent>(silo, out var siloComp))
-        {
-            ent.Comp.Silo = null;
-            Dirty(ent);
-            return;
-        }
-
-        if (siloComp.Clients.Add(ent))
-            Dirty(silo, siloComp);
     }
 
     private void OnToggleOreSiloClient(Entity<OreSiloComponent> ent, ref ToggleOreSiloClientMessage args)

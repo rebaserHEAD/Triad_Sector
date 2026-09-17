@@ -48,8 +48,6 @@ public sealed partial class ConveyorController : SharedConveyorController
 
         }
 
-        // Triad: seed on load (DrydockAppearanceComponent). Here, not on startup, which the shared half subscribes.
-        UpdateAppearance(uid, component);
     }
 
     private void OnConveyorShutdown(EntityUid uid, ConveyorComponent component, ComponentShutdown args)

@@ -69,20 +69,6 @@ public sealed partial class XenoArtifactSystem : SharedXenoArtifactSystem
         RelayEventToNodes((uid, comp), ref args);
     }
 
-    /// <summary>
-    /// Triad: generation hangs off MapInitEvent, and an entity loaded from a file onto a map that is
-    /// already running never gets one. The loader starts it (Initialized) but the map's own init
-    /// already happened, so nothing raises MapInit on it afterwards. An artifact that came out of a
-    /// ship file, including the legacy bodies triad_migration renames into current ones, therefore
-    /// reached the world with an empty graph and stayed inert: nothing to trigger, nothing to unlock,
-    /// worth nothing. Queue every artifact that starts up and settle it on the next tick, once we can
-    /// see whether its map is live or still waiting to be initialized.
-    /// </summary>
-    protected override void AfterArtifactStartup(Entity<XenoArtifactComponent> ent)
-    {
-        if (ent.Comp.IsGenerationRequired)
-            _pendingGeneration.Add(ent.Owner);
-    }
 
     private void OnArtifactMapInit(Entity<XenoArtifactComponent> ent, ref MapInitEvent args)
     {

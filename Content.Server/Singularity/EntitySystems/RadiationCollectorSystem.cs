@@ -36,7 +36,6 @@ public sealed partial class RadiationCollectorSystem : EntitySystem
         SubscribeLocalEvent<RadiationCollectorComponent, ExaminedEvent>(OnExamined);
         SubscribeLocalEvent<RadiationCollectorComponent, GasAnalyzerScanEvent>(OnAnalyzed);
         SubscribeLocalEvent<RadiationCollectorComponent, MapInitEvent>(OnMapInit);
-        SubscribeLocalEvent<RadiationCollectorComponent, ComponentStartup>(OnStartup); // Triad - see OnStartup
         SubscribeLocalEvent<RadiationCollectorComponent, EntInsertedIntoContainerMessage>(OnTankChanged);
         SubscribeLocalEvent<RadiationCollectorComponent, EntRemovedFromContainerMessage>(OnTankChanged);
         SubscribeLocalEvent<NetworkBatteryPostSync>(PostSync);
@@ -55,12 +54,6 @@ public sealed partial class RadiationCollectorSystem : EntitySystem
         return true;
     }
 
-    // Triad: seed on load (DrydockAppearanceComponent); container-derived.
-    private void OnStartup(EntityUid uid, RadiationCollectorComponent component, ComponentStartup args)
-    {
-        TryGetLoadedGasTank(uid, out var gasTank);
-        UpdateTankAppearance(uid, component, gasTank);
-    }
 
     private void OnMapInit(EntityUid uid, RadiationCollectorComponent component, MapInitEvent args)
     {

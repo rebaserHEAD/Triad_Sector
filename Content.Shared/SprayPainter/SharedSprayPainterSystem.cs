@@ -43,7 +43,6 @@ public abstract partial class SharedSprayPainterSystem : EntitySystem
         SubscribeLocalEvent<SprayPainterComponent, SprayPainterDoAfterEvent>(OnPainterDoAfter);
         SubscribeLocalEvent<SprayPainterComponent, GetVerbsEvent<AlternativeVerb>>(OnPainterGetAltVerbs);
         SubscribeLocalEvent<PaintableComponent, InteractUsingEvent>(OnPaintableInteract);
-        SubscribeLocalEvent<PaintableComponent, ComponentStartup>(OnPaintableStartup); // Triad
         SubscribeLocalEvent<PaintedComponent, ExaminedEvent>(OnPainedExamined);
 
         Subs.BuiEvents<SprayPainterComponent>(SprayPainterUiKey.Key,
@@ -125,13 +124,6 @@ public abstract partial class SharedSprayPainterSystem : EntitySystem
         args.Handled = true;
     }
 
-    // Triad: paint is appearance data, which no save writes. Re-apply the recorded style on
-    // startup, which runs for a loaded entity where map init does not.
-    private void OnPaintableStartup(Entity<PaintableComponent> ent, ref ComponentStartup args)
-    {
-        if (ent.Comp.Style is { } style)
-            Appearance.SetData(ent, PaintableVisuals.Prototype, style);
-    }
 
     private void OnPainterGetAltVerbs(Entity<SprayPainterComponent> ent, ref GetVerbsEvent<AlternativeVerb> args)
     {

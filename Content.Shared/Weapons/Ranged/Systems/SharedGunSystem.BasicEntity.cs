@@ -9,7 +9,6 @@ public abstract partial class SharedGunSystem
     protected virtual void InitializeBasicEntity()
     {
         SubscribeLocalEvent<BasicEntityAmmoProviderComponent, MapInitEvent>(OnBasicEntityMapInit);
-        SubscribeLocalEvent<BasicEntityAmmoProviderComponent, ComponentStartup>(OnBasicEntityStartup); // Triad - see OnBasicEntityStartup
         SubscribeLocalEvent<BasicEntityAmmoProviderComponent, TakeAmmoEvent>(OnBasicEntityTakeAmmo);
         SubscribeLocalEvent<BasicEntityAmmoProviderComponent, CheckShootPrototypeEvent>(OnBasicEntityCheckProto); // Mono
         SubscribeLocalEvent<BasicEntityAmmoProviderComponent, GetAmmoCountEvent>(OnBasicEntityAmmoCount);
@@ -26,11 +25,6 @@ public abstract partial class SharedGunSystem
         UpdateBasicEntityAppearance(uid, component);
     }
 
-    // Triad: seed on load (DrydockAppearanceComponent). Without the count default above, which would refill a gun.
-    private void OnBasicEntityStartup(EntityUid uid, BasicEntityAmmoProviderComponent component, ComponentStartup args)
-    {
-        UpdateBasicEntityAppearance(uid, component);
-    }
 
     private void OnBasicEntityTakeAmmo(EntityUid uid, BasicEntityAmmoProviderComponent component, TakeAmmoEvent args)
     {

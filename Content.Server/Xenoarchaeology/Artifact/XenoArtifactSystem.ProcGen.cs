@@ -27,8 +27,6 @@ public sealed partial class XenoArtifactSystem
 
         RebuildXenoArtifactMetaData((ent, ent));
 
-        // Triad: the flag now means "still owes a graph" rather than "was built wanting one", so the
-        // deferred pass in XenoArtifactSystem can tell a restored artifact from a generated one.
         ent.Comp.IsGenerationRequired = false;
     }
 

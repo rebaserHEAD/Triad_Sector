@@ -35,8 +35,6 @@ public sealed partial class ContrabandPermitSystem : SharedContrabandPermitSyste
     [Dependency] private InventorySystem _inventory = default!;
     [Dependency] private SectorServiceSystem _sectorService = default!;
 
-    private readonly HashSet<Entity<ContrabandPermitItemComponent>> _newPermitItems = new();
-
     private EntityQuery<MapGridComponent> _gridQuery;
     private EntityQuery<TransformComponent> _transformQuery;
 
@@ -241,58 +239,6 @@ public sealed partial class ContrabandPermitSystem : SharedContrabandPermitSyste
 
         return !string.IsNullOrEmpty(characterName) && permit.PermitOwnerName == characterName;
     }
-
-    // Triad: removed, no callers since the legacy ship save was deleted
-    /*
-    public void ClearPermitItemsOnGrid(EntityUid gridUid, EntityUid user)
-    {
-        if (!_gridQuery.HasComp(gridUid))
-            return;
-
-        var toDelete = new HashSet<EntityUid>();
-
-        _newPermitItems.Clear();
-
-        var gridTransform = _transformQuery.GetComponent(gridUid);
-        var worldAABB = _lookup.GetWorldAABB(gridUid, gridTransform);
-        _lookup.GetEntitiesIntersecting(gridTransform.MapID, worldAABB, _newPermitItems);
-
-        foreach ((var ent, var comp) in _newPermitItems)
-        {
-            if (ent == gridUid)
-                continue;
-
-            if (!_transformQuery.TryComp(ent, out var entXForm) || entXForm.GridUid != gridUid)
-                continue;
-
-            if (comp.PermitOwnerMind != null && _mind.TryGetMind(user, out var userMindId, out _))
-            {
-                if (userMindId != comp.PermitOwnerMind)
-                {
-                    toDelete.Add(ent);
-                    continue;
-                }
-            }
-            else if (user != comp.PermitOwner)
-            {
-                toDelete.Add(ent);
-                continue;
-            }
-
-            // If the permit item somehow doesn't have permittable or it was set to false
-            if (!TryComp<ContrabandPermittableComponent>(ent, out var permittable) || !permittable.Permittable)
-            {
-                toDelete.Add(ent);
-                continue;
-            }
-        }
-
-        foreach (var uid in toDelete)
-        {
-            Del(uid);
-        }
-    }
-    */
 
     /// <summary>
     /// Whether a permitted item may go away with a ship: the permit has to belong to whoever the ship

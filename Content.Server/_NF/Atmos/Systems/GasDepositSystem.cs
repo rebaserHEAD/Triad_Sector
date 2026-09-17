@@ -62,7 +62,6 @@ public sealed partial class GasDepositSystem : SharedGasDepositSystem
         SubscribeLocalEvent<RandomGasDepositComponent, MapInitEvent>(OnRandomDepositMapInit);
 
         SubscribeLocalEvent<GasDepositExtractorComponent, MapInitEvent>(OnExtractorMapInit);
-        SubscribeLocalEvent<GasDepositExtractorComponent, ComponentStartup>(OnExtractorStartup); // Triad - see OnExtractorStartup
         SubscribeLocalEvent<GasDepositExtractorComponent, BoundUIOpenedEvent>(OnExtractorUiOpened);
         SubscribeLocalEvent<GasDepositExtractorComponent, PowerChangedEvent>(OnPowerChanged);
         SubscribeLocalEvent<GasDepositExtractorComponent, AtmosDeviceUpdateEvent>(OnExtractorUpdate);
@@ -85,11 +84,6 @@ public sealed partial class GasDepositSystem : SharedGasDepositSystem
         UpdateAppearance(ent);
     }
 
-    // Triad: seed on load (DrydockAppearanceComponent).
-    private void OnExtractorStartup(Entity<GasDepositExtractorComponent> ent, ref ComponentStartup args)
-    {
-        UpdateAppearance(ent);
-    }
 
     private void OnExtractorUiOpened(Entity<GasDepositExtractorComponent> ent, ref BoundUIOpenedEvent args)
     {

@@ -70,7 +70,6 @@ namespace Content.Server.VendingMachines
             base.Initialize();
 
             SubscribeLocalEvent<VendingMachineComponent, PowerChangedEvent>(OnPowerChanged);
-            SubscribeLocalEvent<VendingMachineComponent, ComponentStartup>(OnStartup); // Triad - see OnStartup
             SubscribeLocalEvent<VendingMachineComponent, BreakageEventArgs>(OnBreak);
             SubscribeLocalEvent<VendingMachineComponent, DamageChangedEvent>(OnDamageChanged);
             SubscribeLocalEvent<VendingMachineComponent, PriceCalculationEvent>(OnVendingPrice);
@@ -478,14 +477,6 @@ namespace Content.Server.VendingMachines
             // End Frontier
         }
 
-        /// <summary>
-        /// Tries to update the visuals of the component based on its current state.
-        /// </summary>
-        // Triad: seed on load (DrydockAppearanceComponent); nothing seeds this key at spawn either.
-        private void OnStartup(EntityUid uid, VendingMachineComponent component, ComponentStartup args)
-        {
-            TryUpdateVisualState(uid, component);
-        }
 
         public void TryUpdateVisualState(EntityUid uid, VendingMachineComponent? vendComponent = null)
         {

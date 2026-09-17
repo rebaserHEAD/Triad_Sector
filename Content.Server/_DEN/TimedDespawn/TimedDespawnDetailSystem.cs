@@ -25,7 +25,6 @@ public sealed partial class TimedDespawnDetailedSystem : EntitySystem
     public override void Initialize()
     {
         SubscribeLocalEvent<TimedDespawnDetailedComponent, MapInitEvent>(OnMapInit);
-        SubscribeLocalEvent<TimedDespawnDetailedComponent, ComponentStartup>(OnStartup); // Triad
         SubscribeLocalEvent<TimedDespawnDetailedComponent, ExaminedEvent>(OnExamine);
     }
 
@@ -109,19 +108,6 @@ public sealed partial class TimedDespawnDetailedSystem : EntitySystem
         EntityManager.QueueDeleteEntity(ent);
     }
 
-    /// <summary>
-    /// Triad: re-registers a timer that arrived from a save. Only OnMapInit filled the despawn set,
-    /// and MapInitEvent does not re-fire for an already-map-initialised entity, so a loaded holofan
-    /// was never in it and never expired. A zero StartTime is a fresh spawn, which reaches startup
-    /// before map init and is left for OnMapInit to start; a non-zero one keeps its own deadline.
-    /// </summary>
-    private void OnStartup(Entity<TimedDespawnDetailedComponent> ent, ref ComponentStartup args)
-    {
-        if (ent.Comp.StartTime == TimeSpan.Zero)
-            return;
-
-        _timedDespawns.Add(ent);
-    }
 
     private void OnMapInit(Entity<TimedDespawnDetailedComponent> ent, ref MapInitEvent args)
     {

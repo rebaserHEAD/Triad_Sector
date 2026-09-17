@@ -52,7 +52,6 @@ namespace Content.Server.Kitchen.EntitySystems
 
             SubscribeLocalEvent<ActiveReagentGrinderComponent, ComponentStartup>(OnActiveGrinderStart);
             SubscribeLocalEvent<ActiveReagentGrinderComponent, ComponentRemove>(OnActiveGrinderRemove);
-            SubscribeLocalEvent<ReagentGrinderComponent, ComponentStartup>(OnStartup); // Triad - see OnStartup
             SubscribeLocalEvent((EntityUid uid, ReagentGrinderComponent _, ref PowerChangedEvent _) => UpdateUiState(uid));
             SubscribeLocalEvent<ReagentGrinderComponent, InteractUsingEvent>(OnInteractUsing);
             SubscribeLocalEvent<ReagentGrinderComponent, RefreshPartsEvent>(OnRefreshParts);
@@ -163,14 +162,6 @@ namespace Content.Server.Kitchen.EntitySystems
                 args.Cancel();
         }
 
-        // Triad: also seed the beaker visual, which is container-derived (DrydockAppearanceComponent).
-        private void OnStartup(EntityUid uid, ReagentGrinderComponent reagentGrinder, ComponentStartup args)
-        {
-            UpdateUiState(uid);
-
-            var outputContainer = _itemSlotsSystem.GetItemOrNull(uid, SharedReagentGrinder.BeakerSlotId);
-            _appearanceSystem.SetData(uid, ReagentGrinderVisualState.BeakerAttached, outputContainer.HasValue);
-        }
 
         private void OnContainerModified(EntityUid uid, ReagentGrinderComponent reagentGrinder, ContainerModifiedMessage args)
         {

@@ -24,7 +24,6 @@ namespace Content.Server.Atmos.Piping.Unary.EntitySystems
             SubscribeLocalEvent<GasOutletInjectorComponent, AtmosDeviceUpdateEvent>(OnOutletInjectorUpdated);
             SubscribeLocalEvent<GasOutletInjectorComponent, ActivateInWorldEvent>(OnActivate);
             SubscribeLocalEvent<GasOutletInjectorComponent, MapInitEvent>(OnMapInit);
-            SubscribeLocalEvent<GasOutletInjectorComponent, ComponentStartup>(OnStartup); // Triad - see OnStartup
         }
 
         private void OnMapInit(EntityUid uid, GasOutletInjectorComponent component, MapInitEvent args)
@@ -32,11 +31,6 @@ namespace Content.Server.Atmos.Piping.Unary.EntitySystems
             UpdateAppearance(uid, component);
         }
 
-        // Triad: seed on load (DrydockAppearanceComponent).
-        private void OnStartup(EntityUid uid, GasOutletInjectorComponent component, ComponentStartup args)
-        {
-            UpdateAppearance(uid, component);
-        }
 
         private void OnActivate(EntityUid uid, GasOutletInjectorComponent component, ActivateInWorldEvent args)
         {

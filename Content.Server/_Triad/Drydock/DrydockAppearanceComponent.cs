@@ -15,11 +15,10 @@ namespace Content.Server._Triad.Drydock;
 /// holding one, a light that reads off while powered. Each was a hand-written revive step per
 /// machine; this carries the whole class instead.</para>
 ///
-/// <para>The floor under it is a seed at the source, marked <c>// Triad</c> in each owning system:
-/// a visual derived from persisted state is re-derived on <c>ComponentStartup</c> too, since
-/// <see cref="MapInitEvent"/> does not re-fire for an already map-initialized entity. Seed only,
-/// because those handlers also roll randomness and spawn contents. Container-derived visuals are
-/// always in this class: the engine raises <c>EntInsertedIntoContainerMessage</c> from
+/// <para>There is no floor under it on this branch. The seed handlers that re-derived a visual on
+/// <c>ComponentStartup</c> in each owning system are gone, so nothing outside this sidecar restores
+/// appearance and the ladder measures the loss instead of a patched-over version of it. Container-derived
+/// visuals were always this class's alone: the engine raises <c>EntInsertedIntoContainerMessage</c> from
 /// <c>SharedContainerSystem.Insert</c> alone, so a restored container announces nothing.</para>
 ///
 /// <para>Copied at store and left live, since the serializer ignores appearance rather than choking
