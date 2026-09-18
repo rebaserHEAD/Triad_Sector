@@ -142,6 +142,10 @@ public sealed class DrydockCodecFieldPass
                     WriteReadOnly(entry, component, mapping, walk, component.GetType().Name);
                     break;
 
+                case FieldCase.Flags:
+                    WriteFlags(entry, component, mapping);
+                    break;
+
                 case FieldCase.Walk:
                     WalkMember(entry, component, mapping, walk, component.GetType().Name);
                     break;
@@ -223,6 +227,54 @@ public sealed class DrydockCodecFieldPass
 
         into[entry.Key] = DrydockTimeOffsetAdapter.Write(deadline, walk.LifeStage, walk.CurTime, walk.PauseTime);
     }
+
+    /// <summary>
+    /// Finding F35. <c>FlagSerializer.Write</c> starts its bit loop at 1
+    /// (<c>RobustToolbox/Robust.Shared/Serialization/TypeSerializers/Implementations/Custom/FlagSerializer.cs:73</c>),
+    /// so bit 0 is never written: an airtight wall's <c>All</c> (15) writes as South, East, West and
+    /// reads back as 14. Enums with a value using bit 31, such as <c>CollisionGroup.AllMask = -1</c>,
+    /// escape by accident: their highest bit is 32, and <c>1 &lt;&lt; 32</c> is <c>1 &lt;&lt; 0</c>
+    /// in C#. The key is rewritten with every set bit named, bit 0 included; the engine's own reader
+    /// ORs the names back, so only the write is ours.
+    /// </summary>
+    private void WriteFlags(Entry entry, object owner, MappingDataNode into)
+    {
+        if (entry.Get(owner) is not int value)
+            return;
+
+        var tag = entry.CustomSerializer!.GetGenericArguments()[0];
+        into[entry.Key] = FlagNode(_serialization.GetFlagTypeFromTag(tag), value);
+    }
+
+    /// <summary>
+    /// The engine's flag layout with the lost bit put back: a sequence of names, one per set bit, or
+    /// the named whole for -1 as the engine writes it. A set bit the enum has no name for would be
+    /// dropped by a sequence, so the value is written as its decimal instead, which the serializer's
+    /// scalar reader parses (<c>FlagSerializer.cs:39-45</c>).
+    /// </summary>
+    internal static DataNode FlagNode(Type flagType, int value)
+    {
+        if (value == -1 && Enum.GetName(flagType, -1) is { } whole)
+            return new SequenceDataNode { new ValueDataNode(whole) };
+
+        var names = new SequenceDataNode();
+        for (var bit = 0; bit < 32; bit++)
+        {
+            var bitValue = 1 << bit;
+            if ((value & bitValue) == 0)
+                continue;
+
+            if (Enum.GetName(flagType, bitValue) is not { } name)
+                return new ValueDataNode(value.ToString(System.Globalization.CultureInfo.InvariantCulture));
+
+            names.Add(new ValueDataNode(name));
+        }
+
+        return names;
+    }
+
+    internal static bool IsFlagSerializer(Type? serializer) =>
+        serializer is { IsGenericType: true } && serializer.GetGenericTypeDefinition() == typeof(FlagSerializer<>);
 
     /// <summary>The read half of <see cref="WriteTimeOffset"/>: one branch, against the clock at load.</summary>
     private void ReadTimeOffset(Entry entry, object owner, MappingDataNode from)
@@ -490,6 +542,10 @@ public sealed class DrydockCodecFieldPass
 
                         case FieldCase.ReadOnly:
                             WriteReadOnly(member, value, mapping, walk, $"{path}.{member.Member.Name}");
+                            break;
+
+                        case FieldCase.Flags:
+                            WriteFlags(member, value, mapping);
                             break;
 
                         case FieldCase.Walk:
@@ -808,8 +864,11 @@ public sealed class DrydockCodecFieldPass
         if (member.DeclaringType == typeof(MapGridComponent) && IsChunkStore(MemberType(member)))
             return FieldCase.GridChunks;
 
+        if (IsFlagSerializer(data.CustomTypeSerializer))
+            return FieldCase.Flags;
+
         // Last, so a field that is readOnly as well as one of the above is handled as the above: the
-        // three named cases all write the key themselves, which is what a readOnly field needed.
+        // named cases all write the key themselves, which is what a readOnly field needed.
         if (data.ReadOnly)
             return FieldCase.ReadOnly;
 
@@ -824,11 +883,12 @@ public sealed class DrydockCodecFieldPass
 
     /// <summary>
     /// Does this type, or anything a collection of it holds, carry anywhere below it a field the pass
-    /// must correct: a <c>readOnly</c> field, which the generated writer skips, or a time-offset
-    /// field, which the engine's serializer zeroes for any caller but its own? The question is asked
-    /// of the declared type, once, because it decides whether a member is worth descending into at
-    /// all, and a type that carries only a time field is as much a reason to descend as one that
-    /// carries a <c>readOnly</c> one (finding F27).
+    /// must correct: a <c>readOnly</c> field, which the generated writer skips, a time-offset field,
+    /// which the engine's serializer zeroes for any caller but its own, or a flag field, whose
+    /// serializer loses bit 0? The question is asked of the declared type, once, because it decides
+    /// whether a member is worth descending into at all, and a type that carries only a time or flag
+    /// field is as much a reason to descend as one that carries a <c>readOnly</c> one (findings F27,
+    /// F35).
     /// </summary>
     private static bool CarriesCorrection(Type? type)
     {
@@ -873,6 +933,7 @@ public sealed class DrydockCodecFieldPass
         {
             if (attribute.ReadOnly
                 || attribute.CustomTypeSerializer == typeof(TimeOffsetSerializer)
+                || IsFlagSerializer(attribute.CustomTypeSerializer)
                 || Carries(MemberType(member), seen, polymorphic))
             {
                 return true;
@@ -980,14 +1041,14 @@ public sealed class DrydockCodecFieldPass
     }
 
     /// <summary>
-    /// For the audit: every time-offset member the pass corrects below the component level, found by
-    /// the pass's own classification rather than by reading source, so the list cannot drift from
-    /// what the pass does.
+    /// For the audit: every time-offset and flag member the pass corrects below the component level,
+    /// found by the pass's own classification rather than by reading source, so the list cannot drift
+    /// from what the pass does. The caller tells the two apart by the member's serializer.
     ///
     /// <para>One thing the pass knows at runtime and a static list cannot: which concrete type a
     /// polymorphic member holds. The caller supplies the candidates, every concrete data definition
     /// the member could hold, and the audit reports what any of them would carry. Each result is the
-    /// component member the walk starts from and the time member it ends at; the hops between are
+    /// component member the walk starts from and the corrected member it ends at; the hops between are
     /// left out, because through polymorphic members they multiply into a path per inheritor.</para>
     /// </summary>
     internal sealed class NestedTimeAudit(Func<Type, IEnumerable<Type>> concreteDefinitions)
@@ -996,16 +1057,16 @@ public sealed class DrydockCodecFieldPass
         private readonly Dictionary<Type, HashSet<MemberInfo>> _types = new();
         private readonly HashSet<Type> _visiting = new();
 
-        public IEnumerable<(MemberInfo From, MemberInfo Time)> For(Type componentType)
+        public IEnumerable<(MemberInfo From, MemberInfo Corrected)> For(Type componentType)
         {
             foreach (var entry in Build(componentType))
             {
                 if (entry.Case is not (FieldCase.ReadOnly or FieldCase.Walk))
                     continue;
 
-                foreach (var time in Reach(entry.DeclaredType))
+                foreach (var corrected in Reach(entry.DeclaredType))
                 {
-                    yield return (entry.Member, time);
+                    yield return (entry.Member, corrected);
                 }
             }
         }
@@ -1054,6 +1115,7 @@ public sealed class DrydockCodecFieldPass
                 switch (member.Case)
                 {
                     case FieldCase.TimeOffset:
+                    case FieldCase.Flags:
                         found.Add(member.Member);
                         break;
 
@@ -1091,6 +1153,12 @@ public sealed class DrydockCodecFieldPass
         GridChunks,
         GridFixtures,
         ReadOnly,
+
+        /// <summary>
+        /// A <c>FlagSerializer</c> field, rewritten because the engine's writer loses bit 0 (F35). The
+        /// engine's reader restores it, so there is no read half.
+        /// </summary>
+        Flags,
 
         /// <summary>
         /// Not a correction of its own: a member the engine writes correctly whose value holds a

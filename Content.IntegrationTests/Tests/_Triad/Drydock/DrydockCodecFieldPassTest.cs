@@ -7,6 +7,7 @@ using System.Linq;
 using System.Reflection;
 using System.Threading.Tasks;
 using Content.Server._Triad.Drydock.Codec;
+using Content.Server.Atmos.Components;
 using Content.Server.Chemistry.Components;
 using Content.Shared.Containers.ItemSlots;
 using Content.Shared.Damage;
@@ -20,6 +21,7 @@ using Content.Shared.Robotics.Components;
 using Content.Shared.Weapons.Melee;
 using Robust.Shared.GameObjects;
 using Robust.Shared.Map;
+using Robust.Shared.Physics;
 using Robust.Shared.Prototypes;
 using Robust.Shared.Serialization.Manager;
 using Robust.Shared.Serialization.Manager.Attributes;
@@ -876,6 +878,89 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             }
 
             return starts;
+        }
+
+        /// <summary>
+        /// Finding F35. The engine's flag writer never writes bit 0
+        /// (<c>RobustToolbox/Robust.Shared/Serialization/TypeSerializers/Implementations/Custom/FlagSerializer.cs:73</c>),
+        /// so an airlock's <c>All</c> (15) comes back as 14 and an eye loses <c>Normal</c>. A collision
+        /// layer escapes by accident, because <c>CollisionGroup.AllMask = -1</c> makes the loop run to bit 32,
+        /// which C# shifts as bit 0; it is here to show the pass leaves what the engine gets right alone.
+        ///
+        /// <para>Every assertion is on the value read back, not on the node, because a comparison of
+        /// writes cannot see a loss in the write: 15 and 14 write the same. The controls are the bare
+        /// engine write of the same component under the same context.</para>
+        /// </summary>
+        [Test]
+        public async Task AFlagFieldKeepsBitZero()
+        {
+            await using var pair = await PoolManager.GetServerClient();
+            var server = pair.Server;
+            var entMan = server.EntMan;
+            var serialization = server.ResolveDependency<ISerializationManager>();
+            var timing = server.ResolveDependency<IGameTiming>();
+
+            var codec = Codec(serialization, entMan, timing);
+            var map = await pair.CreateTestMap();
+
+            int airtightLive = 0, airtightCodec = 0, airtightBare = 0, northWritten = 0;
+            int eyeLive = 0, eyeCodec = 0, eyeBare = 0;
+            int layerLive = 0, layerCodec = 0, layerBare = 0;
+
+            T Bare<T>(T component) where T : IComponent =>
+                (T) serialization.Read(typeof(T),
+                    serialization.WriteValueAs<MappingDataNode>(typeof(T), component, alwaysWrite: true, context: codec.Context),
+                    context: codec.Context, notNullableOverride: true)!;
+
+            await server.WaitPost(() =>
+            {
+                // On the grid: both anchor at spawn.
+                var airlock = entMan.SpawnEntity("AirlockGlass", map.GridCoords);
+                var airlockMeta = entMan.GetComponent<MetaDataComponent>(airlock);
+                var airtight = entMan.GetComponent<AirtightComponent>(airlock);
+                airtightLive = airtight.InitialAirBlockedDirection;
+                var airtightRow = codec.Write((airlock, airlockMeta), airtight);
+                northWritten = airtightRow.TryGet<SequenceDataNode>("airBlockedDirection", out var directions)
+                    ? directions.Count(node => node is ValueDataNode { Value: "North" })
+                    : -1;
+                airtightCodec = codec.Read<AirtightComponent>(airtightRow).InitialAirBlockedDirection;
+                airtightBare = Bare(airtight).InitialAirBlockedDirection;
+
+                // Normal (bit 0) and Subfloor (bit 2).
+                var eye = entMan.AddComponent<EyeComponent>(airlock);
+                server.System<SharedEyeSystem>().SetVisibilityMask(airlock, 5, eye);
+                eyeLive = eye.VisibilityMask;
+                eyeCodec = codec.Read<EyeComponent>(codec.Write((airlock, airlockMeta), eye)).VisibilityMask;
+                eyeBare = Bare(eye).VisibilityMask;
+
+                var wall = entMan.SpawnEntity("WallSolid", map.GridCoords.Offset(new System.Numerics.Vector2(1, 0)));
+                var fixtures = entMan.GetComponent<FixturesComponent>(wall);
+                layerLive = fixtures.Fixtures.Values.First().CollisionLayer;
+                layerCodec = codec.Read<FixturesComponent>(codec.Write((wall, entMan.GetComponent<MetaDataComponent>(wall)), fixtures)).Fixtures.Values.First().CollisionLayer;
+                layerBare = Bare(fixtures).Fixtures.Values.First().CollisionLayer;
+            });
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(airtightLive & 1, Is.EqualTo(1), "The control: the airlock has to block north, bit 0, for the loss to be measurable.");
+                Assert.That(airtightBare, Is.EqualTo(airtightLive & ~1), "The control, and the finding: the engine's write loses bit 0.");
+                Assert.That(airtightCodec, Is.EqualTo(airtightLive), "The codec must keep every direction an airlock blocks.");
+
+                // The one place the node is asserted: the pass is the permanent remedy (no upstream fix, ruled
+                // 2026-09-18), so an engine bump that fixes the writer must not leave bit 0 written twice or in a
+                // new shape. Engine-bump checklist: re-run this test.
+                Assert.That(northWritten, Is.EqualTo(1), "Bit 0 must be written exactly once, as one name in the flag sequence.");
+
+                Assert.That(eyeLive, Is.EqualTo(5), "The control: the eye must carry Normal and Subfloor.");
+                Assert.That(eyeBare, Is.EqualTo(4), "The control, and the finding: the engine's write loses Normal.");
+                Assert.That(eyeCodec, Is.EqualTo(5), "The codec must keep Normal.");
+
+                Assert.That(layerLive & 1, Is.EqualTo(1), "The control: the wall's layer must carry Opaque, bit 0, the case the engine gets right by accident.");
+                Assert.That(layerBare, Is.EqualTo(layerLive), "The control: the engine keeps a collision layer whole.");
+                Assert.That(layerCodec, Is.EqualTo(layerLive), "And the codec must not change what the engine gets right.");
+            });
+
+            await pair.CleanReturnAsync();
         }
 
         /// <summary>One cyborg's written timeout, or null when the row carries none.</summary>

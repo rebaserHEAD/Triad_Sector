@@ -61,6 +61,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
 
             var audit = new DrydockCodecFieldPass.NestedTimeAudit(Concrete);
             var family = new SortedSet<string>(StringComparer.Ordinal);
+            var flags = new SortedSet<string>(StringComparer.Ordinal);
             var polymorphic = new List<MemberInfo>();
             var refused = new List<string>();
             var components = 0;
@@ -71,9 +72,13 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
 
                 try
                 {
-                    foreach (var (from, time) in audit.For(component))
+                    foreach (var (from, corrected) in audit.For(component))
                     {
-                        family.Add($"{component.Name}.{from.Name} -> {time.DeclaringType?.Name}.{time.Name}");
+                        var line = $"{component.Name}.{from.Name} -> {corrected.DeclaringType?.Name}.{corrected.Name}";
+                        if (DrydockCodecFieldPass.IsFlagSerializer(corrected.GetCustomAttribute<DataFieldBaseAttribute>()?.CustomTypeSerializer))
+                            flags.Add(line);
+                        else
+                            family.Add(line);
                     }
 
                     polymorphic.AddRange(DrydockCodecFieldPass.WalkedOnlyForPolymorphism(component));
@@ -105,6 +110,12 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
 
             foreach (var line in refused)
                 await output.WriteLineAsync($"[nested-time] refused: {line}");
+
+            // F35's members below the component level, which ride the same walk: the pass rewrites each
+            // because the engine's flag writer loses bit 0.
+            await output.WriteLineAsync($"[nested-flags] {flags.Count} (component member -> flag field) pair(s) the walk reaches below the component level.");
+            foreach (var line in flags)
+                await output.WriteLineAsync($"[nested-flags] {line}");
 
             await output.WriteLineAsync(
                 $"[nested-time] delta 1: {widened.Count} type(s) the generator treats as data definitions and the [DataDefinition] attribute alone refused.");
