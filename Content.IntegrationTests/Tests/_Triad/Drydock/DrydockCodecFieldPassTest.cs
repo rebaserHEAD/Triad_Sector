@@ -3,13 +3,16 @@
 using System;
 using System.Collections.Generic;
 using System.Globalization;
+using System.Linq;
 using System.Threading.Tasks;
 using Content.Server._Triad.Drydock.Codec;
 using Content.Shared.Containers.ItemSlots;
 using Content.Shared.Damage;
 using Content.Shared.Damage.Prototypes;
+using Content.Shared.DoAfter;
 using Content.Shared.Doors.Components;
 using Content.Shared.FixedPoint;
+using Content.Shared.Medical;
 using Content.Shared.Weapons.Melee;
 using Robust.Shared.GameObjects;
 using Robust.Shared.Map;
@@ -58,6 +61,13 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
       groups:
         Brute: 30
 
+# A user for a do-after in progress, with nothing else on it for the codec to write.
+- type: entity
+  id: DrydockCodecDoAfterDummy
+  name: DrydockCodecDoAfterDummy
+  components:
+  - type: DoAfter
+
 # The same authored damage on a member that is not readOnly, which is the reach the walk has to
 # have: nothing on the path from the component to DamageDict is readOnly until DamageDict itself.
 - type: entity
@@ -72,6 +82,12 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
 
         private const string Blunt = "Blunt";
         private const string SlotId = "codec-slot";
+
+        /// <summary>
+        /// How long the do-after runs before it is written. Long enough that its start is seconds
+        /// behind the clock, so the offset the codec writes cannot be mistaken for the engine's zero.
+        /// </summary>
+        private const int DoAfterAgeTicks = 150;
 
         /// <summary>
         /// The ladder's own recipe, 37 Blunt on a damageable entity.
@@ -441,6 +457,121 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
 
             await pair.CleanReturnAsync();
         }
+
+        /// <summary>
+        /// Finding F27. <c>DoAfter.StartTime</c> carries <c>TimeOffsetSerializer</c> and is not
+        /// <c>readOnly</c> (<c>Content.Shared/DoAfter/DoAfter.cs:24-25</c>), inside a
+        /// <c>[DataDefinition]</c> reached only through <c>DoAfterComponent.DoAfters</c>, a
+        /// dictionary (<c>Content.Shared/DoAfter/DoAfterComponent.cs:14-15</c>). The engine writes it
+        /// whole, through a serializer that answers zero to any caller that is not its own, so a
+        /// do-after in progress comes back having started at the beginning of time.
+        ///
+        /// <para>The control is the bare engine write under the same context, asserted rather than
+        /// described, because it is the whole finding: a zero that writes, reads and writes again is
+        /// perfectly idempotent, so the corpus round trip cannot see it, and only a comparison against
+        /// the live value can.</para>
+        /// </summary>
+        [Test]
+        public async Task ADoAfterInProgressKeepsItsStartTime()
+        {
+            await using var pair = await PoolManager.GetServerClient();
+            var server = pair.Server;
+            var entMan = server.EntMan;
+            var serialization = server.ResolveDependency<ISerializationManager>();
+            var timing = server.ResolveDependency<IGameTiming>();
+            var doAfters = server.System<SharedDoAfterSystem>();
+
+            var codec = Codec(serialization, entMan, timing);
+            var map = await pair.CreateTestMap();
+
+            EntityUid uid = default;
+            var begun = false;
+
+            await server.WaitPost(() =>
+            {
+                // On an initialized map, so the entity is map-initialized: before map-init a time field
+                // is still setup data and the adapter stores zero on purpose, which would hide the fix.
+                uid = entMan.SpawnEntity("DrydockCodecDoAfterDummy", new EntityCoordinates(map.MapUid, default));
+
+                // Any concrete event with no state of its own: a real content type rather than one
+                // declared here, so reading it back does not depend on the test assembly being
+                // visible to the reflection manager. Five minutes long, so it is still in progress.
+                var args = new DoAfterArgs(entMan, uid, TimeSpan.FromMinutes(5), new StethoscopeDoAfterEvent(), null)
+                {
+                    Broadcast = true,
+                };
+
+                begun = doAfters.TryStartDoAfter(args);
+            });
+
+            // The clock runs on, so the start is seconds behind it and the offset is plainly not zero.
+            await pair.RunTicksSync(DoAfterAgeTicks);
+
+            var started = TimeSpan.Zero;
+            var age = TimeSpan.Zero;
+            var written = new MappingDataNode();
+            var bare = new MappingDataNode();
+            var restored = TimeSpan.MaxValue;
+            var bareRestored = TimeSpan.MaxValue;
+
+            await server.WaitPost(() =>
+            {
+                var component = entMan.GetComponent<DoAfterComponent>(uid);
+                started = component.DoAfters.Values.Single().StartTime;
+                age = timing.CurTime - started;
+
+                written = codec.Write((uid, entMan.GetComponent<MetaDataComponent>(uid)), component);
+
+                // The control: the engine's own write of the same component, under the same context.
+                bare = serialization.WriteValueAs<MappingDataNode>(
+                    typeof(DoAfterComponent), component, alwaysWrite: true, context: codec.Context);
+
+                restored = codec.Read<DoAfterComponent>(written).DoAfters.Values.Single().StartTime;
+
+                bareRestored = ((DoAfterComponent) serialization.Read(
+                        typeof(DoAfterComponent), bare, context: codec.Context, notNullableOverride: true)!)
+                    .DoAfters.Values.Single().StartTime;
+            });
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(begun, Is.True, "The control: a do-after has to be in progress before anything is measured about writing one.");
+
+                Assert.That(age, Is.GreaterThan(TimeSpan.FromSeconds(2)),
+                    "The control: the do-after must have started well before the write, or a zero offset would be right by accident.");
+
+                Assert.That(StartTimeIn(bare), Is.EqualTo("0"),
+                    "The control, and the finding: the engine writes a nested time field as a literal zero for any caller but its own.");
+
+                Assert.That(bareRestored, Is.EqualTo(TimeSpan.Zero),
+                    "The control, and the finding: and reads it back as the beginning of time.");
+
+                Assert.That(Seconds(StartTimeIn(written)), Is.EqualTo(-age.TotalSeconds).Within(1),
+                    "The codec must write a nested start as its distance from the clock, as it does one on a component.");
+
+                Assert.That(restored, Is.EqualTo(started).Within(TimeSpan.FromSeconds(1)),
+                    "And read it back as the same moment, measured from the clock at load.");
+            });
+
+            await pair.CleanReturnAsync();
+        }
+
+        /// <summary>The one do-after's written start, or null when the row carries none.</summary>
+        private static string? StartTimeIn(MappingDataNode component)
+        {
+            if (!component.TryGet<MappingDataNode>("doAfters", out var doAfters) || doAfters.Count != 1)
+                return null;
+
+            var (_, element) = doAfters[0];
+            return element is MappingDataNode doAfter && doAfter.TryGet<ValueDataNode>("startTime", out var start)
+                ? start.Value
+                : null;
+        }
+
+        private static double Seconds(string? written) =>
+            double.TryParse(written, NumberStyles.Float, CultureInfo.InvariantCulture, out var seconds)
+                ? seconds
+                : double.NaN;
 
         /// <summary>
         /// The codec under a stable-id pair that answers rather than throws: neither fixture holds

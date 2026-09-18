@@ -50,6 +50,11 @@ namespace Content.Server._Triad.Drydock.Codec;
 /// fields itself, per field, wherever they sit: on the component, inside a data definition it holds,
 /// and inside the elements of a collection it holds, because a definition is just as reachable
 /// through a dictionary value as through a field.</para>
+///
+/// <para>A time-offset field gets the same reach, on both halves. Below the component level the
+/// engine does write one, through a serializer that answers zero to every caller but its own, so a
+/// nested deadline is not skewed but gone; the walk descends to it for the same reason it descends
+/// to a <c>readOnly</c> field, and the read walk mirrors the write walk to put the value back.</para>
 /// </summary>
 public sealed class DrydockCodecFieldPass
 {
@@ -65,7 +70,7 @@ public sealed class DrydockCodecFieldPass
     private readonly MetaDataSystem _metaData;
 
     private readonly ConcurrentDictionary<Type, ImmutableArray<Entry>> _cache = new();
-    private readonly ConcurrentDictionary<Type, ImmutableArray<Entry>> _readOnlyCache = new();
+    private readonly ConcurrentDictionary<Type, ImmutableArray<Entry>> _nestedCache = new();
     private readonly ConcurrentDictionary<Type, ImmutableArray<Computed>> _computedCache = new();
     private readonly ConcurrentDictionary<(Type Value, Type Serializer), MethodInfo?> _writers = new();
 
@@ -73,7 +78,7 @@ public sealed class DrydockCodecFieldPass
     /// Reachability by declared type, which is a fact about the code rather than about a codec, so
     /// it is shared and answered once per type.
     /// </summary>
-    private static readonly ConcurrentDictionary<Type, bool> CarriesReadOnlyCache = new();
+    private static readonly ConcurrentDictionary<Type, bool> CarriesCorrectionCache = new();
 
     public DrydockCodecFieldPass(
         ISerializationManager serialization,
@@ -164,23 +169,29 @@ public sealed class DrydockCodecFieldPass
     /// Runs on the component the engine's reader produced, against the mapping it was read from.
     /// </summary>
     /// <remarks>
-    /// Only the time-offset case has a read half. The two dropped fields are re-derived rather than
-    /// restored: chunks come back from our own tables, and the grid's fixtures are rebuilt from
-    /// those chunks, so both are correct by having been left alone. A <c>readOnly</c> field needs no
-    /// read half either: the generator's skip is in the writer and in equality, never in the reader,
-    /// so what this pass wrote is read back by the engine's own generated reader.
+    /// Only the time-offset case has a read half of its own, at any depth. The two dropped fields
+    /// are re-derived rather than restored: chunks come back from our own tables, and the grid's
+    /// fixtures are rebuilt from those chunks, so both are correct by having been left alone. A
+    /// <c>readOnly</c> field needs no read half either: the generator's skip is in the writer and in
+    /// equality, never in the reader, so what this pass wrote is read back by the engine's own
+    /// generated reader. The walk cases are here only as the way down to a nested time field, which
+    /// the engine reads back as <see cref="TimeSpan.Zero"/> whatever the row holds.
     /// </remarks>
     public void AfterRead(IComponent component, MappingDataNode mapping)
     {
         foreach (var entry in EntriesFor(component.GetType()))
         {
-            if (entry.Case != FieldCase.TimeOffset)
-                continue;
+            switch (entry.Case)
+            {
+                case FieldCase.TimeOffset:
+                    ReadTimeOffset(entry, component, mapping);
+                    break;
 
-            if (!mapping.TryGet<ValueDataNode>(entry.Key, out var node) || node.IsNull)
-                continue;
-
-            entry.Set(component, DrydockTimeOffsetAdapter.Read(node, _timing.CurTime));
+                case FieldCase.ReadOnly:
+                case FieldCase.Walk:
+                    ReadWalkMember(entry, component, mapping, component.GetType().Name);
+                    break;
+            }
         }
 
         foreach (var computed in ComputedFor(component.GetType()))
@@ -209,6 +220,131 @@ public sealed class DrydockCodecFieldPass
             return;
 
         into[entry.Key] = DrydockTimeOffsetAdapter.Write(deadline, walk.LifeStage, walk.CurTime, walk.PauseTime);
+    }
+
+    /// <summary>The read half of <see cref="WriteTimeOffset"/>: one branch, against the clock at load.</summary>
+    private void ReadTimeOffset(Entry entry, object owner, MappingDataNode from)
+    {
+        if (!from.TryGet<ValueDataNode>(entry.Key, out var node) || node.IsNull)
+            return;
+
+        entry.Set(owner, DrydockTimeOffsetAdapter.Read(node, _timing.CurTime));
+    }
+
+    /// <summary>
+    /// The read mirror of <see cref="WalkMember"/> and of the walk <see cref="WriteReadOnly"/>
+    /// finishes with: down through the value the engine's reader built, against the row it built it
+    /// from, to the time fields that reader restored as zero.
+    /// </summary>
+    private void ReadWalkMember(Entry entry, object owner, MappingDataNode from, string path)
+    {
+        // The asymmetric member's value is a flat dictionary its own reader already rebuilt from the
+        // key it consumes; nothing in it is a definition.
+        if (entry.Asymmetric != null)
+            return;
+
+        if (entry.Get(owner) is not { } value)
+            return;
+
+        var node = entry.Inline
+            ? from
+            : from.TryGet(entry.Key, out var stored) ? stored : null;
+
+        if (node == null)
+            return;
+
+        ReadWalkValue(value, node, $"{path}.{entry.Member.Name}");
+    }
+
+    /// <remarks>
+    /// No cycle guard, unlike the write walk: the object graph here was just built by the engine's
+    /// reader from a tree, and a tree cannot reach itself. A shape the row does not match is
+    /// corruption of our own write, so it is a <see cref="FormatException"/>, the read posture the
+    /// context takes.
+    /// </remarks>
+    private void ReadWalkValue(object? value, DataNode node, string path)
+    {
+        if (value == null || value is string)
+            return;
+
+        var type = value.GetType();
+
+        if (IsDataDefinition(type))
+        {
+            var members = NestedMembersFor(type);
+            if (members.Length == 0)
+                return;
+
+            if (node is not MappingDataNode mapping)
+                throw new FormatException($"Drydock codec: {path} is a data definition the pass corrects, and its row holds {node.GetType().Name} rather than a mapping.");
+
+            foreach (var member in members)
+            {
+                switch (member.Case)
+                {
+                    case FieldCase.TimeOffset:
+                        ReadTimeOffset(member, value, mapping);
+                        break;
+
+                    case FieldCase.ReadOnly:
+                    case FieldCase.Walk:
+                        ReadWalkMember(member, value, mapping, path);
+                        break;
+                }
+            }
+
+            return;
+        }
+
+        switch (value)
+        {
+            case IDictionary dictionary:
+                ReadWalkDictionary(dictionary, node, path);
+                break;
+
+            // A dictionary is an IEnumerable too, so this arm is only reached by everything else.
+            case IEnumerable enumerable:
+                ReadWalkSequence(enumerable, node, path);
+                break;
+        }
+    }
+
+    private void ReadWalkDictionary(IDictionary dictionary, DataNode node, string path)
+    {
+        if (dictionary.Count == 0 || node is not MappingDataNode mapping)
+            return;
+
+        foreach (DictionaryEntry pair in dictionary)
+        {
+            if (pair.Value is not { } element || !NeedsWalking(element))
+                continue;
+
+            var keyNode = _serialization.WriteValue(pair.Key.GetType(), pair.Key, alwaysWrite: true, context: _context);
+            if (keyNode is not ValueDataNode { Value: var key } || !mapping.TryGet(key, out var child))
+                throw new FormatException($"Drydock codec: {path} holds an entry keyed {pair.Key} that its row has no member for.");
+
+            ReadWalkValue(element, child, $"{path}[{key}]");
+        }
+    }
+
+    private void ReadWalkSequence(IEnumerable enumerable, DataNode node, string path)
+    {
+        if (node is not SequenceDataNode sequence)
+            return;
+
+        var index = 0;
+        foreach (var element in enumerable)
+        {
+            if (element != null && NeedsWalking(element))
+            {
+                if (index >= sequence.Count)
+                    throw new FormatException($"Drydock codec: {path} holds {index + 1} elements or more and its row holds {sequence.Count}.");
+
+                ReadWalkValue(element, sequence[index], $"{path}[{index}]");
+            }
+
+            index++;
+        }
     }
 
     /// <summary>
@@ -284,7 +420,7 @@ public sealed class DrydockCodecFieldPass
             // A definition with nothing readOnly on it has nothing here to write, whatever shape it
             // wrote as. Asking first keeps a scalar-writing definition, of which content has
             // several, from being refused for a walk it never needed.
-            var members = ReadOnlyMembersFor(type);
+            var members = NestedMembersFor(type);
             if (members.Length == 0)
                 return;
 
@@ -400,7 +536,7 @@ public sealed class DrydockCodecFieldPass
     private bool NeedsWalking(object value) =>
         value is not string
         && (value is IEnumerable
-            || (IsDataDefinition(value.GetType()) && ReadOnlyMembersFor(value.GetType()).Length > 0));
+            || (IsDataDefinition(value.GetType()) && NestedMembersFor(value.GetType()).Length > 0));
 
     private DataNode WriteMember(Entry entry, object? value, string path)
     {
@@ -452,8 +588,8 @@ public sealed class DrydockCodecFieldPass
     private ImmutableArray<Entry> EntriesFor(Type componentType) =>
         _cache.GetOrAdd(componentType, static type => Build(type));
 
-    private ImmutableArray<Entry> ReadOnlyMembersFor(Type type) =>
-        _readOnlyCache.GetOrAdd(type, static walked => BuildReadOnly(walked));
+    private ImmutableArray<Entry> NestedMembersFor(Type type) =>
+        _nestedCache.GetOrAdd(type, static walked => BuildNested(walked));
 
     private ImmutableArray<Computed> ComputedFor(Type componentType) =>
         _computedCache.GetOrAdd(componentType, static type => BuildComputed(type));
@@ -536,10 +672,20 @@ public sealed class DrydockCodecFieldPass
     }
 
     /// <summary>
-    /// The members the pass owns one level below a component: the <c>readOnly</c> ones, since every
-    /// other member of a nested definition was written by that definition's own generated writer.
+    /// The members the pass owns one level below a component, by the same classification it uses at
+    /// the component level: a <c>readOnly</c> member, a time-offset member, and a member that is a
+    /// way down to either. Everything else of a nested definition was written correctly by that
+    /// definition's own generated writer.
+    ///
+    /// <para>A time-offset member is owned here whether or not it is <c>readOnly</c>. The generated
+    /// writer does write one, but through <c>TimeOffsetSerializer</c>, which answers a literal zero
+    /// to any caller that is not an <c>EntitySerializer</c> and reads back
+    /// <see cref="TimeSpan.Zero"/> for any caller that is not an <c>EntityDeserializer</c>
+    /// (<c>RobustToolbox/Robust.Shared/Serialization/TypeSerializers/Implementations/Custom/TimeOffsetSerializer.cs:65-73</c>,
+    /// <c>:32-36</c>). Written whole is not the same as written right: finding F27, where a do-after
+    /// in progress came back having started at the beginning of time.</para>
     /// </summary>
-    private static ImmutableArray<Entry> BuildReadOnly(Type type)
+    private static ImmutableArray<Entry> BuildNested(Type type)
     {
         var entries = ImmutableArray.CreateBuilder<Entry>();
 
@@ -550,11 +696,6 @@ public sealed class DrydockCodecFieldPass
 
             if (fieldCase is FieldCase.GridChunks or FieldCase.GridFixtures)
                 throw new InvalidOperationException($"Drydock codec: {Name(member)} is a grid field below a component, where one cannot occur.");
-
-            // A member that is not readOnly and carries nothing readOnly below it was written whole
-            // by this definition's own generated writer, so the pass has nothing to do with it.
-            if (fieldCase == FieldCase.TimeOffset && !attribute.ReadOnly)
-                continue;
 
             entries.Add(EntryFor(member, attribute, fieldCase));
         }
@@ -618,29 +759,33 @@ public sealed class DrydockCodecFieldPass
         if (data.ReadOnly)
             return FieldCase.ReadOnly;
 
-        // Not a correction of this member, but a way down to one. Decided per declared member type
-        // and cached, so no component pays the reflection walk twice.
-        if (CarriesReadOnly(MemberType(member)))
+        // Not a correction of this member, but a way down to one: a readOnly field or a time field
+        // somewhere below it. Decided per declared member type and cached, so no component pays the
+        // reflection walk twice.
+        if (CarriesCorrection(MemberType(member)))
             return FieldCase.Walk;
 
         return null;
     }
 
     /// <summary>
-    /// Does this type, or anything a collection of it holds, carry a <c>readOnly</c> data field
-    /// anywhere below it? The question is asked of the declared type, once, because it decides
-    /// whether a member is worth descending into at all.
+    /// Does this type, or anything a collection of it holds, carry anywhere below it a field the pass
+    /// must correct: a <c>readOnly</c> field, which the generated writer skips, or a time-offset
+    /// field, which the engine's serializer zeroes for any caller but its own? The question is asked
+    /// of the declared type, once, because it decides whether a member is worth descending into at
+    /// all, and a type that carries only a time field is as much a reason to descend as one that
+    /// carries a <c>readOnly</c> one (finding F27).
     /// </summary>
-    private static bool CarriesReadOnly(Type? type)
+    private static bool CarriesCorrection(Type? type)
     {
         if (type == null)
             return false;
 
-        if (CarriesReadOnlyCache.TryGetValue(type, out var known))
+        if (CarriesCorrectionCache.TryGetValue(type, out var known))
             return known;
 
         var carries = Carries(type, new HashSet<Type>());
-        CarriesReadOnlyCache[type] = carries;
+        CarriesCorrectionCache[type] = carries;
         return carries;
     }
 
@@ -665,8 +810,12 @@ public sealed class DrydockCodecFieldPass
 
         foreach (var (member, attribute) in DataMembers(type))
         {
-            if (attribute.ReadOnly || Carries(MemberType(member), seen))
+            if (attribute.ReadOnly
+                || attribute.CustomTypeSerializer == typeof(TimeOffsetSerializer)
+                || Carries(MemberType(member), seen))
+            {
                 return true;
+            }
         }
 
         return false;
