@@ -9,6 +9,7 @@ using System.Threading.Tasks;
 using Content.Server._Triad.Drydock.Codec;
 using Content.Server.Atmos.Components;
 using Content.Server.Chemistry.Components;
+using Content.Shared.Armor;
 using Content.Shared.Containers.ItemSlots;
 using Content.Shared.Damage;
 using Content.Shared.Damage.Prototypes;
@@ -906,6 +907,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             int airtightLive = 0, airtightCodec = 0, airtightBare = 0, northWritten = 0;
             int eyeLive = 0, eyeCodec = 0, eyeBare = 0;
             int layerLive = 0, layerCodec = 0, layerBare = 0;
+            int pierceLive = 0, pierceCodec = 0, pierceBare = 0;
 
             T Bare<T>(T component) where T : IComponent =>
                 (T) serialization.Read(typeof(T),
@@ -933,6 +935,15 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                 eyeCodec = codec.Read<EyeComponent>(codec.Write((airlock, airlockMeta), eye)).VisibilityMask;
                 eyeBare = Bare(eye).VisibilityMask;
 
+                // Nested: 13 of the audit's 15 nested flag members are this one field, inside a definition the walk
+                // has to reach. No prototype sets it, so it is set here, on this entity's own copy.
+                var armor = entMan.SpawnEntity("ClothingOuterArmorBone", map.GridCoords);
+                var armorComp = entMan.GetComponent<ArmorComponent>(armor);
+                armorComp.Modifiers.IgnoreArmorPierceFlags = (int) PartialArmorPierceFlags.Positive;
+                pierceLive = armorComp.Modifiers.IgnoreArmorPierceFlags;
+                pierceCodec = codec.Read<ArmorComponent>(codec.Write((armor, entMan.GetComponent<MetaDataComponent>(armor)), armorComp)).Modifiers.IgnoreArmorPierceFlags;
+                pierceBare = Bare(armorComp).Modifiers.IgnoreArmorPierceFlags;
+
                 var wall = entMan.SpawnEntity("WallSolid", map.GridCoords.Offset(new System.Numerics.Vector2(1, 0)));
                 var fixtures = entMan.GetComponent<FixturesComponent>(wall);
                 layerLive = fixtures.Fixtures.Values.First().CollisionLayer;
@@ -954,6 +965,10 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                 Assert.That(eyeLive, Is.EqualTo(5), "The control: the eye must carry Normal and Subfloor.");
                 Assert.That(eyeBare, Is.EqualTo(4), "The control, and the finding: the engine's write loses Normal.");
                 Assert.That(eyeCodec, Is.EqualTo(5), "The codec must keep Normal.");
+
+                Assert.That(pierceLive, Is.EqualTo(1), "The control: the armour's nested modifier set must carry Positive, bit 0.");
+                Assert.That(pierceBare, Is.EqualTo(0), "The control, and the finding: the engine's write loses it inside a nested definition too.");
+                Assert.That(pierceCodec, Is.EqualTo(1), "The walk must reach a flag field below the component and keep bit 0.");
 
                 Assert.That(layerLive & 1, Is.EqualTo(1), "The control: the wall's layer must carry Opaque, bit 0, the case the engine gets right by accident.");
                 Assert.That(layerBare, Is.EqualTo(layerLive), "The control: the engine keeps a collision layer whole.");

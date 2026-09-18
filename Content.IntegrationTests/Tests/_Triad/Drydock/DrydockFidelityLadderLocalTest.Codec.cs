@@ -7,6 +7,9 @@ using System.Text.Json.Nodes;
 using System.Threading.Tasks;
 using Content.IntegrationTests.Pair;
 using Content.Server._Triad.Drydock.Codec;
+using Content.Server.Chemistry.Components;
+using Content.Shared.Chemistry;
+using Content.Shared.Containers.ItemSlots;
 using Robust.Shared.EntitySerialization;
 using Robust.Shared.GameObjects;
 using Robust.Shared.IoC;
@@ -50,13 +53,15 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
     /// stamp with no event (<c>:1019-1036</c>) and the pause stamp.</item>
     /// </list></para>
     ///
-    /// <para>Two departures from the design stop, both stated in the report. The load goes back onto the hull's own
-    /// map, as the engine mode does, and not onto a paused staging map: the whole load runs inside one
-    /// <c>WaitPost</c>, so no tick can run between its phases, which is what the pause was for, and a fresh map would
-    /// lack the atmosphere the rung gives this one. And nothing is subscribed to <c>EntityInitialized</c>: the
-    /// manifest carries no member that is not a data field yet (F33), so the seam has nothing to apply. A copy only
-    /// ever moves data fields, so such a member would get in by being set before init, or in that handler for one an
-    /// init handler resets.</para>
+    /// <para>One departure from the design stop: the load goes back onto the hull's own map, as the engine mode does,
+    /// and not onto a paused staging map. The whole load runs inside one <c>WaitPost</c>, so no tick can run between
+    /// its phases, which is what the pause was for, and a fresh map would lack the atmosphere the rung gives this
+    /// one.</para>
+    ///
+    /// <para>The seam between each entity's init and its startup (<c>EntityInitialized</c>) carries one thing today:
+    /// the item slots held back from init (<see cref="HoldBackSlots"/>). The manifest's members that are not data
+    /// fields (F33) are not carried yet; a copy only ever moves data fields, so such a member would get in by being
+    /// set before init, or at the seam for one an init handler resets.</para>
     /// </summary>
     public sealed partial class DrydockFidelityLadderLocalTest
     {
@@ -68,6 +73,82 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
         private sealed record CodecEntity(long Id, string? Prototype, bool MapInitialized, bool Paused, Dictionary<string, string> Rows);
 
         private sealed record CodecImage(long GridId, List<CodecEntity> Entities, string Tiles, int Unsaved, int Bytes);
+
+        /// <summary>
+        /// The seam's hardest case: a reagent dispenser registers its beaker slot at map init and its storage slots
+        /// from its parts (ReagentDispenserSystem.cs:275, :294-313), neither of which runs under the silent map-init
+        /// stamp, so its slots come back only if the seam adds them from the row. Its jugs and beaker sit in
+        /// containers the row carries, so a restored slot finds its item already inside. No drydock sweep runs:
+        /// nothing here calls the drydock.
+        /// </summary>
+        [Test]
+        public async Task TheLoopKeepsADispensersSlots()
+        {
+            await using var pair = await PoolManager.GetServerClient();
+            var server = pair.Server;
+            var entMan = server.EntMan;
+            var map = await pair.CreateTestMap();
+            var slots = server.System<ItemSlotsSystem>();
+            CodecNotes.Clear();
+
+            var storageIds = new List<string>();
+            var stored = new Dictionary<string, string?>();
+
+            await server.WaitPost(() =>
+            {
+                var dispenser = entMan.SpawnEntity("ChemDispenserEmpty", map.GridCoords);
+                var comp = entMan.GetComponent<ReagentDispenserComponent>(dispenser);
+                storageIds.AddRange(comp.StorageSlotIds);
+
+                var beaker = entMan.SpawnEntity("Beaker", map.GridCoords);
+                slots.TryInsert(dispenser, SharedReagentDispenser.OutputSlotName, beaker, null);
+                for (var i = 0; i < 2 && i < storageIds.Count; i++)
+                    slots.TryInsert(dispenser, storageIds[i], entMan.SpawnEntity("JugCarbon", map.GridCoords), null);
+
+                foreach (var id in storageIds.Prepend(SharedReagentDispenser.OutputSlotName))
+                    stored[id] = slots.TryGetSlot(dispenser, id, out var slot) && slot.Item is { } item
+                        ? entMan.GetComponent<MetaDataComponent>(item).EntityPrototype?.ID
+                        : null;
+            });
+
+            var loaded = await CodecRoundTrip(pair, map.Grid.Owner);
+
+            var restored = new Dictionary<string, string?>();
+            var registered = 0;
+            await server.WaitPost(() =>
+            {
+                var dispensers = entMan.EntityQueryEnumerator<ReagentDispenserComponent, TransformComponent>();
+                while (dispensers.MoveNext(out var uid, out _, out var xform))
+                {
+                    if (xform.GridUid != loaded)
+                        continue;
+
+                    foreach (var id in stored.Keys)
+                    {
+                        if (!slots.TryGetSlot(uid, id, out var slot))
+                            continue;
+
+                        registered++;
+                        restored[id] = slot.Item is { } item ? entMan.GetComponent<MetaDataComponent>(item).EntityPrototype?.ID : null;
+                    }
+                }
+            });
+
+            foreach (var note in CodecNotes)
+                await TestContext.Out.WriteLineAsync(note);
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(storageIds, Is.Not.Empty, "The control: the dispenser must have storage slots, from its parts at map init.");
+                Assert.That(stored[SharedReagentDispenser.OutputSlotName], Is.EqualTo("Beaker"), "The control: the beaker has to be in its slot before the store.");
+                Assert.That(stored.Values.Count(v => v == "JugCarbon"), Is.EqualTo(2), "The control: two jugs have to be in storage slots before the store.");
+
+                Assert.That(registered, Is.EqualTo(stored.Count), "Every slot the dispenser had must be registered again, though nothing that registers them runs.");
+                Assert.That(restored, Is.EquivalentTo(stored), "And each must hold what it held.");
+            });
+
+            await pair.CleanReturnAsync();
+        }
 
         private static async Task<EntityUid> CodecRoundTrip(TestPair pair, EntityUid grid)
         {
@@ -259,6 +340,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             var removed = 0;
             var overwroteByType = new Dictionary<string, int>(StringComparer.Ordinal);
             var removedByType = new Dictionary<string, int>(StringComparer.Ordinal);
+            var heldBack = new Dictionary<EntityUid, Dictionary<string, ItemSlot>>();
 
             foreach (var (uid, data) in deserializer.Entities)
             {
@@ -271,7 +353,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                         continue;
 
                     var registration = factory.GetRegistration(name);
-                    var read = codec.Read(registration.Type, row);
+                    var read = codec.Read(registration.Type, name == ItemSlotsName ? HoldBackSlots(entMan, codec, uid, row, heldBack) : row);
 
                     if (entMan.TryGetComponent(uid, registration.Type, out var existing))
                     {
@@ -320,8 +402,47 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                 newParent: entMan.GetComponent<TransformComponent>(mapUid));
             deserializer.Result.Orphans.Clear();
 
-            // 5. The engine's startup, with the silent map-init stamp.
-            deserializer.StartEntities();
+            // 5. The engine's startup, with the silent map-init stamp, and the seam between each entity's init and its
+            // startup (EntityManager.cs:1060, before StartEntity at EntityDeserializer.cs:977-982), where the held-back
+            // slots go in: into the slot an init handler re-added, or added whole where nothing re-added it.
+            var itemSlots = server.System<ItemSlotsSystem>();
+            var copiedAtSeam = 0;
+            var addedAtSeam = 0;
+
+            void AtSeam(Entity<MetaDataComponent> entity)
+            {
+                if (!heldBack.Remove(entity.Owner, out var held))
+                    return;
+
+                foreach (var (key, stored) in held)
+                {
+                    if (itemSlots.TryGetSlot(entity.Owner, key, out var live))
+                    {
+                        // Into the live instance, not in place of it: the component that re-added the slot holds a
+                        // reference to that instance as its own data field. CopyFrom is ItemSlotsSystem's alone
+                        // (RA0002), so the scaffolding calls it by name; a loader in the server needs a ruling on
+                        // how it gets that access.
+                        CopySlot.Invoke(live, new object[] { stored });
+                        copiedAtSeam++;
+                    }
+                    else
+                    {
+                        itemSlots.AddItemSlot(entity.Owner, key, stored);
+                        addedAtSeam++;
+                    }
+                }
+            }
+
+            var heldBackSlots = heldBack.Values.Sum(held => held.Count);
+            entMan.EntityInitialized += AtSeam;
+            try
+            {
+                deserializer.StartEntities();
+            }
+            finally
+            {
+                entMan.EntityInitialized -= AtSeam;
+            }
 
             // The engine's reading of the tiles against the image's own.
             var stored = DrydockTileTable.Read(tileTable, name => tileDefs[name].TileId).ToHashSet();
@@ -338,8 +459,58 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                            + $"(its ComponentAdd saw prototype data), {added} added as read, {removed} prototype component(s) removed before init.");
             CodecNotes.Add($"         overwritten, top: {Top(overwroteByType)}");
             CodecNotes.Add($"         removed: {Top(removedByType)}");
+            CodecNotes.Add($"[ladder] codec round trip {trip}: {heldBackSlots} item slot(s) held back from init; at the seam {copiedAtSeam} copied into the slot init re-added, "
+                           + $"{addedAtSeam} added whole, {heldBack.Count} entit(y/ies) whose held-back slots the seam never reached.");
 
             return gridUid;
+        }
+
+        private const string ItemSlotsName = "ItemSlots";
+
+        private static readonly System.Reflection.MethodInfo CopySlot =
+            typeof(ItemSlot).GetMethod("CopyFrom", new[] { typeof(ItemSlot) })
+            ?? throw new InvalidOperationException("ItemSlot.CopyFrom(ItemSlot) is gone.");
+
+        /// <summary>
+        /// The item-slot registry is readOnly on purpose: a slot a component adds at init is kept out of a save so
+        /// that the add does not duplicate it (ItemSlotsComponent.cs:36-39), and the codec writes it anyway, because
+        /// a slot's own state (a lock, for one) lives nowhere else. So before init only the keys the prototype's own
+        /// registry holds go in, which is what the registry's init expects, and the rest wait for the seam. Ruled
+        /// 2026-09-18: no list of who re-adds what, because the seam finds out.
+        /// </summary>
+        private static MappingDataNode HoldBackSlots(
+            IEntityManager entMan,
+            DrydockCodec codec,
+            EntityUid uid,
+            MappingDataNode row,
+            Dictionary<EntityUid, Dictionary<string, ItemSlot>> heldBack)
+        {
+            if (!row.TryGet<MappingDataNode>("slots", out var slots))
+                return row;
+
+            var prototypeKeys = entMan.TryGetComponent<ItemSlotsComponent>(uid, out var registry)
+                ? registry.Slots.Keys.ToHashSet()
+                : new HashSet<string>();
+
+            // The stored slots as objects, read once whole, so the seam hands init's slot the stored one.
+            var stored = codec.Read<ItemSlotsComponent>(row).Slots;
+            var filtered = row.Copy();
+            var filteredSlots = filtered.Get<MappingDataNode>("slots");
+            var held = new Dictionary<string, ItemSlot>();
+
+            foreach (var (key, _) in slots)
+            {
+                if (prototypeKeys.Contains(key))
+                    continue;
+
+                filteredSlots.Remove(key);
+                held[key] = stored[key];
+            }
+
+            if (held.Count > 0)
+                heldBack[uid] = held;
+
+            return filtered;
         }
 
         private static string Top(Dictionary<string, int> counts) =>
