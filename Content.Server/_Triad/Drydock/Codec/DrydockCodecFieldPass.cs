@@ -122,10 +122,10 @@ public sealed class DrydockCodecFieldPass
                     break;
 
                 case FieldCase.GridChunks:
-                    // Tiles are stored as our own tilemap and chunk rows. The engine's chunk
-                    // serializer resolves tile ids through a tilemap only its own loader builds, and
-                    // writing the chunks here would store the same tiles a second time in a form
-                    // nothing can read back.
+                    // Tiles are stored apart, in DrydockTileTable under the image's own tile ids. The
+                    // engine's chunk serializer resolves tile ids through a tilemap only its own
+                    // loader and saver build, so the chunks written here would carry ids nothing
+                    // can resolve, and store the same tiles a second time.
                     mapping.Remove(entry.Key);
                     break;
 
@@ -172,7 +172,7 @@ public sealed class DrydockCodecFieldPass
     /// </summary>
     /// <remarks>
     /// Only the time-offset case has a read half of its own, at any depth. The two dropped fields
-    /// are re-derived rather than restored: chunks come back from our own tables, and the grid's
+    /// are re-derived rather than restored: chunks come back from <see cref="DrydockTileTable"/>, and the grid's
     /// fixtures are rebuilt from those chunks, so both are correct by having been left alone. A
     /// <c>readOnly</c> field needs no read half either: the generator's skip is in the writer and in
     /// equality, never in the reader, so what this pass wrote is read back by the engine's own
