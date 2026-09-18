@@ -239,8 +239,8 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             ["PoweredLightComponent.~LastThunk"] = (StateClass.Volatile, "turn-on sound throttle (PoweredLightSystem.cs:287-289)"),
             ["SpeechComponent.~LastTimeSoundPlayed"] = (StateClass.Volatile, "speech sound cooldown (SpeechNoiseSystem.cs:70-74)"),
             ["GridPathfindingComponent.~NextUpdate"] = (StateClass.Volatile, "graph update gate, set when a chunk is dirtied (PathfindingSystem.Grid.cs:329-330, :344-345)"),
-            ["SmesComponent.~LastChargeLevelTime"] = (StateClass.Derived, "SMES visual throttle, stamped at startup (SmesSystem.cs:32)"),
-            ["SmesComponent.~LastChargeStateTime"] = (StateClass.Derived, "SMES visual throttle, stamped at startup (SmesSystem.cs:36)"),
+            ["SmesComponent.~LastChargeLevelTime"] = (StateClass.Volatile, "SMES visual throttle; a restored zero passes the delay test (SmesSystem.cs:41)"),
+            ["SmesComponent.~LastChargeStateTime"] = (StateClass.Volatile, "SMES visual throttle; a restored zero passes the delay test (SmesSystem.cs:50)"),
         };
 
         /// <summary>
