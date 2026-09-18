@@ -7,7 +7,9 @@ using System.Linq;
 using System.Reflection;
 using System.Threading.Tasks;
 using Content.Server._Triad.Drydock;
+using Content.Server._Triad.Drydock.Codec;
 using Robust.Shared.GameObjects;
+using Robust.Shared.Map;
 using Robust.Shared.Serialization;
 using Robust.Shared.Serialization.Manager;
 using Robust.Shared.Serialization.Manager.Attributes;
@@ -110,7 +112,36 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             var confirmed = byLeaf.Keys.ToDictionary(StableName, t => byLeaf[t]);
             var candidateCount = candidates.Count;
 
+            // STEP 3 (the image's probe): every confirmed leaf again, under the codec's context,
+            // beside the verdicts above rather than in place of them, because the no-context set
+            // still describes the old store path. A leaf that writes here is carried by the image
+            // whatever the no-context probe says (finding F32: EntityCoordinates). The three
+            // coordinate and map-id types are probed by name whether or not they are candidates.
+            var named = new[] { typeof(MapCoordinates), typeof(NetCoordinates), typeof(MapId) };
+            var underCodec = new SortedDictionary<string, (bool Bare, bool Codec)>(StringComparer.Ordinal);
+            await server.WaitPost(() =>
+            {
+                // Nothing is on the image, so every reference writes as severed: the question is
+                // whether the type writes at all, not what its references resolve to.
+                var context = new DrydockCodecContext(serialization, server.EntMan, _ => null, _ => EntityUid.Invalid);
+                foreach (var type in byLeaf.Keys.Concat(named).Distinct())
+                {
+                    underCodec[StableName(type)] = (IsConfirmedUnwritable(serialization, type), IsConfirmedUnwritable(serialization, type, context));
+                }
+            });
+
+            TestContext.Out.WriteLine($"[serializability-audit] under the codec's context: {underCodec.Count(e => e.Value.Codec)} of {underCodec.Count} probed leaf type(s) still unwritable.");
+            foreach (var (name, (bare, codec)) in underCodec)
+            {
+                var mark = bare == codec ? "same" : "DIFFERS";
+                TestContext.Out.WriteLine($"[serializability-audit]     {mark}: {name}: no context {(bare ? "unwritable" : "writes")}, codec context {(codec ? "unwritable" : "writes")}");
+            }
+
             await pair.CleanReturnAsync();
+
+            Assert.That(underCodec.Where(e => e.Value.Codec).Select(e => e.Key), Is.EquivalentTo(ExpectedUnwritableUnderCodec),
+                "The set of leaf types the codec's context cannot write has changed. Each one is state a stored ship loses "
+                + "under the image while the no-context verdicts above may say otherwise; read the type and update the page.");
 
             // Discrimination control: the empirical stage exists to clear static candidates the
             // predictor cannot know are writable. If it ever confirms every one of them, it has
@@ -207,6 +238,35 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             "System.ValueTuple<System.Single,System.Numerics.Vector2,System.Single>",
         };
 
+        /// <summary>
+        /// The leaf types the codec's own context still cannot write, locked beside the no-context
+        /// verdicts rather than folded into them. A type on the strip list that is missing here is
+        /// carried by the image; the page records which (finding F32).
+        /// </summary>
+        private static IReadOnlyList<string> ExpectedUnwritableUnderCodec => new[]
+        {
+            // Unwritable under both probes. MapId has a reader only in the engine's own loader, and
+            // the two coordinate types carry one (MapCoordinates) or are no data definition at all.
+            "Robust.Shared.Map.MapCoordinates",
+            "Robust.Shared.Map.MapId",
+            "Robust.Shared.Map.NetCoordinates",
+
+            "Content.Shared.Alert.AlertKey",
+            "Content.Shared.Instruments.MidiTrack",
+            "Content.Shared.MassMedia.Systems.NewsArticle",
+            "Content.Shared.StationRecords.StationRecordsFilter",
+            "Content.Shared._Common.Consent.PlayerConsentSettings",
+            "Content.Shared._NF.BountyContracts.BountyContract",
+            "Content.Shared._NF.ShuttleRecords.ShuttleRecord",
+            "Content.Shared._Triad.ContrabandPermit.ContrabandPermitConsoleEntry",
+            "System.Collections.Generic.Dictionary+Enumerator<Robust.Shared.GameObjects.EntityUid,Content.Shared.Climbing.Components.BonkableComponent>",
+            "System.ValueTuple<System.Single,System.Numerics.Vector2,System.Single>",
+
+            // Not here, because the codec's context writes them: EntityCoordinates and
+            // StationRecordKey (the context supplies EntityUid and NetEntity), and the two captured
+            // types, LatheRecipeBatch and MarketData (the context registers their serializers).
+        };
+
         private enum Verdict
         {
             /// <summary>The fidelity layer serializes and restores this itself.</summary>
@@ -258,8 +318,10 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
         // Ground truth: does the LIVE serializer actually fail to write this type? Only a
         // "No data definition found" throw counts (an NRE on an uninitialized instance is a
         // bad sample, not a serializability gap). Uninstantiable/abstract -> not confirmable
-        // -> assume serializable (polymorphic).
-        private static bool IsConfirmedUnwritable(ISerializationManager serialization, Type type)
+        // -> assume serializable (polymorphic). With no context this is the old store path's
+        // question; under the codec's context it is the image's, because a context supplies
+        // serializers of its own (EntityUid and NetEntity have none without one).
+        private static bool IsConfirmedUnwritable(ISerializationManager serialization, Type type, ISerializationContext? context = null)
         {
             if (type.IsAbstract || type.IsInterface)
                 return false;
@@ -270,7 +332,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
 
             try
             {
-                serialization.WriteValue(type, instance, alwaysWrite: true);
+                serialization.WriteValue(type, instance, alwaysWrite: true, context: context);
                 return false; // wrote fine -> serializable.
             }
             catch (Exception e)
