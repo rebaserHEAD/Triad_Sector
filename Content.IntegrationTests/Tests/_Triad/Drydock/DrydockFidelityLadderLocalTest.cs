@@ -107,7 +107,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
     [TestFixture]
     [Explicit("Exploratory fidelity ladder. Run rungs deliberately and read their reports.")]
     [TestOf(typeof(DrydockFidelitySystem))]
-    public sealed class DrydockFidelityLadderLocalTest
+    public sealed partial class DrydockFidelityLadderLocalTest
     {
         /// <summary>Long enough for a capital hull's power to come up from its file before the first snapshot.</summary>
         private const int PreSettleTicks = 600;
@@ -288,6 +288,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             var protoMan = server.ResolveDependency<IPrototypeManager>();
             var mapLoader = server.System<MapLoaderSystem>();
 
+            CodecNotes.Clear();
             var (owner, station) = await GoldenCorpus.PrepareHarness(pair, 3);
             var map = await pair.CreateTestMap();
 
@@ -337,10 +338,12 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             var second = await RoundTrip(pair, first.Retrieved, owner, station, null);
 
             var sb = new StringBuilder();
-            sb.AppendLine($"[ladder] rung {rung} {vesselId} through {(EngineMode ? "the engine serializer" : "the drydock")}");
+            sb.AppendLine($"[ladder] rung {rung} {vesselId} through {(EngineMode ? "the engine serializer" : CodecMode ? "the grid image" : "the drydock")}");
             sb.AppendLine($"[ladder] lived-in recipes applied: {(recipes.Count == 0 ? "none" : string.Join(", ", recipes))}");
-            Report(sb, rung, vesselId, 1, first, EngineMode ? null : RetrieveGrants, gasRooms, doorPath, protoMan);
-            Report(sb, rung, vesselId, 2, second, EngineMode ? null : RetrieveRestamps, gasRooms, doorPath, protoMan);
+            Report(sb, rung, vesselId, 1, first, EngineMode || CodecMode ? null : RetrieveGrants, gasRooms, doorPath, protoMan);
+            Report(sb, rung, vesselId, 2, second, EngineMode || CodecMode ? null : RetrieveRestamps, gasRooms, doorPath, protoMan);
+            foreach (var note in CodecNotes)
+                sb.AppendLine(note);
             await TestContext.Out.WriteLineAsync(sb.ToString());
 
             Assert.That(first.Before.Entities, Is.GreaterThan(0), "The control: round trip 1 compared no entities.");
@@ -676,7 +679,9 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             var clockBefore = timing.CurTime;
             var (retrieved, mapInit, shipTicks) = EngineMode
                 ? (await EngineRoundTrip(pair, grid), null, 0)
-                : await DrydockRoundTrip(pair, grid, owner, station);
+                : CodecMode
+                    ? (await CodecRoundTrip(pair, grid), null, 0)
+                    : await DrydockRoundTrip(pair, grid, owner, station);
 
             await pair.RunTicksSync(SettleTicks);
 
@@ -889,6 +894,8 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             var settledLines = new List<string>();
             var settlingLines = new List<string>();
             var movedLines = new List<string>();
+            var predictedLines = new List<string>();
+            var predictedSeen = new HashSet<PredictedRow>();
             var timeKept = 0;
 
             var diff = DrydockStateSnapshot.Diff(result.Before, result.After);
@@ -909,6 +916,15 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                     && DrydockFidelitySystem.TimeKeepsItsMeaning(result.Before.Values[key], result.After.Values[key], TimeToleranceSeconds))
                 {
                     timeKept++;
+                    continue;
+                }
+
+                // The census's prediction, taken before anything else sorts the line, because the question the
+                // codec mode asks is what differs that the census did not already say would.
+                if (CodecMode && PredictedFor(line) is { Count: > 0 } rows)
+                {
+                    predictedLines.Add(line);
+                    predictedSeen.UnionWith(rows);
                     continue;
                 }
 
@@ -947,7 +963,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                     findings.Add($"CHANGED  grid|{member}#total: {before} -> {after}");
             }
 
-            Dump(rung, vesselId, trip, result, findings.Concat(settlingLines));
+            Dump(rung, vesselId, trip, result, findings.Concat(settlingLines).Concat(predictedLines));
 
             sb.AppendLine($"[ladder] round trip {trip}: {result.Before.Entities} entities before, {result.After.Entities} after "
                           + $"({result.Before.TieBroken}/{result.After.TieBroken} tie-broken, "
@@ -1013,6 +1029,12 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                 var at = tiles.Select(tile => $"{tile.X},{tile.Y}").ToHashSet();
                 var anchor = tiles.OrderBy(tile => tile.X).ThenBy(tile => tile.Y).First();
                 sb.AppendLine($"[ladder] gas control {recipe} at {anchor.X},{anchor.Y}: before {RoomGas(result.Before, at)}; after {RoomGas(result.After, at)}; late {RoomGas(result.Late, at)}");
+            }
+
+            if (CodecMode)
+            {
+                AppendKinds(sb, rung, vesselId, trip, "predicted", predictedLines, examples: 0);
+                AppendPredicted(sb, trip, predictedSeen, result);
             }
 
             AppendKinds(sb, rung, vesselId, trip, "finding", findings, examples: 2);
