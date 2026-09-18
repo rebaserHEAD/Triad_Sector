@@ -7,7 +7,6 @@ using NUnit.Framework;
 using Robust.Shared.Map;
 using Robust.Shared.Maths;
 using Robust.Shared.Serialization.Markdown.Mapping;
-using Robust.Shared.Serialization.Markdown.Sequence;
 using Robust.Shared.Serialization.Markdown.Value;
 
 namespace Content.Tests.Server._Triad.Drydock;
@@ -56,7 +55,7 @@ public sealed class DrydockTileTableTest
 
         // Chunks (0,0) twice, (1,0), (-1,-1), (-1,0) for (-16,3) and (-2,0) for (-17,3): five, with
         // the last two a tile apart across a chunk edge.
-        Assert.That(table.Get<SequenceDataNode>(DrydockTileTable.ChunksKey), Has.Count.EqualTo(5));
+        Assert.That(table.Get<MappingDataNode>(DrydockTileTable.ChunksKey), Has.Count.EqualTo(5));
     }
 
     [Test]
@@ -66,7 +65,7 @@ public sealed class DrydockTileTableTest
 
         Assert.Multiple(() =>
         {
-            Assert.That(table.Get<SequenceDataNode>(DrydockTileTable.ChunksKey), Is.Empty);
+            Assert.That(table.Get<MappingDataNode>(DrydockTileTable.ChunksKey), Is.Empty);
             Assert.That(DrydockTileTable.Read(table, Type), Is.Empty);
         });
     }
@@ -91,7 +90,8 @@ public sealed class DrydockTileTableTest
     {
         var tile = new Tile(40, flags: 9, variant: 6, rotationMirroring: 4);
         var table = DrydockTileTable.Write(Size, new[] { (new Vector2i(-14, -13), tile) }, Name);
-        var chunk = (MappingDataNode) table.Get<SequenceDataNode>(DrydockTileTable.ChunksKey).Single();
+        (var key, var node) = table.Get<MappingDataNode>(DrydockTileTable.ChunksKey).Single();
+        var chunk = (MappingDataNode) node;
         var bytes = Convert.FromBase64String(chunk.Get<ValueDataNode>("tiles").Value);
 
         // (-14, -13) is in chunk (-1, -1) at (2, 3) within it.
@@ -99,6 +99,7 @@ public sealed class DrydockTileTableTest
 
         Assert.Multiple(() =>
         {
+            Assert.That(key, Is.EqualTo("-1,-1"), "keyed by its index, as the grid component's chunk field is");
             Assert.That(chunk.Get<ValueDataNode>("ind").Value, Is.EqualTo("-1,-1"));
             Assert.That(chunk.Get<ValueDataNode>("version").Value, Is.EqualTo("7"));
             Assert.That(chunk.Get<ValueDataNode>("size").Value, Is.EqualTo("16"));

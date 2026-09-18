@@ -5,7 +5,6 @@ using System.IO;
 using Robust.Shared.Map;
 using Robust.Shared.Maths;
 using Robust.Shared.Serialization.Markdown.Mapping;
-using Robust.Shared.Serialization.Markdown.Sequence;
 using Robust.Shared.Serialization.Markdown.Value;
 
 namespace Content.Server._Triad.Drydock.Codec;
@@ -25,7 +24,8 @@ namespace Content.Server._Triad.Drydock.Codec;
 ///
 /// <para>Id 0 is always the empty tile, which fills every cell of a chunk that holds no tile. Each
 /// chunk entry is shaped as the engine's own (<c>ind</c>, <c>tiles</c>, <c>version</c>, and
-/// <c>size</c>), so a loader hands the entries and the tilemap to the engine unchanged.</para>
+/// <c>size</c>) and the entries are keyed by that index, as the grid component's chunk field is, so
+/// a loader hands the entries and the tilemap to the engine unchanged.</para>
 /// </summary>
 public static class DrydockTileTable
 {
@@ -72,7 +72,9 @@ public static class DrydockTileTable
             cells[y * chunkSize + x] = tile;
         }
 
-        var entries = new SequenceDataNode();
+        // Keyed by the chunk index, as the grid component's own chunk field is: it is a dictionary from index to
+        // chunk, which the engine reads from a mapping and nothing else.
+        var entries = new MappingDataNode();
         foreach (var (chunk, cells) in chunks)
         {
             var bytes = new byte[cells.Length * TileBytes];
@@ -91,13 +93,14 @@ public static class DrydockTileTable
 
             // Each entry carries its size, because the engine's reader takes it from the entry and
             // otherwise assumes 16 (MapChunkSerializer.cs:48-52).
-            entries.Add(new MappingDataNode
+            var ind = $"{chunk.X.ToString(CultureInfo.InvariantCulture)},{chunk.Y.ToString(CultureInfo.InvariantCulture)}";
+            entries[ind] = new MappingDataNode
             {
-                ["ind"] = new ValueDataNode($"{chunk.X.ToString(CultureInfo.InvariantCulture)},{chunk.Y.ToString(CultureInfo.InvariantCulture)}"),
+                ["ind"] = new ValueDataNode(ind),
                 ["tiles"] = new ValueDataNode(Convert.ToBase64String(bytes)),
                 ["version"] = new ValueDataNode(ChunkVersion),
                 [SizeKey] = new ValueDataNode(chunkSize.ToString(CultureInfo.InvariantCulture)),
-            });
+            };
         }
 
         return new MappingDataNode
@@ -119,7 +122,7 @@ public static class DrydockTileTable
         var chunkSize = ushort.Parse(Scalar(table, SizeKey), CultureInfo.InvariantCulture);
 
         if (!table.TryGet<MappingDataNode>(TileMapKey, out var tileMap)
-            || !table.TryGet<SequenceDataNode>(ChunksKey, out var chunks))
+            || !table.TryGet<MappingDataNode>(ChunksKey, out var chunks))
         {
             throw new FormatException("Drydock tile table: the tilemap or the chunks are missing.");
         }
@@ -134,10 +137,13 @@ public static class DrydockTileTable
         }
 
         var tiles = new List<(Vector2i, Tile)>();
-        foreach (var node in chunks)
+        foreach (var (key, node) in chunks)
         {
             if (node is not MappingDataNode entry)
                 throw new FormatException("Drydock tile table: a chunk entry is not a mapping.");
+
+            if (Scalar(entry, "ind") != key)
+                throw new FormatException($"Drydock tile table: chunk {key} carries the index {Scalar(entry, "ind")}.");
 
             if (Scalar(entry, "version") != ChunkVersion)
                 throw new FormatException($"Drydock tile table: a chunk is version {Scalar(entry, "version")}, not {ChunkVersion}.");
