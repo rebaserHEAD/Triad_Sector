@@ -64,6 +64,7 @@ public sealed class DrydockCodecContext : ISerializationContext, ITypeSerializer
     /// </param>
     public DrydockCodecContext(
         ISerializationManager serialization,
+        IEntityManager entMan,
         Func<EntityUid, long?> allocate,
         Func<long, EntityUid> resolve)
     {
@@ -72,6 +73,13 @@ public sealed class DrydockCodecContext : ISerializationContext, ITypeSerializer
 
         SerializerProvider = new SerializationManager.SerializerProvider(serialization);
         SerializerProvider.RegisterSerializer(this);
+
+        // The two captured types, which the engine cannot write at all
+        // (<see cref="DrydockSerializationGap.CapturedTypes"/>). They are registered here rather
+        // than as the engine's default for their type, because the gap is ours: the serializability
+        // audit measures what the engine covers without us, and it must keep measuring that.
+        SerializerProvider.RegisterSerializer(new DrydockLatheRecipeBatchSerializer(this, entMan));
+        SerializerProvider.RegisterSerializer(new DrydockMarketDataSerializer());
     }
 
     public ValidationNode Validate(

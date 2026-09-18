@@ -372,7 +372,24 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                         if (!iface.IsGenericType || iface.GetGenericTypeDefinition() != typeof(ITypeWriter<>))
                             continue;
                         var target = iface.GetGenericArguments()[0];
-                        result.Add(target.IsGenericType ? target.GetGenericTypeDefinition() : target);
+                        var covered = target.IsGenericType ? target.GetGenericTypeDefinition() : target;
+
+                        // The drydock's own capture writers are not the engine's coverage. They are
+                        // registered on DrydockCodecContext rather than as anyone's default, and
+                        // counting them here would have this audit read our hand-written capture as
+                        // proof that the capture is redundant: both types would leave the candidate
+                        // set without ever reaching the probe, and the vanished assertion would fire
+                        // for a type the engine still cannot write. Skipping them keeps that check
+                        // empirical, so the day the engine really does write one, the probe stops
+                        // throwing and the assertion fires for the right reason.
+                        //
+                        // Narrow on purpose, and the residual is stated rather than fixed: a context
+                        // serializer written for a type that is not on the capture list is still
+                        // credited here. The probe is the ground truth wherever the two disagree.
+                        if (DrydockSerializationGap.CapturedTypes.Contains(covered))
+                            continue;
+
+                        result.Add(covered);
                     }
                 }
             }

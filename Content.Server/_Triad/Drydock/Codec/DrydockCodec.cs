@@ -43,7 +43,7 @@ public sealed class DrydockCodec
         Func<long, EntityUid> resolve)
     {
         _serialization = serialization;
-        Context = new DrydockCodecContext(serialization, allocate, resolve);
+        Context = new DrydockCodecContext(serialization, entMan, allocate, resolve);
         _pass = new DrydockCodecFieldPass(serialization, Context, entMan, timing);
     }
 
