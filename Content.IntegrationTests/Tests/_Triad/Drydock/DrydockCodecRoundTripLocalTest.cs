@@ -222,6 +222,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             Report report)
         {
             MappingDataNode first;
+            report.WriteClock.Start();
             try
             {
                 first = codec.Write(entity, component);
@@ -230,6 +231,10 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             {
                 report.Add("write threw", hull, type, Reason(e));
                 return (true, 0);
+            }
+            finally
+            {
+                report.WriteClock.Stop();
             }
 
             // Counted at any depth, and an empty write is its own reported kind rather than a
@@ -243,7 +248,18 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             MappingDataNode decoded;
             try
             {
-                if (DrydockNodeJson.Decode(DrydockNodeJson.Encode(first)) is not MappingDataNode mapping)
+                report.JsonClock.Start();
+                DataNode transported;
+                try
+                {
+                    transported = DrydockNodeJson.Decode(DrydockNodeJson.Encode(first));
+                }
+                finally
+                {
+                    report.JsonClock.Stop();
+                }
+
+                if (transported is not MappingDataNode mapping)
                 {
                     report.Add("json changed the kind", hull, type, "a component mapping decoded as something else");
                     return (true, keys);
@@ -265,6 +281,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             }
 
             IComponent restored;
+            report.ReadClock.Start();
             try
             {
                 restored = codec.Read(type, decoded);
@@ -274,8 +291,13 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                 report.Add("read threw", hull, type, Reason(e));
                 return (true, keys);
             }
+            finally
+            {
+                report.ReadClock.Stop();
+            }
 
             MappingDataNode second;
+            report.RewriteClock.Start();
             try
             {
                 second = codec.Write(entity, restored);
@@ -284,6 +306,10 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             {
                 report.Add("second write threw", hull, type, Reason(e));
                 return (true, keys);
+            }
+            finally
+            {
+                report.RewriteClock.Stop();
             }
 
             if (Difference(first, second, string.Empty) is { } drift)
@@ -434,6 +460,14 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             public int Components;
             public int Keys;
 
+            // The four codec steps alone, apart from loading hulls, walking them and comparing trees,
+            // because the wall time moves with whatever else the machine is doing and says nothing
+            // about the codec. The third leg runs only on drift and is left out.
+            public readonly System.Diagnostics.Stopwatch WriteClock = new();
+            public readonly System.Diagnostics.Stopwatch JsonClock = new();
+            public readonly System.Diagnostics.Stopwatch ReadClock = new();
+            public readonly System.Diagnostics.Stopwatch RewriteClock = new();
+
             public readonly List<string> Unloadable = new();
 
             private readonly List<string> _hulls = new();
@@ -471,6 +505,13 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                     $"[codec-roundtrip] {named} vessel file(s) named, {Hulls} loaded, {Unloadable.Count} not; "
                     + $"{Entities} entit(y/ies) and {Components} component(s) carrying {Keys} key(s) compared in {elapsed.TotalSeconds:F1}s; "
                     + $"{findings} finding(s) across {_byKind.Count} kind(s).");
+
+                var codec = WriteClock.Elapsed + JsonClock.Elapsed + ReadClock.Elapsed + RewriteClock.Elapsed;
+                await TestContext.Out.WriteLineAsync(
+                    $"[codec-roundtrip] codec steps {codec.TotalSeconds:F1}s of the {elapsed.TotalSeconds:F1}s: "
+                    + $"write {WriteClock.Elapsed.TotalSeconds:F1}s, json {JsonClock.Elapsed.TotalSeconds:F1}s, "
+                    + $"read {ReadClock.Elapsed.TotalSeconds:F1}s, second write {RewriteClock.Elapsed.TotalSeconds:F1}s; "
+                    + "the third leg, loading, walking and comparing are the rest.");
 
                 foreach (var path in Unloadable)
                     await TestContext.Out.WriteLineAsync($"[codec-roundtrip] did not load: {path}");
