@@ -695,19 +695,18 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
         }
 
         /// <summary>
-        /// The walk's loop guard against a graph that is not a loop. A reagent dispenser's storage slots
-        /// share its <c>StorageWhitelist</c> instance, so one whitelist sits in several places in the
-        /// same component. A guard over everything visited refused that on the first corpus run after
-        /// the walk widened, 92 components across the dispensers' hulls; a guard over the current path
-        /// walks each place, since each has its own node to fill, and refuses only a real loop.
+        /// A reagent dispenser writes, the content the loop guard first refused: its storage slots
+        /// share its <c>StorageWhitelist</c> instance (<c>ReagentDispenserSystem.cs:306</c>), and a
+        /// guard over everything visited refused that on the first corpus run after the walk
+        /// widened, 92 components across the dispensers' hulls.
         ///
-        /// <para>The sharing itself does not survive the round trip: the one instance writes into
-        /// each place and reads back as that many separate instances. That is what the engine's own
-        /// save does with it too, so a round trip here preserves every value and not the identity
-        /// between them.</para>
+        /// <para>The whitelist is no longer walked at all. It is sealed and carries nothing to
+        /// correct, and the walk reached it only while a <c>ProtoId</c> of a prototype counted as
+        /// holding the prototype. So this is a check that real content writes whole, not a test of
+        /// the guard; <see cref="ASharedDefinitionIsAGraphNotALoop"/> is that.</para>
         /// </summary>
         [Test]
-        public async Task ASharedWhitelistIsAGraphNotALoop()
+        public async Task AReagentDispenserWritesWhole()
         {
             await using var pair = await PoolManager.GetServerClient();
             var server = pair.Server;
@@ -759,14 +758,124 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             {
                 Assert.That(slots, Is.GreaterThan(0), "The control: the dispenser has to have storage slots for the walk to reach.");
                 Assert.That(shared, Is.True,
-                    "The control: the slots have to share the dispenser's whitelist instance, or this test is not about a shared reference.");
+                    "The control: the slots still share the dispenser's whitelist instance, the content that was refused.");
 
-                Assert.That(dispenserThrew, Is.Null, "A shared instance is a graph, not a loop, so the dispenser must write.");
+                Assert.That(dispenserThrew, Is.Null, "The dispenser must write.");
                 Assert.That(itemSlotsThrew, Is.Null, "And so must the item slots that hold the same slots.");
                 Assert.That(writtenSlots, Is.EqualTo(slots), "Every slot must be written, including the ones that share the whitelist.");
             });
 
             await pair.CleanReturnAsync();
+        }
+
+        /// <summary>
+        /// The walk's loop guard against a graph that is not a loop: one definition the pass
+        /// corrects, held in two places in the same component. Shared by hand, because the sharing
+        /// content does, a dispenser's slots holding its whitelist, is of a definition with nothing
+        /// to correct, which the walk no longer enters. A guard over everything visited would refuse
+        /// the second place; a guard over the current path walks both, since each has its own node
+        /// to fill, and refuses only a real loop.
+        ///
+        /// <para>The control is that both places come out corrected rather than only that nothing
+        /// throws: a guard that quietly skipped the second place would leave the engine's zero
+        /// there.</para>
+        ///
+        /// <para>The sharing itself does not survive the round trip: the one instance writes into
+        /// each place and reads back as that many separate instances. That is what the engine's own
+        /// save does with it too, so a round trip here preserves every value and not the identity
+        /// between them.</para>
+        /// </summary>
+        [Test]
+        public async Task ASharedDefinitionIsAGraphNotALoop()
+        {
+            await using var pair = await PoolManager.GetServerClient();
+            var server = pair.Server;
+            var entMan = server.EntMan;
+            var serialization = server.ResolveDependency<ISerializationManager>();
+            var timing = server.ResolveDependency<IGameTiming>();
+            var doAfters = server.System<SharedDoAfterSystem>();
+
+            var codec = Codec(serialization, entMan, timing);
+            var map = await pair.CreateTestMap();
+
+            EntityUid uid = default;
+            var begun = false;
+
+            await server.WaitPost(() =>
+            {
+                uid = entMan.SpawnEntity("DrydockCodecDoAfterDummy", new EntityCoordinates(map.MapUid, default));
+                var args = new DoAfterArgs(entMan, uid, TimeSpan.FromMinutes(5), new StethoscopeDoAfterEvent(), null)
+                {
+                    Broadcast = true,
+                };
+
+                begun = doAfters.TryStartDoAfter(args);
+            });
+
+            await pair.RunTicksSync(DoAfterAgeTicks);
+
+            var shared = false;
+            var age = TimeSpan.Zero;
+            Exception? threw = null;
+            var starts = new List<string?>();
+
+            await server.WaitPost(() =>
+            {
+                var component = entMan.GetComponent<DoAfterComponent>(uid);
+                var held = component.DoAfters;
+                var doAfter = held.Values.Single();
+                var second = (ushort) (doAfter.Index + 1);
+                age = timing.CurTime - doAfter.StartTime;
+
+                held[second] = doAfter;
+                shared = ReferenceEquals(held[doAfter.Index], held[second]);
+
+                try
+                {
+                    starts = StartTimesIn(codec.Write((uid, entMan.GetComponent<MetaDataComponent>(uid)), component));
+                }
+                catch (Exception e)
+                {
+                    threw = e;
+                }
+                finally
+                {
+                    // The system ticks this dictionary, so the hand-made second place goes before it does.
+                    held.Remove(second);
+                }
+            });
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(begun, Is.True, "The control: a do-after has to be in progress before anything is measured about writing one.");
+                Assert.That(shared, Is.True, "The control: both places have to hold the one instance, or this test is not about a shared reference.");
+                Assert.That(age, Is.GreaterThan(TimeSpan.FromSeconds(2)),
+                    "The control: the start must be well behind the clock, or the engine's zero would pass for a correction.");
+
+                Assert.That(threw, Is.Null, "A shared instance is a graph, not a loop, so the component must write.");
+                Assert.That(starts, Has.Count.EqualTo(2), "Both places must be written.");
+                Assert.That(starts.Select(Seconds), Has.All.EqualTo(-age.TotalSeconds).Within(1),
+                    "And both corrected: the walk has to enter the instance in each place it sits, not only the first.");
+            });
+
+            await pair.CleanReturnAsync();
+        }
+
+        /// <summary>Every written do-after's start, in row order.</summary>
+        private static List<string?> StartTimesIn(MappingDataNode component)
+        {
+            var starts = new List<string?>();
+            if (!component.TryGet<MappingDataNode>("doAfters", out var doAfters))
+                return starts;
+
+            foreach (var (_, element) in doAfters)
+            {
+                starts.Add(element is MappingDataNode doAfter && doAfter.TryGet<ValueDataNode>("startTime", out var start)
+                    ? start.Value
+                    : null);
+            }
+
+            return starts;
         }
 
         /// <summary>One cyborg's written timeout, or null when the row carries none.</summary>

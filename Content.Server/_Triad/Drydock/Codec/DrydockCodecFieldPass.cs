@@ -3,6 +3,7 @@ using System.Collections;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Collections.Immutable;
+using System.Diagnostics.CodeAnalysis;
 using System.Linq;
 using System.Reflection;
 using Robust.Shared.GameObjects;
@@ -471,9 +472,8 @@ public sealed class DrydockCodecFieldPass
 
             // A definition that reaches itself would otherwise walk forever. The engine cannot write
             // such a graph either, so this is loud rather than a quiet stop. The guard is the path the
-            // walk is on, not everything it has visited: one instance shared from two places, a
-            // prototype's whitelist held by several slots for instance, is a graph and not a loop,
-            // and each place it sits has its own node to fill.
+            // walk is on, not everything it has visited: one instance shared from two places is a
+            // graph and not a loop, and each place it sits has its own node to fill.
             var tracked = !type.IsValueType;
             if (tracked && !walk.OnPath.Add(value))
                 throw new InvalidOperationException($"Drydock codec: the object graph loops back on itself at {path}.");
@@ -843,26 +843,27 @@ public sealed class DrydockCodecFieldPass
         return carries;
     }
 
-    private static bool Carries(Type? type, HashSet<Type> seen)
+    /// <param name="polymorphic">
+    /// Whether a polymorphic declared type counts as reachable on principle. Always true for the
+    /// pass; false only so the audit can measure what that rule adds.
+    /// </param>
+    private static bool Carries(Type? type, HashSet<Type> seen, bool polymorphic = true)
     {
-        if (type == null || type.IsPrimitive || type == typeof(string) || type.IsEnum || !seen.Add(type))
+        if (IsLeaf(type) || !seen.Add(type))
             return false;
 
         // A collection is transparent: what matters is what it holds, and a dictionary's value type
         // is as much a way down as a field's type is.
-        foreach (var argument in type.GetGenericArguments())
+        foreach (var held in HeldTypes(type))
         {
-            if (Carries(argument, seen))
+            if (Carries(held, seen, polymorphic))
                 return true;
         }
-
-        if (type.IsArray && Carries(type.GetElementType(), seen))
-            return true;
 
         // Decided from the declared type, where the walk itself uses the runtime one. For a
         // polymorphic member the two differ, and the declared type carries none of its inheritors'
         // fields, so it is conservatively reachable and the runtime walk finds out what is there.
-        if (IsPolymorphic(type))
+        if (polymorphic && IsPolymorphic(type))
             return true;
 
         if (!IsDataDefinition(type))
@@ -872,13 +873,58 @@ public sealed class DrydockCodecFieldPass
         {
             if (attribute.ReadOnly
                 || attribute.CustomTypeSerializer == typeof(TimeOffsetSerializer)
-                || Carries(MemberType(member), seen))
+                || Carries(MemberType(member), seen, polymorphic))
             {
                 return true;
             }
         }
 
         return false;
+    }
+
+    /// <summary>
+    /// A type nothing can be below. <see cref="System.Enum"/> is here by name because it is abstract,
+    /// which would make it polymorphic, while <see cref="Type.IsEnum"/> is false for it.
+    /// </summary>
+    private static bool IsLeaf([NotNullWhen(false)] Type? type) =>
+        type == null || type.IsPrimitive || type == typeof(string) || type.IsEnum || type == typeof(Enum);
+
+    /// <summary>
+    /// What the walk descends into below a value besides its members: a nullable's underlying type,
+    /// an array's elements, a dictionary's values and any other sequence's elements. Taken from the
+    /// collection interfaces the type implements rather than from its own generic arguments,
+    /// because that is what the walk tests at runtime: a <c>ProtoId&lt;T&gt;</c> or a tuple names a
+    /// type it does not hold, and a class deriving from a list holds one it does not name. A
+    /// dictionary's keys are left out because the walk never descends them.
+    /// </summary>
+    private static IEnumerable<Type> HeldTypes(Type type)
+    {
+        // A nullable boxes as its underlying value or as null, so the walk sees the value itself.
+        if (Nullable.GetUnderlyingType(type) is { } underlying)
+            return [underlying];
+
+        if (type.IsArray)
+            return [type.GetElementType()!];
+
+        // An interface does not list itself among its interfaces.
+        var interfaces = type.IsInterface ? type.GetInterfaces().Append(type) : type.GetInterfaces();
+        var generic = interfaces.Where(candidate => candidate.IsGenericType).ToList();
+
+        var values = generic
+            .Where(candidate => candidate.GetGenericTypeDefinition() is var definition
+                                && (definition == typeof(IDictionary<,>) || definition == typeof(IReadOnlyDictionary<,>)))
+            .Select(candidate => candidate.GetGenericArguments()[1])
+            .Distinct()
+            .ToList();
+
+        // A dictionary is also a sequence of key-value pairs, which the walk does not treat as one.
+        if (values.Count > 0)
+            return values;
+
+        return generic
+            .Where(candidate => candidate.GetGenericTypeDefinition() == typeof(IEnumerable<>))
+            .Select(candidate => candidate.GetGenericArguments()[0])
+            .Distinct();
     }
 
     /// <summary>
@@ -903,7 +949,7 @@ public sealed class DrydockCodecFieldPass
     /// <c>[ImplicitDataDefinitionForInheritors]</c> base. The engine's own registry would be the
     /// better oracle and is internal to the engine.
     /// </summary>
-    private static bool IsDataDefinition(Type type) =>
+    internal static bool IsDataDefinition(Type type) =>
         typeof(ISerializationGenerated).IsAssignableFrom(type);
 
     /// <summary>
@@ -911,10 +957,118 @@ public sealed class DrydockCodecFieldPass
     /// Such a member is reachable on principle, because the declared type carries none of its
     /// inheritors' fields; the runtime walk then decides what is actually there.
     /// </summary>
-    private static bool IsPolymorphic(Type type) =>
+    internal static bool IsPolymorphic(Type type) =>
         type.IsInterface
         || type.IsAbstract
         || (!type.IsSealed && !type.IsValueType && IsDataDefinition(type));
+
+    /// <summary>
+    /// For the audit: the members of this component the pass walks only because of the polymorphic
+    /// rule, the ones the same classification would pass over if a polymorphic declared type did not
+    /// count as reachable. What that rule costs, measured rather than guessed.
+    /// </summary>
+    internal static IEnumerable<MemberInfo> WalkedOnlyForPolymorphism(Type componentType)
+    {
+        foreach (var (member, attribute) in DataMembers(componentType))
+        {
+            if (Classify(member, attribute) != FieldCase.Walk)
+                continue;
+
+            if (!Carries(MemberType(member), new HashSet<Type>(), polymorphic: false))
+                yield return member;
+        }
+    }
+
+    /// <summary>
+    /// For the audit: every time-offset member the pass corrects below the component level, found by
+    /// the pass's own classification rather than by reading source, so the list cannot drift from
+    /// what the pass does.
+    ///
+    /// <para>One thing the pass knows at runtime and a static list cannot: which concrete type a
+    /// polymorphic member holds. The caller supplies the candidates, every concrete data definition
+    /// the member could hold, and the audit reports what any of them would carry. Each result is the
+    /// component member the walk starts from and the time member it ends at; the hops between are
+    /// left out, because through polymorphic members they multiply into a path per inheritor.</para>
+    /// </summary>
+    internal sealed class NestedTimeAudit(Func<Type, IEnumerable<Type>> concreteDefinitions)
+    {
+        private readonly Dictionary<Type, HashSet<MemberInfo>> _definitions = new();
+        private readonly Dictionary<Type, HashSet<MemberInfo>> _types = new();
+        private readonly HashSet<Type> _visiting = new();
+
+        public IEnumerable<(MemberInfo From, MemberInfo Time)> For(Type componentType)
+        {
+            foreach (var entry in Build(componentType))
+            {
+                if (entry.Case is not (FieldCase.ReadOnly or FieldCase.Walk))
+                    continue;
+
+                foreach (var time in Reach(entry.DeclaredType))
+                {
+                    yield return (entry.Member, time);
+                }
+            }
+        }
+
+        private HashSet<MemberInfo> Reach(Type? type)
+        {
+            var found = new HashSet<MemberInfo>();
+            if (IsLeaf(type))
+                return found;
+
+            if (_types.TryGetValue(type, out var known))
+                return known;
+
+            // A collection is transparent, as it is to the pass.
+            foreach (var held in HeldTypes(type))
+            {
+                found.UnionWith(Reach(held));
+            }
+
+            var candidates = IsPolymorphic(type)
+                ? concreteDefinitions(type)
+                : IsDataDefinition(type) ? new[] { type } : Array.Empty<Type>();
+
+            foreach (var candidate in candidates)
+            {
+                found.UnionWith(Definition(candidate));
+            }
+
+            _types[type] = found;
+            return found;
+        }
+
+        private HashSet<MemberInfo> Definition(Type definition)
+        {
+            if (_definitions.TryGetValue(definition, out var known))
+                return known;
+
+            // A definition that reaches itself contributes what it has found so far, the same
+            // fixpoint the pass's own reachability takes.
+            if (!_visiting.Add(definition))
+                return new HashSet<MemberInfo>();
+
+            var found = new HashSet<MemberInfo>();
+            foreach (var member in BuildNested(definition))
+            {
+                switch (member.Case)
+                {
+                    case FieldCase.TimeOffset:
+                        found.Add(member.Member);
+                        break;
+
+                    case FieldCase.ReadOnly:
+                    case FieldCase.Walk:
+                        found.UnionWith(Reach(member.DeclaredType));
+                        break;
+                }
+            }
+
+            _visiting.Remove(definition);
+            _definitions[definition] = found;
+            return found;
+        }
+    }
 
     private static Type? MemberType(MemberInfo member) => member switch
     {
