@@ -11,8 +11,8 @@ using Robust.Shared.Serialization.TypeSerializers.Interfaces;
 namespace Content.Server._Triad.Drydock.Codec;
 
 /// <summary>
-/// The context every codec read and write runs under. It replaces the engine's
-/// <see cref="EntityUid"/> writer and reader pair, and nothing else.
+/// The context every codec read and write runs under. It replaces the engine's two entity
+/// reference serializers, <see cref="EntityUid"/> and <see cref="NetEntity"/>, and nothing else.
 ///
 /// <para>The engine's context is <c>EntitySerializer</c>, whose <see cref="EntityUid"/> writer
 /// returns the entity's position in the one document being written
@@ -22,6 +22,18 @@ namespace Content.Server._Triad.Drydock.Codec;
 /// reference writes as the target's <see cref="DrydockStableIdComponent.Value"/>, the same id that
 /// entity's own row carries, so a row addresses another row without either of them being read as
 /// part of a document.</para>
+///
+/// <para>The <see cref="NetEntity"/> half is the same reference spelled for the network, and the
+/// engine's contexts carry both halves as a pair: <c>EntitySerializer</c>, <c>EntityDeserializer</c>
+/// and <c>YamlValidationContext</c> each implement the two
+/// (<c>RobustToolbox/Robust.Shared/EntitySerialization/EntitySerializer.cs:38-40</c>,
+/// <c>EntityDeserializer.cs:30-33</c>, <c>Robust.Shared/Prototypes/YamlValidationContext.cs:14-17</c>).
+/// Carrying only the first left a component holding a <see cref="NetEntity"/> unwritable, and a store
+/// refused outright rather than one that lost a field: finding F28, where a device-linked analysis
+/// console could not be stored at all. A network id means nothing next round, so the half here goes
+/// through the <see cref="EntityUid"/> one and stores the same stable id, as the engine's own reader
+/// goes through its <see cref="EntityUid"/> reader and converts back
+/// (<c>EntityDeserializer.cs:1224-1239</c>).</para>
 ///
 /// <para>Everything else the manager asks a context is answered the way the engine answers it.
 /// <see cref="WritingReadingPrototypes"/> is false because an image holds entities, not prototypes:
@@ -35,7 +47,10 @@ namespace Content.Server._Triad.Drydock.Codec;
 /// <c>customTypeSerializer</c> resolves from the manager's own type-keyed cache and never consults
 /// a context (<c>RobustToolbox/Robust.Shared/Serialization/Manager/SerializationManager.Writing.cs:298-302</c>).</para>
 /// </summary>
-public sealed class DrydockCodecContext : ISerializationContext, ITypeSerializer<EntityUid, ValueDataNode>
+public sealed class DrydockCodecContext :
+    ISerializationContext,
+    ITypeSerializer<EntityUid, ValueDataNode>,
+    ITypeSerializer<NetEntity, ValueDataNode>
 {
     /// <summary>
     /// What a reference writes as when it points outside the image, and what an id that no row
@@ -44,6 +59,7 @@ public sealed class DrydockCodecContext : ISerializationContext, ITypeSerializer
     /// </summary>
     public const string InvalidReference = "invalid";
 
+    private readonly IEntityManager _entMan;
     private readonly Func<EntityUid, long?> _allocate;
     private readonly Func<long, EntityUid> _resolve;
 
@@ -68,9 +84,12 @@ public sealed class DrydockCodecContext : ISerializationContext, ITypeSerializer
         Func<EntityUid, long?> allocate,
         Func<long, EntityUid> resolve)
     {
+        _entMan = entMan;
         _allocate = allocate;
         _resolve = resolve;
 
+        // Registers both reference halves at once, as the engine's own contexts do: the provider
+        // takes every serializer interface this type implements.
         SerializerProvider = new SerializationManager.SerializerProvider(serialization);
         SerializerProvider.RegisterSerializer(this);
 
@@ -126,5 +145,47 @@ public sealed class DrydockCodecContext : ISerializationContext, ITypeSerializer
             throw new FormatException($"Drydock codec: an entity reference held '{node.Value}', which is neither a stable id nor '{InvalidReference}'.");
 
         return _resolve(stableId);
+    }
+
+    // The NetEntity half. Explicit, because its three members share their parameter lists with the
+    // EntityUid half's and differ only in the value type; the engine's contexts do the same.
+
+    ValidationNode ITypeValidator<NetEntity, ValueDataNode>.Validate(
+        ISerializationManager serializationManager,
+        ValueDataNode node,
+        IDependencyCollection dependencies,
+        ISerializationContext? context)
+    {
+        return Validate(serializationManager, node, dependencies, context);
+    }
+
+    DataNode ITypeWriter<NetEntity>.Write(
+        ISerializationManager serializationManager,
+        NetEntity value,
+        IDependencyCollection dependencies,
+        bool alwaysWrite,
+        ISerializationContext? context)
+    {
+        // The entity the network id names, then the same stable id its own row carries. A network id
+        // stored as itself would name nothing, or the wrong thing, in the round that reads it back.
+        var uid = value.IsValid() ? _entMan.GetEntity(value) : EntityUid.Invalid;
+        return Write(serializationManager, uid, dependencies, alwaysWrite, context);
+    }
+
+    NetEntity ITypeReader<NetEntity, ValueDataNode>.Read(
+        ISerializationManager serializationManager,
+        ValueDataNode node,
+        IDependencyCollection dependencies,
+        SerializationHookContext hookCtx,
+        ISerializationContext? context,
+        ISerializationManager.InstantiationDelegate<NetEntity>? instanceProvider)
+    {
+        var uid = Read(serializationManager, node, dependencies, hookCtx, context);
+
+        // A reference off the image reads as invalid on the EntityUid side, and stays invalid here
+        // rather than becoming a network id for nothing.
+        return uid.IsValid() && _entMan.TryGetNetEntity(uid, out var net)
+            ? net.Value
+            : NetEntity.Invalid;
     }
 }
