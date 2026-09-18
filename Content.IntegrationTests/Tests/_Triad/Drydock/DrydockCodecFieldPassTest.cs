@@ -4,6 +4,7 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
+using System.Reflection;
 using System.Threading.Tasks;
 using Content.Server._Triad.Drydock.Codec;
 using Content.Shared.Containers.ItemSlots;
@@ -13,13 +14,17 @@ using Content.Shared.DoAfter;
 using Content.Shared.Doors.Components;
 using Content.Shared.FixedPoint;
 using Content.Shared.Medical;
+using Content.Shared.Robotics;
+using Content.Shared.Robotics.Components;
 using Content.Shared.Weapons.Melee;
 using Robust.Shared.GameObjects;
 using Robust.Shared.Map;
 using Robust.Shared.Prototypes;
 using Robust.Shared.Serialization.Manager;
+using Robust.Shared.Serialization.Manager.Attributes;
 using Robust.Shared.Serialization.Markdown.Mapping;
 using Robust.Shared.Serialization.Markdown.Value;
+using Robust.Shared.Serialization.TypeSerializers.Implementations.Custom;
 using Robust.Shared.Timing;
 
 namespace Content.IntegrationTests.Tests._Triad.Drydock
@@ -88,6 +93,9 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
         /// behind the clock, so the offset the codec writes cannot be mistaken for the engine's zero.
         /// </summary>
         private const int DoAfterAgeTicks = 150;
+
+        /// <summary>How long the clock runs before a test that must tell an absolute time from an offset.</summary>
+        private const int ClockRunTicks = 300;
 
         /// <summary>
         /// The ladder's own recipe, 37 Blunt on a damageable entity.
@@ -513,6 +521,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             var bare = new MappingDataNode();
             var restored = TimeSpan.MaxValue;
             var bareRestored = TimeSpan.MaxValue;
+            var bareReadOfCodecRow = TimeSpan.MaxValue;
 
             await server.WaitPost(() =>
             {
@@ -531,6 +540,13 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                 bareRestored = ((DoAfterComponent) serialization.Read(
                         typeof(DoAfterComponent), bare, context: codec.Context, notNullableOverride: true)!)
                     .DoAfters.Values.Single().StartTime;
+
+                // The read half's own control. The row above held a zero already, so reading it back
+                // as zero proves nothing about the read; this is the codec's row, which holds a real
+                // offset, read the engine's way.
+                bareReadOfCodecRow = ((DoAfterComponent) serialization.Read(
+                        typeof(DoAfterComponent), written, context: codec.Context, notNullableOverride: true)!)
+                    .DoAfters.Values.Single().StartTime;
             });
 
             Assert.Multiple(() =>
@@ -546,6 +562,9 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                 Assert.That(bareRestored, Is.EqualTo(TimeSpan.Zero),
                     "The control, and the finding: and reads it back as the beginning of time.");
 
+                Assert.That(bareReadOfCodecRow, Is.EqualTo(TimeSpan.Zero),
+                    "The control, and the finding: the engine reads a nested time field as zero whatever the row holds, which is why the read half needs a walk of its own.");
+
                 Assert.That(Seconds(StartTimeIn(written)), Is.EqualTo(-age.TotalSeconds).Within(1),
                     "The codec must write a nested start as its distance from the clock, as it does one on a component.");
 
@@ -554,6 +573,133 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             });
 
             await pair.CleanReturnAsync();
+        }
+
+        /// <summary>
+        /// The same finding one step further in, where the old predicate could not reach.
+        /// <c>RoboticsConsoleComponent.Cyborgs</c> is a <c>Dictionary&lt;string, CyborgControlData&gt;</c>
+        /// (<c>Content.Shared/Robotics/Components/RoboticsConsoleComponent.cs:20-21</c>), and
+        /// <c>CyborgControlData</c> is a <c>[DataRecord] record struct</c> whose <c>Timeout</c>, the
+        /// moment the console drops a cyborg, carries <c>TimeOffsetSerializer</c>
+        /// (<c>Content.Shared/Robotics/RoboticsConsoleUi.cs:60-61</c>, <c>:111-112</c>).
+        ///
+        /// <para>Two things the pass had wrong meet here. <c>[DataDefinition]</c> is not inherited and
+        /// a record carries <c>[DataRecord]</c> instead, so a predicate that asked for the attribute
+        /// never descended at all; and the element is a struct, so a correction made to it lands in a
+        /// boxed copy and is lost unless it is written back into the dictionary.</para>
+        ///
+        /// <para>Built from a row rather than from a live console, because the component is under
+        /// <c>[Access]</c> and its only runtime writer is a device-network packet handler. That covers
+        /// both halves: the read restores the deadline into the struct in the dictionary, and the write
+        /// of what was read stores it again.</para>
+        /// </summary>
+        [Test]
+        public async Task ACyborgRecordKeepsItsTimeoutThroughAStructInADictionary()
+        {
+            await using var pair = await PoolManager.GetServerClient();
+            var server = pair.Server;
+            var entMan = server.EntMan;
+            var serialization = server.ResolveDependency<ISerializationManager>();
+            var timing = server.ResolveDependency<IGameTiming>();
+
+            var codec = Codec(serialization, entMan, timing);
+            var map = await pair.CreateTestMap();
+
+            // The clock runs on first. A raw absolute time and an offset from now differ by exactly the
+            // clock, so at a clock near zero the two are inside the tolerance of each other and the test
+            // could not tell a codec that applied the offset from one that did nothing.
+            await pair.RunTicksSync(ClockRunTicks);
+
+            const string address = "codec-borg";
+            const double ahead = 300;
+
+            var row = new MappingDataNode
+            {
+                ["cyborgs"] = new MappingDataNode
+                {
+                    [address] = new MappingDataNode
+                    {
+                        ["chassisSprite"] = ValueDataNode.Null(),
+                        ["chassisName"] = new ValueDataNode("chassis"),
+                        ["name"] = new ValueDataNode("borg"),
+                        ["timeout"] = new ValueDataNode(ahead.ToString(CultureInfo.InvariantCulture)),
+                    },
+                },
+            };
+
+            var clock = TimeSpan.Zero;
+            var expected = TimeSpan.Zero;
+            var restored = TimeSpan.MaxValue;
+            var bareRestored = TimeSpan.MaxValue;
+            string? rewritten = null;
+            string? bareRewritten = null;
+
+            await server.WaitPost(() =>
+            {
+                clock = timing.CurTime;
+                expected = clock + TimeSpan.FromSeconds(ahead);
+
+                var component = codec.Read<RoboticsConsoleComponent>(row);
+                var cyborgs = component.Cyborgs;
+                restored = cyborgs[address].Timeout;
+
+                // The control: the engine's own read of the same row under the same context.
+                var bare = (RoboticsConsoleComponent) serialization.Read(
+                    typeof(RoboticsConsoleComponent), row, context: codec.Context, notNullableOverride: true)!;
+                var bareCyborgs = bare.Cyborgs;
+                bareRestored = bareCyborgs[address].Timeout;
+
+                // And the write half, from what the codec read, against a map-initialized owner.
+                var owner = entMan.SpawnEntity(null, new EntityCoordinates(map.MapUid, default));
+                var meta = entMan.GetComponent<MetaDataComponent>(owner);
+                rewritten = TimeoutIn(codec.Write((owner, meta), component), address);
+
+                bareRewritten = TimeoutIn(serialization.WriteValueAs<MappingDataNode>(
+                    typeof(RoboticsConsoleComponent), component, alwaysWrite: true, context: codec.Context), address);
+            });
+
+            var timeoutAttribute = typeof(CyborgControlData).GetField(nameof(CyborgControlData.Timeout))!
+                .GetCustomAttribute<DataFieldAttribute>();
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(typeof(CyborgControlData).GetCustomAttribute<DataDefinitionAttribute>(), Is.Null,
+                    "The control: this has to be a type the attribute-only predicate missed, or the test proves nothing about the change.");
+
+                Assert.That(clock, Is.GreaterThan(TimeSpan.FromSeconds(5)),
+                    "The control: the clock has to be well away from zero, or a raw time and an offset are the same number.");
+
+                Assert.That(timeoutAttribute?.CustomTypeSerializer, Is.EqualTo(typeof(TimeOffsetSerializer)),
+                    "The control: the field declares the offset serializer, which is what the pass reads.");
+
+                // The finding, asserted in place, and it is not F27's. The generator ignores the
+                // declared serializer on this record and emits a plain TimeSpan read and write
+                // (CyborgControlData.g.cs:97, :267), so the engine stores the deadline as an absolute
+                // time on the previous server's clock rather than as zero.
+                Assert.That(bareRestored, Is.EqualTo(TimeSpan.FromSeconds(ahead)),
+                    "The engine reads the stored number back as an absolute time, ignoring the declared offset.");
+
+                Assert.That(Seconds(bareRewritten), Is.EqualTo((clock + TimeSpan.FromSeconds(ahead)).TotalSeconds).Within(1),
+                    "And writes the deadline as an absolute time, which means nothing next round.");
+
+                Assert.That(restored, Is.EqualTo(expected).Within(TimeSpan.FromSeconds(1)),
+                    "The codec must restore the deadline against the clock at load, into the struct in the dictionary rather than into a copy that is thrown away.");
+
+                Assert.That(Seconds(rewritten), Is.EqualTo(ahead).Within(1),
+                    "And store it again as its distance from the clock.");
+            });
+
+            await pair.CleanReturnAsync();
+        }
+
+        /// <summary>One cyborg's written timeout, or null when the row carries none.</summary>
+        private static string? TimeoutIn(MappingDataNode component, string address)
+        {
+            return component.TryGet<MappingDataNode>("cyborgs", out var cyborgs)
+                   && cyborgs.TryGet<MappingDataNode>(address, out var cyborg)
+                   && cyborg.TryGet<ValueDataNode>("timeout", out var timeout)
+                ? timeout.Value
+                : null;
         }
 
         /// <summary>The one do-after's written start, or null when the row carries none.</summary>

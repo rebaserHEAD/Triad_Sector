@@ -9,6 +9,7 @@ using Robust.Shared.GameObjects;
 using Robust.Shared.Map.Components;
 using Robust.Shared.Maths;
 using Robust.Shared.Physics;
+using Robust.Shared.Serialization;
 using Robust.Shared.Serialization.Manager;
 using Robust.Shared.Serialization.Manager.Attributes;
 using Robust.Shared.Serialization.Manager.Definition;
@@ -254,6 +255,11 @@ public sealed class DrydockCodecFieldPass
             return;
 
         ReadWalkValue(value, node, $"{path}.{entry.Member.Name}");
+
+        // A struct came out of the member as a boxed copy, so the corrections the walk made are in
+        // the box and not in the owner until it goes back.
+        if (value.GetType().IsValueType)
+            entry.Set(owner, value);
     }
 
     /// <remarks>
@@ -314,6 +320,10 @@ public sealed class DrydockCodecFieldPass
         if (dictionary.Count == 0 || node is not MappingDataNode mapping)
             return;
 
+        // Structs are corrected in a boxed copy and written back once the enumeration is done,
+        // rather than while it runs.
+        List<(object Key, object Value)>? writeBack = null;
+
         foreach (DictionaryEntry pair in dictionary)
         {
             if (pair.Value is not { } element || !NeedsWalking(element))
@@ -324,6 +334,17 @@ public sealed class DrydockCodecFieldPass
                 throw new FormatException($"Drydock codec: {path} holds an entry keyed {pair.Key} that its row has no member for.");
 
             ReadWalkValue(element, child, $"{path}[{key}]");
+
+            if (element.GetType().IsValueType)
+                (writeBack ??= new()).Add((pair.Key, element));
+        }
+
+        if (writeBack == null)
+            return;
+
+        foreach (var (key, value) in writeBack)
+        {
+            dictionary[key] = value;
         }
     }
 
@@ -331,6 +352,8 @@ public sealed class DrydockCodecFieldPass
     {
         if (node is not SequenceDataNode sequence)
             return;
+
+        List<(int Index, object Value)>? writeBack = null;
 
         var index = 0;
         foreach (var element in enumerable)
@@ -341,9 +364,26 @@ public sealed class DrydockCodecFieldPass
                     throw new FormatException($"Drydock codec: {path} holds {index + 1} elements or more and its row holds {sequence.Count}.");
 
                 ReadWalkValue(element, sequence[index], $"{path}[{index}]");
+
+                if (element.GetType().IsValueType)
+                    (writeBack ??= new()).Add((index, element));
             }
 
             index++;
+        }
+
+        if (writeBack == null)
+            return;
+
+        // A struct corrected in a set, or anything else without an index, has nowhere to go back
+        // to. That is refused rather than left as the zero the engine read, which is the loss this
+        // walk exists to prevent.
+        if (enumerable is not IList list)
+            throw new InvalidOperationException($"Drydock codec: {path} holds value-type elements the pass corrected, in a {enumerable.GetType().Name} it cannot write them back into.");
+
+        foreach (var (at, value) in writeBack)
+        {
+            list[at] = value;
         }
     }
 
@@ -805,6 +845,12 @@ public sealed class DrydockCodecFieldPass
         if (type.IsArray && Carries(type.GetElementType(), seen))
             return true;
 
+        // Decided from the declared type, where the walk itself uses the runtime one. For a
+        // polymorphic member the two differ, and the declared type carries none of its inheritors'
+        // fields, so it is conservatively reachable and the runtime walk finds out what is there.
+        if (IsPolymorphic(type))
+            return true;
+
         if (!IsDataDefinition(type))
             return false;
 
@@ -832,8 +878,29 @@ public sealed class DrydockCodecFieldPass
         && type.GetGenericTypeDefinition() == typeof(Dictionary<,>)
         && type.GetGenericArguments()[0] == typeof(Vector2i);
 
+    /// <summary>
+    /// Is this a type the engine's serializer treats as a data definition? Asked of the source
+    /// generator's own decision rather than re-derived from attributes: the generator emits
+    /// <see cref="ISerializationGenerated"/> for every type it accepts, records included
+    /// (<c>RobustToolbox/Robust.Serialization.Generator/Generator.cs:55</c>, <c>:190</c>). The
+    /// attribute alone misses three kinds, because <c>[DataDefinition]</c> is not inherited
+    /// (<c>RobustToolbox/Robust.Shared/Serialization/Manager/Attributes/DataDefinitionAttribute.cs:13</c>):
+    /// a subclass of a definition, a <c>[DataRecord]</c>, and an inheritor of an
+    /// <c>[ImplicitDataDefinitionForInheritors]</c> base. The engine's own registry would be the
+    /// better oracle and is internal to the engine.
+    /// </summary>
     private static bool IsDataDefinition(Type type) =>
-        type.GetCustomAttribute<DataDefinitionAttribute>() != null;
+        typeof(ISerializationGenerated).IsAssignableFrom(type);
+
+    /// <summary>
+    /// Can a member of this declared type hold, at runtime, a type the declaration does not name?
+    /// Such a member is reachable on principle, because the declared type carries none of its
+    /// inheritors' fields; the runtime walk then decides what is actually there.
+    /// </summary>
+    private static bool IsPolymorphic(Type type) =>
+        type.IsInterface
+        || type.IsAbstract
+        || (!type.IsSealed && !type.IsValueType && IsDataDefinition(type));
 
     private static Type? MemberType(MemberInfo member) => member switch
     {
