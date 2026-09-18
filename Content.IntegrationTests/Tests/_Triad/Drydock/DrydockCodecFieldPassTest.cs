@@ -7,6 +7,7 @@ using System.Linq;
 using System.Reflection;
 using System.Threading.Tasks;
 using Content.Server._Triad.Drydock.Codec;
+using Content.Server.Chemistry.Components;
 using Content.Shared.Containers.ItemSlots;
 using Content.Shared.Damage;
 using Content.Shared.Damage.Prototypes;
@@ -23,6 +24,7 @@ using Robust.Shared.Prototypes;
 using Robust.Shared.Serialization.Manager;
 using Robust.Shared.Serialization.Manager.Attributes;
 using Robust.Shared.Serialization.Markdown.Mapping;
+using Robust.Shared.Serialization.Markdown.Sequence;
 using Robust.Shared.Serialization.Markdown.Value;
 using Robust.Shared.Serialization.TypeSerializers.Implementations.Custom;
 using Robust.Shared.Timing;
@@ -687,6 +689,81 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
 
                 Assert.That(Seconds(rewritten), Is.EqualTo(ahead).Within(1),
                     "And store it again as its distance from the clock.");
+            });
+
+            await pair.CleanReturnAsync();
+        }
+
+        /// <summary>
+        /// The walk's loop guard against a graph that is not a loop. A reagent dispenser's storage slots
+        /// share its <c>StorageWhitelist</c> instance, so one whitelist sits in several places in the
+        /// same component. A guard over everything visited refused that on the first corpus run after
+        /// the walk widened, 92 components across the dispensers' hulls; a guard over the current path
+        /// walks each place, since each has its own node to fill, and refuses only a real loop.
+        ///
+        /// <para>The sharing itself does not survive the round trip: the one instance writes into
+        /// each place and reads back as that many separate instances. That is what the engine's own
+        /// save does with it too, so a round trip here preserves every value and not the identity
+        /// between them.</para>
+        /// </summary>
+        [Test]
+        public async Task ASharedWhitelistIsAGraphNotALoop()
+        {
+            await using var pair = await PoolManager.GetServerClient();
+            var server = pair.Server;
+            var entMan = server.EntMan;
+            var serialization = server.ResolveDependency<ISerializationManager>();
+            var timing = server.ResolveDependency<IGameTiming>();
+
+            var codec = Codec(serialization, entMan, timing);
+            var map = await pair.CreateTestMap();
+
+            var slots = 0;
+            var shared = false;
+            Exception? dispenserThrew = null;
+            Exception? itemSlotsThrew = null;
+            var writtenSlots = 0;
+
+            await server.WaitPost(() =>
+            {
+                // On the grid: a dispenser anchors at spawn, and anchoring to a bare map logs an error.
+                var uid = entMan.SpawnEntity("ChemDispenserEmpty", map.GridCoords);
+                var meta = entMan.GetComponent<MetaDataComponent>(uid);
+                var dispenser = entMan.GetComponent<ReagentDispenserComponent>(uid);
+
+                var storage = dispenser.StorageSlots;
+                slots = storage.Count;
+                shared = storage.Count > 0 && ReferenceEquals(storage[0].Whitelist, dispenser.StorageWhitelist);
+
+                try
+                {
+                    var written = codec.Write((uid, meta), dispenser);
+                    writtenSlots = written.TryGet<SequenceDataNode>("storageSlots", out var sequence) ? sequence.Count : 0;
+                }
+                catch (Exception e)
+                {
+                    dispenserThrew = e;
+                }
+
+                try
+                {
+                    codec.Write((uid, meta), entMan.GetComponent<ItemSlotsComponent>(uid));
+                }
+                catch (Exception e)
+                {
+                    itemSlotsThrew = e;
+                }
+            });
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(slots, Is.GreaterThan(0), "The control: the dispenser has to have storage slots for the walk to reach.");
+                Assert.That(shared, Is.True,
+                    "The control: the slots have to share the dispenser's whitelist instance, or this test is not about a shared reference.");
+
+                Assert.That(dispenserThrew, Is.Null, "A shared instance is a graph, not a loop, so the dispenser must write.");
+                Assert.That(itemSlotsThrew, Is.Null, "And so must the item slots that hold the same slots.");
+                Assert.That(writtenSlots, Is.EqualTo(slots), "Every slot must be written, including the ones that share the whitelist.");
             });
 
             await pair.CleanReturnAsync();

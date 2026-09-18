@@ -263,8 +263,10 @@ public sealed class DrydockCodecFieldPass
     }
 
     /// <remarks>
-    /// No cycle guard, unlike the write walk: the object graph here was just built by the engine's
-    /// reader from a tree, and a tree cannot reach itself. A shape the row does not match is
+    /// No cycle guard, unlike the write walk, because the row bounds it rather than the object graph:
+    /// every step goes down to a child node of the row, and only an inline member stays on the same
+    /// node, as a different type the engine could not have written if it held itself. However the
+    /// values underneath are shared or looped, the walk ends where the row does. A shape the row does not match is
     /// corruption of our own write, so it is a <see cref="FormatException"/>, the read posture the
     /// context takes.
     /// </remarks>
@@ -468,26 +470,38 @@ public sealed class DrydockCodecFieldPass
                 throw new InvalidOperationException($"Drydock codec: {path} is a data definition carrying readOnly fields and wrote as {node.GetType().Name} rather than a mapping.");
 
             // A definition that reaches itself would otherwise walk forever. The engine cannot write
-            // such a graph either, so this is loud rather than a quiet stop.
-            if (!type.IsValueType && !walk.Seen.Add(value))
+            // such a graph either, so this is loud rather than a quiet stop. The guard is the path the
+            // walk is on, not everything it has visited: one instance shared from two places, a
+            // prototype's whitelist held by several slots for instance, is a graph and not a loop,
+            // and each place it sits has its own node to fill.
+            var tracked = !type.IsValueType;
+            if (tracked && !walk.OnPath.Add(value))
                 throw new InvalidOperationException($"Drydock codec: the object graph loops back on itself at {path}.");
 
-            foreach (var member in members)
+            try
             {
-                switch (member.Case)
+                foreach (var member in members)
                 {
-                    case FieldCase.TimeOffset:
-                        WriteTimeOffset(member, value, mapping, walk);
-                        break;
+                    switch (member.Case)
+                    {
+                        case FieldCase.TimeOffset:
+                            WriteTimeOffset(member, value, mapping, walk);
+                            break;
 
-                    case FieldCase.ReadOnly:
-                        WriteReadOnly(member, value, mapping, walk, $"{path}.{member.Member.Name}");
-                        break;
+                        case FieldCase.ReadOnly:
+                            WriteReadOnly(member, value, mapping, walk, $"{path}.{member.Member.Name}");
+                            break;
 
-                    case FieldCase.Walk:
-                        WalkMember(member, value, mapping, walk, path);
-                        break;
+                        case FieldCase.Walk:
+                            WalkMember(member, value, mapping, walk, path);
+                            break;
+                    }
                 }
+            }
+            finally
+            {
+                if (tracked)
+                    walk.OnPath.Remove(value);
             }
 
             return;
@@ -935,14 +949,15 @@ public sealed class DrydockCodecFieldPass
 
     /// <summary>
     /// The state one component's write shares with everything under it: the owning entity's pause
-    /// state, which a deadline at any depth is measured against, and what the walk has already seen.
+    /// state, which a deadline at any depth is measured against, and the path the walk is on.
     /// </summary>
     private sealed class WalkState(EntityLifeStage lifeStage, TimeSpan curTime, TimeSpan? pauseTime)
     {
         public readonly EntityLifeStage LifeStage = lifeStage;
         public readonly TimeSpan CurTime = curTime;
         public readonly TimeSpan? PauseTime = pauseTime;
-        public readonly HashSet<object> Seen = new(ReferenceEqualityComparer.Instance);
+        /// <summary>The definitions on the walk's current path, which is what a loop returns to.</summary>
+        public readonly HashSet<object> OnPath = new(ReferenceEqualityComparer.Instance);
     }
 
     /// <summary>One manifest entry, resolved against the component it names.</summary>
