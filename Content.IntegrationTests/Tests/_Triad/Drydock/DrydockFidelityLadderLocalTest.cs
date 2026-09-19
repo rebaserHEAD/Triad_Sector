@@ -708,6 +708,19 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                 (line, key, _) => line.StartsWith("CHANGED", StringComparison.Ordinal)
                                   && RearmedByThePowerEdge.Contains(key[(key.IndexOf('|') + 1)..])),
 
+            // Ruled 2026-09-19 with the severed-reference rule: an invalid uid parked in a nullable member is a value the
+            // codebase's own idiom cannot express, so the load reads it as null. The count is the point of the family.
+            new("invalid in a nullable reads null",
+                "Accepted: a reference the image could not keep reads null where its member is nullable (the codec's field "
+                + "pass, FieldCase.Reference, amending F17 on 2026-09-19), so a member that already held an invalid uid at "
+                + "the store comes back null. Sorted only where the stored value was invalid and the loaded one is null; a "
+                + "reference that pointed at something and came back invalid is a severed reference, not this.",
+                (line, key, result) => line.StartsWith("CHANGED", StringComparison.Ordinal)
+                                       && result.Before.Values.TryGetValue(key, out var before)
+                                       && before == "invalid"
+                                       && result.After.Values.TryGetValue(key, out var after)
+                                       && after == "null"),
+
             // Ruled 2026-09-19: the cache is not a class of its own; a line sorts only where every state it lost is one
             // something fills again, and the wires state only on H12's own condition.
             new("BUI state cache refilled on open",

@@ -1312,6 +1312,13 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             CodecNotes.Add($"         removed: {Top(removedByType)}");
             CodecNotes.Add($"[ladder] codec round trip {trip}: prototype ids the manifest read that no longer resolve, set as null: "
                            + (codec.Unresolved.Count == 0 ? "none." : string.Join(", ", codec.Unresolved.Select(u => $"{u.Member.Key} '{u.Id}'")) + "."));
+            var severed = codec.Severed
+                .GroupBy(entry => entry.Nullable ? entry.Member : $"{entry.Member} (not nullable)", StringComparer.Ordinal)
+                .ToDictionary(group => group.Key, group => group.Count(), StringComparer.Ordinal);
+            CodecNotes.Add($"[ladder] codec round trip {trip}: references the image could not keep: "
+                           + $"{codec.Severed.Count(entry => entry.Nullable)} in nullable members, read as null, and "
+                           + $"{codec.Severed.Count(entry => !entry.Nullable)} in members that are not, left invalid"
+                           + (severed.Count == 0 ? "." : ": " + Top(severed) + "."));
             CodecNotes.Add($"[ladder] codec round trip {trip}: queued lathe batches left out for a recipe that no longer resolves: "
                            + (codec.Context.DroppedBatches.Count == 0 ? "none." : Top(codec.Context.DroppedBatches.GroupBy(id => id, StringComparer.Ordinal).ToDictionary(g => g.Key, g => g.Count(), StringComparer.Ordinal)) + "."));
             CodecNotes.Add($"[ladder] codec round trip {trip}: {heldBackSlots} item slot(s) held back from init; at the seam {copiedAtSeam} copied into the slot init re-added; "
