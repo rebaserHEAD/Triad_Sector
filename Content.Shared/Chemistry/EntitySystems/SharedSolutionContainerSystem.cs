@@ -1077,7 +1077,11 @@ public abstract partial class SharedSolutionContainerSystem : EntitySystem
         if (!Resolve(uid, ref meta))
             throw new InvalidOperationException("Attempted to ensure solution on invalid entity.");
         var manager = EnsureComp<SolutionContainerManagerComponent>(uid);
-        if (meta.EntityLifeStage >= EntityLifeStage.MapInitialized)
+        // Triad: a restored entity is stamped map-initialised only after init, but its solution entities are already in
+        // their containers; use them rather than re-authoring an empty template in the prototype dictionary.
+        // if (meta.EntityLifeStage >= EntityLifeStage.MapInitialized)
+        if (meta.EntityLifeStage >= EntityLifeStage.MapInitialized
+            || ContainerSystem.TryGetContainer(uid, $"solution@{name}", out var restored) && restored is ContainerSlot { ContainedEntity: not null })
         {
             EnsureSolutionEntity((uid, manager), name, out existed,
                 out var solEnt, maxVol, prototype);

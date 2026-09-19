@@ -261,6 +261,125 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             await pair.CleanReturnAsync();
         }
 
+        /// <summary>
+        /// F37 through the loader's own path: a member whose prototype authors a value (a deep fryer's solutions, vat_oil
+        /// in its YAML) that the live entity holds as null. The load builds the component from the prototype and copies
+        /// the row over it, so a row that leaves the null out gives the prototype's value back. The solution container
+        /// system nulls the dictionary once it has made the solutions into entities, which is the live null here.
+        /// </summary>
+        [Test]
+        public async Task APrototypeAuthoredValueNulledLiveComesBackNull()
+        {
+            await using var pair = await PoolManager.GetServerClient();
+            var server = pair.Server;
+            var entMan = server.EntMan;
+            var map = await pair.CreateTestMap();
+            CodecNotes.Clear();
+
+            bool authored = false, nullBefore = false;
+            var storedVolume = Content.Shared.FixedPoint.FixedPoint2.Zero;
+            await server.WaitPost(() =>
+            {
+                var fryer = entMan.SpawnEntity("KitchenDeepFryer", map.GridCoords);
+
+                // Oil in the vat, so a vat that came back as an empty template reads differently from the real one.
+                var solutions = server.System<Content.Shared.Chemistry.EntitySystems.SharedSolutionContainerSystem>();
+                if (solutions.TryGetSolution(fryer, "vat_oil", out var vat, out _))
+                    solutions.TryAddReagent(vat.Value, "Cornoil", 30, out _);
+                storedVolume = VatEntitySolution(entMan, fryer, "vat_oil")?.Volume ?? Content.Shared.FixedPoint.FixedPoint2.Zero;
+
+                authored = entMan.GetComponent<MetaDataComponent>(fryer).EntityPrototype!.Components
+                    .TryGetValue("SolutionContainerManager", out var proto)
+                    && ((Content.Shared.Chemistry.Components.SolutionManager.SolutionContainerManagerComponent) proto.Component).Solutions is { Count: > 0 };
+                nullBefore = entMan.GetComponent<Content.Shared.Chemistry.Components.SolutionManager.SolutionContainerManagerComponent>(fryer).Solutions == null;
+            });
+
+            var loaded = await CodecRoundTrip(pair, map.Grid.Owner);
+
+            var fryers = 0;
+            var nullAfter = 0;
+            var vatIsTheEntity = 0;
+            var restoredVolume = Content.Shared.FixedPoint.FixedPoint2.Zero;
+            await server.WaitPost(() =>
+            {
+                var query = entMan.EntityQueryEnumerator<Content.Server.Nyanotrasen.Kitchen.Components.DeepFryerComponent, TransformComponent>();
+                while (query.MoveNext(out var uid, out var fryer, out var xform))
+                {
+                    if (xform.GridUid != loaded)
+                        continue;
+
+                    fryers++;
+                    if (entMan.GetComponent<Content.Shared.Chemistry.Components.SolutionManager.SolutionContainerManagerComponent>(uid).Solutions == null)
+                        nullAfter++;
+
+                    // The fryer caches the solution init hands it; it has to be the one in the solution entity, where the
+                    // oil is, not a template beside it.
+                    if (VatEntitySolution(entMan, uid, fryer.SolutionName) is { } vat && ReferenceEquals(vat, fryer.Solution))
+                        vatIsTheEntity++;
+
+                    restoredVolume = fryer.Solution.Volume;
+                }
+            });
+
+            foreach (var note in CodecNotes)
+                await TestContext.Out.WriteLineAsync(note);
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(authored, Is.True, "The control: the fryer's prototype has to author its solutions, or this is the initializer case.");
+                Assert.That(nullBefore, Is.True, "The control: the live fryer has to hold them as null before the store.");
+                Assert.That(storedVolume, Is.GreaterThan(Content.Shared.FixedPoint.FixedPoint2.Zero), "The control: the vat has to hold oil before the store.");
+                Assert.That(fryers, Is.EqualTo(1), "One fryer has to come back.");
+                Assert.That(nullAfter, Is.EqualTo(1), "Its solutions have to come back null, not as the prototype's vat_oil.");
+                Assert.That(vatIsTheEntity, Is.EqualTo(1), "And the vat it caches has to be its solution entity's, not an empty template.");
+                Assert.That(restoredVolume, Is.EqualTo(storedVolume), "And that vat has to hold the oil it held.");
+            });
+
+            await pair.CleanReturnAsync();
+        }
+
+        /// <summary>
+        /// The F37 fix's own control: it must not change a first spawn. A fryer spawned the normal way has no solution
+        /// container yet at its init, so it still takes its vat from its prototype, and map init makes that an entity.
+        /// </summary>
+        [Test]
+        public async Task AFreshFryerStillTakesItsVatFromThePrototype()
+        {
+            await using var pair = await PoolManager.GetServerClient();
+            var server = pair.Server;
+            var entMan = server.EntMan;
+            var map = await pair.CreateTestMap();
+
+            string? vatName = null;
+            bool solutionsConverted = false, vatIsTheEntity = false;
+            await server.WaitPost(() =>
+            {
+                var uid = entMan.SpawnEntity("KitchenDeepFryer", map.GridCoords);
+                var fryer = entMan.GetComponent<Content.Server.Nyanotrasen.Kitchen.Components.DeepFryerComponent>(uid);
+                var vat = VatEntitySolution(entMan, uid, fryer.SolutionName);
+                vatName = vat?.Name;
+                solutionsConverted = entMan.GetComponent<Content.Shared.Chemistry.Components.SolutionManager.SolutionContainerManagerComponent>(uid).Solutions == null;
+                vatIsTheEntity = vat != null && ReferenceEquals(vat, fryer.Solution);
+            });
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(vatName, Is.EqualTo("vat_oil"), "A fresh fryer has to have its prototype's vat as a solution entity.");
+                Assert.That(solutionsConverted, Is.True, "Map init has to have made the prototype's solutions into entities.");
+                Assert.That(vatIsTheEntity, Is.True, "And the vat it caches has to be that entity's.");
+            });
+
+            await pair.CleanReturnAsync();
+        }
+
+        /// <summary>The solution held by an entity's solution entity for <paramref name="name"/>, or null when there is none.</summary>
+        private static Content.Shared.Chemistry.Components.Solution? VatEntitySolution(IEntityManager entMan, EntityUid uid, string name) =>
+            entMan.System<Robust.Shared.Containers.SharedContainerSystem>().TryGetContainer(uid, $"solution@{name}", out var container)
+            && container is Robust.Shared.Containers.ContainerSlot { ContainedEntity: { } solutionEntity }
+            && entMan.TryGetComponent<Content.Shared.Chemistry.Components.SolutionComponent>(solutionEntity, out var solution)
+                ? solution.Solution
+                : null;
+
         private static async Task<EntityUid> CodecRoundTrip(TestPair pair, EntityUid grid)
         {
             var server = pair.Server;
