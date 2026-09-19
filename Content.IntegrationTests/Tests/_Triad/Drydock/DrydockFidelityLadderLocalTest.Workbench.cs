@@ -388,12 +388,14 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                     }));
             }
 
-            // 6. A disposal unit engaged with something inside, its flush a minute off.
+            // 6. A disposal unit engaged with something inside, its flush three minutes off: the regression for row 475, out of
+            // the manifest as not reproduced. The flush is a data field the rows carry; only a power-off edge after the load
+            // would null it (SharedDisposalUnitSystem.cs:249-252), and the on edge's ManualEngage keeps the smaller of it and a
+            // fresh one (:686), so the power receiver's keys are shown beside the unit's.
             {
                 var unit = Place(entMan, grid, "DisposalUnit", 13, 5);
-                // The power receiver's keys beside the unit's: row 475's loss needs a power-off edge after the load, which
-                // nulls the flush (SharedDisposalUnitSystem.cs:249-252), and only then an on edge that re-rolls it (:256-259).
-                recipes.Add(new WorkbenchRecipe(6, "disposal unit", "DisposalUnit.NextFlush", new[] { "DisposalUnitComponent", "ApcPowerReceiverComponent" },
+                recipes.Add(new WorkbenchRecipe(6, "disposal unit", "DisposalUnit.NextFlush, a data field, out of the manifest",
+                    new[] { "DisposalUnitComponent", "ApcPowerReceiverComponent" },
                     new List<string> { PathOf("DisposalUnit", 13, 5) },
                     () =>
                     {
@@ -402,7 +404,35 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                         containers.Insert(entMan.SpawnEntity("FoodBanana", At(13, 5)), comp.Container);
                         entMan.System<SharedDisposalUnitSystem>().ManualEngage(unit, comp);
                         return new List<string> { $"engaged {comp.Engaged}, NextFlush {comp.NextFlush?.ToString() ?? "null"}" };
-                    }));
+                    })
+                {
+                    AfterLoad = retrieved =>
+                    {
+                        var notes = new List<string>();
+                        var bad = new List<string>();
+                        var now = server.ResolveDependency<IGameTiming>().CurTime;
+                        var found = 0;
+                        var query = entMan.EntityQueryEnumerator<DisposalUnitComponent, TransformComponent>();
+                        while (query.MoveNext(out _, out var comp, out var xform))
+                        {
+                            if (xform.GridUid != retrieved)
+                                continue;
+
+                            found++;
+                            var left = comp.NextFlush - now;
+                            notes.Add($"disposal unit engaged {comp.Engaged}, flush in {(left is { } l ? $"{l.TotalSeconds:F1}s" : "none")} of {WorkbenchLongTimer.TotalSeconds}s");
+                            // Two round trips run well over half a minute of the ship's clock; a flush lost and re-rolled on a
+                            // load is back within a few seconds of the full timer.
+                            if (!comp.Engaged || left is not { } remaining || remaining > WorkbenchLongTimer - TimeSpan.FromSeconds(30))
+                                bad.Add("the disposal unit has to come back engaged with its flush kept (more than 30 s down after two trips)");
+                        }
+
+                        if (found == 0)
+                            bad.Add("the disposal unit has to come back at all");
+
+                        return (notes, bad);
+                    },
+                });
             }
 
             // 7. A fryer with oil and an item, which the wait before the store fries once.

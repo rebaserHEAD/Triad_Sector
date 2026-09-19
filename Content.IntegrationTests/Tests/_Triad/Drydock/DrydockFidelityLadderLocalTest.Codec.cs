@@ -483,7 +483,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             });
 
             // The manifest's last moment, one tick after the load: a member the first power solve resets (a door's timer,
-            // a fryer's, a flush's) is set back once it has run, and dirtied, since startup's reset of the net ticks is past.
+            // a fryer's) is set back once it has run, and dirtied, since startup's reset of the net ticks is past.
             await pair.RunTicksSync(1);
             var manifest = LastManifest!;
             await server.WaitPost(() =>
