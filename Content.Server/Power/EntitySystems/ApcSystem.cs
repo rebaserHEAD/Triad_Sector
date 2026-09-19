@@ -58,7 +58,11 @@ public sealed partial class ApcSystem : EntitySystem
                 UpdateUIState(uid, apc, battery);
             }
 
-            if (apc.NeedStateUpdate)
+            // Triad: hold the deferred update until the battery has been synced. PowerNetSystem.Update is batched into a
+            // 0.5 s accumulator (PowerNetSystem.cs:283-287), so the next tick can come before the first PreSync
+            // (BatterySystem.cs:81), while the network battery still reads 0 of 0 and a full battery computes as Lack.
+            // if (apc.NeedStateUpdate)
+            if (apc.NeedStateUpdate && battery.NetworkBattery.Capacity > 0)
             {
                 UpdateApcState(uid, apc, battery);
             }
