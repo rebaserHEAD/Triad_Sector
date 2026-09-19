@@ -165,7 +165,7 @@ public sealed partial class DrydockCodec
     /// <summary>A prototype id read back as the registered prototype, or as null, counted, when none of its kind has it.</summary>
     private IPrototype? ReadPrototype(DrydockManifestMember member, Type type, ValueDataNode node)
     {
-        var prototypes = _entMan.EntitySysManager.DependencyCollection.Resolve<IPrototypeManager>();
+        var prototypes = _prototypes ?? _entMan.EntitySysManager.DependencyCollection.Resolve<IPrototypeManager>();
         if (prototypes.TryIndex(Nullable.GetUnderlyingType(type) ?? type, node.Value, out var prototype))
             return prototype;
 

@@ -1,5 +1,7 @@
 using System;
+using System.Collections.Generic;
 using Robust.Shared.GameObjects;
+using Robust.Shared.Prototypes;
 using Robust.Shared.Serialization.Manager;
 using Robust.Shared.Serialization.Markdown.Mapping;
 using Robust.Shared.Timing;
@@ -38,6 +40,27 @@ public sealed partial class DrydockCodec
     /// (<see cref="DrydockCodecFieldPass.Severed"/>).
     /// </summary>
     public IReadOnlyList<(string Member, bool Nullable)> Severed => _pass.Severed;
+
+    /// <summary>
+    /// The prototype manager a manifest's prototype-id member reads through, where the caller has one. A caller that
+    /// does not passes none and the codec asks the entity manager's dependencies for it, which is what a test harness
+    /// can reach; server code injects instead.
+    /// </summary>
+    private readonly IPrototypeManager? _prototypes;
+
+    /// <inheritdoc cref="DrydockCodec(ISerializationManager, IEntityManager, IGameTiming, Func{EntityUid, long?}, Func{long, EntityUid})"/>
+    /// <param name="prototypes">The prototype manager, injected rather than resolved.</param>
+    public DrydockCodec(
+        ISerializationManager serialization,
+        IEntityManager entMan,
+        IPrototypeManager prototypes,
+        IGameTiming timing,
+        Func<EntityUid, long?> allocate,
+        Func<long, EntityUid> resolve)
+        : this(serialization, entMan, timing, allocate, resolve)
+    {
+        _prototypes = prototypes;
+    }
 
     /// <param name="allocate">See <see cref="DrydockCodecContext"/>: the stable id for an entity.</param>
     /// <param name="resolve">See <see cref="DrydockCodecContext"/>: the entity a stable id names.</param>
