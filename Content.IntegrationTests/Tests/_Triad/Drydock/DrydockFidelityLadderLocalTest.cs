@@ -400,7 +400,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
 
         /// <summary>
         /// A codec-mode run stops on a rung that brings more than this many finding kinds (verb and
-        /// <c>Component.member</c>, as <see cref="KindOf"/> gives them) that no earlier rung had, or on any failure.
+        /// <c>Component.member</c>, as <see cref="StopKindOf"/> gives them) that no earlier rung had, or on any failure.
         /// Kinds rather than lines, because a known kind repeats with hull size and a line count stops the run on
         /// volume alone (rung 31, Stubby: 408 lines, 2 new kinds).
         /// </summary>
@@ -435,12 +435,30 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                 foreach (var line in System.IO.File.ReadLines(file))
                 {
                     if (line.Length > 0 && char.IsUpper(line[0]))
-                        _seenFindingKinds.Add(KindOf(line));
+                        _seenFindingKinds.Add(StopKindOf(line));
                 }
             }
 
             CodecNotes.Add($"[ladder] new-kind stop seeded with {_seenFindingKinds.Count} kind(s) from the dumps of rungs before {rung}.");
             return _seenFindingKinds;
+        }
+
+        /// <summary>
+        /// A line's kind as the new-kind stop counts it: <see cref="KindOf"/>, with a node network's label taken out. A
+        /// network is named by its first member's path (DrydockFidelitySystem.DeepSnapshot.cs, RenderNetworks), so the
+        /// same kind on another hull's pipe net would otherwise count as new every time.
+        /// </summary>
+        private static string StopKindOf(string line)
+        {
+            var kind = KindOf(line);
+            foreach (var network in new[] { "PipeNetAir.", "NodeGroup." })
+            {
+                var at = kind.IndexOf(" " + network, StringComparison.Ordinal);
+                if (at >= 0)
+                    return kind[..(at + 1 + network.Length)] + "*";
+            }
+
+            return kind;
         }
 
         /// <summary>
@@ -1119,7 +1137,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             }
 
             foreach (var line in findings)
-                findingKinds.Add(KindOf(line));
+                findingKinds.Add(StopKindOf(line));
 
             Dump(rung, vesselId, trip, result, findings.Concat(settlingLines).Concat(predictedLines));
 

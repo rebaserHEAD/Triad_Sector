@@ -45,7 +45,9 @@ public static class DrydockCodecManifest
     /// <param name="Member">The owner's data field that reads a key the entry's own member is written under.</param>
     /// <param name="SideKey">
     /// Where its live value is carried instead. No reader consumes it: the owner's generated reader and the entry's
-    /// serializer look their keys up by name and never enumerate the mapping.
+    /// serializer look their keys up by name and never enumerate the mapping. That holds by construction only for a
+    /// reader that looks keys up: a twin on an owner read by a custom type serializer that enumerates its mapping would
+    /// hand it the side key, and needs the key stripped before that read.
     /// </param>
     public sealed record AsymmetricTwin(string Member, string SideKey);
 
