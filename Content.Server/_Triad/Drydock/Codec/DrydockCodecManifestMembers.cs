@@ -276,7 +276,7 @@ public static class DrydockCodecManifestMembers
         // a song (:185), and a disarm clears the played flag (:275), so the three go together.
         new DrydockNotCarried(507, "ScuttleDevice", "SelectedNukeSong", MusicState, SortsAsNotCarried: true),
         new DrydockNotCarried(507, "ScuttleDevice", "NukeSongLength", MusicState, SortsAsNotCarried: true),
-        new DrydockNotCarried(507, "ScuttleDevice", "PlayedNukeSong", MusicState),
+        new DrydockNotCarried(507, "ScuttleDevice", "PlayedNukeSong", MusicState, SortsAsNotCarried: true),
         new DrydockNotCarried(435, "Wires", "StateData",
             "boxed values, most of them live CancellationTokenSources; PowerWireActionKey.CutWires travels as an entry of its own, and .Pulsed is owed with H12"));
 

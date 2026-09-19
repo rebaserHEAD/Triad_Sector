@@ -687,8 +687,8 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
 
         /// <summary>
         /// The not-carried families' control, with no server: a difference on a member whose entry opts in sorts into that
-        /// entry's family, a time as well; one on a member left out without opting in (the song's played flag, a grid's
-        /// alerter list) does not.
+        /// entry's family, a time as well; one on a member left out without opting in (a scuttle device's playing alert, a
+        /// grid's alerter list) does not.
         /// </summary>
         [Test]
         public void OnlyANotCarriedEntryThatOptsInSortsItsLines()
@@ -703,7 +703,9 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                     Is.EqualTo("not carried: ScuttleDevice.SelectedNukeSong"), "An opted-in member's line has to sort into its entry's family.");
                 Assert.That(Sorted($"ScuttleDeviceWyvern@8,8|ScuttleDeviceComponent.~NukeSongLength{DrydockFidelitySystem.TimeSuffix}"),
                     Is.EqualTo("not carried: ScuttleDevice.NukeSongLength"), "A time's suffix must not keep it out of its family.");
-                Assert.That(Sorted("ScuttleDeviceWyvern@8,8|ScuttleDeviceComponent.~PlayedNukeSong"), Is.Null,
+                Assert.That(Sorted("ScuttleDeviceWyvern@8,8|ScuttleDeviceComponent.~PlayedNukeSong"),
+                    Is.EqualTo("not carried: ScuttleDevice.PlayedNukeSong"), "The played flag opts in with the rest of the music state.");
+                Assert.That(Sorted("ScuttleDeviceWyvern@8,8|ScuttleDeviceComponent.~AlertAudioStream"), Is.Null,
                     "A member left out without opting in has to stay a finding.");
                 Assert.That(Sorted("grid|TargetSeekerAlertGridComponent.Alerters"), Is.Null,
                     "The alerter list, left out because a carried copy grows, has to stay a finding.");
