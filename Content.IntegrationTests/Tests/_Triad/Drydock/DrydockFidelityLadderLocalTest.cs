@@ -8,6 +8,7 @@ using System.Threading.Tasks;
 using Content.IntegrationTests.Pair;
 using Content.Server._NF.Trade;
 using Content.Server._Triad.Drydock;
+using Content.Server._Triad.Drydock.Codec;
 using Content.Server.Atmos;
 using Content.Server.Atmos.Components;
 using Content.Server.Atmos.EntitySystems;
@@ -609,7 +610,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
         /// </summary>
         private sealed record KnownFamily(string Name, string Receipt, Func<string, string, RoundTripResult, bool> Matches);
 
-        private static readonly KnownFamily[] KnownFamilies =
+        private static readonly KnownFamily[] KnownFamilies = new KnownFamily[]
         {
             new("occluder-rewound",
                 "Same vertices, other winding: the default polygon is clockwise (OccluderComponent.cs:26-32), the engine's "
@@ -659,7 +660,56 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                 + "holding no order, since orders live in the station's database (CargoSystem.Telepad.cs:40-46, :131-152, :66-69).",
                 (line, key, _) => line.StartsWith("CHANGED", StringComparison.Ordinal)
                                   && RearmedByThePowerEdge.Contains(key[(key.IndexOf('|') + 1)..])),
-        };
+        }.Concat(NotCarriedFamilies()).ToArray();
+
+        /// <summary>
+        /// A family for each member the manifest leaves out on purpose and marks as sorting so
+        /// (<see cref="DrydockNotCarried.SortsAsNotCarried"/>), that entry's own reason its receipt. Opt-in per entry, never
+        /// the whole list: a grid's alerter list is left out because a carried copy grows, and a line on it is F36.
+        /// </summary>
+        private static IEnumerable<KnownFamily> NotCarriedFamilies() =>
+            DrydockCodecManifestMembers.NotCarried
+                .Where(entry => entry.SortsAsNotCarried)
+                .Select(entry => new KnownFamily(
+                    $"not carried: {entry.Component}.{entry.Member}",
+                    $"Not carried, by verdict (DrydockCodecManifestMembers.NotCarried, row {entry.Row}): {entry.Reason}.",
+                    (line, key, _) => line.StartsWith("CHANGED", StringComparison.Ordinal)
+                                      && SnapshotMember(key) is var member
+                                      && (member == $"{entry.Component}Component.{entry.Member}" || member == $"{entry.Component}Component.~{entry.Member}")));
+
+        /// <summary>A key's <c>Component.member</c>, without the entity's path or the suffix a time takes.</summary>
+        private static string SnapshotMember(string key)
+        {
+            var member = key[(key.IndexOf('|') + 1)..];
+            return member.EndsWith(DrydockFidelitySystem.TimeSuffix, StringComparison.Ordinal)
+                ? member[..^DrydockFidelitySystem.TimeSuffix.Length]
+                : member;
+        }
+
+        /// <summary>
+        /// The not-carried families' control, with no server: a difference on a member whose entry opts in sorts into that
+        /// entry's family, a time as well; one on a member left out without opting in (the song's played flag, a grid's
+        /// alerter list) does not.
+        /// </summary>
+        [Test]
+        public void OnlyANotCarriedEntryThatOptsInSortsItsLines()
+        {
+            var empty = new RoundTripResult(new DrydockStateSnapshot(), new DrydockStateSnapshot(), new DrydockStateSnapshot(),
+                new DrydockStateSnapshot(), EntityUid.Invalid, 0, 0, 0, null);
+            string? Sorted(string key) => FamilyFor($"CHANGED  {key}: before -> after", key, empty, null).Family?.Name;
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(Sorted("ScuttleDeviceWyvern@8,8|ScuttleDeviceComponent.~SelectedNukeSong"),
+                    Is.EqualTo("not carried: ScuttleDevice.SelectedNukeSong"), "An opted-in member's line has to sort into its entry's family.");
+                Assert.That(Sorted($"ScuttleDeviceWyvern@8,8|ScuttleDeviceComponent.~NukeSongLength{DrydockFidelitySystem.TimeSuffix}"),
+                    Is.EqualTo("not carried: ScuttleDevice.NukeSongLength"), "A time's suffix must not keep it out of its family.");
+                Assert.That(Sorted("ScuttleDeviceWyvern@8,8|ScuttleDeviceComponent.~PlayedNukeSong"), Is.Null,
+                    "A member left out without opting in has to stay a finding.");
+                Assert.That(Sorted("grid|TargetSeekerAlertGridComponent.Alerters"), Is.Null,
+                    "The alerter list, left out because a carried copy grows, has to stay a finding.");
+            });
+        }
 
         /// <summary>What the power edge a load raises re-arms or restarts, as deep-snapshot members.</summary>
         private static readonly HashSet<string> RearmedByThePowerEdge = new(StringComparer.Ordinal)

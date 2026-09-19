@@ -79,7 +79,10 @@ public sealed record DrydockManifestMember(
 }
 
 /// <param name="Reason">Why it is not carried, which is the whole point of listing it.</param>
-public sealed record DrydockNotCarried(int Row, string Component, string Member, string Reason);
+/// <param name="SortsAsNotCarried">Whether the fidelity ladder sorts a difference on this member as explained by
+/// <paramref name="Reason"/>. Opt-in per entry: a member left out because a carried copy would grow (a grid's alerter
+/// list) is exactly what the ladder has to go on showing.</param>
+public sealed record DrydockNotCarried(int Row, string Component, string Member, string Reason, bool SortsAsNotCarried = false);
 
 /// <summary>
 /// The members of a component that are not data fields and that a restored ship has to have back (finding F33), each
@@ -271,8 +274,8 @@ public static class DrydockCodecManifestMembers
         new DrydockNotCarried(507, "ScuttleDevice", "AlertAudioStream", "a playing audio entity"),
         // The song and its length are picked at the arm (ScuttleDeviceSystem.cs:231-235), the countdown plays nothing without
         // a song (:185), and a disarm clears the played flag (:275), so the three go together.
-        new DrydockNotCarried(507, "ScuttleDevice", "SelectedNukeSong", MusicState),
-        new DrydockNotCarried(507, "ScuttleDevice", "NukeSongLength", MusicState),
+        new DrydockNotCarried(507, "ScuttleDevice", "SelectedNukeSong", MusicState, SortsAsNotCarried: true),
+        new DrydockNotCarried(507, "ScuttleDevice", "NukeSongLength", MusicState, SortsAsNotCarried: true),
         new DrydockNotCarried(507, "ScuttleDevice", "PlayedNukeSong", MusicState),
         new DrydockNotCarried(435, "Wires", "StateData",
             "boxed values, most of them live CancellationTokenSources; PowerWireActionKey.CutWires travels as an entry of its own, and .Pulsed is owed with H12"));
