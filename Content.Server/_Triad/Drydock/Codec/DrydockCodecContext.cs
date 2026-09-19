@@ -99,6 +99,11 @@ public sealed class DrydockCodecContext :
         // audit measures what the engine covers without us, and it must keep measuring that.
         SerializerProvider.RegisterSerializer(new DrydockLatheRecipeBatchSerializer(this, entMan));
         SerializerProvider.RegisterSerializer(new DrydockMarketDataSerializer());
+
+        // Their copy halves, at the list each is held in rather than per element: the engine copies a list's
+        // elements through a delegate that never consults a context (DrydockLatheQueueCopier says where).
+        SerializerProvider.RegisterSerializer(new DrydockLatheQueueCopier());
+        SerializerProvider.RegisterSerializer(new DrydockMarketDataListCopier());
     }
 
     public ValidationNode Validate(

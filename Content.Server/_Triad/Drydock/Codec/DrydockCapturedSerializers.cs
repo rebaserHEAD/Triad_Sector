@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Globalization;
 using Content.Shared._NF.Market;
 using Content.Shared.Lathe;
@@ -29,6 +30,12 @@ namespace Content.Server._Triad.Drydock.Codec;
 /// and on the way back in (<c>SerializationManager.Reading.cs:77-120</c>), so a
 /// <c>List&lt;LatheRecipeBatch&gt;</c> written by a component's generated writer reaches this one per
 /// element.</para>
+///
+/// <para>A copy is the exception. The engine copies a list's elements through a delegate that reads only its own
+/// serializers (<c>SerializationManager.Copying.cs:207</c>), so a per-element copier here would never be reached;
+/// each type's copy half is registered at the list its component holds it in instead
+/// (<see cref="DrydockLatheQueueCopier"/>, <see cref="DrydockMarketDataListCopier"/>), which the component's
+/// generated copy looks up on the context first.</para>
 /// </summary>
 internal static class DrydockCapturedKeys
 {
@@ -167,6 +174,40 @@ public sealed class DrydockLatheRecipeBatchSerializer : ITypeSerializer<LatheRec
 }
 
 /// <summary>
+/// The copy half of <see cref="DrydockLatheRecipeBatchSerializer"/>, for the whole queue rather than one batch. A
+/// load copies each read component into the one its prototype added, and the engine's list copier asks for each
+/// element's copy through a delegate built from the manager's own serializers and cached per type, never from the
+/// calling context (<c>RobustToolbox/Robust.Shared/Serialization/Manager/SerializationManager.Copying.cs:207</c>);
+/// with no empty constructor, a batch cannot be made there, and the copy throws. The field itself is looked up on
+/// the context first (<c>SerializationManager.SerializerProvider.cs:131-135</c>), so the copy is taken over one
+/// level up, at <see cref="LatheComponent.Queue"/>'s own type.
+/// </summary>
+public sealed class DrydockLatheQueueCopier : ITypeCopier<List<LatheRecipeBatch>>
+{
+    public void CopyTo(
+        ISerializationManager serializationManager,
+        List<LatheRecipeBatch> source,
+        ref List<LatheRecipeBatch> target,
+        IDependencyCollection dependencies,
+        SerializationHookContext hookCtx,
+        ISerializationContext? context = null)
+    {
+        target.Clear();
+        target.EnsureCapacity(source.Count);
+
+        // The constructor hands out a fresh index, and the index is what the queue de-queues by, so the batch's
+        // own goes back on, as the reader does. The recipe is a prototype and is shared, not copied.
+        foreach (var batch in source)
+        {
+            target.Add(new LatheRecipeBatch(batch.Recipe, batch.ItemsPrinted, batch.ItemsRequested, batch.Actor)
+            {
+                Index = batch.Index,
+            });
+        }
+    }
+}
+
+/// <summary>
 /// Player-modified market state. <see cref="MarketData"/> is a plain class with no data definition,
 /// so the engine has no way to write one and a cargo console's market comes back empty without this.
 /// Every member is a value; there is no reference to carry.
@@ -222,5 +263,35 @@ public sealed class DrydockMarketDataSerializer : ITypeSerializer<MarketData, Ma
             stack,
             DrydockCapturedKeys.Integer(node, QuantityKey),
             DrydockCapturedKeys.Real(node, PriceKey));
+    }
+}
+
+/// <summary>
+/// The copy half of <see cref="DrydockMarketDataSerializer"/>, taken over at the list for the reason
+/// <see cref="DrydockLatheQueueCopier"/> gives: <see cref="MarketData"/> has no empty constructor either, so the
+/// engine's per-element copy of <c>CargoMarketDataComponent.MarketDataList</c> throws.
+/// </summary>
+public sealed class DrydockMarketDataListCopier : ITypeCopier<List<MarketData>>
+{
+    public void CopyTo(
+        ISerializationManager serializationManager,
+        List<MarketData> source,
+        ref List<MarketData> target,
+        IDependencyCollection dependencies,
+        SerializationHookContext hookCtx,
+        ISerializationContext? context = null)
+    {
+        target.Clear();
+        target.EnsureCapacity(source.Count);
+
+        foreach (var data in source)
+        {
+            // The type is open to subclassing, and a copy made here would be the base type, dropping whatever a
+            // subclass carried. None exists; one appearing is refused rather than cut down.
+            if (data.GetType() != typeof(MarketData))
+                throw new InvalidOperationException($"Drydock codec: a market entry is a {data.GetType().Name}, which the market copier would cut down to MarketData.");
+
+            target.Add(new MarketData(data.Prototype, data.StackPrototype, data.Quantity, data.Price));
+        }
     }
 }
