@@ -680,7 +680,8 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                 + "(BatteryComponent.CurrentCharge, \"battery charge under load\"). Sorted only where the state settled, the "
                 + "after value being the late one, and is the Full that the loaded battery's own charge gives under "
                 + "CalcChargeState (ApcSystem.cs:197-209). Any other move, a Full the battery does not justify or the Lack of a "
-                + "battery not yet synced among them, stays a finding.",
+                + "battery not yet synced among them, stays a finding. Proven by its control so far "
+                + "(OnlyAChargeStateTheLoadedBatteryJustifiesSorts); no rung has handed it a line since the power fix.",
                 (line, key, result) => line.StartsWith("CHANGED", StringComparison.Ordinal)
                                        && SnapshotMember(key) == "ApcComponent.~LastChargeState"
                                        && result.After.Values.TryGetValue(key, out var state)
