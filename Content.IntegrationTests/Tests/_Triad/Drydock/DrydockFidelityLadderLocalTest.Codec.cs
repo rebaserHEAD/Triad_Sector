@@ -8,6 +8,7 @@ using System.Threading.Tasks;
 using Content.IntegrationTests.Pair;
 using Content.Server._Triad.Drydock;
 using Content.Server._Triad.Drydock.Codec;
+using Content.Server._Triad.Drydock.Loader;
 using Content.Server.Chemistry.Components;
 using Content.Server.Power.Components;
 using Content.Server.Pinpointer;
@@ -37,42 +38,21 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
     /// engine's own deserializer, driven one phase at a time with the image's rows applied between its component pass
     /// and its startup. That is route 1, the hybrid, ruled on 2026-09-18.
     ///
-    /// <para>LOCAL SCAFFOLDING. The loader lives here until it is ruled into the server, and nothing in it is the
-    /// drydock's. Rows travel as JSON text in memory; there is no database, no store and no retrieve.</para>
+    /// <para>The loop is server code (<see cref="DrydockImageSystem"/>: the store, the load, the despawn) and this file
+    /// holds what measures it: the store's write costs (<see cref="WriteProbe"/>), each load phase's time, the census of
+    /// what the walk left out, the leftovers of the despawn, and the notes and failures the ladder prints. Rows travel as
+    /// JSON text in memory (<see cref="DrydockImage"/>); there is no database, no store and no retrieve.</para>
     ///
-    /// <para>The load, in order. The engine's steps are numbered as in
-    /// <c>resources/2026-09-18-engine-loader-ordering.md</c>.
-    /// <list type="number">
-    /// <item>A skeleton document: every stored entity under its prototype, with its stable id as the yaml uid and its
-    /// recorded <c>mapInit</c> and <c>paused</c>, and the grid's own grid component carrying the tile table's chunks.
-    /// Nothing else, because every other component comes from the image's rows.</item>
-    /// <item><c>TryProcessData</c> and <c>CreateEntities</c> (<c>EntityDeserializer.cs:153</c>, <c>:183</c>): the
-    /// engine allocates everyone and adds each prototype's components (steps 4 and 6b), and reads the tiles with its
-    /// own chunk reader, tile-change and collision work suppressed.</item>
-    /// <item>The rows, through <see cref="DrydockCodec"/> under its own context, whose references resolve through the
-    /// engine's <c>UidMap</c> (<c>:93</c>). A component the entity already has, which the prototype put there, is
-    /// read into a temporary and copied in, which is the engine's own path for one (<c>:693-694</c>); one it lacks is
-    /// added as read, or added fresh and copied into when it has serialization hooks, as the engine does
-    /// (<c>:670-685</c>); and a prototype component with no row is removed.</item>
-    /// <item>The grid re-parented onto the map with <c>SetCoordinates</c>, in the same gap the engine's own merge
-    /// uses (<c>MapLoaderSystem.Load.cs:192</c>, <c>MapLoaderSystem.LoadMap.cs:254-274</c>).</item>
-    /// <item><c>StartEntities</c> (<c>:213</c>): parents first, init then startup per entity, then the map-init
-    /// stamp with no event (<c>:1019-1036</c>) and the pause stamp.</item>
-    /// </list></para>
+    /// <para>The load goes back onto the hull's own map, as the engine mode does, and not onto a paused staging map. The
+    /// whole load runs inside one <c>WaitPost</c>, so no tick can run between its phases, which is what the pause was
+    /// for, and a fresh map would lack the atmosphere the rung gives this one. The store's despawn is the drydock's, on a
+    /// paused staging map deleted with the hull (<see cref="Despawn"/>), and what it leaves behind is checked before the
+    /// load (<see cref="Leftovers"/>).</para>
     ///
-    /// <para>One departure from the design stop: the load goes back onto the hull's own map, as the engine mode does,
-    /// and not onto a paused staging map. The whole load runs inside one <c>WaitPost</c>, so no tick can run between
-    /// its phases, which is what the pause was for, and a fresh map would lack the atmosphere the rung gives this
-    /// one. The store's despawn is the drydock's, on a paused staging map deleted with the hull (<see cref="Despawn"/>),
-    /// and what it leaves behind is checked before the load (<see cref="Leftovers"/>).</para>
-    ///
-    /// <para>The seam between each entity's init and its startup (<c>EntityInitialized</c>) carries the item slots held
-    /// back from init (<see cref="HoldBackSlots"/>) and the manifest's seam members. The manifest (F33,
-    /// <see cref="DrydockCodecManifestMembers"/>) carries what a copy of data fields cannot, in a row of its own, and
-    /// sets each member at its moment: before init with the rows, at the seam for one an init handler resets, and after
-    /// every entity has started (a cable receiver's provider, through the cable system). A data field listed as
-    /// carried-and-reapplied is taken off its component after the rows and set back at its moment. What the first power
-    /// solve re-arms has no moment; the ladder sorts it as accepted.</para>
+    /// <para>What the manifest (F33, <see cref="DrydockCodecManifestMembers"/>) sets, missed or refused, and the appearance
+    /// entries the gate refused, come back in the load's result and fail the test once the report has printed
+    /// (<see cref="AssertLoopHeld"/>), unless <c>LADDER_MANIFEST_OFF</c> holds members off to show a loss on purpose. What the
+    /// first power solve re-arms has no moment; the ladder sorts it as accepted.</para>
     /// </summary>
     public sealed partial class DrydockFidelityLadderLocalTest
     {
@@ -108,70 +88,8 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
 
         private const int DearestKept = 3;
 
-        private sealed record CodecEntity(long Id, string? Prototype, bool MapInitialized, bool Paused, Dictionary<string, string> Rows);
-
-        private sealed record CodecImage(long GridId, List<CodecEntity> Entities, string Tiles, int Unsaved, int Bytes);
-
-        /// <summary>A manifest member decoded at the rows, or taken off its component there, held for its moment.</summary>
-        private sealed record HeldMember(EntityUid Uid, DrydockManifestMember Member, object? Value);
-
-        /// <summary>One load's manifest: what waits for a later moment, and what each moment set, missed or refused.</summary>
-        private sealed class ManifestApply
-        {
-            public int Trip;
-            public readonly List<HeldMember> Held = new();
-            public readonly Dictionary<string, int> Missing = new(StringComparer.Ordinal);
-            public readonly Dictionary<string, int> Refused = new(StringComparer.Ordinal);
-            public int Repaired;
-            public int AlreadyPaired;
-            public int StoredUnpaired;
-            public readonly Dictionary<string, int> LaterByMember = new(StringComparer.Ordinal);
-            private readonly Dictionary<DrydockApplyMoment, int> _set = new();
-
-            public void Count(DrydockManifestMember member)
-            {
-                _set[member.Moment] = _set.GetValueOrDefault(member.Moment) + 1;
-                if (member.Moment != DrydockApplyMoment.BeforeInit)
-                    LaterByMember[member.Key] = LaterByMember.GetValueOrDefault(member.Key) + 1;
-            }
-
-            public int Set(DrydockApplyMoment moment) => _set.GetValueOrDefault(moment);
-
-            /// <summary>A member whose component the entity no longer had at its moment, by member and prototype.</summary>
-            public void Miss(DrydockManifestMember member, string prototype)
-            {
-                var key = $"{member.Key} on {prototype}";
-                Missing[key] = Missing.GetValueOrDefault(key) + 1;
-            }
-
-            /// <summary>A member the load would not set, by member, prototype and why.</summary>
-            public void Refuse(DrydockManifestMember member, string prototype, string why)
-            {
-                var key = $"{member.Key} on {prototype}: {why}";
-                Refused[key] = Refused.GetValueOrDefault(key) + 1;
-            }
-
-            /// <summary>Members <c>LADDER_MANIFEST_OFF</c> holds off, by key: decoded, not set, so their loss shows.</summary>
-            public readonly Dictionary<string, int> OffByKey = new(StringComparer.Ordinal);
-
-            /// <summary>Whether <c>LADDER_MANIFEST_OFF</c> names this member, by component or by key; counted when it does.</summary>
-            public bool HeldOff(DrydockManifestMember member)
-            {
-                if (!ManifestOff.Contains(member.Component) && !ManifestOff.Contains(member.Key))
-                    return false;
-
-                OffByKey[member.Key] = OffByKey.GetValueOrDefault(member.Key) + 1;
-                return true;
-            }
-
-            /// <summary>Each seam member by the prototype it was set on, since a seam set is rare and each one is a case.</summary>
-            public readonly Dictionary<string, int> SeamByPrototype = new(StringComparer.Ordinal);
-
-            public void SeamOn(string key) => SeamByPrototype[key] = SeamByPrototype.GetValueOrDefault(key) + 1;
-        }
-
         /// <summary>The last load's manifest, for the round trip's notes and failures.</summary>
-        private static ManifestApply? LastManifest;
+        private static DrydockManifestApply? LastManifest;
 
         /// <summary>
         /// <c>LADDER_MANIFEST_OFF</c>: component names or member keys, comma-separated, whose manifest members the load
@@ -181,10 +99,6 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             (Environment.GetEnvironmentVariable("LADDER_MANIFEST_OFF") ?? string.Empty)
                 .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries),
             StringComparer.Ordinal);
-
-        private static readonly List<DrydockUnwritableMember> ManifestUnwritable = new();
-
-        private static readonly Dictionary<string, int> ManifestStripped = new(StringComparer.Ordinal);
 
         /// <summary>
         /// What the loop lost or left on this test's round trips. The manifest's, while every member was applied
@@ -206,35 +120,6 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
 
         private static string PrototypeOf(IEntityManager entMan, EntityUid uid) =>
             entMan.GetComponent<MetaDataComponent>(uid).EntityPrototype?.ID ?? "(no prototype)";
-
-        private static readonly DrydockManifestMember[] ReapplyCarried =
-            DrydockCodecManifestMembers.Members.Where(m => m.Kind == DrydockMemberKind.ReapplyCarried).ToArray();
-
-        /// <summary>
-        /// A manifest member set straight onto its component. A member that goes through a system is the caller's; one
-        /// whose component the entity no longer has at its moment is counted, not set.
-        /// </summary>
-        private static void SetManifestMember(
-            IEntityManager entMan,
-            IComponentFactory factory,
-            EntityUid uid,
-            DrydockManifestMember member,
-            object? value,
-            ManifestApply apply)
-        {
-            if (member.Kind == DrydockMemberKind.ViaSystem)
-                throw new InvalidOperationException($"Codec loop: {member.Component}.{member.Member} goes through its system, and the loop has no path for it.");
-
-            var registration = factory.GetRegistration(member.Component);
-            if (!entMan.TryGetComponent(uid, registration.Type, out var component))
-            {
-                apply.Miss(member, PrototypeOf(entMan, uid));
-                return;
-            }
-
-            DrydockCodec.SetMember(component, member, value);
-            apply.Count(member);
-        }
 
         /// <summary>
         /// The seam's hardest case: a reagent dispenser registers its beaker slot at map init and its storage slots
@@ -539,8 +424,9 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             var server = pair.Server;
             var entMan = server.EntMan;
             var timing = server.ResolveDependency<IGameTiming>();
+            var system = server.System<DrydockImageSystem>();
 
-            CodecImage image = default!;
+            DrydockImageStoreResult stored = default!;
             var mapUid = EntityUid.Invalid;
             var fidelity = server.System<DrydockFidelitySystem>();
             var mobsBefore = 0;
@@ -566,7 +452,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
 
                 mapUid = entMan.GetComponent<TransformComponent>(grid).MapUid!.Value;
                 var store = System.Diagnostics.Stopwatch.StartNew();
-                image = CodecStore(pair, grid);
+                stored = StoreTimed(entMan, system, grid);
                 LastStoreTime = store.Elapsed;
                 despawn = Despawn(pair, grid);
             });
@@ -578,53 +464,92 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             await server.WaitPost(() => leftovers = Leftovers(entMan, despawn));
 
             EntityUid loaded = default;
+            DrydockLoadResult result = default!;
             var mobsAfter = 0;
+            LoadTimes loadTimes = default;
             await server.WaitPost(() =>
             {
-                loaded = CodecLoad(pair, image, mapUid);
+                (result, loadTimes) = LoadTimed(system, stored.Image, mapUid);
+                loaded = result.Grid;
+                LastLoadIds = result.Ids.ToDictionary(entry => entry.Key, entry => entry.Value);
                 mobsAfter = fidelity.GridTreeList(loaded)
                     .Count(uid => entMan.GetComponent<MetaDataComponent>(uid).EntityPrototype?.ID.StartsWith("Mob", StringComparison.Ordinal) == true);
             });
 
-            var manifest = LastManifest!;
-            var unwritable = ManifestUnwritable
+            var image = stored.Image;
+            var manifest = result.Manifest;
+            LastManifest = manifest;
+            var trip = CodecNotes.Count(note => note.Contains(" entities stored (", StringComparison.Ordinal)) + 1;
+            var unwritable = stored.Unwritable
                 .GroupBy(u => $"{u.Member.Key} on {u.Prototype ?? "(no prototype)"}", StringComparer.Ordinal)
                 .ToDictionary(g => g.Key, g => g.Count(), StringComparer.Ordinal);
-            CodecNotes.Add($"[ladder] codec round trip {manifest.Trip}: manifest members set before init {manifest.Set(DrydockApplyMoment.BeforeInit)}, "
+
+            CodecNotes.Add($"[ladder] codec round trip {trip}: {image.Entities.Count} entities stored ({image.Unsaved} unsavable left out with what they held), "
+                           + $"{image.Entities.Sum(e => e.Rows.Count)} rows, {image.Bytes} bytes of JSON text; "
+                           + $"tiles {result.TilesStored} stored, {result.TilesRestored} restored, {result.TilesMissing} missing, {result.TilesExtra} extra.");
+            CodecNotes.Add($"[ladder] codec round trip {trip}: {result.Overwrote} row(s) copied into a component the prototype had added "
+                           + $"(its ComponentAdd saw prototype data), {result.Added} added as read, {result.Removed} prototype component(s) removed before init.");
+            CodecNotes.Add($"         overwritten, top: {Top(result.OverwroteByType)}");
+            CodecNotes.Add($"         removed: {Top(result.RemovedByType)}");
+            CodecNotes.Add($"[ladder] codec round trip {trip}: prototype ids the manifest read that no longer resolve, set as null: "
+                           + (result.UnresolvedPrototypes.Count == 0 ? "none." : string.Join(", ", result.UnresolvedPrototypes.Select(u => $"{u.Member.Key} '{u.Id}'")) + "."));
+            var severed = result.Severed
+                .GroupBy(entry => entry.Nullable ? entry.Member : $"{entry.Member} (not nullable)", StringComparer.Ordinal)
+                .ToDictionary(group => group.Key, group => group.Count(), StringComparer.Ordinal);
+            CodecNotes.Add($"[ladder] codec round trip {trip}: references the image could not keep: "
+                           + $"{result.Severed.Count(entry => entry.Nullable)} in nullable members, read as null, and "
+                           + $"{result.Severed.Count(entry => !entry.Nullable)} in members that are not, left invalid"
+                           + (severed.Count == 0 ? "." : ": " + Top(severed) + "."));
+            CodecNotes.Add($"[ladder] codec round trip {trip}: queued lathe batches left out for a recipe that no longer resolves: "
+                           + (result.DroppedBatches.Count == 0 ? "none." : Top(result.DroppedBatches.GroupBy(id => id, StringComparer.Ordinal).ToDictionary(g => g.Key, g => g.Count(), StringComparer.Ordinal)) + "."));
+            CodecNotes.Add($"[ladder] codec round trip {trip}: {result.HeldBackSlots} item slot(s) held back from init; at the seam {result.CopiedAtSeam} copied into the slot init re-added; "
+                           + $"after startup {result.CopiedAfterStartup} copied into the slot startup re-added, {result.AddedWhole} added whole because nothing re-added them.");
+            CodecNotes.Add($"[ladder] codec round trip {trip}: load by phase, {image.Entities.Count} entities: rows parsed {loadTimes.Begin.TotalMilliseconds:F0} ms, "
+                           + $"skeleton and CreateEntities {loadTimes.Create.TotalMilliseconds:F0} ms, rows and re-parent {loadTimes.Rows.TotalMilliseconds:F0} ms, "
+                           + $"StartEntities {loadTimes.Start.TotalMilliseconds:F0} ms; the store took {LastStoreTime.TotalMilliseconds:F0} ms.");
+            var parts = LastStoreTimes;
+            CodecNotes.Add($"[ladder] codec round trip {trip}: store parts: id pass {parts.IdPass.TotalMilliseconds:F1} ms (un-sliced), "
+                           + $"tile table {parts.Tiles.TotalMilliseconds:F1} ms, appearance rows {parts.Appearance.TotalMilliseconds:F1} ms "
+                           + $"(dearest one {parts.DearestAppearance.TotalMilliseconds:F2} ms), {parts.Writes} component write(s), {parts.During} over the store; dearest single writes: "
+                           + string.Join(", ", parts.Dearest.Select(d => $"{d.Component} on {d.Prototype ?? "(no prototype)"} {d.Time.TotalMilliseconds:F2} ms ({d.During})"))
+                           + ".");
+            CodecNotes.Add($"[ladder] codec round trip {trip}: {result.AppearanceApplied} appearance entr(y/ies) set before init; "
+                           + $"not stored, by value type: {Top(stored.AppearanceSkipped)}; refused by the gate: {Top(result.AppearanceRefused)}; "
+                           + $"{result.AppearanceStillDirty} of {result.AppearanceComponents} appearance component(s) still marked modified in the load's tick.");
+
+            CodecNotes.Add($"[ladder] codec round trip {trip}: manifest members set before init {manifest.Set(DrydockApplyMoment.BeforeInit)}, "
                            + $"at the seam {manifest.Set(DrydockApplyMoment.Seam)}, after startup {manifest.Set(DrydockApplyMoment.AfterStart)} "
                            + $"({Top(manifest.LaterByMember)}); component gone at its moment: {Top(manifest.Missing)}; "
-                           + $"not written at the store: {Top(unwritable)}; components stripped at the store: {Top(ManifestStripped)}.");
-            CodecNotes.Add($"[ladder] codec round trip {manifest.Trip}: cable receivers: {manifest.Repaired} re-paired with the stored provider, "
+                           + $"not written at the store: {Top(unwritable)}; components stripped at the store: {Top(stored.Stripped)}.");
+            CodecNotes.Add($"[ladder] codec round trip {trip}: cable receivers: {manifest.Repaired} re-paired with the stored provider, "
                            + $"{manifest.AlreadyPaired} already on it, {manifest.StoredUnpaired} stored unpaired and still so; refused: {Top(manifest.Refused)}.");
-            CodecNotes.Add($"[ladder] codec round trip {manifest.Trip}: seam members by prototype: {Top(manifest.SeamByPrototype)}.");
+            CodecNotes.Add($"[ladder] codec round trip {trip}: seam members by prototype: {Top(manifest.SeamByPrototype)}.");
             if (ManifestOff.Count > 0)
-                CodecNotes.Add($"[ladder] codec round trip {manifest.Trip}: manifest held off by LADDER_MANIFEST_OFF ({string.Join(",", ManifestOff)}): {Top(manifest.OffByKey)}.");
+                CodecNotes.Add($"[ladder] codec round trip {trip}: manifest held off by LADDER_MANIFEST_OFF ({string.Join(",", ManifestOff)}): {Top(manifest.OffByKey)}.");
 
             // With every member applied, a lost one fails the test once its report has printed, where holding members off
             // is how a loss is shown on purpose.
             if (ManifestOff.Count == 0)
             {
-                var lost = ManifestUnwritable
+                var lost = stored.Unwritable
                     .GroupBy(u => u.ToString(), StringComparer.Ordinal)
                     .Select(g => $"not written at the store: {g.Key} x{g.Count()}")
                     .Concat(manifest.Missing.Select(m => $"component gone at its moment: {m.Key} x{m.Value}"))
                     .Concat(manifest.Refused.Select(r => $"refused by the load: {r.Key} x{r.Value}"))
-                    .Select(line => $"codec round trip {manifest.Trip}: {line}")
+                    .Concat(result.AppearanceRefused.Select(a => $"appearance type refused by the gate: {a.Key} x{a.Value}"))
+                    .Select(line => $"codec round trip {trip}: {line}")
                     .ToList();
                 LoopFailures.AddRange(lost);
                 CodecNotes.AddRange(lost.Select(line => $"[ladder] MANIFEST FAILURE {line}"));
             }
 
             // Whatever the manifest does, a leftover of the despawn fails.
-            CodecNotes.Add($"[ladder] codec round trip {manifest.Trip}: despawn "
+            CodecNotes.Add($"[ladder] codec round trip {trip}: despawn "
                            + (DespawnGridOnly ? "of the grid alone (LADDER_DESPAWN=grid-only, the control)" : "with its staging map")
                            + $": {despawn.Hull.Count} entities in the hull, {despawn.Made.Count} made during it, {leftovers.Count} left over.");
-            var left = leftovers.Select(line => $"codec round trip {manifest.Trip}: despawn: {line}").ToList();
+            var left = leftovers.Select(line => $"codec round trip {trip}: despawn: {line}").ToList();
             LoopFailures.AddRange(left);
             CodecNotes.AddRange(left.Select(line => $"[ladder] DESPAWN FAILURE {line}"));
-
-            ManifestUnwritable.Clear();
-            ManifestStripped.Clear();
 
             var mobsStored = image.Entities.Count(e => e.Prototype?.StartsWith("Mob", StringComparison.Ordinal) == true);
             CodecNotes.Add($"[ladder] mob census: {mobsBefore} Mob* entit(y/ies) aboard before the store ({mobsUnsavable} of them unsavable), "
@@ -634,6 +559,103 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             CodecNotes.Add($"[ladder] unsavable at the store: {unsavable.Values.Sum()} entit(y/ies), by prototype"
                            + (unsavable.Count == 0 ? ": none." : ": " + Top(unsavable) + "."));
             return loaded;
+        }
+
+        /// <summary>Each phase of the last load, timed here because the server loader times nothing.</summary>
+        private readonly record struct LoadTimes(TimeSpan Begin, TimeSpan Create, TimeSpan Rows, TimeSpan Start);
+
+        private static (DrydockLoadResult Result, LoadTimes Times) LoadTimed(DrydockImageSystem system, DrydockImage image, EntityUid mapUid)
+        {
+            // LADDER_MANIFEST_OFF: members it names are decoded and not set, so a recipe shows its predicted loss.
+            var options = new DrydockLoadOptions
+            {
+                HoldOff = ManifestOff.Count == 0
+                    ? null
+                    : member => ManifestOff.Contains(member.Component) || ManifestOff.Contains(member.Key),
+            };
+
+            var phase = System.Diagnostics.Stopwatch.StartNew();
+            var session = system.BeginLoad(image, mapUid, options);
+            var begin = phase.Elapsed;
+            phase.Restart();
+            session.CreateEntities();
+            var create = phase.Elapsed;
+            phase.Restart();
+            session.ApplyRows();
+            var rows = phase.Elapsed;
+            phase.Restart();
+            session.Start();
+            var start = phase.Elapsed;
+            return (session.Complete(), new LoadTimes(begin, create, rows, start));
+        }
+
+        /// <summary>
+        /// The write costs the server store leaves to its caller: it calls this probe around each row and times nothing itself.
+        /// The dearest component writes (the write and its JSON) are kept, each with the collections that landed inside it,
+        /// and the appearance rows are summed and their dearest kept.
+        /// </summary>
+        private sealed class WriteProbe : IDrydockStoreProbe
+        {
+            private readonly IEntityManager _entMan;
+            private readonly System.Diagnostics.Stopwatch _watch = new();
+            private Collections _startCollections;
+
+            public readonly List<DearWrite> Dearest = new();
+            public TimeSpan Appearance;
+            public TimeSpan DearestAppearance;
+
+            public WriteProbe(IEntityManager entMan) => _entMan = entMan;
+
+            public void Before(EntityUid uid, string row)
+            {
+                _startCollections = Collections.Now();
+                _watch.Restart();
+            }
+
+            public void After(EntityUid uid, string row)
+            {
+                var cost = _watch.Elapsed;
+                if (row == DrydockImageSystem.AppearanceRow)
+                {
+                    Appearance += cost;
+                    if (cost > DearestAppearance)
+                        DearestAppearance = cost;
+
+                    return;
+                }
+
+                if (row == DrydockCodec.ManifestRow)
+                    return;
+
+                if (Dearest.Count < DearestKept || cost > Dearest[^1].Time)
+                {
+                    Dearest.Add(new DearWrite(cost, row, _entMan.GetComponent<MetaDataComponent>(uid).EntityPrototype?.ID, Collections.Now().Since(_startCollections)));
+                    Dearest.Sort((a, b) => b.Time.CompareTo(a.Time));
+                    if (Dearest.Count > DearestKept)
+                        Dearest.RemoveAt(DearestKept);
+                }
+            }
+        }
+
+        /// <summary>The server store, timed by its parts: the id pass, every entity's rows through a <see cref="WriteProbe"/>, and the tile table.</summary>
+        private static DrydockImageStoreResult StoreTimed(IEntityManager entMan, DrydockImageSystem system, EntityUid grid)
+        {
+            var storeCollections = Collections.Now();
+            var probe = new WriteProbe(entMan);
+            var part = System.Diagnostics.Stopwatch.StartNew();
+            var session = system.BeginStore(grid, probe);
+            var idPass = part.Elapsed;
+
+            foreach (var uid in session.Aboard)
+                session.WriteEntity(uid);
+
+            part.Restart();
+            session.WriteTiles();
+            var tiles = part.Elapsed;
+
+            var result = session.Complete();
+            LastStoreTimes = new StoreTimes(idPass, tiles, probe.Appearance, probe.DearestAppearance, result.Writes, probe.Dearest, Collections.Now().Since(storeCollections));
+            return result;
         }
 
         /// <summary>
@@ -646,10 +668,10 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
         private sealed record DespawnWatch(Dictionary<EntityUid, string> Hull, List<EntityUid> Made);
 
         /// <summary>
-        /// The store's despawn, as the drydock's does it: the hull moved onto a fresh paused staging map
-        /// (DrydockSystem.Freeze.cs:301-311, :460), then the grid and the map deleted, in the order the drydock queues them
-        /// (DrydockSystem.cs:655-666). Whatever a terminate handler throws out of the hull, a disposal unit's contents
-        /// (DisposalUnitSystem.cs:41-44) among them, lands on the staging map and goes with it.
+        /// The store's despawn, run by the server loader (<see cref="DrydockImageSystem.Despawn"/>: the hull moved onto a fresh
+        /// paused staging map, then the grid and the map deleted), with the watch the leftovers are read against: every entity
+        /// that was in the hull, and every one made during the despawn. Whatever a terminate handler throws out of the hull, a
+        /// disposal unit's contents (DisposalUnitSystem.cs:41-44) among them, lands on the staging map and goes with it.
         /// </summary>
         private static DespawnWatch Despawn(TestPair pair, EntityUid grid)
         {
@@ -664,18 +686,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             entMan.EntityAdded += Made;
             try
             {
-                if (DespawnGridOnly)
-                {
-                    entMan.DeleteEntity(grid);
-                    return watch;
-                }
-
-                var maps = server.System<SharedMapSystem>();
-                var staging = maps.CreateMap(out _, runMapInit: true);
-                maps.SetPaused(staging, true);
-                server.System<SharedTransformSystem>().SetCoordinates(grid, new EntityCoordinates(staging, System.Numerics.Vector2.Zero));
-                entMan.DeleteEntity(grid);
-                entMan.DeleteEntity(staging);
+                server.System<DrydockImageSystem>().Despawn(grid, stagingMap: !DespawnGridOnly);
                 return watch;
             }
             finally
@@ -713,38 +724,6 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             return xform.ParentUid.IsValid()
                 ? $"on map {xform.MapID} under {PrototypeOf(entMan, xform.ParentUid)} {xform.ParentUid} at {xform.LocalPosition}"
                 : "in nullspace";
-        }
-
-        /// <summary>
-        /// The store's walk and its id pass: every savable entity from the grid down, each given its stable id in walk
-        /// order. An entity whose prototype is not savable is left out with everything under it. The snapshots before a
-        /// store take their tie-break from the same walk, so the ids they order by are the ids the image carries.
-        /// </summary>
-        private static (List<EntityUid> Aboard, Dictionary<EntityUid, long> Ids, int Unsaved) StoreWalk(IEntityManager entMan, EntityUid grid)
-        {
-            var aboard = new List<EntityUid>();
-            var unsaved = 0;
-            var stack = new Stack<EntityUid>();
-            stack.Push(grid);
-            while (stack.TryPop(out var uid))
-            {
-                if (entMan.GetComponent<MetaDataComponent>(uid).EntityPrototype is { MapSavable: false })
-                {
-                    unsaved++;
-                    continue;
-                }
-
-                aboard.Add(uid);
-                var children = entMan.GetComponent<TransformComponent>(uid).ChildEnumerator;
-                while (children.MoveNext(out var child))
-                    stack.Push(child);
-            }
-
-            var ids = new Dictionary<EntityUid, long>();
-            for (var i = 0; i < aboard.Count; i++)
-                ids[aboard[i]] = i + 1;
-
-            return (aboard, ids, unsaved);
         }
 
         /// <summary>
@@ -791,7 +770,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             if (!CodecMode)
                 return null;
 
-            var ids = StoreWalk(entMan, grid).Ids;
+            var ids = entMan.System<DrydockImageSystem>().Walk(grid).Ids;
             return uid => ids.TryGetValue(uid, out var id) ? id : null;
         }
 
@@ -806,673 +785,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
         /// <summary>The last load's entities by the stable id each was loaded under.</summary>
         private static Dictionary<EntityUid, long>? LastLoadIds;
 
-        /// <summary>
-        /// Every saved entity aboard, walked from the grid as the corpus harness walks it, each component the engine
-        /// would save written by the codec and carried as JSON text. An entity whose prototype is not savable is left
-        /// out with everything under it, as the engine's own save does, and a reference to it is off the image.
-        /// </summary>
-        private static CodecImage CodecStore(TestPair pair, EntityUid grid)
-        {
-            var server = pair.Server;
-            var entMan = server.EntMan;
-            var factory = server.ResolveDependency<IComponentFactory>();
-            var tileDefs = server.ResolveDependency<ITileDefinitionManager>();
-            var storeCollections = Collections.Now();
-            var part = System.Diagnostics.Stopwatch.StartNew();
-
-            var (aboard, ids, unsaved) = StoreWalk(entMan, grid);
-
-            var idPass = part.Elapsed;
-
-            var codec = new DrydockCodec(
-                server.ResolveDependency<ISerializationManager>(),
-                entMan,
-                server.ResolveDependency<IGameTiming>(),
-                uid => ids.TryGetValue(uid, out var id) ? id : null,
-                _ => throw new InvalidOperationException("The store resolves nothing."));
-
-            var entities = new List<CodecEntity>();
-            var bytes = 0;
-            var writes = 0;
-            var dearest = new List<DearWrite>();
-            var appearanceTime = TimeSpan.Zero;
-            var dearestAppearance = TimeSpan.Zero;
-            foreach (var uid in aboard)
-            {
-                var meta = entMan.GetComponent<MetaDataComponent>(uid);
-                var rows = new Dictionary<string, string>();
-                var kept = new List<IComponent>();
-                foreach (var component in entMan.GetComponents(uid))
-                {
-                    var registration = factory.GetRegistration(component.GetType());
-
-                    // A component the manifest strips names a round, a crew member or a live link, and is not the ship's.
-                    if (DrydockCodecManifestMembers.Stripped.ContainsKey(registration.Name))
-                    {
-                        ManifestStripped[registration.Name] = ManifestStripped.GetValueOrDefault(registration.Name) + 1;
-                        continue;
-                    }
-
-                    kept.Add(component);
-                    if (registration.Unsaved)
-                        continue;
-
-                    var writeCollections = Collections.Now();
-                    part.Restart();
-                    var text = DrydockNodeJson.Encode(codec.Write((uid, meta), component)).ToJsonString();
-                    var cost = part.Elapsed;
-                    writes++;
-                    if (dearest.Count < DearestKept || cost > dearest[^1].Time)
-                    {
-                        dearest.Add(new DearWrite(cost, registration.Name, meta.EntityPrototype?.ID, Collections.Now().Since(writeCollections)));
-                        dearest.Sort((a, b) => b.Time.CompareTo(a.Time));
-                        if (dearest.Count > DearestKept)
-                            dearest.RemoveAt(DearestKept);
-                    }
-
-                    rows[registration.Name] = text;
-                    bytes += text.Length;
-                }
-
-                part.Restart();
-                if (entMan.TryGetComponent<AppearanceComponent>(uid, out var appearance)
-                    && WriteAppearance(entMan, server.ResolveDependency<ISerializationManager>(), codec, appearance) is { } appearanceRow)
-                {
-                    var text = DrydockNodeJson.Encode(appearanceRow).ToJsonString();
-                    rows[AppearanceRow] = text;
-                    bytes += text.Length;
-                }
-
-                var appearanceCost = part.Elapsed;
-                appearanceTime += appearanceCost;
-                if (appearanceCost > dearestAppearance)
-                    dearestAppearance = appearanceCost;
-
-                if (codec.WriteManifest((uid, meta), kept, factory, ManifestUnwritable) is { } manifestRow)
-                {
-                    var text = DrydockNodeJson.Encode(manifestRow).ToJsonString();
-                    rows[DrydockCodec.ManifestRow] = text;
-                    bytes += text.Length;
-                }
-
-                entities.Add(new CodecEntity(
-                    ids[uid],
-                    meta.EntityPrototype?.ID,
-                    meta.EntityLifeStage >= EntityLifeStage.MapInitialized,
-                    meta.EntityPaused,
-                    rows));
-            }
-
-            // The chunk size is an internal data field, so it is taken from the grid component's own row, which carries it
-            // when it is not the default (MapGridComponent.cs:45-46).
-            part.Restart();
-            var gridComp = entMan.GetComponent<MapGridComponent>(grid);
-            var gridRow = (MappingDataNode) DrydockNodeJson.Decode(JsonNode.Parse(entities.Single(e => e.Id == ids[grid]).Rows["MapGrid"])!);
-            var chunkSize = gridRow.TryGet<ValueDataNode>("chunkSize", out var sizeNode)
-                ? ushort.Parse(sizeNode.Value, System.Globalization.CultureInfo.InvariantCulture)
-                : MapGridComponent.DefaultChunkSize;
-
-            var tiles = DrydockTileTable.Write(
-                chunkSize,
-                server.System<SharedMapSystem>().GetAllTiles(grid, gridComp).Select(tile => (tile.GridIndices, tile.Tile)),
-                id => tileDefs[id].ID);
-
-            var tilesText = DrydockNodeJson.Encode(tiles).ToJsonString();
-            LastStoreTimes = new StoreTimes(idPass, part.Elapsed, appearanceTime, dearestAppearance, writes, dearest, Collections.Now().Since(storeCollections));
-            return new CodecImage(ids[grid], entities, tilesText, unsaved, bytes + tilesText.Length);
-        }
-
-        private static EntityUid CodecLoad(TestPair pair, CodecImage image, EntityUid mapUid)
-        {
-            var server = pair.Server;
-            var entMan = server.EntMan;
-            var factory = server.ResolveDependency<IComponentFactory>();
-            var serialization = server.ResolveDependency<ISerializationManager>();
-            var tileDefs = server.ResolveDependency<ITileDefinitionManager>();
-
-            var tileTable = (MappingDataNode) DrydockNodeJson.Decode(JsonNode.Parse(image.Tiles)!);
-            var rows = image.Entities.ToDictionary(
-                entity => entity.Id,
-                entity => entity.Rows.ToDictionary(
-                    row => row.Key,
-                    row => (MappingDataNode) DrydockNodeJson.Decode(JsonNode.Parse(row.Value)!)));
-
-            // Each phase timed, because the engine's two (CreateEntities, StartEntities) run whole and cannot be sliced by us.
-            var phase = System.Diagnostics.Stopwatch.StartNew();
-            TimeSpan skeletonTime, createTime, rowsTime, startTime;
-
-            // 1. The skeleton.
-            var groups = new SortedDictionary<string, SequenceDataNode>(StringComparer.Ordinal);
-            foreach (var entity in image.Entities)
-            {
-                var node = new MappingDataNode
-                {
-                    ["uid"] = new ValueDataNode(entity.Id.ToString()),
-                    ["mapInit"] = new ValueDataNode(entity.MapInitialized ? "true" : "false"),
-                    ["paused"] = new ValueDataNode(entity.Paused ? "true" : "false"),
-                };
-
-                if (entity.Id == image.GridId)
-                {
-                    var gridRow = rows[entity.Id]["MapGrid"].Copy();
-                    gridRow["type"] = new ValueDataNode("MapGrid");
-                    gridRow["chunks"] = tileTable.Get<MappingDataNode>(DrydockTileTable.ChunksKey).Copy();
-                    node["components"] = new SequenceDataNode { gridRow };
-                }
-
-                var key = entity.Prototype ?? string.Empty;
-                if (!groups.TryGetValue(key, out var group))
-                    groups[key] = group = new SequenceDataNode();
-
-                group.Add(node);
-            }
-
-            var entityGroups = new SequenceDataNode();
-            foreach (var (prototype, members) in groups)
-                entityGroups.Add(new MappingDataNode { ["proto"] = new ValueDataNode(prototype), ["entities"] = members });
-
-            var gridYamlId = new ValueDataNode(image.GridId.ToString());
-            var document = new MappingDataNode
-            {
-                ["meta"] = new MappingDataNode { ["format"] = new ValueDataNode("7"), ["category"] = new ValueDataNode("Grid") },
-                ["maps"] = new SequenceDataNode(),
-                ["grids"] = new SequenceDataNode { gridYamlId },
-                ["orphans"] = new SequenceDataNode { gridYamlId.Copy() },
-                ["nullspace"] = new SequenceDataNode(),
-                ["tilemap"] = tileTable.Get<MappingDataNode>(DrydockTileTable.TileMapKey).Copy(),
-                ["entities"] = entityGroups,
-            };
-
-            skeletonTime = phase.Elapsed;
-            phase.Restart();
-
-            // 2. The engine's allocation and component pass.
-            // The entity-system collection, not the root one: the deserializer injects systems (SharedMapSystem among
-            // them), and MapLoaderSystem hands it its own injected collection, which is this one.
-            var deserializer = new EntityDeserializer(
-                server.ResolveDependency<IEntitySystemManager>().DependencyCollection,
-                document,
-                new DeserializationOptions());
-            if (!deserializer.TryProcessData())
-                throw new InvalidOperationException("Codec loop: the engine refused the skeleton document.");
-
-            deserializer.CreateEntities();
-            var gridUid = deserializer.UidMap[(int) image.GridId];
-            LastLoadIds = deserializer.UidMap.ToDictionary(entry => entry.Value, entry => (long) entry.Key);
-
-            createTime = phase.Elapsed;
-            phase.Restart();
-
-            // 3. The rows.
-            var codec = new DrydockCodec(
-                serialization,
-                entMan,
-                server.ResolveDependency<IGameTiming>(),
-                _ => throw new InvalidOperationException("The load allocates nothing."),
-                id => deserializer.UidMap.TryGetValue((int) id, out var uid)
-                    ? uid
-                    : throw new FormatException($"Codec loop: a row names stable id {id}, which the image does not hold."));
-
-            var overwrote = 0;
-            var added = 0;
-            var removed = 0;
-            var overwroteByType = new Dictionary<string, int>(StringComparer.Ordinal);
-            var removedByType = new Dictionary<string, int>(StringComparer.Ordinal);
-            var heldBack = new Dictionary<EntityUid, Dictionary<string, ItemSlot>>();
-            var appearanceApplied = 0;
-            var manifest = new ManifestApply();
-            LastManifest = manifest;
-
-            foreach (var (uid, data) in deserializer.Entities)
-            {
-                var entityRows = rows[data.YamlId];
-                foreach (var (name, row) in entityRows)
-                {
-                    // The grid's own grid component came in through the skeleton with its chunks; a copy of the row,
-                    // which has none, would empty it. The appearance and manifest rows are not components and go in after them.
-                    if ((uid == gridUid && name == "MapGrid") || name == AppearanceRow || name == DrydockCodec.ManifestRow)
-                        continue;
-
-                    var registration = factory.GetRegistration(name);
-                    var read = codec.Read(registration.Type, name == ItemSlotsName ? HoldBackSlots(entMan, codec, uid, row, heldBack) : row);
-
-                    if (entMan.TryGetComponent(uid, registration.Type, out var existing))
-                    {
-                        serialization.CopyTo(read, ref existing, codec.Context, notNullableOverride: true);
-                        overwrote++;
-                        overwroteByType[name] = overwroteByType.GetValueOrDefault(name) + 1;
-                        continue;
-                    }
-
-                    if (read is ISerializationHooks)
-                    {
-                        var fresh = factory.GetComponent(registration);
-                        entMan.AddComponent(uid, fresh);
-                        serialization.CopyTo(read, ref fresh, codec.Context, notNullableOverride: true);
-                    }
-                    else
-                    {
-                        entMan.AddComponent(uid, read);
-                    }
-
-                    added++;
-                }
-
-                // Before init, after the components: an init or startup handler that recomputes a key then overwrites the
-                // stored value with the truth, and a key nothing recomputes keeps it.
-                if (entityRows.TryGetValue(AppearanceRow, out var appearanceRow))
-                    appearanceApplied += ReadAppearance(pair, codec, uid, appearanceRow);
-
-                // The manifest (F33): the members before init set now, the rest decoded now and held for their moment.
-                if (entityRows.TryGetValue(DrydockCodec.ManifestRow, out var manifestRow))
-                {
-                    foreach (var (member, value) in codec.ReadManifest(manifestRow, DrydockApplyMoment.BeforeInit, factory))
-                    {
-                        if (!manifest.HeldOff(member))
-                            SetManifestMember(entMan, factory, uid, member, value, manifest);
-                    }
-
-                    foreach (var moment in new[] { DrydockApplyMoment.Seam, DrydockApplyMoment.AfterStart })
-                    {
-                        foreach (var (member, value) in codec.ReadManifest(manifestRow, moment, factory))
-                        {
-                            if (!manifest.HeldOff(member))
-                                manifest.Held.Add(new HeldMember(uid, member, value));
-                        }
-                    }
-                }
-
-                // A member the rows carry but an init, startup or power handler resets: taken off the component as the row
-                // left it, to be set back at its moment.
-                foreach (var member in ReapplyCarried)
-                {
-                    if (!entityRows.ContainsKey(member.Component)
-                        || !entMan.TryGetComponent(uid, factory.GetRegistration(member.Component).Type, out var carrier)
-                        || manifest.HeldOff(member))
-                        continue;
-
-                    manifest.Held.Add(new HeldMember(uid, member, DrydockCodec.GetMember(carrier, member)));
-                }
-
-                if (entMan.GetComponent<MetaDataComponent>(uid).EntityPrototype is not { } prototype)
-                    continue;
-
-                foreach (var name in prototype.Components.Keys)
-                {
-                    var registration = factory.GetRegistration(name);
-                    if (entityRows.ContainsKey(name) || registration.Unsaved || !entMan.HasComponent(uid, registration.Type))
-                        continue;
-
-                    entMan.RemoveComponent(uid, registration.Type);
-                    removed++;
-                    removedByType[name] = removedByType.GetValueOrDefault(name) + 1;
-                }
-            }
-
-            // 4. Onto the map, as the engine's merge does in the same gap.
-            var xformSystem = server.System<SharedTransformSystem>();
-            var gridXform = entMan.GetComponent<TransformComponent>(gridUid);
-            xformSystem.SetCoordinates(
-                (gridUid, gridXform, entMan.GetComponent<MetaDataComponent>(gridUid)),
-                new EntityCoordinates(mapUid, gridXform.LocalPosition),
-                rotation: gridXform.LocalRotation,
-                newParent: entMan.GetComponent<TransformComponent>(mapUid));
-            deserializer.Result.Orphans.Clear();
-
-            rowsTime = phase.Elapsed;
-            phase.Restart();
-
-            // 5. The engine's startup, with the silent map-init stamp, and the seam between each entity's init and its
-            // startup (EntityManager.cs:1060, before StartEntity at EntityDeserializer.cs:977-982), where the held-back
-            // slots go in: into the slot an init handler re-added, or added whole where nothing re-added it.
-            var itemSlots = server.System<ItemSlotsSystem>();
-            var copiedAtSeam = 0;
-            var addedAtSeam = 0;
-
-            // Pass (i), at the seam: into the slot init re-added, so a startup handler already sees the restored state.
-            // A key nothing re-added yet waits, because a startup handler may still add it (a gas canister does,
-            // SharedGasCanisterSystem.cs:33-37), and adding the stored one now would make that a duplicate.
-            var seamMembers = manifest.Held.Where(h => h.Member.Moment == DrydockApplyMoment.Seam).ToLookup(h => h.Uid);
-            var metaSystem = server.System<MetaDataSystem>();
-
-            void AtSeam(Entity<MetaDataComponent> entity)
-            {
-                // The manifest's seam members: after the init handler that resets them, before any startup handler reads them.
-                foreach (var member in seamMembers[entity.Owner])
-                {
-                    manifest.SeamOn($"{member.Member.Key} on {entity.Comp.EntityPrototype?.ID ?? "(no prototype)"}");
-
-                    if (member.Member is { Component: "MetaData", Member: nameof(MetaDataComponent.EntityName) })
-                    {
-                        // Through the system, which raises the rename the name's other readers follow.
-                        if (member.Value is string name)
-                        {
-                            metaSystem.SetEntityName(entity.Owner, name, entity.Comp);
-                            manifest.Count(member.Member);
-                        }
-
-                        continue;
-                    }
-
-                    SetManifestMember(entMan, factory, member.Uid, member.Member, member.Value, manifest);
-                }
-
-                if (!heldBack.TryGetValue(entity.Owner, out var held))
-                    return;
-
-                foreach (var key in held.Keys.ToList())
-                {
-                    if (!itemSlots.TryGetSlot(entity.Owner, key, out var live))
-                        continue;
-
-                    // Into the live instance, not in place of it: the component that re-added the slot holds a
-                    // reference to that instance as its own data field. CopyFrom is ItemSlotsSystem's alone (RA0002);
-                    // the server's loader does this from a Triad partial of that system (ruled), the scaffolding by name.
-                    CopySlot.Invoke(live, new object[] { held[key] });
-                    held.Remove(key);
-                    copiedAtSeam++;
-                }
-
-                if (held.Count == 0)
-                    heldBack.Remove(entity.Owner);
-            }
-
-            var heldBackSlots = heldBack.Values.Sum(held => held.Count);
-            entMan.EntityInitialized += AtSeam;
-            try
-            {
-                deserializer.StartEntities();
-            }
-            finally
-            {
-                entMan.EntityInitialized -= AtSeam;
-            }
-
-            // Pass (ii), once after startup, since the engine raises nothing per entity after StartEntity
-            // (IEntityManager.cs:55-56): into the slot startup re-added, or the stored slot added whole where nothing
-            // re-added it (a dispenser's, whose adders run at map init and from its parts, neither of which runs).
-            var copiedAfterStartup = 0;
-            foreach (var (uid, held) in heldBack)
-            {
-                foreach (var (key, storedSlot) in held)
-                {
-                    if (itemSlots.TryGetSlot(uid, key, out var live))
-                    {
-                        CopySlot.Invoke(live, new object[] { storedSlot });
-                        copiedAfterStartup++;
-                    }
-                    else
-                    {
-                        itemSlots.AddItemSlot(uid, key, storedSlot);
-                        addedAtSeam++;
-                    }
-                }
-            }
-
-            heldBack.Clear();
-
-            // The manifest's after-startup members, once every entity has started: a receiver's provider, set back through
-            // the cable system, because startup paired it with whichever provider was nearest and connectable then; and a
-            // pinpointer's target, through the pinpointer system.
-            var cables = server.System<ExtensionCableSystem>();
-            var pinpointers = server.System<PinpointerSystem>();
-            foreach (var held in manifest.Held.Where(h => h.Member.Moment == DrydockApplyMoment.AfterStart))
-            {
-                // A pinpointer's target through SetTarget, which sets the target's name with it and, when active, the direction.
-                if (held.Member is { Component: "Pinpointer", Member: nameof(PinpointerComponent.Target) })
-                {
-                    if (!entMan.TryGetComponent<PinpointerComponent>(held.Uid, out var pinpointer))
-                    {
-                        manifest.Miss(held.Member, PrototypeOf(entMan, held.Uid));
-                        continue;
-                    }
-
-                    pinpointers.SetTarget(held.Uid, held.Value as EntityUid?, pinpointer);
-                    manifest.Count(held.Member);
-                    continue;
-                }
-
-                // A scuttle device's armed map, worked out again: the map it has loaded onto.
-                if (held.Member is { Component: "ScuttleDevice", Member: nameof(Content.Server._Mono.ScuttleDevice.ScuttleDeviceComponent.ArmedMap) })
-                {
-                    if (!entMan.TryGetComponent<Content.Server._Mono.ScuttleDevice.ScuttleDeviceComponent>(held.Uid, out var scuttle))
-                    {
-                        manifest.Miss(held.Member, PrototypeOf(entMan, held.Uid));
-                        continue;
-                    }
-
-                    scuttle.ArmedMap = entMan.GetComponent<TransformComponent>(held.Uid).MapID;
-                    manifest.Count(held.Member);
-                    continue;
-                }
-
-                if (held.Member is not { Component: "ExtensionCableReceiver", Member: nameof(ExtensionCableReceiverComponent.Provider) })
-                {
-                    SetManifestMember(entMan, factory, held.Uid, held.Member, held.Value, manifest);
-                    continue;
-                }
-
-                var receiverProto = PrototypeOf(entMan, held.Uid);
-                if (!entMan.TryGetComponent<ExtensionCableReceiverComponent>(held.Uid, out var receiver))
-                {
-                    manifest.Miss(held.Member, receiverProto);
-                    continue;
-                }
-
-                if (held.Value is not EntityUid providerUid)
-                {
-                    if (receiver.Provider != null)
-                        manifest.Refuse(held.Member, receiverProto, "stored unpaired, paired at startup");
-                    else
-                        manifest.StoredUnpaired++;
-
-                    continue;
-                }
-
-                if (!entMan.TryGetComponent<ExtensionCableProviderComponent>(providerUid, out var provider))
-                {
-                    manifest.Refuse(held.Member, receiverProto, "its stored provider is not on the image");
-                    continue;
-                }
-
-                if (receiver.Provider?.Owner == providerUid)
-                {
-                    manifest.AlreadyPaired++;
-                    continue;
-                }
-
-                if (cables.TryPairReceiver((held.Uid, receiver), (providerUid, provider)))
-                {
-                    manifest.Repaired++;
-                    manifest.Count(held.Member);
-                }
-                else
-                {
-                    manifest.Refuse(held.Member, receiverProto, $"the cable system would not pair it with {PrototypeOf(entMan, providerUid)}");
-                }
-            }
-
-            startTime = phase.Elapsed;
-
-            // The engine's reading of the tiles against the image's own.
-            var stored = DrydockTileTable.Read(tileTable, name => tileDefs[name].TileId).ToHashSet();
-            var restored = server.System<SharedMapSystem>()
-                .GetAllTiles(gridUid, entMan.GetComponent<MapGridComponent>(gridUid))
-                .Select(tile => (tile.GridIndices, tile.Tile))
-                .ToHashSet();
-
-            var trip = CodecNotes.Count(note => note.Contains(" entities stored (", StringComparison.Ordinal)) + 1;
-            manifest.Trip = trip;
-            CodecNotes.Add($"[ladder] codec round trip {trip}: {image.Entities.Count} entities stored ({image.Unsaved} unsavable left out with what they held), "
-                           + $"{image.Entities.Sum(e => e.Rows.Count)} rows, {image.Bytes} bytes of JSON text; "
-                           + $"tiles {stored.Count} stored, {restored.Count} restored, {stored.Except(restored).Count()} missing, {restored.Except(stored).Count()} extra.");
-            CodecNotes.Add($"[ladder] codec round trip {trip}: {overwrote} row(s) copied into a component the prototype had added "
-                           + $"(its ComponentAdd saw prototype data), {added} added as read, {removed} prototype component(s) removed before init.");
-            CodecNotes.Add($"         overwritten, top: {Top(overwroteByType)}");
-            CodecNotes.Add($"         removed: {Top(removedByType)}");
-            CodecNotes.Add($"[ladder] codec round trip {trip}: prototype ids the manifest read that no longer resolve, set as null: "
-                           + (codec.Unresolved.Count == 0 ? "none." : string.Join(", ", codec.Unresolved.Select(u => $"{u.Member.Key} '{u.Id}'")) + "."));
-            var severed = codec.Severed
-                .GroupBy(entry => entry.Nullable ? entry.Member : $"{entry.Member} (not nullable)", StringComparer.Ordinal)
-                .ToDictionary(group => group.Key, group => group.Count(), StringComparer.Ordinal);
-            CodecNotes.Add($"[ladder] codec round trip {trip}: references the image could not keep: "
-                           + $"{codec.Severed.Count(entry => entry.Nullable)} in nullable members, read as null, and "
-                           + $"{codec.Severed.Count(entry => !entry.Nullable)} in members that are not, left invalid"
-                           + (severed.Count == 0 ? "." : ": " + Top(severed) + "."));
-            CodecNotes.Add($"[ladder] codec round trip {trip}: queued lathe batches left out for a recipe that no longer resolves: "
-                           + (codec.Context.DroppedBatches.Count == 0 ? "none." : Top(codec.Context.DroppedBatches.GroupBy(id => id, StringComparer.Ordinal).ToDictionary(g => g.Key, g => g.Count(), StringComparer.Ordinal)) + "."));
-            CodecNotes.Add($"[ladder] codec round trip {trip}: {heldBackSlots} item slot(s) held back from init; at the seam {copiedAtSeam} copied into the slot init re-added; "
-                           + $"after startup {copiedAfterStartup} copied into the slot startup re-added, {addedAtSeam} added whole because nothing re-added them.");
-            // SetData dirties; the engine's ResetNetTicks runs after it inside startup. What is still marked modified in
-            // this tick after the load is what PVS sends again, a network cost rather than a correctness one.
-            var now = server.ResolveDependency<IGameTiming>().CurTick;
-            var appearances = 0;
-            var stillDirty = 0;
-            foreach (var uid in deserializer.Entities.Keys)
-            {
-                if (!entMan.TryGetComponent<AppearanceComponent>(uid, out var appearance))
-                    continue;
-
-                appearances++;
-                if (appearance.LastModifiedTick >= now)
-                    stillDirty++;
-            }
-
-            CodecNotes.Add($"[ladder] codec round trip {trip}: load by phase, {image.Entities.Count} entities: skeleton {skeletonTime.TotalMilliseconds:F0} ms, "
-                           + $"CreateEntities {createTime.TotalMilliseconds:F0} ms, rows and re-parent {rowsTime.TotalMilliseconds:F0} ms, "
-                           + $"StartEntities {startTime.TotalMilliseconds:F0} ms; the store took {LastStoreTime.TotalMilliseconds:F0} ms.");
-            var parts = LastStoreTimes;
-            CodecNotes.Add($"[ladder] codec round trip {trip}: store parts: id pass {parts.IdPass.TotalMilliseconds:F1} ms (un-sliced), "
-                           + $"tile table {parts.Tiles.TotalMilliseconds:F1} ms, appearance rows {parts.Appearance.TotalMilliseconds:F1} ms "
-                           + $"(dearest one {parts.DearestAppearance.TotalMilliseconds:F2} ms), {parts.Writes} component write(s), {parts.During} over the store; dearest single writes: "
-                           + string.Join(", ", parts.Dearest.Select(d => $"{d.Component} on {d.Prototype ?? "(no prototype)"} {d.Time.TotalMilliseconds:F2} ms ({d.During})"))
-                           + ".");
-            CodecNotes.Add($"[ladder] codec round trip {trip}: {appearanceApplied} appearance entr(y/ies) set before init; "
-                           + $"not stored, by value type: {Top(AppearanceSkipped)}; "
-                           + $"{stillDirty} of {appearances} appearance component(s) still marked modified in the load's tick.");
-            AppearanceSkipped.Clear();
-
-            return gridUid;
-        }
-
-        /// <summary>
-        /// The live appearance dictionary is not a data field (AppearanceComponent.cs:35), and the field the codec does
-        /// write, <c>AppearanceDataInit</c>, is the prototype's initial data, so without this row every appearance
-        /// entry is lost. Read through the component's own public state (the drydock's LiveAppearance does the same,
-        /// DrydockFidelitySystem.cs:496-502), which is the live dictionary itself and is only read here.
-        /// </summary>
-        private const string AppearanceRow = "~appearance";
-
-        private static readonly Dictionary<string, int> AppearanceSkipped = new(StringComparer.Ordinal);
-
-        private static MappingDataNode? WriteAppearance(IEntityManager entMan, ISerializationManager serialization, DrydockCodec codec, AppearanceComponent appearance)
-        {
-            if (entMan.GetComponentState(entMan.EventBus, appearance, null, GameTick.Zero) is not AppearanceComponentState { Data.Count: > 0 } state)
-                return null;
-
-            var row = new MappingDataNode();
-            foreach (var (key, value) in state.Data)
-            {
-                try
-                {
-                    var keyNode = (ValueDataNode) serialization.WriteValue(typeof(Enum), key, alwaysWrite: true, context: codec.Context);
-
-                    // The value is declared as object, so its own type rides beside it for the read.
-                    row[keyNode.Value] = new MappingDataNode
-                    {
-                        ["type"] = new ValueDataNode(value.GetType().AssemblyQualifiedName!),
-                        ["value"] = serialization.WriteValue(value.GetType(), value, alwaysWrite: true, context: codec.Context),
-                    };
-                }
-                catch (ArgumentException)
-                {
-                    // A value type with no serializer (ShowLayerData, ruled skipped): named in the report, not stored.
-                    var type = value.GetType().Name;
-                    AppearanceSkipped[type] = AppearanceSkipped.GetValueOrDefault(type) + 1;
-                }
-            }
-
-            return row.Count == 0 ? null : row;
-        }
-
-        /// <summary>Each stored entry through the public writer, SetData, which on an entity not yet initialized just sets it.</summary>
-        private static int ReadAppearance(TestPair pair, DrydockCodec codec, EntityUid uid, MappingDataNode row)
-        {
-            var server = pair.Server;
-            var serialization = server.ResolveDependency<ISerializationManager>();
-            var reflection = server.ResolveDependency<IReflectionManager>();
-            var appearance = server.System<SharedAppearanceSystem>();
-            var applied = 0;
-
-            foreach (var (keyText, entry) in row)
-            {
-                var stored = (MappingDataNode) entry;
-                var typeName = stored.Get<ValueDataNode>("type").Value;
-                // Stored assembly-qualified, as the drydock's own appearance capture does, so the runtime resolves any
-                // loaded assembly (Robust.Shared.Maths's Color is in none the engine's reflection manager lists); the
-                // reflection manager by full name is the fallback for a name that has lost its assembly.
-                var type = Type.GetType(typeName)
-                           ?? reflection.GetType(typeName.Split(',')[0])
-                           ?? throw new FormatException($"Codec loop: appearance value type {typeName} is unknown.");
-
-                var key = (Enum) serialization.Read(typeof(Enum), new ValueDataNode(keyText), context: codec.Context, notNullableOverride: true)!;
-                var value = serialization.Read(type, stored["value"], context: codec.Context, notNullableOverride: true)!;
-                appearance.SetData(uid, key, value);
-                applied++;
-            }
-
-            return applied;
-        }
-
-        private const string ItemSlotsName = "ItemSlots";
-
-        private static readonly System.Reflection.MethodInfo CopySlot =
-            typeof(ItemSlot).GetMethod("CopyFrom", new[] { typeof(ItemSlot) })
-            ?? throw new InvalidOperationException("ItemSlot.CopyFrom(ItemSlot) is gone.");
-
-        /// <summary>
-        /// The item-slot registry is readOnly on purpose: a slot a component adds at init is kept out of a save so
-        /// that the add does not duplicate it (ItemSlotsComponent.cs:36-39), and the codec writes it anyway, because
-        /// a slot's own state (a lock, for one) lives nowhere else. So before init only the keys the prototype's own
-        /// registry holds go in, which is what the registry's init expects, and the rest wait for the seam. Ruled
-        /// 2026-09-18: no list of who re-adds what, because the seam finds out.
-        /// </summary>
-        private static MappingDataNode HoldBackSlots(
-            IEntityManager entMan,
-            DrydockCodec codec,
-            EntityUid uid,
-            MappingDataNode row,
-            Dictionary<EntityUid, Dictionary<string, ItemSlot>> heldBack)
-        {
-            if (!row.TryGet<MappingDataNode>("slots", out var slots))
-                return row;
-
-            var prototypeKeys = entMan.TryGetComponent<ItemSlotsComponent>(uid, out var registry)
-                ? registry.Slots.Keys.ToHashSet()
-                : new HashSet<string>();
-
-            // The stored slots as objects, read once whole, so the seam hands init's slot the stored one.
-            var stored = codec.Read<ItemSlotsComponent>(row).Slots;
-            var filtered = row.Copy();
-            var filteredSlots = filtered.Get<MappingDataNode>("slots");
-            var held = new Dictionary<string, ItemSlot>();
-
-            foreach (var (key, _) in slots)
-            {
-                if (prototypeKeys.Contains(key))
-                    continue;
-
-                filteredSlots.Remove(key);
-                held[key] = stored[key];
-            }
-
-            if (held.Count > 0)
-                heldBack[uid] = held;
-
-            return filtered;
-        }
-
-        private static string Top(Dictionary<string, int> counts) =>
+        private static string Top(IReadOnlyDictionary<string, int> counts) =>
             counts.Count == 0
                 ? "none"
                 : string.Join(", ", counts.OrderByDescending(kv => kv.Value).ThenBy(kv => kv.Key, StringComparer.Ordinal).Take(12).Select(kv => $"{kv.Key} x{kv.Value}"));
