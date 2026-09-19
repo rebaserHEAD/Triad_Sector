@@ -293,9 +293,22 @@ public sealed class DrydockCodecFieldPass
     private void ReadWalkMember(Entry entry, object owner, MappingDataNode from, string path)
     {
         // The asymmetric member's value is a flat dictionary its own reader already rebuilt from the
-        // key it consumes; nothing in it is a definition.
-        if (entry.Asymmetric != null)
+        // key it consumes; nothing in it is a definition. Its twins read that key too, so each is set
+        // back to what it held live, from its side key, or to null when the row has none.
+        if (entry.Asymmetric is { } asymmetric)
+        {
+            foreach (var twin in asymmetric.Twins)
+            {
+                var member = DrydockCodecManifest.TwinMember(asymmetric, twin);
+                var twinValue = from.TryGet(twin.SideKey, out var sideNode) && !sideNode.IsNull
+                    ? _serialization.Read(MemberTypeOf(member), sideNode, context: _context, notNullableOverride: true)
+                    : null;
+
+                SetValue(member, owner, twinValue);
+            }
+
             return;
+        }
 
         if (entry.Get(owner) is not { } value)
             return;
@@ -461,6 +474,16 @@ public sealed class DrydockCodecFieldPass
             foreach (var absent in asymmetric.AbsentKeys)
             {
                 into.Remove(absent);
+            }
+
+            // The owner's own fields that read those keys, carried beside them where no reader looks. A null one
+            // writes no key, which reads back as null.
+            foreach (var twin in asymmetric.Twins)
+            {
+                var member = DrydockCodecManifest.TwinMember(asymmetric, twin);
+                into.Remove(twin.SideKey);
+                if (GetValue(member, owner) is { } twinValue)
+                    into[twin.SideKey] = _serialization.WriteValue(MemberTypeOf(member), twinValue, alwaysWrite: true, context: _context);
             }
         }
         else if (!entry.Inline)
@@ -1190,6 +1213,13 @@ public sealed class DrydockCodecFieldPass
         FieldInfo field => field.GetValue(target),
         PropertyInfo property => property.GetValue(target),
         _ => null,
+    };
+
+    private static Type MemberTypeOf(MemberInfo member) => member switch
+    {
+        FieldInfo field => field.FieldType,
+        PropertyInfo property => property.PropertyType,
+        _ => throw new InvalidOperationException($"Drydock codec: {member.Name} is neither a field nor a property."),
     };
 
     private static void SetValue(MemberInfo member, object target, object? value)

@@ -305,6 +305,138 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
         }
 
         /// <summary>
+        /// A specifier's wiki twins, <c>_damageTypeDictionary</c> and <c>_damageGroupDictionary</c>
+        /// (<c>Content.Shared/Damage/DamageSpecifier.cs:21-32</c>), read the same <c>types</c> and <c>groups</c> keys the
+        /// damage is written under. A damaged airlock's are null live; without their side keys a read put the damage
+        /// into the first, where an engine save would later write it as <c>types</c>. Through the whole load: the
+        /// write, the JSON a row is, the read, and the copy into what the prototype added.
+        /// </summary>
+        [Test]
+        public async Task ADamagedAirlocksWikiTwinsComeBackNull()
+        {
+            await using var pair = await PoolManager.GetServerClient();
+            var server = pair.Server;
+            var entMan = server.EntMan;
+            var serialization = server.ResolveDependency<ISerializationManager>();
+            var protoMan = server.ResolveDependency<IPrototypeManager>();
+            var timing = server.ResolveDependency<IGameTiming>();
+            var damage = server.System<DamageableSystem>();
+
+            var codec = Codec(serialization, entMan, timing);
+            var map = await pair.CreateTestMap();
+
+            var liveTwins = new Dictionary<string, FixedPoint2>?[2];
+            var loadedTwins = new Dictionary<string, FixedPoint2>?[2];
+            var row = new MappingDataNode();
+            var live = FixedPoint2.Zero;
+            var loaded = FixedPoint2.Zero;
+
+            await server.WaitPost(() =>
+            {
+                // On the grid: an airlock anchors at spawn, and off a grid that is an error.
+                var uid = entMan.SpawnEntity("Airlock", map.GridCoords);
+                damage.TryChangeDamage(uid,
+                    new DamageSpecifier(protoMan.Index<DamageTypePrototype>(Blunt), FixedPoint2.New(37)),
+                    ignoreResistances: true);
+
+                var component = entMan.GetComponent<DamageableComponent>(uid);
+                live = component.Damage.GetTotal();
+                liveTwins = WikiTwins(component.Damage);
+
+                row = (MappingDataNode) DrydockNodeJson.Decode(DrydockNodeJson.Encode(
+                    codec.Write((uid, entMan.GetComponent<MetaDataComponent>(uid)), component)));
+
+                var target = entMan.GetComponent<DamageableComponent>(entMan.SpawnEntity("Airlock", map.GridCoords.Offset(new System.Numerics.Vector2(1, 0))));
+                serialization.CopyTo(codec.Read<DamageableComponent>(row), ref target, codec.Context, notNullableOverride: true);
+
+                loaded = target.Damage.GetTotal();
+                loadedTwins = WikiTwins(target.Damage);
+            });
+
+            var specifier = row.Get<MappingDataNode>("damage");
+            Assert.Multiple(() =>
+            {
+                Assert.That(live, Is.EqualTo(FixedPoint2.New(37)), "The control: the airlock has to be damaged first.");
+                Assert.That(liveTwins, Has.All.Null, "The control: a spawned airlock's twins are null, as on every live entity measured.");
+
+                Assert.That(specifier.Has("~types") || specifier.Has("~groups"), Is.False,
+                    "A null twin writes no side key.");
+
+                Assert.That(loadedTwins, Has.All.Null,
+                    "Both twins must come back null, not holding a copy of the damage.");
+
+                // The copy target's DamageDict; TotalDamage is not a data field and is summed again at init.
+                Assert.That(loaded, Is.EqualTo(live), "And the damage itself must survive the load.");
+            });
+
+            await pair.CleanReturnAsync();
+        }
+
+        /// <summary>
+        /// The other side of <see cref="ADamagedAirlocksWikiTwinsComeBackNull"/>: a mining drill's prototype authors
+        /// both (<c>types</c> Structural 15, <c>groups</c> Brute 6), so its twins are not null live, and a null after
+        /// the read would lose them. Before the side keys the <c>groups</c> twin came back null on every drill in the
+        /// ladder, because the pass removes that key.
+        /// </summary>
+        [Test]
+        public async Task AnAuthoredDrillKeepsBothWikiTwins()
+        {
+            await using var pair = await PoolManager.GetServerClient();
+            var server = pair.Server;
+            var entMan = server.EntMan;
+            var serialization = server.ResolveDependency<ISerializationManager>();
+            var timing = server.ResolveDependency<IGameTiming>();
+
+            var codec = Codec(serialization, entMan, timing);
+            var map = await pair.CreateTestMap();
+
+            var liveTwins = new Dictionary<string, FixedPoint2>?[2];
+            var loadedTwins = new Dictionary<string, FixedPoint2>?[2];
+            var live = new Dictionary<string, FixedPoint2>();
+            var loaded = new Dictionary<string, FixedPoint2>();
+
+            await server.WaitPost(() =>
+            {
+                var uid = entMan.SpawnEntity("MiningDrill", new EntityCoordinates(map.MapUid, default));
+                var component = entMan.GetComponent<MeleeWeaponComponent>(uid);
+                live = new Dictionary<string, FixedPoint2>(component.Damage.DamageDict);
+                liveTwins = WikiTwins(component.Damage);
+
+                var row = (MappingDataNode) DrydockNodeJson.Decode(DrydockNodeJson.Encode(
+                    codec.Write((uid, entMan.GetComponent<MetaDataComponent>(uid)), component)));
+
+                var target = entMan.GetComponent<MeleeWeaponComponent>(entMan.SpawnEntity("MiningDrill", new EntityCoordinates(map.MapUid, default)));
+                serialization.CopyTo(codec.Read<MeleeWeaponComponent>(row), ref target, codec.Context, notNullableOverride: true);
+
+                loaded = new Dictionary<string, FixedPoint2>(target.Damage.DamageDict);
+                loadedTwins = WikiTwins(target.Damage);
+            });
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(liveTwins, Has.All.Not.Null, "The control: the drill's prototype authors both, so neither twin is null live.");
+
+                Assert.That(loadedTwins[0], Is.EquivalentTo(liveTwins[0]!), "The types twin must come back as authored, not as the flattened damage.");
+                Assert.That(loadedTwins[1], Is.EquivalentTo(liveTwins[1]!), "The groups twin must come back as authored, though the pass removes its key.");
+                Assert.That(loaded, Is.EquivalentTo(live), "And the damage the drill deals must not change.");
+            });
+
+            await pair.CleanReturnAsync();
+        }
+
+        /// <summary>
+        /// A specifier's two twins, types then groups, named here rather than taken from the manifest, so an entry that
+        /// lost its twins leaves these tests something to fail on.
+        /// </summary>
+        private static Dictionary<string, FixedPoint2>?[] WikiTwins(DamageSpecifier specifier)
+        {
+            return new[] { "_damageTypeDictionary", "_damageGroupDictionary" }
+                .Select(name => (FieldInfo) typeof(DamageSpecifier).GetField(name, BindingFlags.Instance | BindingFlags.NonPublic)!)
+                .Select(field => (Dictionary<string, FixedPoint2>?) field.GetValue(specifier))
+                .ToArray();
+        }
+
+        /// <summary>
         /// The depth case. <c>ItemSlotsComponent.Slots</c> is a <c>readOnly</c>
         /// <c>Dictionary&lt;string, ItemSlot&gt;</c>
         /// (<c>Content.Shared/Containers/ItemSlot/ItemSlotsComponent.cs:23</c>) and

@@ -29,7 +29,25 @@ public static class DrydockCodecManifest
     /// The other keys that reader consumes, which the pass removes. The live member already holds
     /// everything they would contribute, so a row carrying one is read twice.
     /// </param>
-    public sealed record AsymmetricInlineField(Type Owner, string Member, string Key, ImmutableArray<string> AbsentKeys);
+    /// <param name="Twins">
+    /// The owner's other data fields that read <paramref name="Key"/> or one of <paramref name="AbsentKeys"/>
+    /// themselves. An asymmetric entry that writes under a key another data field reads must name that twin, and the
+    /// twin is carried under its own side key: otherwise the write under the shared key is read into the twin as well
+    /// and the twin's own value is lost.
+    /// </param>
+    public sealed record AsymmetricInlineField(
+        Type Owner,
+        string Member,
+        string Key,
+        ImmutableArray<string> AbsentKeys,
+        ImmutableArray<AsymmetricTwin> Twins);
+
+    /// <param name="Member">The owner's data field that reads a key the entry's own member is written under.</param>
+    /// <param name="SideKey">
+    /// Where its live value is carried instead. No reader consumes it: the owner's generated reader and the entry's
+    /// serializer look their keys up by name and never enumerate the mapping.
+    /// </param>
+    public sealed record AsymmetricTwin(string Member, string SideKey);
 
     /// <summary>
     /// <para><c>DamageSpecifier.DamageDict</c> is an <c>IncludeDataField(readOnly)</c> carrying
@@ -49,6 +67,13 @@ public static class DrydockCodecManifest
     ///
     /// <para>The pass owns both keys. It writes <c>types</c> whether or not the generated writer
     /// emitted one, and removes <c>groups</c> whether or not it did.</para>
+    ///
+    /// <para>Both keys are also read by data fields of their own, <c>_damageTypeDictionary</c> and
+    /// <c>_damageGroupDictionary</c> (<c>Content.Shared/Damage/DamageSpecifier.cs:21-32</c>), kept "solely so the
+    /// wiki works" and read by no hand-written code. Live, they hold what a prototype or map authored, or null. Left
+    /// alone, a read put the live damage into the first and nothing into the second, so an authored weapon lost its
+    /// <c>groups</c> and a damaged wall came back with its damage copied into a field an engine save writes as
+    /// <c>types</c>. Each is carried under its own side key and set back from it after the read.</para>
     /// </summary>
     public static readonly ImmutableArray<AsymmetricInlineField> AsymmetricInlineFields =
         ImmutableArray.Create(
@@ -56,7 +81,20 @@ public static class DrydockCodecManifest
                 typeof(DamageSpecifier),
                 nameof(DamageSpecifier.DamageDict),
                 "types",
-                ImmutableArray.Create("groups")));
+                ImmutableArray.Create("groups"),
+                ImmutableArray.Create(
+                    new AsymmetricTwin("_damageTypeDictionary", "~types"),
+                    new AsymmetricTwin("_damageGroupDictionary", "~groups"))));
+
+    /// <summary>The field or property a twin names, which the manifest's audit keeps resolvable.</summary>
+    public static MemberInfo TwinMember(AsymmetricInlineField entry, AsymmetricTwin twin)
+    {
+        const BindingFlags flags = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
+
+        return (MemberInfo?) entry.Owner.GetField(twin.Member, flags)
+               ?? entry.Owner.GetProperty(twin.Member, flags)
+               ?? throw new InvalidOperationException($"Drydock codec: {entry.Owner.Name}.{twin.Member}, a twin of {entry.Member}, does not exist.");
+    }
 
     /// <summary>
     /// A data field that is a computed property over a backing member, so the value the getter

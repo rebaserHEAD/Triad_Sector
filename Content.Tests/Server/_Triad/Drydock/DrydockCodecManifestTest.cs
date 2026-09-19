@@ -1,6 +1,7 @@
 #nullable enable
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Reflection;
 using Content.Server._Triad.Drydock.Codec;
 using Content.Shared.Damage;
@@ -51,6 +52,91 @@ public sealed class DrydockCodecManifestTest
             });
         }
     }
+
+    /// <summary>
+    /// Every twin is a data field of the owner that reads a key the entry writes or removes, so without its side key
+    /// the shared key's value would be read into it too; and every side key is one no data field of the owner reads.
+    /// </summary>
+    [Test]
+    public void EveryTwinReadsAKeyItsEntryOwns()
+    {
+        foreach (var entry in DrydockCodecManifest.AsymmetricInlineFields)
+        {
+            foreach (var twin in entry.Twins)
+                Assert.That(WrongTwin(entry, twin), Is.Null);
+        }
+    }
+
+    /// <summary>
+    /// And the other direction: every data field of the owner that reads such a key is named, because one left out
+    /// is read the shared value and loses its own.
+    /// </summary>
+    [Test]
+    public void NoOwnerFieldReadingAnOwnedKeyIsLeftUnnamed()
+    {
+        foreach (var entry in DrydockCodecManifest.AsymmetricInlineFields)
+        {
+            var owned = entry.AbsentKeys.Add(entry.Key);
+            var named = entry.Twins.Select(twin => twin.Member).ToHashSet();
+
+            foreach (var member in DataFields(entry.Owner))
+            {
+                if (member.Name == entry.Member || !owned.Contains(Tag(member) ?? string.Empty))
+                    continue;
+
+                Assert.That(named, Does.Contain(member.Name),
+                    $"{entry.Owner.Name}.{member.Name} reads '{Tag(member)}', which {entry.Member}'s entry owns, and is not named as a twin.");
+            }
+        }
+    }
+
+    /// <summary>The control for the twin check, against a twin corrupted one way each.</summary>
+    [Test]
+    public void TheTwinCheckCatchesACorruptedTwin()
+    {
+        var entry = DrydockCodecManifest.AsymmetricInlineFields[0];
+        var twin = entry.Twins[0];
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(WrongTwin(entry, twin with { Member = "_noSuchDictionary" }), Is.Not.Null,
+                "A twin that does not exist went unreported.");
+
+            Assert.That(WrongTwin(entry, twin with { Member = entry.Member }), Is.Not.Null,
+                "A twin that is the entry's own member went unreported.");
+
+            Assert.That(WrongTwin(entry, twin with { SideKey = entry.Key }), Is.Not.Null,
+                "A side key a reader consumes went unreported.");
+        });
+    }
+
+    private static string? WrongTwin(DrydockCodecManifest.AsymmetricInlineField entry, DrydockCodecManifest.AsymmetricTwin twin)
+    {
+        var member = Member(entry.Owner, twin.Member);
+        if (member == null)
+            return $"{entry.Owner.Name}.{twin.Member} does not exist.";
+
+        if (twin.Member == entry.Member)
+            return $"{entry.Owner.Name}.{twin.Member} is the entry's own member, not a twin of it.";
+
+        var tag = Tag(member);
+        if (tag == null || (tag != entry.Key && !entry.AbsentKeys.Contains(tag)))
+            return $"{entry.Owner.Name}.{twin.Member} reads '{tag}', a key the entry neither writes nor removes, so it is no twin.";
+
+        if (DataFields(entry.Owner).Any(field => Tag(field) == twin.SideKey) || twin.SideKey == entry.Key || entry.AbsentKeys.Contains(twin.SideKey))
+            return $"{entry.Owner.Name}'s side key '{twin.SideKey}' is a key a reader consumes.";
+
+        return null;
+    }
+
+    private static IEnumerable<MemberInfo> DataFields(Type owner)
+    {
+        const BindingFlags flags = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
+        return owner.GetFields(flags).Cast<MemberInfo>().Concat(owner.GetProperties(flags))
+            .Where(member => member.GetCustomAttribute<DataFieldAttribute>() != null);
+    }
+
+    private static string? Tag(MemberInfo member) => member.GetCustomAttribute<DataFieldAttribute>()?.Tag;
 
     /// <summary>
     /// The premise of every entry: the member's own serializer reads a shape it cannot write. The
