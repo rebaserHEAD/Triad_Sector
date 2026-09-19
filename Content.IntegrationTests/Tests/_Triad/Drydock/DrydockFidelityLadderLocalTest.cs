@@ -547,6 +547,16 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                 (_, key, result) => TradeCrateMembers.Contains(key[(key.IndexOf('|') + 1)..])
                                     && result.Before.Values.ContainsKey(key[..key.IndexOf('|')] + "|TradeCrateComponent.<present>")),
 
+            new("F20-collection-master",
+                "Same collection, other master: startup's anchor event and every node-group rebuild re-run "
+                + "AssignEntityAsCollectionMaster (PowerMonitoringConsoleSystem.cs:191-200, :226-229, :742-818), and which device "
+                + "becomes master is query order (F20). It only names the console's \"array of N\" row (join row 345, derived:startup). "
+                + "Sorted only where the collection, master and children, is the same set of devices before and after.",
+                (_, key, result) => CollectionMembers.Contains(key[(key.IndexOf('|') + 1)..])
+                                    && Collection(result.Before.Values, key[..key.IndexOf('|')]) is { } before
+                                    && Collection(result.After.Values, key[..key.IndexOf('|')]) is { } after
+                                    && before.SetEquals(after)),
+
             // Owed to a rebuild handler that does not exist yet (resources/2026-09-18-rebuild-list.tsv), so each handler's
             // arrival has lines to delete. The load stays free of the old retrieve sweeps, which are what these replace.
             new("owed: H12",
@@ -558,6 +568,38 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                                     && result.After.Values.TryGetValue(key[..key.IndexOf('|')] + "|WiresComponent.~WiresList", out var wires)
                                     && wires.StartsWith("count=0", StringComparison.Ordinal)),
         };
+
+        private const string CollectionMasterMember = "PowerMonitoringDeviceComponent.~CollectionMaster";
+        private const string ChildDevicesMember = "PowerMonitoringDeviceComponent.~ChildDevices";
+
+        private static readonly HashSet<string> CollectionMembers = new(StringComparer.Ordinal) { CollectionMasterMember, ChildDevicesMember };
+
+        /// <summary>
+        /// The power-monitoring collection a device belongs to, as a set of device paths: its master and the master's
+        /// children. Null when the device names no master, or the master's children are not in the snapshot.
+        /// </summary>
+        private static HashSet<string>? Collection(IReadOnlyDictionary<string, string> values, string path)
+        {
+            if (!values.TryGetValue($"{path}|{CollectionMasterMember}", out var master) || master is "null" or "<absent>" || master.Length == 0)
+                return null;
+
+            if (!values.TryGetValue($"{master}|{ChildDevicesMember}", out var children))
+                return null;
+
+            var set = new HashSet<string>(StringComparer.Ordinal) { master };
+            var open = children.IndexOf('[');
+            var close = children.LastIndexOf(']');
+            if (open < 0 || close <= open)
+                return null;
+
+            foreach (var entry in children[(open + 1)..close].Split(", ", StringSplitOptions.RemoveEmptyEntries))
+            {
+                var at = entry.IndexOf('=');
+                set.Add(at < 0 ? entry : entry[..at]);
+            }
+
+            return set;
+        }
 
         /// <summary>What H12's layout rebuild fills besides the wire list, which the census predicts on its own (join row 434).</summary>
         private static readonly HashSet<string> OwedToH12 = new(StringComparer.Ordinal)

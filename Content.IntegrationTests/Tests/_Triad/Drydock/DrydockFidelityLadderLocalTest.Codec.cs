@@ -138,6 +138,11 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             public void Miss(DrydockManifestMember member) => Missing[member.Key] = Missing.GetValueOrDefault(member.Key) + 1;
 
             public void Refuse(string key) => Refused[key] = Refused.GetValueOrDefault(key) + 1;
+
+            /// <summary>Each seam member by the prototype it was set on, since a seam set is rare and each one is a case.</summary>
+            public readonly Dictionary<string, int> SeamByPrototype = new(StringComparer.Ordinal);
+
+            public void SeamOn(string key) => SeamByPrototype[key] = SeamByPrototype.GetValueOrDefault(key) + 1;
         }
 
         /// <summary>The last load's manifest, for the round trip's pass after the power solve.</summary>
@@ -319,6 +324,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                            + $"not written, by type: {Top(ManifestUnwritable)}; components stripped at the store: {Top(ManifestStripped)}.");
             CodecNotes.Add($"[ladder] codec round trip {manifest.Trip}: cable receivers: {manifest.Repaired} re-paired with the stored provider, "
                            + $"{manifest.AlreadyPaired} already on it, {manifest.StoredUnpaired} stored unpaired and still so; refused: {Top(manifest.Refused)}.");
+            CodecNotes.Add($"[ladder] codec round trip {manifest.Trip}: seam members by prototype: {Top(manifest.SeamByPrototype)}.");
             ManifestUnwritable.Clear();
             ManifestStripped.Clear();
 
@@ -743,6 +749,8 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                 // The manifest's seam members: after the init handler that resets them, before any startup handler reads them.
                 foreach (var member in seamMembers[entity.Owner])
                 {
+                    manifest.SeamOn($"{member.Member.Key} on {entity.Comp.EntityPrototype?.ID ?? "(no prototype)"}");
+
                     if (member.Member is { Component: "MetaData", Member: nameof(MetaDataComponent.EntityName) })
                     {
                         // Through the system, which raises the rename the name's other readers follow.
