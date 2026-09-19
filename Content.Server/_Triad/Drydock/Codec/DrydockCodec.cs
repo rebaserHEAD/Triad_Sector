@@ -33,6 +33,12 @@ public sealed partial class DrydockCodec
     /// </summary>
     public DrydockCodecContext Context { get; }
 
+    /// <summary>
+    /// Every severed reference this codec's reads met, by path, and whether its member was nullable and so read null
+    /// (<see cref="DrydockCodecFieldPass.Severed"/>).
+    /// </summary>
+    public IReadOnlyList<(string Member, bool Nullable)> Severed => _pass.Severed;
+
     /// <param name="allocate">See <see cref="DrydockCodecContext"/>: the stable id for an entity.</param>
     /// <param name="resolve">See <see cref="DrydockCodecContext"/>: the entity a stable id names.</param>
     public DrydockCodec(

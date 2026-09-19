@@ -81,6 +81,7 @@ public sealed class DrydockCodecFieldPass
     /// it is shared and answered once per type.
     /// </summary>
     private static readonly ConcurrentDictionary<Type, bool> CarriesCorrectionCache = new();
+    private static readonly ConcurrentDictionary<Type, bool> CarriesReferenceCache = new();
 
     public DrydockCodecFieldPass(
         ISerializationManager serialization,
@@ -207,7 +208,12 @@ public sealed class DrydockCodecFieldPass
 
                 case FieldCase.ReadOnly:
                 case FieldCase.Walk:
+                case FieldCase.ReferenceWalk:
                     ReadWalkMember(entry, component, mapping, component.GetType().Name);
+                    break;
+
+                case FieldCase.Reference:
+                    ReadReference(entry, component, mapping, component.GetType().Name);
                     break;
             }
         }
@@ -289,6 +295,32 @@ public sealed class DrydockCodecFieldPass
         serializer is { IsGenericType: true } && serializer.GetGenericTypeDefinition() == typeof(FlagSerializer<>);
 
     /// <summary>The read half of <see cref="WriteTimeOffset"/>: one branch, against the clock at load.</summary>
+    /// <summary>
+    /// Every severed reference this pass met on the read side, by its path, and whether its member was nullable and so
+    /// set to null. A count large in the nullable column is upstream code parking an invalid uid where the idiom reads
+    /// null, and a count in the other is what the engine's own rule leaves at <see cref="EntityUid.Invalid"/>.
+    /// </summary>
+    public readonly List<(string Member, bool Nullable)> Severed = new();
+
+    /// <summary>
+    /// A reference the image could not keep, which the row holds as <see cref="DrydockCodecContext.InvalidReference"/>:
+    /// null where the member is nullable, and the engine's invalid uid where it is not (<see cref="FieldCase.Reference"/>).
+    /// A reference that resolved is untouched, and so is a row that holds a true null, which the engine already reads as
+    /// one.
+    /// </summary>
+    private void ReadReference(Entry entry, object owner, MappingDataNode from, string path)
+    {
+        var node = entry.Inline ? from : from.TryGet(entry.Key, out var stored) ? stored : null;
+        if (node is not ValueDataNode { Value: DrydockCodecContext.InvalidReference })
+            return;
+
+        var nullable = Nullable.GetUnderlyingType(entry.DeclaredType ?? typeof(EntityUid)) != null;
+        Severed.Add(($"{path}.{entry.Member.Name}", nullable));
+
+        if (nullable)
+            entry.Set(owner, null);
+    }
+
     private void ReadTimeOffset(Entry entry, object owner, MappingDataNode from)
     {
         if (!from.TryGet<ValueDataNode>(entry.Key, out var node) || node.IsNull)
@@ -374,7 +406,12 @@ public sealed class DrydockCodecFieldPass
 
                     case FieldCase.ReadOnly:
                     case FieldCase.Walk:
+                    case FieldCase.ReferenceWalk:
                         ReadWalkMember(member, value, mapping, path);
+                        break;
+
+                    case FieldCase.Reference:
+                        ReadReference(member, value, mapping, path);
                         break;
                 }
             }
@@ -875,7 +912,7 @@ public sealed class DrydockCodecFieldPass
             ? data.Tag ?? DataDefinitionUtility.AutoGenerateTag(member.Name)
             : string.Empty;
 
-        if (inline && fieldCase is not (FieldCase.ReadOnly or FieldCase.Walk))
+        if (inline && fieldCase is not (FieldCase.ReadOnly or FieldCase.Walk or FieldCase.ReferenceWalk))
             throw new InvalidOperationException($"Drydock codec: {Name(member)} is an inline field, and the pass has no rule for one carrying {fieldCase}.");
 
         return new Entry(
@@ -907,14 +944,30 @@ public sealed class DrydockCodecFieldPass
         if (data.ReadOnly)
             return FieldCase.ReadOnly;
 
+        // After readOnly, so a readOnly reference is written the way a readOnly field has to be; its severed value is
+        // then the one case this pass leaves at the engine's answer, and the audit would name it if one existed.
+        if (IsReference(MemberType(member)))
+            return FieldCase.Reference;
+
         // Not a correction of this member, but a way down to one: a readOnly field or a time field
         // somewhere below it. Decided per declared member type and cached, so no component pays the
         // reflection walk twice.
         if (CarriesCorrection(MemberType(member)))
             return FieldCase.Walk;
 
+        // The same question for a reference below, asked second because the walk that answers the first descends on
+        // both sides and this one only on the read.
+        if (CarriesReference(MemberType(member)))
+            return FieldCase.ReferenceWalk;
+
         return null;
     }
+
+    /// <summary>An entity reference, in either spelling and nullable or not.</summary>
+    private static bool IsReference(Type? type) =>
+        type != null
+        && (Nullable.GetUnderlyingType(type) ?? type) is var held
+        && (held == typeof(EntityUid) || held == typeof(NetEntity));
 
     /// <summary>
     /// Does this type, or anything a collection of it holds, carry anywhere below it a field the pass
@@ -938,20 +991,44 @@ public sealed class DrydockCodecFieldPass
         return carries;
     }
 
+    /// <summary>
+    /// The same question for an entity reference below the type, asked and cached apart because it is the read side's
+    /// alone: a reference needs nothing written, so the write walk has no reason to descend for one.
+    /// </summary>
+    private static bool CarriesReference(Type? type)
+    {
+        if (type == null)
+            return false;
+
+        if (CarriesReferenceCache.TryGetValue(type, out var known))
+            return known;
+
+        var carries = Carries(type, new HashSet<Type>(), references: true);
+        CarriesReferenceCache[type] = carries;
+        return carries;
+    }
+
     /// <param name="polymorphic">
     /// Whether a polymorphic declared type counts as reachable on principle. Always true for the
     /// pass; false only so the audit can measure what that rule adds.
     /// </param>
-    private static bool Carries(Type? type, HashSet<Type> seen, bool polymorphic = true)
+    /// <param name="references">
+    /// Whether an entity reference counts as a thing worth reaching, rather than the three corrections. What the read
+    /// side asks (<see cref="CarriesReference"/>), never the write side.
+    /// </param>
+    private static bool Carries(Type? type, HashSet<Type> seen, bool polymorphic = true, bool references = false)
     {
         if (IsLeaf(type) || !seen.Add(type))
             return false;
 
         // A collection is transparent: what matters is what it holds, and a dictionary's value type
         // is as much a way down as a field's type is.
+        if (references && IsReference(type))
+            return true;
+
         foreach (var held in HeldTypes(type))
         {
-            if (Carries(held, seen, polymorphic))
+            if (Carries(held, seen, polymorphic, references))
                 return true;
         }
 
@@ -966,10 +1043,12 @@ public sealed class DrydockCodecFieldPass
 
         foreach (var (member, attribute) in DataMembers(type))
         {
-            if (attribute.ReadOnly
-                || attribute.CustomTypeSerializer == typeof(TimeOffsetSerializer)
-                || IsFlagSerializer(attribute.CustomTypeSerializer)
-                || Carries(MemberType(member), seen, polymorphic))
+            if (references
+                ? IsReference(MemberType(member)) || Carries(MemberType(member), seen, polymorphic, references)
+                : attribute.ReadOnly
+                  || attribute.CustomTypeSerializer == typeof(TimeOffsetSerializer)
+                  || IsFlagSerializer(attribute.CustomTypeSerializer)
+                  || Carries(MemberType(member), seen, polymorphic))
             {
                 return true;
             }
@@ -1202,6 +1281,22 @@ public sealed class DrydockCodecFieldPass
         /// reachable through another readOnly field.
         /// </summary>
         Walk,
+
+        /// <summary>
+        /// An entity reference, corrected on the read side alone: one the image could not keep comes back as null in a
+        /// nullable member rather than as <see cref="EntityUid.Invalid"/>, because <c>x != null</c> and <c>x is { }</c>
+        /// are how this codebase asks "have I got one", and an invalid uid passes both (ruled 2026-09-19, amending F17;
+        /// found on a station AI core, whose eye is never remade because its severed <c>RemoteEntity</c> read non-null).
+        /// A non-nullable member keeps the invalid uid, which is the engine's own answer for a null reference node, and
+        /// the row keeps the invalid marker either way, so the image still says "this pointed off the image".
+        /// </summary>
+        Reference,
+
+        /// <summary>
+        /// Not a correction of its own: a way down to a <see cref="Reference"/>. Read side only, because a reference
+        /// needs nothing written.
+        /// </summary>
+        ReferenceWalk,
     }
 
     /// <summary>

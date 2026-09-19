@@ -88,6 +88,13 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
     damage:
       groups:
         Brute: 9
+
+# The four shapes a severed reference takes, on one entity.
+- type: entity
+  id: DrydockCodecReferenceDummy
+  name: DrydockCodecReferenceDummy
+  components:
+  - type: DrydockCodecReferenceDummy
 ";
 
         private const string Blunt = "Blunt";
@@ -1190,5 +1197,103 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
 
         private static FixedPoint2 Amount(ValueDataNode node) =>
             FixedPoint2.New(double.Parse(node.Value, CultureInfo.InvariantCulture));
+
+        /// <summary>
+        /// A reference the image cannot keep, in four members of one component: nullable, non-nullable, the network
+        /// spelling, and one inside a definition inside a list, which is the depth the claim is about. The nullable ones
+        /// read null, because <c>x is { }</c> and <c>x != null</c> are how the codebase asks whether it has a reference
+        /// and an invalid uid passes both; the non-nullable one keeps the invalid uid, which is the engine's own answer
+        /// for a null reference node. The row keeps the invalid marker in every case, so a reader can still tell a
+        /// reference that pointed off the image from one that was never set.
+        /// </summary>
+        [Test]
+        public async Task ASeveredReferenceReadsNullWhereTheMemberIsNullable()
+        {
+            await using var pair = await PoolManager.GetServerClient();
+            var server = pair.Server;
+            var entMan = server.EntMan;
+            var serialization = server.ResolveDependency<ISerializationManager>();
+            var timing = server.ResolveDependency<IGameTiming>();
+            var map = await pair.CreateTestMap();
+
+            MappingDataNode written = default!;
+            DrydockCodecReferenceDummyComponent restored = default!;
+            var severed = new List<(string Member, bool Nullable)>();
+
+            await server.WaitPost(() =>
+            {
+                var uid = entMan.SpawnEntity("DrydockCodecReferenceDummy", new EntityCoordinates(map.MapUid, default));
+                var offImage = entMan.SpawnEntity(null, new EntityCoordinates(map.MapUid, default));
+                var component = entMan.GetComponent<DrydockCodecReferenceDummyComponent>(uid);
+
+                component.Nullable = offImage;
+                component.NonNullable = offImage;
+                component.NullableNet = entMan.GetNetEntity(offImage);
+                component.Holders.Add(new DrydockCodecReferenceHolder { Held = offImage });
+
+                // The image holds the dummy and nothing else, so every reference on it points off the image.
+                var codec = new DrydockCodec(
+                    serialization,
+                    entMan,
+                    timing,
+                    target => target == uid ? 1 : null,
+                    id => id == 1 ? uid : EntityUid.Invalid);
+
+                written = codec.Write((uid, entMan.GetComponent<MetaDataComponent>(uid)), component);
+                restored = codec.Read<DrydockCodecReferenceDummyComponent>(written);
+                severed.AddRange(codec.Severed);
+            });
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(Marker(written, "nullable"), Is.EqualTo(DrydockCodecContext.InvalidReference), "The control: the row has to keep the invalid marker.");
+                Assert.That(Marker(written, "nonNullable"), Is.EqualTo(DrydockCodecContext.InvalidReference), "for the non-nullable member as well");
+                Assert.That(Marker(written, "nullableNet"), Is.EqualTo(DrydockCodecContext.InvalidReference), "and for the network spelling");
+
+                Assert.That(restored.Nullable, Is.Null, "A severed reference in a nullable member has to read null.");
+                Assert.That(restored.NullableNet, Is.Null, "The network spelling of one reads null too.");
+                Assert.That(restored.NonNullable, Is.EqualTo(EntityUid.Invalid), "A non-nullable member keeps the engine's invalid uid.");
+                Assert.That(restored.Holders, Has.Count.EqualTo(1), "The control: the definition in the list has to come back.");
+                Assert.That(restored.Holders[0].Held, Is.Null, "And a nullable reference inside it reads null, which is the depth this claims.");
+
+                Assert.That(severed.Count(entry => entry.Nullable), Is.EqualTo(3), "Three severed references were in nullable members.");
+                Assert.That(severed.Count(entry => !entry.Nullable), Is.EqualTo(1), "and one was not, which is what the count is for");
+            });
+
+            await pair.CleanReturnAsync();
+        }
+
+        /// <summary>What a written component's member holds, as text, or null where it holds no value node.</summary>
+        private static string? Marker(MappingDataNode component, string key) =>
+            component.TryGet<ValueDataNode>(key, out var node) ? node.Value : null;
+    }
+
+    /// <summary>
+    /// A component for <see cref="DrydockCodecFieldPassTest.ASeveredReferenceReadsNullWhereTheMemberIsNullable"/>: the
+    /// four shapes a severed reference can take, on one component, so the pass is asked about all of them at once. Test
+    /// only, and registered because the integration test assembly is a content assembly (PoolManager.cs:101).
+    /// </summary>
+    [RegisterComponent]
+    public sealed partial class DrydockCodecReferenceDummyComponent : Component
+    {
+        [DataField]
+        public EntityUid? Nullable;
+
+        [DataField]
+        public EntityUid NonNullable;
+
+        [DataField]
+        public NetEntity? NullableNet;
+
+        [DataField]
+        public List<DrydockCodecReferenceHolder> Holders = new();
+    }
+
+    /// <summary>A definition in a list, holding the reference the walk has to reach.</summary>
+    [DataDefinition]
+    public sealed partial class DrydockCodecReferenceHolder
+    {
+        [DataField]
+        public EntityUid? Held;
     }
 }
