@@ -109,7 +109,7 @@ public sealed partial class DrydockImageSystem : EntitySystem
         new(this, grid, probe);
 
     /// <summary>The whole store in one call, for a caller that does not slice or time it.</summary>
-    public DrydockStoreResult Store(EntityUid grid, IDrydockStoreProbe? probe = null)
+    public DrydockImageStoreResult Store(EntityUid grid, IDrydockStoreProbe? probe = null)
     {
         var session = BeginStore(grid, probe);
         foreach (var uid in session.Aboard)

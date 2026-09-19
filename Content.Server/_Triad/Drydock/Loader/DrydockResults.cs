@@ -22,7 +22,7 @@ public interface IDrydockStoreProbe
 /// <param name="Stripped">Components the manifest strips (a round, a crew member, a live link), by name.</param>
 /// <param name="AppearanceSkipped">Appearance values with no serializer, by type name.</param>
 /// <param name="Writes">Component rows written.</param>
-public sealed record DrydockStoreResult(
+public sealed record DrydockImageStoreResult(
     DrydockImage Image,
     IReadOnlyList<DrydockUnwritableMember> Unwritable,
     IReadOnlyDictionary<string, int> Stripped,

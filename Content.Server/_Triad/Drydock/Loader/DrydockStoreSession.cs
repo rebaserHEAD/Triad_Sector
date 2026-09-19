@@ -136,7 +136,7 @@ public sealed class DrydockStoreSession
         _tiles = Text(tiles);
     }
 
-    public DrydockStoreResult Complete()
+    public DrydockImageStoreResult Complete()
     {
         if (_tiles == null)
             throw new InvalidOperationException("Drydock store: WriteTiles has not run.");
@@ -145,6 +145,6 @@ public sealed class DrydockStoreSession
             throw new InvalidOperationException($"Drydock store: {_entities.Count} of {_walk.Aboard.Count} entities written.");
 
         var image = new DrydockImage(_walk.Ids[_grid], _entities, _tiles, _walk.Unsaved, _bytes + _tiles.Length);
-        return new DrydockStoreResult(image, _unwritable, _stripped, _appearanceSkipped, _writes);
+        return new DrydockImageStoreResult(image, _unwritable, _stripped, _appearanceSkipped, _writes);
     }
 }
