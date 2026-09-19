@@ -452,9 +452,10 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
         /// Round trip 2's unexplained lines (findings and settling) against the same key on round trip 1, because a line
         /// that shows on both trips says nothing by itself about which way it is heading. <c>oscillates</c>: trip 2 goes
         /// back to trip 1's stored value (period two, as a sink's visual following whichever solution updated last).
-        /// <c>repeats</c>: the same change both trips, a fixed loss re-applied. <c>compounds</c>: a number moving the same
-        /// way again to somewhere new, which is finding F36's signature, an init or startup handler applying a relative
-        /// change to a persisted value (a grid's alerter list growing by one per restore); every one is listed.
+        /// <c>repeats</c>: the same change both trips, a fixed loss re-applied. <c>compounds</c>: a number that takes trip
+        /// 1's step again, or a collection that gains entries on both trips or loses an entry it had already lost, which is
+        /// finding F36's signature, an init or startup handler applying a relative change to a persisted value (a grid's
+        /// alerter list growing by one per restore); every one is listed.
         /// <c>trip2-only</c>: not on trip 1. Live values under load compound too, so a compounds line is read, not believed.
         /// </summary>
         private static void AppendShapes(StringBuilder sb, int rung, string vesselId, RoundTripResult first, RoundTripResult second, List<string> lines)
@@ -501,14 +502,53 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                 return "oscillates";
             if (b2 == b1 && a2 == a1)
                 return "repeats";
+            // A collection that renders its entries is judged by them, and never by how many it has: a count alone cannot
+            // tell one thing lost twice from two different things lost once each (ruled 2026-09-19).
+            if (CollectionCompounds(b1, a1, b2, a2) is { } collection)
+                return collection ? Compounds : "other";
             if (Number(b1) is { } nb1 && Number(a1) is { } na1 && Number(b2) is { } nb2 && Number(a2) is { } na2
                 && SameStep(na1 - nb1, na2 - nb2))
                 return Compounds;
-            if (ListLength(b1) is { } l0 && ListLength(a1) is { } l1 && ListLength(b2) is { } l0b && ListLength(a2) is { } l2
-                && l1 != l0 && l1 - l0 == l2 - l0b)
-                return Compounds;
 
             return "other";
+        }
+
+        /// <summary>
+        /// Whether a collection compounds across the two trips, or null where either rendering does not list its entries.
+        /// It compounds when it gains entries on both trips, which is growth per store whatever it gains, and when trip 2
+        /// loses an entry trip 1 had already lost, which is the same loss again. Losing different entries once each is two
+        /// one-off losses: a UI cache that loses a machine's state on trip 1, has it filled again, and loses the wires
+        /// state on trip 2 reads as compounding by count and is nothing of the kind (ruled 2026-09-19).
+        /// </summary>
+        private static bool? CollectionCompounds(string b1, string a1, string b2, string a2)
+        {
+            if (Entries(b1) is not { } before1 || Entries(a1) is not { } after1
+                || Entries(b2) is not { } before2 || Entries(a2) is not { } after2)
+            {
+                return null;
+            }
+
+            var lostOnce = before1.Except(after1).ToHashSet(StringComparer.Ordinal);
+            return after1.Except(before1).Any() && after2.Except(before2).Any()
+                   || lostOnce.Count > 0 && before2.Except(after2).Any(entry => lostOnce.Contains(entry));
+        }
+
+        /// <summary>
+        /// A rendering's entries, from a <c>count=N [a, b]</c> mapping or a <c>- </c> list, or null where it is neither.
+        /// An empty mapping is an empty set, not nothing: it lists its entries and has none.
+        /// </summary>
+        private static HashSet<string>? Entries(string render)
+        {
+            var open = render.IndexOf('[');
+            var close = render.LastIndexOf(']');
+            if (open >= 0 && close > open)
+                return new HashSet<string>(render[(open + 1)..close].Split(", ", StringSplitOptions.RemoveEmptyEntries), StringComparer.Ordinal);
+
+            var lines = render.Split('\n')
+                .Select(line => line.TrimStart())
+                .Where(line => line.StartsWith("- ", StringComparison.Ordinal))
+                .ToHashSet(StringComparer.Ordinal);
+            return lines.Count > 0 ? lines : null;
         }
 
         /// <summary>
@@ -586,13 +626,6 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                 System.Globalization.CultureInfo.InvariantCulture, out var raw)
                 ? raw
                 : null;
-        }
-
-        /// <summary>A rendered list's length, counted as its <c>- </c> lines, or null for anything that is not one.</summary>
-        private static int? ListLength(string render)
-        {
-            var count = render.Split('\n').Count(line => line.TrimStart().StartsWith("- ", StringComparison.Ordinal));
-            return count > 0 ? count : null;
         }
 
         /// <summary>
@@ -754,20 +787,10 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
         /// </summary>
         private static IEnumerable<string> LostStates(string before, string after)
         {
-            var kept = StateEntries(after);
-            return StateEntries(before)
+            var kept = Entries(after) ?? new HashSet<string>(StringComparer.Ordinal);
+            return (Entries(before) ?? new HashSet<string>(StringComparer.Ordinal))
                 .Where(entry => !kept.Contains(entry))
                 .Select(entry => entry[(entry.IndexOf('<') + 1)..].TrimEnd('>'));
-        }
-
-        /// <summary>One rendering's <c>Key=&lt;StateType&gt;</c> entries.</summary>
-        private static HashSet<string> StateEntries(string render)
-        {
-            var open = render.IndexOf('[');
-            var close = render.LastIndexOf(']');
-            return open < 0 || close <= open
-                ? new HashSet<string>(StringComparer.Ordinal)
-                : new HashSet<string>(render[(open + 1)..close].Split(", ", StringSplitOptions.RemoveEmptyEntries), StringComparer.Ordinal);
         }
 
         /// <summary>A key's <c>Component.member</c>, without the entity's path or the suffix a time takes.</summary>
@@ -894,7 +917,9 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
         /// <summary>
         /// The compounds shape's control, with no server: growth per store is a step taken again, so a value that takes the
         /// same step twice compounds and one that lands somewhere new each time does not, however far it goes the same way.
-        /// A pre-rolled fizziness threshold is the second of those, and its own class judges it (ruled 2026-09-19).
+        /// A pre-rolled fizziness threshold is the second of those, and its own class judges it. A collection is judged by
+        /// its entries instead: gaining any on both trips compounds, losing the same entry again compounds, and losing a
+        /// different one each trip does not (ruled 2026-09-19).
         /// </summary>
         [Test]
         public void OnlyAStepTakenAgainCompounds()
@@ -923,9 +948,13 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                 Assert.That(Shape("0.18811038", "0.37616146", "0.37616146", "0.71269476"), Is.EqualTo("other"),
                     "A number re-rolled to somewhere new each time does not compound, though it moved the same way.");
                 Assert.That(Shape("- a", "- a\n- b", "- a\n- b", "- a\n- b\n- c"), Is.EqualTo(Compounds),
-                    "A list that gains the same number of elements again compounds.");
-                Assert.That(Shape("- a", "- a\n- b", "- a\n- b", "- a\n- b\n- c\n- d"), Is.EqualTo("other"),
-                    "A list that gains a different number does not, by the same rule.");
+                    "A list that gains entries on both trips compounds.");
+                Assert.That(Shape("- a", "- a\n- b", "- a\n- b", "- a\n- b\n- c\n- d"), Is.EqualTo(Compounds),
+                    "It compounds whatever it gains, and however many: growth per store is growth.");
+                Assert.That(Shape("count=2 [A, B]", "count=1 [B]", "count=2 [A, C]", "count=1 [C]"), Is.EqualTo(Compounds),
+                    "Losing the same entry again is the same loss again.");
+                Assert.That(Shape("count=2 [A, B]", "count=1 [B]", "count=1 [B]", "count=0 []"), Is.EqualTo("other"),
+                    "Losing a different entry each trip is two one-off losses, which the count alone would call growth.");
             });
         }
 
