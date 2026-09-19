@@ -29,8 +29,14 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                 Assert.That(DrydockAppearanceTypes.TryResolve(reflection, typeof(System.Diagnostics.Process).AssemblyQualifiedName!, out _), Is.False,
                     "A framework type, one that runs a process, must be refused.");
                 Assert.That(DrydockAppearanceTypes.TryResolve(reflection, "System.IO.FileInfo", out _), Is.False, "A bare framework name must be refused.");
-                Assert.That(DrydockAppearanceTypes.TryResolve(reflection, typeof(System.Collections.Generic.Dictionary<string, string>).AssemblyQualifiedName!, out _), Is.False,
-                    "A generic type name must be refused.");
+                Assert.That(DrydockAppearanceTypes.TryResolve(reflection, typeof(System.Collections.Generic.Dictionary<string, object>).AssemblyQualifiedName!, out _), Is.False,
+                    "A dictionary of anything but two strings must be refused.");
+                Assert.That(DrydockAppearanceTypes.TryResolve(reflection, typeof(System.Collections.Generic.Dictionary<string, System.Collections.Generic.Dictionary<string, string>>).AssemblyQualifiedName!, out _), Is.False,
+                    "A dictionary nested in a dictionary must be refused.");
+                Assert.That(DrydockAppearanceTypes.TryResolve(reflection, typeof(System.Collections.Generic.Dictionary<int, string>).AssemblyQualifiedName!, out _), Is.False,
+                    "A dictionary with another key type must be refused.");
+                Assert.That(DrydockAppearanceTypes.TryResolve(reflection, typeof(System.Collections.Generic.List<string>).AssemblyQualifiedName!, out _), Is.False,
+                    "Another generic must be refused.");
                 Assert.That(DrydockAppearanceTypes.TryResolve(reflection, "No.Such.Type", out _), Is.False, "An unknown name must be refused.");
                 Assert.That(DrydockAppearanceTypes.TryResolve(reflection, string.Empty, out _), Is.False, "An empty name must be refused.");
             });
@@ -57,6 +63,10 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
 
                 Assert.That(DrydockAppearanceTypes.TryResolve(reflection, typeof(Robust.Shared.Maths.Color).AssemblyQualifiedName!, out var color), Is.True, "Color, which is not networked by attribute, resolves by name.");
                 Assert.That(color, Is.EqualTo(typeof(Robust.Shared.Maths.Color)));
+
+                Assert.That(DrydockAppearanceTypes.TryResolve(reflection, typeof(System.Collections.Generic.Dictionary<string, string>).AssemblyQualifiedName!, out var layers), Is.True,
+                    "The one closed generic, a dictionary of two strings, resolves.");
+                Assert.That(layers, Is.EqualTo(typeof(System.Collections.Generic.Dictionary<string, string>)));
 
                 Assert.That(DrydockAppearanceTypes.IsAdmissible(typeof(ApcChargeState)), Is.True);
                 Assert.That(DrydockAppearanceTypes.IsAdmissible(typeof(System.Diagnostics.Process)), Is.False);

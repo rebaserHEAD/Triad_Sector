@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Text.RegularExpressions;
 using Robust.Shared.Reflection;
 using Robust.Shared.Serialization;
 
@@ -10,7 +11,7 @@ namespace Content.Server._Triad.Drydock.Loader;
 /// may instantiate only through this gate, and nothing else picks a type from a string: the name resolves through the
 /// reflection manager, and the type is admitted only when it is an enum or carries <see cref="NetSerializableAttribute"/>
 /// (appearance keys and values are networked, so every real one is one or the other), or is on the short list of engine
-/// value types named below. Anything else is refused, and the caller counts it.
+/// value types named below, or is exactly a dictionary of two strings. Anything else is refused, and the caller counts it.
 /// </summary>
 public static class DrydockAppearanceTypes
 {
@@ -27,6 +28,16 @@ public static class DrydockAppearanceTypes
         typeof(string),
         typeof(Robust.Shared.Maths.Color),
     };
+
+    /// <summary>
+    /// The one generic on the list, by its exact closed type: a dictionary of two strings, which the pipe system writes
+    /// for a pipe's layer visuals (ruled 2026-09-19). Matched on the stored assembly-qualified name with each argument
+    /// exactly <c>System.String</c>, so a dictionary of anything else, one nested in another, and every other generic
+    /// stay refused.
+    /// </summary>
+    private static readonly Regex ClosedStringDictionary = new(
+        @"^System\.Collections\.Generic\.Dictionary`2\[\[System\.String(,[^\[\]]*)?\],\[System\.String(,[^\[\]]*)?\]\](,[^\[\]]*)?$",
+        RegexOptions.CultureInvariant | RegexOptions.Compiled);
 
     private static readonly Dictionary<string, Type> EngineValueTypesByName = BuildEngineValueTypesByName();
 
@@ -45,12 +56,21 @@ public static class DrydockAppearanceTypes
 
     /// <summary>
     /// The type a stored name (as the store writes it, the assembly-qualified name) may be read as, or false when the load
-    /// must not read it. A generic type name is refused: no appearance value is one.
+    /// must not read it. Every generic name is refused except the one closed dictionary above.
     /// </summary>
     public static bool TryResolve(IReflectionManager reflection, string storedName, out Type type)
     {
         type = null!;
-        if (string.IsNullOrEmpty(storedName) || storedName.Contains('['))
+        if (string.IsNullOrEmpty(storedName))
+            return false;
+
+        if (ClosedStringDictionary.IsMatch(storedName))
+        {
+            type = typeof(Dictionary<string, string>);
+            return true;
+        }
+
+        if (storedName.Contains('['))
             return false;
 
         var comma = storedName.IndexOf(',');
