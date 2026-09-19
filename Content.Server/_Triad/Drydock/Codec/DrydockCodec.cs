@@ -44,11 +44,13 @@ public sealed partial class DrydockCodec
     {
         _serialization = serialization;
         _factory = entMan.ComponentFactory;
+        _entMan = entMan;
         Context = new DrydockCodecContext(serialization, entMan, allocate, resolve);
         _pass = new DrydockCodecFieldPass(serialization, Context, entMan, timing);
     }
 
     private readonly IComponentFactory _factory;
+    private readonly IEntityManager _entMan;
 
     /// <summary>
     /// The component as it will be stored.

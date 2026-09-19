@@ -4,9 +4,12 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
 using Content.Server._Mono.TargetSeekingAlert;
+using Content.Shared._FarHorizons.Power.Generation.FissionGenerator;
 using Content.Server._Triad.Drydock.Codec;
 using Content.Server.Power.Components;
+using Content.Server.Wires;
 using Content.Shared.Coordinates;
+using Content.Shared.Power;
 using Robust.Shared.GameObjects;
 using Robust.Shared.Map;
 using Robust.Shared.Map.Components;
@@ -20,8 +23,9 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
 {
     /// <summary>
     /// The manifest's row (<see cref="DrydockCodec.WriteManifest"/>, <see cref="DrydockCodec.ReadManifest"/>): a member the
-    /// component rows cannot carry goes into a row of its own and comes back at its moment, a null as an explicit null, and a
-    /// data field the manifest lists as not carried is taken out of its component's row.
+    /// component rows cannot carry goes into a row of its own and comes back at its moment, a null as an explicit null, a
+    /// dictionary entry under its own key and an owed one not at all, and a data field the manifest lists as not carried
+    /// is taken out of its component's row.
     /// </summary>
     [TestFixture]
     [TestOf(typeof(DrydockCodec))]
@@ -49,8 +53,9 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             var factory = server.ResolveDependency<IComponentFactory>();
 
             EntityUid cable = default, paired = default, lone = default;
-            EntityUid? pairedAtStartup = null, pairedRead = null, loneRead = EntityUid.Invalid;
-            bool pairedRowHasKey = false, loneRowNull = false, pairedBeforeInit = true;
+            EntityUid? pairedAtStartup = null;
+            (bool Found, object? Value) pairedRead = default, loneRead = default, pairedBeforeInit = default;
+            bool pairedRowHasKey = false, loneRowNull = false;
             var unwritable = new Dictionary<string, int>();
 
             await server.WaitPost(() =>
@@ -71,16 +76,12 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
 
                 var pairedRow = Manifest(entMan, factory, codec, paired, unwritable);
                 pairedRowHasKey = pairedRow?.Has(ProviderKey) == true;
-                pairedBeforeInit = pairedRow != null && codec.ReadManifest(pairedRow, DrydockApplyMoment.BeforeInit, factory).Any(m => m.Member.Member == "Provider");
-                pairedRead = pairedRow == null
-                    ? null
-                    : (EntityUid?) codec.ReadManifest(pairedRow, DrydockApplyMoment.AfterStart, factory).Single(m => m.Member.Member == "Provider").Value;
+                pairedBeforeInit = ReadAt(codec, factory, pairedRow, DrydockApplyMoment.BeforeInit, ProviderKey);
+                pairedRead = ReadAt(codec, factory, pairedRow, DrydockApplyMoment.AfterStart, ProviderKey);
 
                 var loneRow = Manifest(entMan, factory, codec, lone, unwritable);
                 loneRowNull = loneRow != null && loneRow.TryGet<ValueDataNode>(ProviderKey, out var node) && node.IsNull;
-                loneRead = loneRow == null
-                    ? EntityUid.Invalid
-                    : (EntityUid?) codec.ReadManifest(loneRow, DrydockApplyMoment.AfterStart, factory).Single(m => m.Member.Member == "Provider").Value;
+                loneRead = ReadAt(codec, factory, loneRow, DrydockApplyMoment.AfterStart, ProviderKey);
             });
 
             Assert.Multiple(() =>
@@ -89,11 +90,13 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                 Assert.That(unwritable, Is.Empty, "Nothing on either receiver may be left out as unwritable.");
 
                 Assert.That(pairedRowHasKey, Is.True, "The paired receiver's provider has to be in its manifest row.");
-                Assert.That(pairedBeforeInit, Is.False, "The provider is an after-startup member and must not be read before init.");
-                Assert.That(pairedRead, Is.EqualTo(cable), "It has to come back as the cable entity, through the stable ids.");
+                Assert.That(pairedBeforeInit.Found, Is.False, "The provider is an after-startup member and must not be read before init.");
+                Assert.That(pairedRead.Found, Is.True, "The provider has to be read at its moment, after startup.");
+                Assert.That(pairedRead.Value, Is.EqualTo(cable), "It has to come back as the cable entity, through the stable ids.");
 
                 Assert.That(loneRowNull, Is.True, "An unpaired receiver's provider has to be written as an explicit null.");
-                Assert.That(loneRead, Is.Null, "And read back as null, not as a default or an invalid entity.");
+                Assert.That(loneRead.Found, Is.True, "The null has to be read at the provider's moment too.");
+                Assert.That(loneRead.Value, Is.Null, "And read back as null, not as a default or an invalid entity.");
             });
 
             await pair.CleanReturnAsync();
@@ -132,6 +135,121 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             });
 
             await pair.CleanReturnAsync();
+        }
+
+        /// <summary>
+        /// A power wire's cut count travels as an entry of the wires' state data, before init, so the layout rebuild finds it
+        /// in place; a pulse does not, because nothing re-arms the timer that would clear it (owed with H12).
+        /// </summary>
+        [Test]
+        public async Task APowerWiresCutCountTravelsAndAPulseDoesNot()
+        {
+            await using var pair = await PoolManager.GetServerClient();
+            var server = pair.Server;
+            var entMan = server.EntMan;
+            var factory = server.ResolveDependency<IComponentFactory>();
+            var map = await pair.CreateTestMap();
+
+            bool hadCut = false, hadPulse = false, pulseWritten = true;
+            (bool Found, object? Value) cut = default;
+            object? setBack = null;
+            var unwritable = new Dictionary<string, int>();
+
+            await server.WaitPost(() =>
+            {
+                var wiresSystem = entMan.System<WiresSystem>();
+                var airlock = entMan.SpawnEntity("Airlock", map.GridCoords);
+                wiresSystem.SetData(airlock, PowerWireActionKey.CutWires, 2);
+                wiresSystem.SetData(airlock, PowerWireActionKey.Pulsed, true);
+                hadCut = wiresSystem.TryGetData<int?>(airlock, PowerWireActionKey.CutWires, out var before) && before == 2;
+                hadPulse = wiresSystem.TryGetData<bool>(airlock, PowerWireActionKey.Pulsed, out var pulsed) && pulsed;
+
+                var codec = Codec(server.ResolveDependency<ISerializationManager>(), entMan, server.ResolveDependency<IGameTiming>(), airlock);
+                var row = Manifest(entMan, factory, codec, airlock, unwritable);
+                var cutMember = DrydockCodecManifestMembers.Members.Single(m => Equals(m.EntryKey, PowerWireActionKey.CutWires));
+                var pulseMember = DrydockCodecManifestMembers.Members.Single(m => Equals(m.EntryKey, PowerWireActionKey.Pulsed));
+                pulseWritten = row?.Has(pulseMember.Key) == true;
+                cut = ReadAt(codec, factory, row, DrydockApplyMoment.BeforeInit, cutMember.Key);
+
+                // Set back onto the airlock's own state data with the entry taken out first, as a fresh component holds none.
+                var wires = entMan.GetComponent<WiresComponent>(airlock);
+                wiresSystem.RemoveData(airlock, PowerWireActionKey.CutWires, wires);
+                DrydockCodec.SetMember(wires, cutMember, cut.Value);
+                setBack = wiresSystem.TryGetData<int?>(airlock, PowerWireActionKey.CutWires, out var after, wires) ? after : null;
+            });
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(hadCut && hadPulse, Is.True, "The control: the airlock has to hold both entries before the write.");
+                Assert.That(unwritable, Is.Empty, "Nothing on the airlock may be left out as unwritable.");
+                Assert.That(cut.Found, Is.True, "The cut count has to be in the row and read before init.");
+                Assert.That(cut.Value, Is.EqualTo(2), "And read as the count it was.");
+                Assert.That(setBack, Is.EqualTo(2), "Setting it back has to put it under its own key, where the power wire reads it.");
+                Assert.That(pulseWritten, Is.False, "A pulse is owed with H12 and must not be written.");
+            });
+
+            await pair.CleanReturnAsync();
+        }
+
+        /// <summary>
+        /// A network id means nothing in another round, so a monitor's turbine travels as the entity it names and comes back
+        /// as that entity's network id; one naming nothing on the image comes back null.
+        /// </summary>
+        [Test]
+        public async Task AMonitorsNetworkReferenceTravelsAsTheEntity()
+        {
+            await using var pair = await PoolManager.GetServerClient();
+            var server = pair.Server;
+            var entMan = server.EntMan;
+            var factory = server.ResolveDependency<IComponentFactory>();
+
+            NetEntity turbineNet = default;
+            (bool Found, object? Value) named = default, offImage = default;
+            var unwritable = new Dictionary<string, int>();
+            const string key = "GasTurbineMonitor.turbine";
+
+            await server.WaitPost(() =>
+            {
+                var monitor = entMan.SpawnEntity(null, MapCoordinates.Nullspace);
+                var turbine = entMan.SpawnEntity(null, MapCoordinates.Nullspace);
+                var stray = entMan.SpawnEntity(null, MapCoordinates.Nullspace);
+                var comp = entMan.AddComponent<GasTurbineMonitorComponent>(monitor);
+                turbineNet = entMan.GetNetEntity(turbine);
+                comp.turbine = turbineNet;
+
+                var codec = Codec(server.ResolveDependency<ISerializationManager>(), entMan, server.ResolveDependency<IGameTiming>(), monitor, turbine);
+                named = ReadAt(codec, factory, Manifest(entMan, factory, codec, monitor, unwritable), DrydockApplyMoment.BeforeInit, key);
+
+                // The stray is not on the image, so the codec has no stable id for it.
+                comp.turbine = entMan.GetNetEntity(stray);
+                offImage = ReadAt(codec, factory, Manifest(entMan, factory, codec, monitor, unwritable), DrydockApplyMoment.BeforeInit, key);
+            });
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(unwritable, Is.Empty, "Nothing on the monitor may be left out as unwritable.");
+                Assert.That(named.Found, Is.True, "The turbine reference has to be in the row and read before init.");
+                Assert.That(named.Value, Is.EqualTo(turbineNet), "It has to come back as the named entity's network id.");
+                Assert.That(offImage.Found, Is.True, "A reference off the image has to be written too.");
+                Assert.That(offImage.Value, Is.Null, "And read back as null, not as an invalid network id.");
+            });
+
+            await pair.CleanReturnAsync();
+        }
+
+        /// <summary>A member read from a row at a moment, and whether the row held it at that moment at all.</summary>
+        private static (bool Found, object? Value) ReadAt(DrydockCodec codec, IComponentFactory factory, MappingDataNode? row, DrydockApplyMoment moment, string key)
+        {
+            if (row == null)
+                return (false, null);
+
+            foreach (var (member, value) in codec.ReadManifest(row, moment, factory))
+            {
+                if (member.Key == key)
+                    return (true, value);
+            }
+
+            return (false, null);
         }
 
         private static MappingDataNode? Manifest(IEntityManager entMan, IComponentFactory factory, DrydockCodec codec, EntityUid uid, Dictionary<string, int> unwritable) =>

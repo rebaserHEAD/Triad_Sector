@@ -1,11 +1,13 @@
 #nullable enable
 
 using System;
+using System.Collections;
 using System.Collections.Generic;
 using System.Linq;
 using System.Reflection;
 using System.Threading.Tasks;
 using Content.Server._Triad.Drydock.Codec;
+using Content.Shared.Power;
 using Robust.Shared.GameObjects;
 using Robust.Shared.Serialization.Manager.Attributes;
 
@@ -53,8 +55,12 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                     wrong.Add($"stripped {name}: not a registered component");
             }
 
+            // By (component, member) as well as by entry, because a dictionary's entries are several entries of one member,
+            // and the census join counts members.
+            var members = DrydockCodecManifestMembers.Members.Select(m => (m.Component, m.Member)).Distinct().Count();
             await TestContext.Out.WriteLineAsync(
                 $"[manifest] {resolved} of {DrydockCodecManifestMembers.Members.Length} member entries resolved as their kind; "
+                + $"{members} distinct (component, member) pairs, {DrydockCodecManifestMembers.Members.Count(m => m.OwedWith != null)} owed; "
                 + $"{DrydockCodecManifestMembers.NotCarried.Length} not carried, {DrydockCodecManifestMembers.Stripped.Count} stripped components checked.");
             foreach (var line in wrong)
                 await TestContext.Out.WriteLineAsync($"[manifest]   {line}");
@@ -75,6 +81,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             var factory = pair.Server.ResolveDependency<IComponentFactory>();
             var gravity = DrydockCodecManifestMembers.Members.Single(m => m.Component == "GravityGenerator");
             var fryer = DrydockCodecManifestMembers.Members.Single(m => m.Component == "DeepFryer");
+            var cutWires = DrydockCodecManifestMembers.Members.Single(m => Equals(m.EntryKey, PowerWireActionKey.CutWires));
 
             Assert.Multiple(() =>
             {
@@ -89,6 +96,14 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                     "A member listed as re-applied that nothing carries went unreported.");
                 Assert.That(Wrong(factory, gravity with { Kind = DrydockMemberKind.AbsoluteTime }), Is.Not.Null,
                     "A time that is not a TimeSpan went unreported.");
+
+                Assert.That(Wrong(factory, cutWires), Is.Null, "The control's control: the real dictionary entry resolves.");
+                Assert.That(Wrong(factory, cutWires with { EntryKey = null }), Is.Not.Null,
+                    "A dictionary entry without its key went unreported.");
+                Assert.That(Wrong(factory, gravity with { Kind = DrydockMemberKind.Entry, EntryKey = PowerWireActionKey.CutWires, EntryType = typeof(int) }), Is.Not.Null,
+                    "An entry of a member that is not a dictionary went unreported.");
+                Assert.That(Wrong(factory, gravity with { EntryKey = PowerWireActionKey.CutWires }), Is.Not.Null,
+                    "An entry key on a member not listed as an entry went unreported.");
             });
 
             await pair.CleanReturnAsync();
@@ -106,14 +121,24 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             var computed = DrydockCodecManifest.ComputedFields.Any(c => c.Component == registration.Type && c.BackingMember == entry.Member);
             var type = Nullable.GetUnderlyingType(DrydockCodecManifestMembers.MemberType(member)) ?? DrydockCodecManifestMembers.MemberType(member);
 
+            if (entry.Kind != DrydockMemberKind.Entry && (entry.EntryKey != null || entry.EntryType != null))
+                return "carries an entry key or type, but is not listed as an entry";
+
             return entry.Kind switch
             {
                 DrydockMemberKind.ReapplyCarried when !dataField && !computed =>
                     "listed as re-applied, but nothing carries it: it is neither a data field nor a computed-field backing member",
-                DrydockMemberKind.Field or DrydockMemberKind.AbsoluteTime or DrydockMemberKind.ViaSystem when dataField =>
+                DrydockMemberKind.Field or DrydockMemberKind.AbsoluteTime or DrydockMemberKind.ViaSystem or DrydockMemberKind.Reference
+                    or DrydockMemberKind.Entry when dataField =>
                     "a data field, which the codec carries already: a census error, or the entry is a re-apply",
                 DrydockMemberKind.AbsoluteTime when type != typeof(TimeSpan) =>
                     $"listed as a time, but it is a {type.Name}",
+                DrydockMemberKind.Reference when type != typeof(NetEntity) =>
+                    $"listed as a network reference, but it is a {type.Name}",
+                DrydockMemberKind.Entry when entry.EntryKey == null || entry.EntryType == null =>
+                    "listed as a dictionary entry without its key or its value type",
+                DrydockMemberKind.Entry when !typeof(IDictionary).IsAssignableFrom(type) =>
+                    $"listed as a dictionary entry, but it is a {type.Name}",
                 _ => null,
             };
         }

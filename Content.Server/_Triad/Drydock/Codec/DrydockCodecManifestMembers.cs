@@ -1,5 +1,6 @@
 using System.Collections.Immutable;
 using System.Reflection;
+using Content.Shared.Power;
 
 namespace Content.Server._Triad.Drydock.Codec;
 
@@ -36,6 +37,15 @@ public enum DrydockMemberKind
     /// <summary>A reference kept on both sides (the receiver's provider and the provider's receiver list), set through the
     /// owning system rather than by a field write.</summary>
     ViaSystem,
+
+    /// <summary>A <see cref="NetEntity"/> kept on a component, carried as the entity it names: written as that entity's
+    /// stable id and set back as the loaded entity's NetEntity, or null when it names nothing on the image.</summary>
+    Reference,
+
+    /// <summary>One entry of a dictionary member that is otherwise not carried (a wire's state data), keyed by
+    /// <see cref="DrydockManifestMember.EntryKey"/> and holding a <see cref="DrydockManifestMember.EntryType"/>. An entry
+    /// the dictionary does not hold is not written, so the load leaves it absent as well.</summary>
+    Entry,
 }
 
 /// <param name="Row">The census join's row id (resources/2026-09-17-census-join.tsv, column f33).</param>
@@ -43,13 +53,26 @@ public enum DrydockMemberKind
 /// <param name="Member">The field or property on the component or one of its base types.</param>
 /// <param name="OnlyWith">A component the entity must also carry for the member to travel: a fried item's name is the
 /// member, and every entity has a name.</param>
+/// <param name="EntryKey">For an <see cref="DrydockMemberKind.Entry"/>, the dictionary key.</param>
+/// <param name="EntryType">For an <see cref="DrydockMemberKind.Entry"/>, the type of the value under the key.</param>
+/// <param name="OwedWith">The rebuild handler (resources/2026-09-18-rebuild-list.tsv) the member waits for. An owed member
+/// is listed so the build-time test keeps guarding it, and is not written until the handler exists.</param>
 public sealed record DrydockManifestMember(
     int Row,
     string Component,
     string Member,
     DrydockApplyMoment Moment,
     DrydockMemberKind Kind,
-    string? OnlyWith = null);
+    string? OnlyWith = null,
+    Enum? EntryKey = null,
+    Type? EntryType = null,
+    string? OwedWith = null)
+{
+    /// <summary>The member's key in a manifest row: <c>Component.Member</c>, and the entry's key after it for an entry.</summary>
+    public string Key => EntryKey == null
+        ? $"{Component}.{Member}"
+        : $"{Component}.{Member}[{EntryKey.GetType().Name}.{EntryKey}]";
+}
 
 /// <param name="Reason">Why it is not carried, which is the whole point of listing it.</param>
 public sealed record DrydockNotCarried(int Row, string Component, string Member, string Reason);
@@ -62,7 +85,8 @@ public sealed record DrydockNotCarried(int Row, string Component, string Member,
 /// listed as carried by this manifest, or a component that is no longer registered.
 ///
 /// <para>Out by scope (the image carries no mobs): rows 316, 449, 450, 452, 454, 505 and 508. Out by verdict: rows 104,
-/// 399, 400. Row 453 is a data field list the codec carries.</para>
+/// 399, 400, and 498 (a worn stethoscope goes ashore with its wearer). Out as unreachable: row 506, whose console no
+/// prototype carries. Row 453 is a data field list the codec carries.</para>
 /// </summary>
 public static class DrydockCodecManifestMembers
 {
@@ -172,9 +196,10 @@ public static class DrydockCodecManifestMembers
         new DrydockManifestMember(469, "ParticleAcceleratorControlBox", "CanBeEnabled", Before, Field),
         new DrydockManifestMember(500, "ParticleAcceleratorPart", "Master", Before, Field),
         new DrydockManifestMember(331, "Pinpointer", "IsActive", Before, Field),
-        new DrydockManifestMember(332, "Pinpointer", "Target", Before, Field),
+        // Through SetTarget (SharedPinpointerSystem.cs:82-95), which also sets the target's name and, when active, the
+        // direction; both read the target's started components, so after startup.
+        new DrydockManifestMember(332, "Pinpointer", "Target", DrydockApplyMoment.AfterStart, DrydockMemberKind.ViaSystem),
         new DrydockManifestMember(336, "PneumaticCannon", "Power", Before, Field),
-        new DrydockManifestMember(506, "PointDiskConsolePrinting", "FinishTime", Before, Time),
         new DrydockManifestMember(438, "PortableScrubber", "Enabled", Before, Field),
         new DrydockManifestMember(480, "PreventCrisping", "Cycles", Before, Field),
         new DrydockManifestMember(360, "RCD", "UseMirrorPrototype", Before, Field),
@@ -193,7 +218,6 @@ public static class DrydockCodecManifestMembers
         new DrydockManifestMember(39, "Smes", "LastChargeState", Before, Field),
         new DrydockManifestMember(38, "Smes", "LastChargeLevel", Before, Field),
         new DrydockManifestMember(389, "SpaceVillainArcade", "RewardAmount", Before, Field),
-        new DrydockManifestMember(498, "Stethoscope", "IsActive", Before, Field),
         new DrydockManifestMember(398, "SuitSensor", "User", Before, Field),
         new DrydockManifestMember(486, "Summonable", "AlreadySummoned", Before, Field),
         new DrydockManifestMember(486, "Summonable", "Summon", Before, Field),
@@ -201,6 +225,14 @@ public static class DrydockCodecManifestMembers
         new DrydockManifestMember(432, "Wieldable", "OldInhandPrefix", Before, Field),
         new DrydockManifestMember(433, "Wires", "SerialNumber", Before, Field),
         new DrydockManifestMember(433, "Wires", "WireSeed", Before, Field),
+        // Before init, so H12's layout rebuild finds the count in place: the power wire seeds it only when it is absent
+        // (PowerWireAction.cs:180-182).
+        new DrydockManifestMember(435, "Wires", "StateData", Before, DrydockMemberKind.Entry,
+            EntryKey: PowerWireActionKey.CutWires, EntryType: typeof(int)),
+        // A pulse is cleared only by its timer (PowerWireAction.cs:269), which no store keeps, so a carried pulse would
+        // hold the wire for ever; it travels once H12 re-arms the timer.
+        new DrydockManifestMember(435, "Wires", "StateData", Before, DrydockMemberKind.Entry,
+            EntryKey: PowerWireActionKey.Pulsed, EntryType: typeof(bool), OwedWith: "H12"),
         new DrydockManifestMember(437, "WiresPanel", "Visible", Before, Field),
         new DrydockManifestMember(510, "Pda", "ContainedId", Before, Field),
         new DrydockManifestMember(511, "GhostRoleMobSpawner", "CurrentTakeovers", Before, Field),
@@ -210,7 +242,9 @@ public static class DrydockCodecManifestMembers
         new DrydockManifestMember(519, "DeployableTurretController", "LinkedTurrets", Before, Field),
         new DrydockManifestMember(520, "Dispenser", "Dispensing", Before, Field),
         new DrydockManifestMember(520, "Dispenser", "DispensingItemId", Before, Field),
-        new DrydockManifestMember(520, "Dispenser", "DispenseTimer", Before, Field));
+        new DrydockManifestMember(520, "Dispenser", "DispenseTimer", Before, Field),
+        new DrydockManifestMember(523, "GasTurbineMonitor", "turbine", Before, DrydockMemberKind.Reference),
+        new DrydockManifestMember(524, "NuclearReactorMonitor", "reactor", Before, DrydockMemberKind.Reference));
 
     /// <summary>
     /// What the manifest leaves out on purpose, member by member, because each is either state a load rebuilds or a value
@@ -229,7 +263,7 @@ public static class DrydockCodecManifestMembers
         new DrydockNotCarried(507, "ScuttleDevice", "ArmedMap", "a MapId, which means nothing in another round"),
         new DrydockNotCarried(507, "ScuttleDevice", "AlertAudioStream", "a playing audio entity"),
         new DrydockNotCarried(435, "Wires", "StateData",
-            "boxed values, most of them live CancellationTokenSources; only PowerWireActionKey.CutWires and .Pulsed are owed, as entries of their own"));
+            "boxed values, most of them live CancellationTokenSources; PowerWireActionKey.CutWires travels as an entry of its own, and .Pulsed is owed with H12"));
 
     /// <summary>
     /// Components the store strips, by registration name, with the reason: each is either tied to the round's station or

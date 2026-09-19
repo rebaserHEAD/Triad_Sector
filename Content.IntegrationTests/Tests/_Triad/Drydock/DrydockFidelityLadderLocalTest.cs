@@ -546,6 +546,24 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                 + "its express deadline (CargoSystem.TradeCrates.cs:53-81); the loader is to store the destination by prototype.",
                 (_, key, result) => TradeCrateMembers.Contains(key[(key.IndexOf('|') + 1)..])
                                     && result.Before.Values.ContainsKey(key[..key.IndexOf('|')] + "|TradeCrateComponent.<present>")),
+
+            // Owed to a rebuild handler that does not exist yet (resources/2026-09-18-rebuild-list.tsv), so each handler's
+            // arrival has lines to delete. The load stays free of the old retrieve sweeps, which are what these replace.
+            new("owed: H12",
+                "OWED to H12, wire layout and timed wire re-arm: the state data is set by each wire's action as it is added "
+                + "(WiresSystem.cs:143, :167, through SetData at :812), the statuses are refilled from the wires by "
+                + "UpdateUserInterface (:528), and both run from map init (:469-488), which the silent map-init stamp never "
+                + "raises. Sorted only where the same entity's wire list also came back empty.",
+                (_, key, result) => OwedToH12.Contains(key[(key.IndexOf('|') + 1)..])
+                                    && result.After.Values.TryGetValue(key[..key.IndexOf('|')] + "|WiresComponent.~WiresList", out var wires)
+                                    && wires.StartsWith("count=0", StringComparison.Ordinal)),
+        };
+
+        /// <summary>What H12's layout rebuild fills besides the wire list, which the census predicts on its own (join row 434).</summary>
+        private static readonly HashSet<string> OwedToH12 = new(StringComparer.Ordinal)
+        {
+            "WiresComponent.~StateData",
+            "WiresComponent.~Statuses",
         };
 
         /// <summary>What <c>OnTradeCrateInit</c> rewrites (CargoSystem.TradeCrates.cs:58-80), as deep-snapshot members.</summary>

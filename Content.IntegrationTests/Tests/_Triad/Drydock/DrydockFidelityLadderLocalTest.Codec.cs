@@ -10,7 +10,9 @@ using Content.Server._Triad.Drydock;
 using Content.Server._Triad.Drydock.Codec;
 using Content.Server.Chemistry.Components;
 using Content.Server.Power.Components;
+using Content.Server.Pinpointer;
 using Content.Server.Power.EntitySystems;
+using Content.Shared.Pinpointer;
 using Content.Shared.Chemistry;
 using Content.Shared.Containers.ItemSlots;
 using Robust.Shared.EntitySerialization;
@@ -128,13 +130,12 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             {
                 _set[member.Moment] = _set.GetValueOrDefault(member.Moment) + 1;
                 if (member.Moment != DrydockApplyMoment.BeforeInit)
-                    LaterByMember[$"{member.Component}.{member.Member}"] = LaterByMember.GetValueOrDefault($"{member.Component}.{member.Member}") + 1;
+                    LaterByMember[member.Key] = LaterByMember.GetValueOrDefault(member.Key) + 1;
             }
 
             public int Set(DrydockApplyMoment moment) => _set.GetValueOrDefault(moment);
 
-            public void Miss(DrydockManifestMember member) =>
-                Missing[$"{member.Component}.{member.Member}"] = Missing.GetValueOrDefault($"{member.Component}.{member.Member}") + 1;
+            public void Miss(DrydockManifestMember member) => Missing[member.Key] = Missing.GetValueOrDefault(member.Key) + 1;
 
             public void Refuse(string key) => Refused[key] = Refused.GetValueOrDefault(key) + 1;
         }
@@ -812,10 +813,26 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             heldBack.Clear();
 
             // The manifest's after-startup members, once every entity has started: a receiver's provider, set back through
-            // the cable system, because startup paired it with whichever provider was nearest and connectable then.
+            // the cable system, because startup paired it with whichever provider was nearest and connectable then; and a
+            // pinpointer's target, through the pinpointer system.
             var cables = server.System<ExtensionCableSystem>();
+            var pinpointers = server.System<PinpointerSystem>();
             foreach (var held in manifest.Held.Where(h => h.Member.Moment == DrydockApplyMoment.AfterStart))
             {
+                // A pinpointer's target through SetTarget, which sets the target's name with it and, when active, the direction.
+                if (held.Member is { Component: "Pinpointer", Member: nameof(PinpointerComponent.Target) })
+                {
+                    if (!entMan.TryGetComponent<PinpointerComponent>(held.Uid, out var pinpointer))
+                    {
+                        manifest.Miss(held.Member);
+                        continue;
+                    }
+
+                    pinpointers.SetTarget(held.Uid, held.Value as EntityUid?, pinpointer);
+                    manifest.Count(held.Member);
+                    continue;
+                }
+
                 if (held.Member is not { Component: "ExtensionCableReceiver", Member: nameof(ExtensionCableReceiverComponent.Provider) })
                 {
                     SetManifestMember(entMan, factory, held.Uid, held.Member, held.Value, manifest);
