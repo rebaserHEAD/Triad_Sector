@@ -92,8 +92,9 @@ public sealed record DrydockNotCarried(int Row, string Component, string Member,
 /// listed as carried by this manifest, or a component that is no longer registered.
 ///
 /// <para>Out by scope (the image carries no mobs): rows 316, 449, 450, 452, 454, 505 and 508. Out by verdict: rows 104,
-/// 399, 400, and 498 (a worn stethoscope goes ashore with its wearer). Out as unreachable: row 506, whose console no
-/// prototype carries. Row 453 is a data field list the codec carries.</para>
+/// 399, 400, and 498 (a worn stethoscope goes ashore with its wearer), and row 507's music state, listed in
+/// <see cref="NotCarried"/>. Out as unreachable: row 506, whose console no prototype carries. Row 453 is a data field
+/// list the codec carries.</para>
 /// </summary>
 public static class DrydockCodecManifestMembers
 {
@@ -221,11 +222,8 @@ public static class DrydockCodecManifestMembers
         new DrydockManifestMember(507, "ScuttleDevice", "RemainingTime", DrydockApplyMoment.Seam, Field, SkipWhen: "DisarmOnMapChange"),
         new DrydockManifestMember(507, "ScuttleDevice", "CooldownTime", Before, Field),
         new DrydockManifestMember(507, "ScuttleDevice", "Armed", Before, Field, SkipWhen: "DisarmOnMapChange"),
-        // One that does not keeps its countdown, and its armed map is the map it loads onto.
+        // One that does not keeps its countdown, and its armed map is the map it loads onto. Its music state is not carried.
         new DrydockManifestMember(507, "ScuttleDevice", "ArmedMap", DrydockApplyMoment.AfterStart, DrydockMemberKind.Rederive),
-        new DrydockManifestMember(507, "ScuttleDevice", "PlayedNukeSong", Before, Field),
-        new DrydockManifestMember(507, "ScuttleDevice", "NukeSongLength", Before, Field),
-        new DrydockManifestMember(507, "ScuttleDevice", "SelectedNukeSong", Before, Field),
         new DrydockManifestMember(507, "ScuttleDevice", "PlayedAlertSound", Before, Field),
         new DrydockManifestMember(39, "Smes", "LastChargeState", Before, Field),
         new DrydockManifestMember(38, "Smes", "LastChargeLevel", Before, Field),
@@ -258,9 +256,11 @@ public static class DrydockCodecManifestMembers
         new DrydockManifestMember(523, "GasTurbineMonitor", "turbine", Before, DrydockMemberKind.Reference),
         new DrydockManifestMember(524, "NuclearReactorMonitor", "reactor", Before, DrydockMemberKind.Reference));
 
+    private const string MusicState = "music state, re-picked at the next arm; no serializer for ResolvedSoundSpecifier";
+
     /// <summary>
-    /// What the manifest leaves out on purpose, member by member, because each is either state a load rebuilds or a value
-    /// that means nothing in another round. A member here is never written by the codec.
+    /// What the manifest leaves out on purpose, member by member, because each is state a load rebuilds, a value that
+    /// means nothing in another round, or presentation the next use picks again. A member here is never written by the codec.
     /// </summary>
     public static readonly ImmutableArray<DrydockNotCarried> NotCarried = ImmutableArray.Create(
         new DrydockNotCarried(457, "TargetSeekerAlertGrid", "Alerters",
@@ -273,6 +273,11 @@ public static class DrydockCodecManifestMembers
         new DrydockNotCarried(495, "ForensicScanner", "CancelToken", "a live CancellationTokenSource"),
         new DrydockNotCarried(481, "Mail", "PriorityCancelToken", "a live CancellationTokenSource"),
         new DrydockNotCarried(507, "ScuttleDevice", "AlertAudioStream", "a playing audio entity"),
+        // The song and its length are picked at the arm (ScuttleDeviceSystem.cs:231-235), the countdown plays nothing without
+        // a song (:185), and a disarm clears the played flag (:275), so the three go together.
+        new DrydockNotCarried(507, "ScuttleDevice", "SelectedNukeSong", MusicState),
+        new DrydockNotCarried(507, "ScuttleDevice", "NukeSongLength", MusicState),
+        new DrydockNotCarried(507, "ScuttleDevice", "PlayedNukeSong", MusicState),
         new DrydockNotCarried(435, "Wires", "StateData",
             "boxed values, most of them live CancellationTokenSources; PowerWireActionKey.CutWires travels as an entry of its own, and .Pulsed is owed with H12"));
 

@@ -449,7 +449,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                 var keeps = Place(entMan, grid, "ScuttleDeviceWyvern", 8, 8);
                 var disarms = Place(entMan, grid, "ScuttleDeviceRazorN", 9, 9);
                 recipes.Add(new WorkbenchRecipe(8, "scuttle devices",
-                    "ScuttleDevice.RemainingTime, CooldownTime, Armed, PlayedNukeSong, NukeSongLength, SelectedNukeSong, PlayedAlertSound, ArmedMap",
+                    "ScuttleDevice.RemainingTime, CooldownTime, Armed, PlayedAlertSound, ArmedMap",
                     new[] { "ScuttleDeviceComponent" },
                     new List<string> { PathOf("ScuttleDeviceWyvern", 8, 8), PathOf("ScuttleDeviceRazorN", 9, 9) },
                     () =>
