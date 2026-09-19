@@ -9,7 +9,9 @@ using Content.Server._Triad.Drydock.Codec;
 using Content.Shared._NF.Shipyard.Prototypes;
 using Robust.Shared.EntitySerialization.Systems;
 using Robust.Shared.GameObjects;
+using Robust.Shared.Map;
 using Robust.Shared.Prototypes;
+using ForceSay = Content.Shared.Damage.ForceSay.DamageForceSayComponent;
 using Robust.Shared.Serialization.Manager;
 using Robust.Shared.Serialization.Markdown;
 using Robust.Shared.Serialization.Markdown.Mapping;
@@ -124,8 +126,60 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                 "The control: no component was copied the load's way, so a copy that never threw would mean nothing.");
             Assert.That(Copied.Compared, Is.GreaterThan(0),
                 "The control: the copy's live comparison compared no scalar.");
+            Assert.That(ReadNulls.Compared, Is.GreaterThan(0),
+                "The control: F37's count compared no object-valued member, so a zero from it would mean nothing.");
+            Assert.That(CopyNulls.Compared, Is.GreaterThan(0),
+                "The control: F37's count compared no object-valued member on the copy.");
             Assert.That(report.Keys, Is.GreaterThan(0),
                 "The control: every component compared wrote an empty mapping, so a clean corpus here would mean the codec wrote nothing rather than that it wrote everything.");
+
+            await pair.CleanReturnAsync();
+        }
+
+        /// <summary>
+        /// The control for F37's count, and one real case of F37. A force-say component's damage groups nulled at runtime
+        /// is a live null over a non-null default (the member is nullable and initialised to a set). A member declared
+        /// non-nullable is no case of F37: a null there makes the write throw instead (a tag set, NullNotAllowedException).
+        /// Counted against a fresh component, the count has to see it,
+        /// or the corpus's zero means nothing. Sent through the codec's write and read, and through the load's copy onto a
+        /// fresh component, it answers the finding itself for this one member, printed rather than asserted.
+        /// </summary>
+        [Test]
+        public async Task F37TheCountSeesARuntimeNullOverANonNullDefault()
+        {
+            await using var pair = await PoolManager.GetServerClient();
+            var server = pair.Server;
+            var entMan = server.EntMan;
+            var factory = server.ResolveDependency<IComponentFactory>();
+            var serialization = server.ResolveDependency<ISerializationManager>();
+
+            var control = new NullTally();
+            var read = new NullTally();
+            var copied = new NullTally();
+            await server.WaitPost(() =>
+            {
+                var uid = entMan.SpawnEntity(null, MapCoordinates.Nullspace);
+                var live = entMan.EnsureComponent<ForceSay>(uid);
+                typeof(ForceSay).GetField(nameof(ForceSay.ValidDamageGroups))!.SetValue(live, null);
+
+                var fresh = factory.GetComponent<ForceSay>();
+                CountNullness(live, fresh, nameof(ForceSay), control);
+
+                var codec = new DrydockCodec(serialization, entMan, server.ResolveDependency<IGameTiming>(), _ => null, _ => EntityUid.Invalid);
+                var restored = codec.Read(typeof(ForceSay), codec.Write((uid, entMan.GetComponent<MetaDataComponent>(uid)), live));
+                CountNullness(live, restored, nameof(ForceSay), read);
+
+                IComponent target = factory.GetComponent<ForceSay>();
+                serialization.CopyTo(restored, ref target, codec.Context, notNullableOverride: true);
+                CountNullness(live, target, nameof(ForceSay), copied);
+            });
+
+            await TestContext.Out.WriteLineAsync($"[f37-control] counter against a fresh component: {control.NullLost.Values.Sum()} null lost of {control.Compared} compared.");
+            await TestContext.Out.WriteLineAsync($"[f37-control] the codec's read: {read.NullLost.Values.Sum()} null lost of {read.Compared} compared.");
+            await TestContext.Out.WriteLineAsync($"[f37-control] the load's copy: {copied.NullLost.Values.Sum()} null lost of {copied.Compared} compared.");
+
+            Assert.That(control.NullLost.GetValueOrDefault($"{nameof(ForceSay)}.{nameof(ForceSay.ValidDamageGroups)}"), Is.EqualTo(1),
+                "The control: a live null over a non-null default has to be counted, or the corpus's zero means nothing.");
 
             await pair.CleanReturnAsync();
         }
@@ -316,6 +370,8 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             // same again, so a comparison of writes cannot see it (F35's airtight 15 wrote as 14 and 14 again).
             // Nothing runs between the write and this read, so the clock has not moved and a time reads back
             // at the same moment.
+            var nullLostByRead = CountNullness(component, restored, type.Name, ReadNulls);
+
             var lostByWrite = new HashSet<string>(StringComparer.Ordinal);
             foreach (var (member, detail) in LiveDifferences(component, restored, type.Name, FirstRead))
             {
@@ -327,6 +383,8 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
 
             if (Copy(serialization, factory, codec, entity, restored, type, hull, report) is { } target)
             {
+                CountNullness(component, target, type.Name, CopyNulls, beyond: nullLostByRead);
+
                 // Against the live component again, with what the write already lost left out: a member lost there
                 // reads the same wrong value into the copy, and it is one loss, not two.
                 foreach (var (member, detail) in LiveDifferences(component, target, type.Name, Copied))
@@ -630,6 +688,88 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             }
         }
 
+        /// <summary>
+        /// F37's count, taken before any fix: the object-valued data-field members (collections, definitions, any
+        /// reference) whose nullness differs from the live component's, top level and one definition down. A live null
+        /// that comes back non-null is the case F37 names, a runtime null over a non-null default; the other direction is
+        /// counted beside it. Nullness only, because equality means nothing reliable for these types; a counted member
+        /// adds nothing to the findings. Returns the members the comparison found null-lost, so the copy can count what it
+        /// adds beyond the read.
+        /// </summary>
+        private static HashSet<string> CountNullness(object live, object other, string path, NullTally tally, HashSet<string>? beyond = null, int depth = 0)
+        {
+            var lost = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var member in ObjectValued(live.GetType()))
+            {
+                var before = Get(member, live);
+                var after = Get(member, other);
+                var name = $"{path}.{member.Name}";
+                tally.Compared++;
+
+                if (before == null && after != null)
+                {
+                    lost.Add(name);
+                    tally.NullLost[name] = tally.NullLost.GetValueOrDefault(name) + 1;
+                    if (beyond != null && !beyond.Contains(name))
+                        tally.BeyondRead[name] = tally.BeyondRead.GetValueOrDefault(name) + 1;
+                }
+                else if (before != null && after == null)
+                {
+                    tally.NullGained[name] = tally.NullGained.GetValueOrDefault(name) + 1;
+                }
+                else if (depth == 0 && before != null && after != null && before.GetType() == after.GetType()
+                         && before is Robust.Shared.Serialization.ISerializationGenerated)
+                {
+                    lost.UnionWith(CountNullness(before, after, name, tally, beyond, depth + 1));
+                }
+            }
+
+            return lost;
+        }
+
+        /// <summary>F37's count over one side of the comparison.</summary>
+        private sealed class NullTally
+        {
+            public long Compared;
+            public readonly Dictionary<string, int> NullLost = new(StringComparer.Ordinal);
+            public readonly Dictionary<string, int> NullGained = new(StringComparer.Ordinal);
+            public readonly Dictionary<string, int> BeyondRead = new(StringComparer.Ordinal);
+        }
+
+        private static readonly NullTally ReadNulls = new();
+
+        private static readonly NullTally CopyNulls = new();
+
+        private static readonly Dictionary<Type, List<MemberInfo>> ObjectValuedCache = new();
+
+        /// <summary>The data-field members that can hold null and are not scalars: what the scalar comparison leaves out.</summary>
+        private static List<MemberInfo> ObjectValued(Type type)
+        {
+            if (ObjectValuedCache.TryGetValue(type, out var cached))
+                return cached;
+
+            const System.Reflection.BindingFlags flags = System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public
+                                                         | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.DeclaredOnly;
+            var members = new List<MemberInfo>();
+            for (var declaring = type; declaring != null && declaring != typeof(object); declaring = declaring.BaseType)
+            {
+                foreach (var member in declaring.GetFields(flags).Cast<MemberInfo>().Concat(declaring.GetProperties(flags)))
+                {
+                    if (member.GetCustomAttribute<Robust.Shared.Serialization.Manager.Attributes.DataFieldBaseAttribute>() == null)
+                        continue;
+
+                    var memberType = MemberType(member);
+                    if (IsScalar(memberType) || memberType.IsValueType && Nullable.GetUnderlyingType(memberType) == null)
+                        continue;
+
+                    members.Add(member);
+                }
+            }
+
+            ObjectValuedCache[type] = members;
+            return members;
+        }
+
         private static readonly Dictionary<Type, List<MemberInfo>> MemberCache = new();
 
         /// <summary>A live comparison's own coverage: a clean result over no comparisons would read as clean.</summary>
@@ -828,6 +968,25 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                     await TestContext.Out.WriteLineAsync($"[codec-roundtrip] the copy lost it, by member ({_lostByCopy.Count}):");
                     foreach (var (member, count) in _lostByCopy.OrderByDescending(kv => kv.Value).ThenBy(kv => kv.Key, StringComparer.Ordinal))
                         await TestContext.Out.WriteLineAsync($"[codec-roundtrip]     {member} x{count}");
+                }
+
+                foreach (var (side, tally) in new[] { ("read", ReadNulls), ("copy", CopyNulls) })
+                {
+                    await TestContext.Out.WriteLineAsync(
+                        $"[codec-roundtrip] F37 nullness, {side}: {tally.Compared} object-valued member(s) compared over {Hulls} hull(s); "
+                        + $"{tally.NullLost.Values.Sum()} live null came back non-null across {tally.NullLost.Count} member(s), "
+                        + $"{tally.NullGained.Values.Sum()} live non-null came back null across {tally.NullGained.Count} member(s)"
+                        + (side == "copy" ? $"; {tally.BeyondRead.Values.Sum()} null-lost by the copy that the read kept null." : "."));
+
+                    foreach (var (label, members) in new[] { ("null lost", tally.NullLost), ("null gained", tally.NullGained), ("null lost beyond the read", tally.BeyondRead) })
+                    {
+                        if (members.Count == 0 || side == "read" && label == "null lost beyond the read")
+                            continue;
+
+                        await TestContext.Out.WriteLineAsync($"[codec-roundtrip] F37 {side}, {label}, by member ({members.Count}):");
+                        foreach (var (member, count) in members.OrderByDescending(kv => kv.Value).ThenBy(kv => kv.Key, StringComparer.Ordinal))
+                            await TestContext.Out.WriteLineAsync($"[codec-roundtrip]     {member} x{count}");
+                    }
                 }
 
                 foreach (var path in Unloadable)
