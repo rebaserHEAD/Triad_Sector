@@ -12,6 +12,7 @@ using Content.Server.Chemistry.Components;
 using Content.Server.Power.Components;
 using Content.Server.Pinpointer;
 using Content.Server.Power.EntitySystems;
+using Content.Shared.APC;
 using Content.Shared.Pinpointer;
 using Content.Shared.Chemistry;
 using Content.Shared.Containers.ItemSlots;
@@ -424,6 +425,105 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             });
 
             await pair.CleanReturnAsync();
+        }
+
+        /// <summary>
+        /// A full APC has to come back reading Full. The load starts it the way a spawn does, so its deferred first state
+        /// update has to wait for its battery's first sync as a fresh one's does (<c>ApcFirstStateTest</c>): before the power
+        /// net's first batch its network battery reads 0 of 0, which computes as Lack, and a full battery then raises
+        /// nothing that would recompute it.
+        /// </summary>
+        [Test]
+        public async Task AFullApcComesBackReadingFull()
+        {
+            await using var pair = await PoolManager.GetServerClient();
+            var server = pair.Server;
+            var entMan = server.EntMan;
+            var map = await pair.CreateTestMap();
+            var second = (int) Math.Ceiling(1 / server.ResolveDependency<IGameTiming>().TickPeriod.TotalSeconds);
+            CodecNotes.Clear();
+            LoopFailures.Clear();
+
+            EntityUid apc = default;
+            await server.WaitPost(() => apc = entMan.SpawnEntity("APCBasic", map.GridCoords));
+
+            // Past the first batch and the state's 1 s gate (ApcSystem.cs:151), then the update opening the APC runs, so
+            // the state stored is Full whether or not a spawn gets it right.
+            await pair.RunTicksSync(2 * second);
+            var before = default(ApcChargeState);
+            float charge = 0, max = 0;
+            await server.WaitPost(() =>
+            {
+                server.System<ApcSystem>().UpdateApcState(apc);
+                before = entMan.GetComponent<ApcComponent>(apc).LastChargeState;
+                var battery = entMan.GetComponent<BatteryComponent>(apc);
+                (charge, max) = (battery.CurrentCharge, battery.MaxCharge);
+            });
+
+            // Store straight after a batch: zero the network battery and tick until the batch writes it back
+            // (BatterySystem.cs:81). Where the load's first tick falls in the batch cycle is then set by the store's clock
+            // gap, not by chance, and the control below checks that it falls before the next batch.
+            var batch = false;
+            for (var i = 0; i < second && !batch; i++)
+            {
+                await server.WaitPost(() => entMan.GetComponent<PowerNetworkBatteryComponent>(apc).NetworkBattery.Capacity = 0);
+                await pair.RunTicksSync(1);
+                await server.WaitPost(() => batch = entMan.GetComponent<PowerNetworkBatteryComponent>(apc).NetworkBattery.Capacity > 0);
+            }
+
+            var loaded = await CodecRoundTrip(pair, map.Grid.Owner);
+            await pair.RunTicksSync(1);
+
+            var restored = new List<EntityUid>();
+            var syncedAtFirstTick = true;
+            var atFirstTick = default(ApcChargeState);
+            await server.WaitPost(() =>
+            {
+                var query = entMan.EntityQueryEnumerator<ApcComponent, TransformComponent>();
+                while (query.MoveNext(out var uid, out _, out var xform))
+                {
+                    if (xform.GridUid == loaded)
+                        restored.Add(uid);
+                }
+
+                if (restored.Count != 1)
+                    return;
+
+                syncedAtFirstTick = entMan.GetComponent<PowerNetworkBatteryComponent>(restored[0]).NetworkBattery.Capacity > 0;
+                atFirstTick = entMan.GetComponent<ApcComponent>(restored[0]).LastChargeState;
+            });
+
+            await pair.RunTicksSync(second);
+
+            (ApcChargeState State, bool Pending, float Charge) after = default;
+            await server.WaitPost(() =>
+            {
+                if (restored.Count != 1)
+                    return;
+
+                var comp = entMan.GetComponent<ApcComponent>(restored[0]);
+                after = (comp.LastChargeState, comp.NeedStateUpdate, entMan.GetComponent<BatteryComponent>(restored[0]).CurrentCharge);
+            });
+
+            foreach (var note in CodecNotes)
+                await TestContext.Out.WriteLineAsync(note);
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(charge, Is.EqualTo(max).And.GreaterThan(0), "The control: the APC's battery has to be full before the store.");
+                Assert.That(before, Is.EqualTo(ApcChargeState.Full), "The control: the APC has to read Full before the store.");
+                Assert.That(batch, Is.True, "The control: the power net has to run a batch within a second.");
+                Assert.That(restored, Has.Count.EqualTo(1), "One APC has to come back.");
+                Assert.That(syncedAtFirstTick, Is.False, "The control: the loaded APC's first tick has to come before its battery's first sync.");
+
+                Assert.That(atFirstTick, Is.EqualTo(ApcChargeState.Full), "At its first tick it has to still read the Full it was stored with.");
+                Assert.That(after.Charge, Is.EqualTo(max), "Its battery has to come back full.");
+                Assert.That(after.Pending, Is.False, "Its deferred update has to have run.");
+                Assert.That(after.State, Is.EqualTo(ApcChargeState.Full), "And it has to read Full, not the Lack of a battery not yet synced.");
+            });
+
+            await pair.CleanReturnAsync();
+            AssertLoopHeld();
         }
 
         /// <summary>The solution held by an entity's solution entity for <paramref name="name"/>, or null when there is none.</summary>
