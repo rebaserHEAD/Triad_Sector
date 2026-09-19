@@ -688,8 +688,10 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                 "OWED to H12, wire layout and timed wire re-arm: the state data is set by each wire's action as it is added "
                 + "(WiresSystem.cs:143, :167, through SetData at :812), the statuses are refilled from the wires by "
                 + "UpdateUserInterface (:528), and both run from map init (:469-488), which the silent map-init stamp never "
-                + "raises. Sorted only where the same entity's wire list also came back empty.",
-                (_, key, result) => OwedToH12.Contains(key[(key.IndexOf('|') + 1)..])
+                + "raises. Sorted only where the same entity's wire list also came back empty. A UI state cache that lost the "
+                + "wires state and nothing else sorts here too: what it lost is the wires interface's own state, and H12 is "
+                + "the handler that fills it again.",
+                (_, key, result) => (OwedToH12.Contains(key[(key.IndexOf('|') + 1)..]) || LostOnlyTheWiresState(key, result))
                                     && result.After.Values.TryGetValue(key[..key.IndexOf('|')] + "|WiresComponent.~WiresList", out var wires)
                                     && wires.StartsWith("count=0", StringComparison.Ordinal)),
 
@@ -772,6 +774,17 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                     (line, key, _) => line.StartsWith("CHANGED", StringComparison.Ordinal)
                                       && SnapshotMember(key) is var member
                                       && (member == $"{entry.Component}Component.{entry.Member}" || member == $"{entry.Component}Component.~{entry.Member}")));
+
+        /// <summary>
+        /// Whether a UI state cache lost the wires state and nothing else, which makes the line H12's rather than the
+        /// cache family's: what it lost is the wires interface's own state, and H12 is the handler that fills it again.
+        /// </summary>
+        private static bool LostOnlyTheWiresState(string key, RoundTripResult result) =>
+            SnapshotMember(key) == "UserInterfaceComponent.~States"
+            && result.Before.Values.TryGetValue(key, out var before)
+            && result.After.Values.TryGetValue(key, out var after)
+            && LostStates(before, after).ToList() is { Count: > 0 } lost
+            && lost.All(state => state == "WiresBoundUserInterfaceState");
 
         /// <summary>The BUI states something fills again at or before an open, so a cache that lost one is full by the time
         /// a player sees the interface.</summary>
@@ -877,8 +890,8 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
 
         /// <summary>
         /// The UI cache family's control, with no server: a cache that lost only states something fills again sorts, the
-        /// wires state with them only where the wire list came back empty as the H12 family requires, and a cache that lost
-        /// anything else stays a finding.
+        /// wires state with them only where the wire list came back empty as the H12 family requires, a cache that lost the
+        /// wires state alone sorts as H12's, and a cache that lost anything else stays a finding.
         /// </summary>
         [Test]
         public void OnlyAUiCacheWhoseLostStatesAreExplainedSorts()
@@ -909,8 +922,8 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                     "With the wires themselves back, the wires state is owed to nothing and the line stays a finding.");
                 Assert.That(Sorted("count=1 [Key=<FireControlConsoleBoundInterfaceState>]", nothing, nothing), Is.Null,
                     "A state nothing here explains keeps the line a finding.");
-                Assert.That(Sorted(alarmAndWires, alarm, nothing), Is.EqualTo("BUI state cache refilled on open"),
-                    "Losing one of two states sorts on the same rule.");
+                Assert.That(Sorted(alarmAndWires, alarm, nothing), Is.EqualTo("owed: H12"),
+                    "A cache that lost the wires state and nothing else is H12's, not this family's.");
             });
         }
 
