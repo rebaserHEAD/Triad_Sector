@@ -53,8 +53,8 @@ public sealed record DrydockNotCarried(int Row, string Component, string Member,
 /// resolves every entry against its component and fails on a member that is gone, one that has become a data field while
 /// listed as carried by this manifest, or a component that is no longer registered.
 ///
-/// <para>Out by scope (the image carries no mobs): rows 316, 449, 450, 452, 454 and 505. Out by verdict: rows 104, 399,
-/// 400. Row 453 is a data field list the codec carries.</para>
+/// <para>Out by scope (the image carries no mobs): rows 316, 449, 450, 452, 454, 505 and 508. Out by verdict: rows 104,
+/// 399, 400. Row 453 is a data field list the codec carries.</para>
 /// </summary>
 public static class DrydockCodecManifestMembers
 {
@@ -67,6 +67,9 @@ public static class DrydockCodecManifestMembers
         new DrydockManifestMember(184, "Crayon", "SelectedState", DrydockApplyMoment.Seam, Field),
         new DrydockManifestMember(183, "Crayon", "Charges", DrydockApplyMoment.Seam, Field),
         new DrydockManifestMember(223, "ExpendableLight", "CurrentState", DrydockApplyMoment.Seam, Field),
+        // The fry handler takes the current name as the original and prefixes it again (DeepFryerSystem.cs:746-751).
+        new DrydockManifestMember(448, "DeepFried", "OriginalName", DrydockApplyMoment.Seam, DrydockMemberKind.ReapplyCarried),
+        new DrydockManifestMember(448, "MetaData", "EntityName", DrydockApplyMoment.Seam, DrydockMemberKind.ViaSystem),
         // Init also re-arms a Timer.Spawn at the full duration (CargoSystem.TradeCrates.cs:77-80), which this does not
         // re-arm; the remedy is a marked edit leaving a stored deadline alone, after which before-init is right.
         new DrydockManifestMember(456, "TradeCrate", "ExpressDeliveryTime", DrydockApplyMoment.Seam, Time),
@@ -120,7 +123,6 @@ public static class DrydockCodecManifestMembers
         new DrydockManifestMember(164, "Conveyor", "State", Before, Field),
         new DrydockManifestMember(464, "Defusable", "Usable", Before, Field),
         new DrydockManifestMember(465, "Defusable", "ProceedWireCut", Before, Field),
-        new DrydockManifestMember(508, "DelayedDeath", "DeathTimer", Before, Field),
         new DrydockManifestMember(501, "DiskConsolePrinting", "FinishTime", Before, Time),
         new DrydockManifestMember(494, "DisposalHolder", "StartingTime", Before, Field),
         new DrydockManifestMember(494, "DisposalHolder", "TimeLeft", Before, Field),
@@ -191,7 +193,16 @@ public static class DrydockCodecManifestMembers
         new DrydockManifestMember(432, "Wieldable", "OldInhandPrefix", Before, Field),
         new DrydockManifestMember(433, "Wires", "SerialNumber", Before, Field),
         new DrydockManifestMember(433, "Wires", "WireSeed", Before, Field),
-        new DrydockManifestMember(437, "WiresPanel", "Visible", Before, Field));
+        new DrydockManifestMember(437, "WiresPanel", "Visible", Before, Field),
+        new DrydockManifestMember(510, "Pda", "ContainedId", Before, Field),
+        new DrydockManifestMember(511, "GhostRoleMobSpawner", "CurrentTakeovers", Before, Field),
+        new DrydockManifestMember(513, "ActiveHotPotato", "TargetTime", Before, Time),
+        new DrydockManifestMember(517, "ContainmentFieldGenerator", "_powerBuffer", Before, Field),
+        new DrydockManifestMember(517, "ContainmentFieldGenerator", "IsConnected", Before, Field),
+        new DrydockManifestMember(519, "DeployableTurretController", "LinkedTurrets", Before, Field),
+        new DrydockManifestMember(520, "Dispenser", "Dispensing", Before, Field),
+        new DrydockManifestMember(520, "Dispenser", "DispensingItemId", Before, Field),
+        new DrydockManifestMember(520, "Dispenser", "DispenseTimer", Before, Field));
 
     /// <summary>
     /// What the manifest leaves out on purpose, member by member, because each is either state a load rebuilds or a value
