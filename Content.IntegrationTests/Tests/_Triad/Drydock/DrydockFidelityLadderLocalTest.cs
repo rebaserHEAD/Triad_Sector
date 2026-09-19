@@ -503,13 +503,25 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             if (b2 == b1 && a2 == a1)
                 return "repeats";
             if (Number(b1) is { } nb1 && Number(a1) is { } na1 && Number(b2) is { } nb2 && Number(a2) is { } na2
-                && Math.Sign(na1 - nb1) != 0 && Math.Sign(na2 - nb2) == Math.Sign(na1 - nb1) && na2 != na1)
+                && SameStep(na1 - nb1, na2 - nb2))
                 return Compounds;
-            if (ListLength(a1) is { } l1 && ListLength(b1) is { } l0 && ListLength(a2) is { } l2 && l1 > l0 && l2 > l1)
+            if (ListLength(b1) is { } l0 && ListLength(a1) is { } l1 && ListLength(b2) is { } l0b && ListLength(a2) is { } l2
+                && l1 != l0 && l1 - l0 == l2 - l0b)
                 return Compounds;
 
             return "other";
         }
+
+        /// <summary>
+        /// Whether round trip 2 took round trip 1's step again: the same way by the same amount, within one per cent of it,
+        /// or within an epsilon for a step too small for that. Growth per store is a step repeated, so a number that moves
+        /// the same way to somewhere else each time is not it: a fizziness threshold re-rolled from nothing, or a heat
+        /// signature still climbing, lands somewhere new every trip and is judged by its own class (ruled 2026-09-19).
+        /// </summary>
+        private static bool SameStep(double first, double second) =>
+            Math.Sign(first) != 0
+            && Math.Sign(second) == Math.Sign(first)
+            && Math.Abs(second - first) <= Math.Max(Math.Abs(first) * 0.01, 1e-6);
 
         /// <summary>
         /// Whether a CHANGED line on round trip 2 compounds against round trip 1. That is growth per store, class 2 of the
@@ -789,6 +801,44 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             "CargoTelepadComponent.Accumulator",
             "Appearance.CargoTelepadVisuals.State",
         };
+
+        /// <summary>
+        /// The compounds shape's control, with no server: growth per store is a step taken again, so a value that takes the
+        /// same step twice compounds and one that lands somewhere new each time does not, however far it goes the same way.
+        /// A pre-rolled fizziness threshold is the second of those, and its own class judges it (ruled 2026-09-19).
+        /// </summary>
+        [Test]
+        public void OnlyAStepTakenAgainCompounds()
+        {
+            const string key = "SodaDispenser@-3,10|PressurizedSolutionComponent.SprayFizzinessThresholdRoll";
+
+            string? Shape(string b1, string a1, string b2, string a2)
+            {
+                RoundTripResult Trip(string before, string after)
+                {
+                    var stored = new DrydockStateSnapshot();
+                    var loaded = new DrydockStateSnapshot();
+                    stored.Values[key] = before;
+                    loaded.Values[key] = after;
+                    return new RoundTripResult(new DrydockStateSnapshot(), stored, loaded, loaded, EntityUid.Invalid, 0, 0, 0, null);
+                }
+
+                return ShapeOf(key, Trip(b1, a1), Trip(b2, a2));
+            }
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(Shape("1", "2", "2", "3"), Is.EqualTo(Compounds), "A value that takes the same step again compounds.");
+                Assert.That(Shape("100", "101", "101", "102.005"), Is.EqualTo(Compounds), "A step within one per cent of the first is that step again.");
+                Assert.That(Shape("3", "2", "2", "1"), Is.EqualTo(Compounds), "A step down taken again compounds as well.");
+                Assert.That(Shape("0.18811038", "0.37616146", "0.37616146", "0.71269476"), Is.EqualTo("other"),
+                    "A number re-rolled to somewhere new each time does not compound, though it moved the same way.");
+                Assert.That(Shape("- a", "- a\n- b", "- a\n- b", "- a\n- b\n- c"), Is.EqualTo(Compounds),
+                    "A list that gains the same number of elements again compounds.");
+                Assert.That(Shape("- a", "- a\n- b", "- a\n- b", "- a\n- b\n- c\n- d"), Is.EqualTo("other"),
+                    "A list that gains a different number does not, by the same rule.");
+            });
+        }
 
         /// <summary>
         /// The no-growth guard's control, with no server: a wire panel's statuses sort into the H12 family on round trip 1,
