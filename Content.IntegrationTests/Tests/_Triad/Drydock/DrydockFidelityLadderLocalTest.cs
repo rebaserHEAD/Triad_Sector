@@ -282,6 +282,10 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
         [TestCaseSource(nameof(Rungs))]
         public async Task Rung(int rung, string vesselId)
         {
+            if (CodecStopped is { } stopped)
+                Assert.Ignore($"The codec-mode run stopped at {stopped}.");
+
+            var clock = System.Diagnostics.Stopwatch.StartNew();
             await using var pair = await PoolManager.GetServerClient();
             var server = pair.Server;
             var entMan = server.EntMan;
@@ -340,19 +344,37 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             var sb = new StringBuilder();
             sb.AppendLine($"[ladder] rung {rung} {vesselId} through {(EngineMode ? "the engine serializer" : CodecMode ? "the grid image" : "the drydock")}");
             sb.AppendLine($"[ladder] lived-in recipes applied: {(recipes.Count == 0 ? "none" : string.Join(", ", recipes))}");
-            Report(sb, rung, vesselId, 1, first, EngineMode || CodecMode ? null : RetrieveGrants, gasRooms, doorPath, protoMan);
-            Report(sb, rung, vesselId, 2, second, EngineMode || CodecMode ? null : RetrieveRestamps, gasRooms, doorPath, protoMan);
+            var findings = Report(sb, rung, vesselId, 1, first, EngineMode || CodecMode ? null : RetrieveGrants, gasRooms, doorPath, protoMan)
+                           + Report(sb, rung, vesselId, 2, second, EngineMode || CodecMode ? null : RetrieveRestamps, gasRooms, doorPath, protoMan);
             foreach (var note in CodecNotes)
                 sb.AppendLine(note);
+            sb.AppendLine($"[ladder] rung {rung} {vesselId}: {first.Before.Entities} entities, {findings} finding line(s), {clock.Elapsed.TotalSeconds:F1}s wall before cleanup");
             await TestContext.Out.WriteLineAsync(sb.ToString());
+
+            // A codec-mode run over many rungs stops on a rung too large to sort, or one that logged an error, and the rest
+            // report themselves skipped rather than burying the stop under a hundred more reports.
+            if (CodecMode && findings > CodecStopFindings)
+                CodecStopped = $"rung {rung} {vesselId}, {findings} findings";
 
             Assert.That(first.Before.Entities, Is.GreaterThan(0), "The control: round trip 1 compared no entities.");
             Assert.That(second.Before.Entities, Is.GreaterThan(0), "The control: round trip 2 compared no entities.");
 
             await server.WaitPost(() => entMan.DeleteEntity(second.Retrieved));
             await pair.RunTicksSync(3);
-            await pair.CleanReturnAsync();
+            try
+            {
+                await pair.CleanReturnAsync();
+            }
+            catch when (CodecMode)
+            {
+                CodecStopped ??= $"rung {rung} {vesselId}, which logged an error or failed to return clean";
+                throw;
+            }
         }
+
+        private const int CodecStopFindings = 400;
+
+        private static string? CodecStopped;
 
         /// <summary>
         /// Puts the hull into states a lived-in ship has and a shuttle file does not: damage on a wall and
@@ -865,7 +887,8 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                 : null;
         }
 
-        private static void Report(
+        /// <returns>The round trip's finding lines, the count a codec-mode run stops on.</returns>
+        private static int Report(
             StringBuilder sb,
             int rung,
             string vesselId,
@@ -1052,6 +1075,8 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
 
             if (result.MapInit != null)
                 sb.AppendLine($"[ladder] round trip {trip} map-init transaction:").Append(result.MapInit.Detail());
+
+            return findings.Count;
         }
 
         /// <summary>

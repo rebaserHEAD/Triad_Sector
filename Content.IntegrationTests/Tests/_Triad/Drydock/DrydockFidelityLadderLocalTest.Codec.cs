@@ -16,6 +16,7 @@ using Robust.Shared.IoC;
 using Robust.Shared.Map;
 using Robust.Shared.Map.Components;
 using Robust.Shared.Maths;
+using Robust.Shared.Reflection;
 using Robust.Shared.Serialization;
 using Robust.Shared.Serialization.Manager;
 using Robust.Shared.Serialization.Markdown.Mapping;
@@ -230,6 +231,14 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                     bytes += text.Length;
                 }
 
+                if (entMan.TryGetComponent<AppearanceComponent>(uid, out var appearance)
+                    && WriteAppearance(entMan, server.ResolveDependency<ISerializationManager>(), codec, appearance) is { } appearanceRow)
+                {
+                    var text = DrydockNodeJson.Encode(appearanceRow).ToJsonString();
+                    rows[AppearanceRow] = text;
+                    bytes += text.Length;
+                }
+
                 entities.Add(new CodecEntity(
                     ids[uid],
                     meta.EntityPrototype?.ID,
@@ -341,6 +350,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             var overwroteByType = new Dictionary<string, int>(StringComparer.Ordinal);
             var removedByType = new Dictionary<string, int>(StringComparer.Ordinal);
             var heldBack = new Dictionary<EntityUid, Dictionary<string, ItemSlot>>();
+            var appearanceApplied = 0;
 
             foreach (var (uid, data) in deserializer.Entities)
             {
@@ -348,8 +358,8 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                 foreach (var (name, row) in entityRows)
                 {
                     // The grid's own grid component came in through the skeleton with its chunks; a copy of the row,
-                    // which has none, would empty it.
-                    if (uid == gridUid && name == "MapGrid")
+                    // which has none, would empty it. The appearance row is not a component and goes in after them.
+                    if ((uid == gridUid && name == "MapGrid") || name == AppearanceRow)
                         continue;
 
                     var registration = factory.GetRegistration(name);
@@ -376,6 +386,11 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
 
                     added++;
                 }
+
+                // Before init, after the components: an init or startup handler that recomputes a key then overwrites the
+                // stored value with the truth, and a key nothing recomputes keeps it.
+                if (entityRows.TryGetValue(AppearanceRow, out var appearanceRow))
+                    appearanceApplied += ReadAppearance(pair, codec, uid, appearanceRow);
 
                 if (entMan.GetComponent<MetaDataComponent>(uid).EntityPrototype is not { } prototype)
                     continue;
@@ -461,8 +476,95 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             CodecNotes.Add($"         removed: {Top(removedByType)}");
             CodecNotes.Add($"[ladder] codec round trip {trip}: {heldBackSlots} item slot(s) held back from init; at the seam {copiedAtSeam} copied into the slot init re-added, "
                            + $"{addedAtSeam} added whole, {heldBack.Count} entit(y/ies) whose held-back slots the seam never reached.");
+            // SetData dirties; the engine's ResetNetTicks runs after it inside startup. What is still marked modified in
+            // this tick after the load is what PVS sends again, a network cost rather than a correctness one.
+            var now = server.ResolveDependency<IGameTiming>().CurTick;
+            var appearances = 0;
+            var stillDirty = 0;
+            foreach (var uid in deserializer.Entities.Keys)
+            {
+                if (!entMan.TryGetComponent<AppearanceComponent>(uid, out var appearance))
+                    continue;
+
+                appearances++;
+                if (appearance.LastModifiedTick >= now)
+                    stillDirty++;
+            }
+
+            CodecNotes.Add($"[ladder] codec round trip {trip}: {appearanceApplied} appearance entr(y/ies) set before init; "
+                           + $"not stored, by value type: {Top(AppearanceSkipped)}; "
+                           + $"{stillDirty} of {appearances} appearance component(s) still marked modified in the load's tick.");
+            AppearanceSkipped.Clear();
 
             return gridUid;
+        }
+
+        /// <summary>
+        /// The live appearance dictionary is not a data field (AppearanceComponent.cs:35), and the field the codec does
+        /// write, <c>AppearanceDataInit</c>, is the prototype's initial data, so without this row every appearance
+        /// entry is lost. Read through the component's own public state (the drydock's LiveAppearance does the same,
+        /// DrydockFidelitySystem.cs:496-502), which is the live dictionary itself and is only read here.
+        /// </summary>
+        private const string AppearanceRow = "~appearance";
+
+        private static readonly Dictionary<string, int> AppearanceSkipped = new(StringComparer.Ordinal);
+
+        private static MappingDataNode? WriteAppearance(IEntityManager entMan, ISerializationManager serialization, DrydockCodec codec, AppearanceComponent appearance)
+        {
+            if (entMan.GetComponentState(entMan.EventBus, appearance, null, GameTick.Zero) is not AppearanceComponentState { Data.Count: > 0 } state)
+                return null;
+
+            var row = new MappingDataNode();
+            foreach (var (key, value) in state.Data)
+            {
+                try
+                {
+                    var keyNode = (ValueDataNode) serialization.WriteValue(typeof(Enum), key, alwaysWrite: true, context: codec.Context);
+
+                    // The value is declared as object, so its own type rides beside it for the read.
+                    row[keyNode.Value] = new MappingDataNode
+                    {
+                        ["type"] = new ValueDataNode(value.GetType().FullName!),
+                        ["value"] = serialization.WriteValue(value.GetType(), value, alwaysWrite: true, context: codec.Context),
+                    };
+                }
+                catch (ArgumentException)
+                {
+                    // A value type with no serializer (ShowLayerData, ruled skipped): named in the report, not stored.
+                    var type = value.GetType().Name;
+                    AppearanceSkipped[type] = AppearanceSkipped.GetValueOrDefault(type) + 1;
+                }
+            }
+
+            return row.Count == 0 ? null : row;
+        }
+
+        /// <summary>Each stored entry through the public writer, SetData, which on an entity not yet initialized just sets it.</summary>
+        private static int ReadAppearance(TestPair pair, DrydockCodec codec, EntityUid uid, MappingDataNode row)
+        {
+            var server = pair.Server;
+            var serialization = server.ResolveDependency<ISerializationManager>();
+            var reflection = server.ResolveDependency<IReflectionManager>();
+            var appearance = server.System<SharedAppearanceSystem>();
+            var applied = 0;
+
+            foreach (var (keyText, entry) in row)
+            {
+                var stored = (MappingDataNode) entry;
+                var typeName = stored.Get<ValueDataNode>("type").Value;
+                // The core library's types (bool, int, float, string) by the runtime, the game's by the engine's
+                // reflection manager, which only knows the game's assemblies.
+                var type = Type.GetType(typeName)
+                           ?? reflection.GetType(typeName)
+                           ?? throw new FormatException($"Codec loop: appearance value type {typeName} is unknown.");
+
+                var key = (Enum) serialization.Read(typeof(Enum), new ValueDataNode(keyText), context: codec.Context, notNullableOverride: true)!;
+                var value = serialization.Read(type, stored["value"], context: codec.Context, notNullableOverride: true)!;
+                appearance.SetData(uid, key, value);
+                applied++;
+            }
+
+            return applied;
         }
 
         private const string ItemSlotsName = "ItemSlots";
