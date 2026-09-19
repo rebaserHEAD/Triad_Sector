@@ -48,7 +48,8 @@ public sealed partial class DrydockCodec
     ///
     /// <para>OWED at the store: leaving one out loses it, so the store is to refuse the whole hull instead, naming the
     /// entity and the member, as it is to for a component write that throws and for an entity stored before its map
-    /// init.</para>
+    /// init. The build-time test writes a sample of every type <see cref="WrittenAs"/> gives, so this is the
+    /// backstop.</para>
     /// </summary>
     public MappingDataNode? WriteManifest(
         Entity<MetaDataComponent> entity,
@@ -116,15 +117,37 @@ public sealed partial class DrydockCodec
         if (value == null)
             return ValueDataNode.Null();
 
-        return value switch
+        if (member.Kind == DrydockMemberKind.AbsoluteTime)
+            return _pass.WriteTime(entity, (TimeSpan) value);
+
+        var type = WrittenAs(member, info)
+                   ?? throw new InvalidOperationException($"Drydock codec: {member.Key} is a {member.Kind}, which the manifest does not write.");
+
+        return _serialization.WriteValue(type, value switch
         {
             // A receiver's provider is kept as the provider entity, so it travels as a stable id like every reference.
-            Entity<ExtensionCableProviderComponent> provider => _serialization.WriteValue(typeof(EntityUid), provider.Owner, alwaysWrite: true, context: Context),
-            TimeSpan time when member.Kind == DrydockMemberKind.AbsoluteTime => _pass.WriteTime(entity, time),
+            Entity<ExtensionCableProviderComponent> provider => provider.Owner,
             // A network id means nothing in another round, so the entity it names travels, as a stable id.
-            NetEntity net when member.Kind == DrydockMemberKind.Reference => _serialization.WriteValue(typeof(EntityUid), _entMan.GetEntity(net), alwaysWrite: true, context: Context),
-            _ => _serialization.WriteValue(TypeOf(member, info), value, alwaysWrite: true, context: Context),
-        };
+            NetEntity net when member.Kind == DrydockMemberKind.Reference => _entMan.GetEntity(net),
+            _ => value,
+        }, alwaysWrite: true, context: Context);
+    }
+
+    /// <summary>
+    /// The type the manifest hands the serializer for a member's value, or null when it hands it none: a re-applied member
+    /// is not written, a re-derived one is written as a marker and a time goes through the time-offset adapter. A network
+    /// reference and a cable receiver's provider travel as the entity they name. The build-time test writes a sample of
+    /// every type this gives.
+    /// </summary>
+    public static Type? WrittenAs(DrydockManifestMember member, MemberInfo info)
+    {
+        if (member.Kind is DrydockMemberKind.ReapplyCarried or DrydockMemberKind.Rederive or DrydockMemberKind.AbsoluteTime)
+            return null;
+
+        var type = TypeOf(member, info);
+        return member.Kind == DrydockMemberKind.Reference || (Nullable.GetUnderlyingType(type) ?? type) == typeof(Entity<ExtensionCableProviderComponent>)
+            ? typeof(EntityUid)
+            : type;
     }
 
     /// <summary>The type a member's value travels as: the entry's for a dictionary entry, the member's own otherwise.</summary>
