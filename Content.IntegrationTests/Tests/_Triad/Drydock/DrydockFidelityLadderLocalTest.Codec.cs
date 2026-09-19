@@ -139,6 +139,19 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
 
             public void Refuse(string key) => Refused[key] = Refused.GetValueOrDefault(key) + 1;
 
+            /// <summary>Members <c>LADDER_MANIFEST_OFF</c> holds off, by key: decoded, not set, so their loss shows.</summary>
+            public readonly Dictionary<string, int> OffByKey = new(StringComparer.Ordinal);
+
+            /// <summary>Whether <c>LADDER_MANIFEST_OFF</c> names this member, by component or by key; counted when it does.</summary>
+            public bool HeldOff(DrydockManifestMember member)
+            {
+                if (!ManifestOff.Contains(member.Component) && !ManifestOff.Contains(member.Key))
+                    return false;
+
+                OffByKey[member.Key] = OffByKey.GetValueOrDefault(member.Key) + 1;
+                return true;
+            }
+
             /// <summary>Each seam member by the prototype it was set on, since a seam set is rare and each one is a case.</summary>
             public readonly Dictionary<string, int> SeamByPrototype = new(StringComparer.Ordinal);
 
@@ -147,6 +160,15 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
 
         /// <summary>The last load's manifest, for the round trip's pass after the power solve.</summary>
         private static ManifestApply? LastManifest;
+
+        /// <summary>
+        /// <c>LADDER_MANIFEST_OFF</c>: component names or member keys, comma-separated, whose manifest members the load
+        /// decodes and does not set, so a recipe shows its predicted loss before the same run shows the member's apply.
+        /// </summary>
+        private static readonly HashSet<string> ManifestOff = new(
+            (Environment.GetEnvironmentVariable("LADDER_MANIFEST_OFF") ?? string.Empty)
+                .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries),
+            StringComparer.Ordinal);
 
         private static readonly Dictionary<string, int> ManifestUnwritable = new(StringComparer.Ordinal);
 
@@ -444,6 +466,8 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             CodecNotes.Add($"[ladder] codec round trip {manifest.Trip}: cable receivers: {manifest.Repaired} re-paired with the stored provider, "
                            + $"{manifest.AlreadyPaired} already on it, {manifest.StoredUnpaired} stored unpaired and still so; refused: {Top(manifest.Refused)}.");
             CodecNotes.Add($"[ladder] codec round trip {manifest.Trip}: seam members by prototype: {Top(manifest.SeamByPrototype)}.");
+            if (ManifestOff.Count > 0)
+                CodecNotes.Add($"[ladder] codec round trip {manifest.Trip}: manifest held off by LADDER_MANIFEST_OFF ({string.Join(",", ManifestOff)}): {Top(manifest.OffByKey)}.");
             ManifestUnwritable.Clear();
             ManifestStripped.Clear();
 
@@ -802,12 +826,18 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                 if (entityRows.TryGetValue(DrydockCodec.ManifestRow, out var manifestRow))
                 {
                     foreach (var (member, value) in codec.ReadManifest(manifestRow, DrydockApplyMoment.BeforeInit, factory))
-                        SetManifestMember(entMan, factory, uid, member, value, manifest);
+                    {
+                        if (!manifest.HeldOff(member))
+                            SetManifestMember(entMan, factory, uid, member, value, manifest);
+                    }
 
                     foreach (var moment in new[] { DrydockApplyMoment.Seam, DrydockApplyMoment.AfterStart, DrydockApplyMoment.AfterPowerSolve })
                     {
                         foreach (var (member, value) in codec.ReadManifest(manifestRow, moment, factory))
-                            manifest.Held.Add(new HeldMember(uid, member, value));
+                        {
+                            if (!manifest.HeldOff(member))
+                                manifest.Held.Add(new HeldMember(uid, member, value));
+                        }
                     }
                 }
 
@@ -816,7 +846,8 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                 foreach (var member in ReapplyCarried)
                 {
                     if (!entityRows.ContainsKey(member.Component)
-                        || !entMan.TryGetComponent(uid, factory.GetRegistration(member.Component).Type, out var carrier))
+                        || !entMan.TryGetComponent(uid, factory.GetRegistration(member.Component).Type, out var carrier)
+                        || manifest.HeldOff(member))
                         continue;
 
                     manifest.Held.Add(new HeldMember(uid, member, DrydockCodec.GetMember(carrier, member)));
