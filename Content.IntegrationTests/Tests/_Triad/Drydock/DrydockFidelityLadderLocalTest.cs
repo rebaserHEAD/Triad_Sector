@@ -210,7 +210,6 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             ["HTNComponent.~PlanningJob"] = (StateClass.Volatile, "in-flight planner job"),
             ["HTNComponent.~PlanningToken"] = (StateClass.Volatile, "in-flight planner cancellation token"),
             ["GridAtmosphereComponent.~EqualizationQueueCycleControl"] = (StateClass.Volatile, "atmos processing cursor"),
-            ["UserInterfaceComponent.~States"] = (StateClass.Derived, "BUI state cache, rebuilt on the next UI update"),
             ["ApcComponent.~LastExternalState"] = (StateClass.Derived, "APC visual and UI update throttle cache"),
             ["ApcComponent.~LastChargeStateTime"] = (StateClass.Derived, "APC visual and UI update throttle cache"),
             ["ApcPowerProviderComponent.~LinkedReceivers"] = (StateClass.Derived, "receiver pairing is reassigned on reconnect"),
@@ -672,6 +671,26 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                 (line, key, _) => line.StartsWith("CHANGED", StringComparison.Ordinal)
                                   && RearmedByThePowerEdge.Contains(key[(key.IndexOf('|') + 1)..])),
 
+            // Ruled 2026-09-19: the cache is not a class of its own; a line sorts only where every state it lost is one
+            // something fills again, and the wires state only on H12's own condition.
+            new("BUI state cache refilled on open",
+                "Accepted: UserInterfaceComponent.States holds the last state the server sent each open interface, and a "
+                + "load has no client with one open. What a player opens on a restored machine is filled at the open or "
+                + "before it: an air alarm's ActivateInWorld handler opens the interface, syncs its devices and calls "
+                + "UpdateUI in the same tick (AirAlarmSystem.cs:180, :255-273, :638-669), and every sensor packet refills "
+                + "it again (:561); a holopad fills its state on BeforeActivatableUIOpen, before the interface opens "
+                + "(HolopadSystem.cs:52, :86-89, :467-498), and its update loop refills it while one is open (:455). The "
+                + "wires state is owed to H12 instead, and sorts here only where that entity's wire list also came back "
+                + "empty, which is the H12 family's own condition. A state nothing here explains keeps the line a finding.",
+                (line, key, result) => line.StartsWith("CHANGED", StringComparison.Ordinal)
+                                       && SnapshotMember(key) == "UserInterfaceComponent.~States"
+                                       && result.Before.Values.TryGetValue(key, out var before)
+                                       && result.After.Values.TryGetValue(key, out var after)
+                                       && LostStates(before, after).All(state => RefilledOnOpen.Contains(state)
+                                                                                 || state == "WiresBoundUserInterfaceState"
+                                                                                 && result.After.Values.TryGetValue(key[..key.IndexOf('|')] + "|WiresComponent.~WiresList", out var wires)
+                                                                                 && wires.StartsWith("count=0", StringComparison.Ordinal))),
+
             // Ruled 2026-09-19, deliberately narrow: it may never absorb the state the load gets wrong.
             new("charge state caught up with a live battery",
                 "Accepted: an APC recomputes its charge state at most once a second (ApcSystem.cs:151), so a battery that "
@@ -720,6 +739,36 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                     (line, key, _) => line.StartsWith("CHANGED", StringComparison.Ordinal)
                                       && SnapshotMember(key) is var member
                                       && (member == $"{entry.Component}Component.{entry.Member}" || member == $"{entry.Component}Component.~{entry.Member}")));
+
+        /// <summary>The BUI states something fills again at or before an open, so a cache that lost one is full by the time
+        /// a player sees the interface.</summary>
+        private static readonly HashSet<string> RefilledOnOpen = new(StringComparer.Ordinal)
+        {
+            "AirAlarmUIState",
+            "HolopadBoundInterfaceState",
+        };
+
+        /// <summary>
+        /// The state types a UI cache held before and no longer holds after, from the two renderings of it
+        /// (<c>count=N [Key=&lt;StateType&gt;, ...]</c>). An entry whose state type changed counts as the old one lost.
+        /// </summary>
+        private static IEnumerable<string> LostStates(string before, string after)
+        {
+            var kept = StateEntries(after);
+            return StateEntries(before)
+                .Where(entry => !kept.Contains(entry))
+                .Select(entry => entry[(entry.IndexOf('<') + 1)..].TrimEnd('>'));
+        }
+
+        /// <summary>One rendering's <c>Key=&lt;StateType&gt;</c> entries.</summary>
+        private static HashSet<string> StateEntries(string render)
+        {
+            var open = render.IndexOf('[');
+            var close = render.LastIndexOf(']');
+            return open < 0 || close <= open
+                ? new HashSet<string>(StringComparer.Ordinal)
+                : new HashSet<string>(render[(open + 1)..close].Split(", ", StringSplitOptions.RemoveEmptyEntries), StringComparer.Ordinal);
+        }
 
         /// <summary>A key's <c>Component.member</c>, without the entity's path or the suffix a time takes.</summary>
         private static string SnapshotMember(string key)
@@ -804,6 +853,45 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
         };
 
         /// <summary>
+        /// The UI cache family's control, with no server: a cache that lost only states something fills again sorts, the
+        /// wires state with them only where the wire list came back empty as the H12 family requires, and a cache that lost
+        /// anything else stays a finding.
+        /// </summary>
+        [Test]
+        public void OnlyAUiCacheWhoseLostStatesAreExplainedSorts()
+        {
+            const string path = "AirAlarm@-1,3";
+            const string key = $"{path}|UserInterfaceComponent.~States";
+            const string alarm = "count=1 [Key=<AirAlarmUIState>]";
+            const string alarmAndWires = "count=2 [Key=<AirAlarmUIState>, Key=<WiresBoundUserInterfaceState>]";
+            const string nothing = "count=0 []";
+
+            string? Sorted(string before, string after, string wires)
+            {
+                var result = new RoundTripResult(new DrydockStateSnapshot(), new DrydockStateSnapshot(), new DrydockStateSnapshot(),
+                    new DrydockStateSnapshot(), EntityUid.Invalid, 0, 0, 0, null);
+                result.Before.Values[key] = before;
+                result.After.Values[key] = after;
+                result.After.Values[$"{path}|WiresComponent.~WiresList"] = wires;
+                return FamilyFor($"CHANGED  {key}: {before} -> {after}", key, result, null).Family?.Name;
+            }
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(Sorted(alarm, nothing, nothing), Is.EqualTo("BUI state cache refilled on open"),
+                    "A cache that lost only a state the open fills again has to sort.");
+                Assert.That(Sorted(alarmAndWires, nothing, nothing), Is.EqualTo("BUI state cache refilled on open"),
+                    "The wires state sorts with it where the wire list came back empty.");
+                Assert.That(Sorted(alarmAndWires, nothing, "count=2 [- a, - b]"), Is.Null,
+                    "With the wires themselves back, the wires state is owed to nothing and the line stays a finding.");
+                Assert.That(Sorted("count=1 [Key=<FireControlConsoleBoundInterfaceState>]", nothing, nothing), Is.Null,
+                    "A state nothing here explains keeps the line a finding.");
+                Assert.That(Sorted(alarmAndWires, alarm, nothing), Is.EqualTo("BUI state cache refilled on open"),
+                    "Losing one of two states sorts on the same rule.");
+            });
+        }
+
+        /// <summary>
         /// The compounds shape's control, with no server: growth per store is a step taken again, so a value that takes the
         /// same step twice compounds and one that lands somewhere new each time does not, however far it goes the same way.
         /// A pre-rolled fizziness threshold is the second of those, and its own class judges it (ruled 2026-09-19).
@@ -877,16 +965,16 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
         }
 
         /// <summary>
-        /// The no-growth guard on the registry, through the report itself: a line the registry classifies as derived (a BUI
-        /// state cache) stays classified on round trip 1 and when it repeats, and is a finding when it grows again on round
-        /// trip 2. The server is only for the prototypes the report reads.
+        /// The no-growth guard on the registry, through the report itself: a line the registry classifies as derived (a gas
+        /// canister's pressure cache) stays classified on round trip 1 and when it repeats, and is a finding when it grows
+        /// again on round trip 2. The server is only for the prototypes the report reads.
         /// </summary>
         [Test]
         public async Task TheRegistryNeverAbsorbsALineThatCompounds()
         {
             await using var pair = await PoolManager.GetServerClient();
             var protoMan = pair.Server.ResolveDependency<IPrototypeManager>();
-            const string key = "ComputerShuttle@0,0|UserInterfaceComponent.~States";
+            const string key = "GasCanister@0,0|GasCanisterComponent.~LastPressure";
 
             // Early as before, so the key is not live and reaches the registry.
             RoundTripResult Trip(string before, string after)
@@ -910,7 +998,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
 
             Assert.Multiple(() =>
             {
-                Assert.That(Registry.ContainsKey("UserInterfaceComponent.~States"), Is.True, "The control's control: the key has to be the registry's.");
+                Assert.That(Registry.ContainsKey("GasCanisterComponent.~LastPressure"), Is.True, "The control's control: the key has to be the registry's.");
                 Assert.That(Findings(first, null), Is.Zero, "The control: on round trip 1 the registry classifies the line.");
                 Assert.That(Findings(repeats, first), Is.Zero, "A line repeating round trip 1's change stays classified.");
                 Assert.That(Findings(grows, first), Is.EqualTo(1), "A line growing again on round trip 2 has to be a finding.");
