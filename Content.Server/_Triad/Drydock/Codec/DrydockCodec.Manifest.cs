@@ -9,9 +9,14 @@ using Robust.Shared.Serialization.Manager.Definition;
 using Robust.Shared.Serialization.Markdown;
 using Robust.Shared.Serialization.Markdown.Mapping;
 using Robust.Shared.Serialization.Markdown.Value;
-using Robust.Shared.Serialization.Markdown.Value;
 
 namespace Content.Server._Triad.Drydock.Codec;
+
+/// <summary>A manifest member a store could not write: the entity's prototype, the member, and what the serializer threw.</summary>
+public sealed record DrydockUnwritableMember(string? Prototype, DrydockManifestMember Member, string Exception, string Message)
+{
+    public override string ToString() => $"{Member.Key} on {Prototype ?? "(no prototype)"}: {Exception}: {Message}";
+}
 
 /// <summary>
 /// The manifest's half of the codec (<see cref="DrydockCodecManifestMembers"/>): the members that are not data fields,
@@ -39,13 +44,17 @@ public sealed partial class DrydockCodec
     /// set, nor a dictionary entry the dictionary does not hold. A member the loader works out again
     /// (<see cref="DrydockMemberKind.Rederive"/>) is written as a marker and read back as null. A null value is
     /// written as an explicit null, so the read sets it rather than leaving whatever non-null default the prototype gave
-    /// the new component. A value no serializer can write is counted in <paramref name="unwritable"/> by its type and left out.
+    /// the new component. A value no serializer can write is added to <paramref name="unwritable"/>, named, and left out.
+    ///
+    /// <para>OWED at the store: leaving one out loses it, so the store is to refuse the whole hull instead, naming the
+    /// entity and the member, as it is to for a component write that throws and for an entity stored before its map
+    /// init.</para>
     /// </summary>
     public MappingDataNode? WriteManifest(
         Entity<MetaDataComponent> entity,
         IEnumerable<IComponent> components,
         IComponentFactory factory,
-        Dictionary<string, int> unwritable)
+        ICollection<DrydockUnwritableMember> unwritable)
     {
         MappingDataNode? row = null;
         var carried = components.ToList();
@@ -84,15 +93,14 @@ public sealed partial class DrydockCodec
                     value = entries[entryKey];
                 }
 
-                var type = TypeOf(member, info);
                 DataNode node;
                 try
                 {
-                    node = WriteMember(entity, member, type, value);
+                    node = WriteMember(entity, member, info, value);
                 }
                 catch (Exception e) when (e is ArgumentException or InvalidOperationException or NotSupportedException)
                 {
-                    unwritable[type.Name] = unwritable.GetValueOrDefault(type.Name) + 1;
+                    unwritable.Add(new DrydockUnwritableMember(entity.Comp.EntityPrototype?.ID, member, e.GetType().Name, e.Message));
                     continue;
                 }
 
@@ -103,7 +111,7 @@ public sealed partial class DrydockCodec
         return row;
     }
 
-    private DataNode WriteMember(Entity<MetaDataComponent> entity, DrydockManifestMember member, Type type, object? value)
+    private DataNode WriteMember(Entity<MetaDataComponent> entity, DrydockManifestMember member, MemberInfo info, object? value)
     {
         if (value == null)
             return ValueDataNode.Null();
@@ -115,7 +123,7 @@ public sealed partial class DrydockCodec
             TimeSpan time when member.Kind == DrydockMemberKind.AbsoluteTime => _pass.WriteTime(entity, time),
             // A network id means nothing in another round, so the entity it names travels, as a stable id.
             NetEntity net when member.Kind == DrydockMemberKind.Reference => _serialization.WriteValue(typeof(EntityUid), _entMan.GetEntity(net), alwaysWrite: true, context: Context),
-            _ => _serialization.WriteValue(type, value, alwaysWrite: true, context: Context),
+            _ => _serialization.WriteValue(TypeOf(member, info), value, alwaysWrite: true, context: Context),
         };
     }
 

@@ -52,8 +52,9 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
     /// <summary>
     /// The fidelity ladder: one storable vessel per case, smallest hull first, compared with
     /// <see cref="DrydockFidelitySystem.DeepSnapshotGrid"/> across two round trips. It reports and
-    /// does not assert on findings; the assertions are that both round trips completed and that the
-    /// comparison saw something.
+    /// does not assert on findings; the assertions are that both round trips completed, that the
+    /// comparison saw something, and, through the grid image with every manifest member applied, that the
+    /// manifest lost none of its members on the way (<see cref="AssertManifestHeld"/>).
     ///
     /// <para>Before round trip 1 the hull is put into lived-in states (<see cref="ApplyLivedIn"/>), so the
     /// comparison covers damage, cargo, open doors and panels, queues, fired guns and lit smokables, not only a hull
@@ -310,6 +311,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             var mapLoader = server.System<MapLoaderSystem>();
 
             CodecNotes.Clear();
+            ManifestFailures.Clear();
             var (owner, station) = await GoldenCorpus.PrepareHarness(pair, 3);
             var map = await pair.CreateTestMap();
 
@@ -398,6 +400,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             await server.WaitPost(() => entMan.DeleteEntity(second.Retrieved));
             await pair.RunTicksSync(3);
             await pair.CleanReturnAsync();
+            AssertManifestHeld();
         }
 
         /// <summary>

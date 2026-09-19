@@ -135,9 +135,19 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
 
             public int Set(DrydockApplyMoment moment) => _set.GetValueOrDefault(moment);
 
-            public void Miss(DrydockManifestMember member) => Missing[member.Key] = Missing.GetValueOrDefault(member.Key) + 1;
+            /// <summary>A member whose component the entity no longer had at its moment, by member and prototype.</summary>
+            public void Miss(DrydockManifestMember member, string prototype)
+            {
+                var key = $"{member.Key} on {prototype}";
+                Missing[key] = Missing.GetValueOrDefault(key) + 1;
+            }
 
-            public void Refuse(string key) => Refused[key] = Refused.GetValueOrDefault(key) + 1;
+            /// <summary>A member the load would not set, by member, prototype and why.</summary>
+            public void Refuse(DrydockManifestMember member, string prototype, string why)
+            {
+                var key = $"{member.Key} on {prototype}: {why}";
+                Refused[key] = Refused.GetValueOrDefault(key) + 1;
+            }
 
             /// <summary>Members <c>LADDER_MANIFEST_OFF</c> holds off, by key: decoded, not set, so their loss shows.</summary>
             public readonly Dictionary<string, int> OffByKey = new(StringComparer.Ordinal);
@@ -170,9 +180,29 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                 .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries),
             StringComparer.Ordinal);
 
-        private static readonly Dictionary<string, int> ManifestUnwritable = new(StringComparer.Ordinal);
+        private static readonly List<DrydockUnwritableMember> ManifestUnwritable = new();
 
         private static readonly Dictionary<string, int> ManifestStripped = new(StringComparer.Ordinal);
+
+        /// <summary>
+        /// What the manifest lost on this test's round trips while every member was applied (<see cref="ManifestOff"/> empty):
+        /// a member no serializer wrote at the store, one whose component was gone at its moment, one the load refused.
+        /// Each is a failure, not a note (ruled 2026-09-19), raised by <see cref="AssertManifestHeld"/> once the report has
+        /// printed.
+        /// </summary>
+        private static readonly List<string> ManifestFailures = new();
+
+        private static void AssertManifestHeld()
+        {
+            var failures = ManifestFailures.ToList();
+            ManifestFailures.Clear();
+            Assert.That(failures, Is.Empty,
+                "With every manifest member applied, none may be lost: each named here was not written at the store, had "
+                + "its component gone at its moment, or was refused by the load.");
+        }
+
+        private static string PrototypeOf(IEntityManager entMan, EntityUid uid) =>
+            entMan.GetComponent<MetaDataComponent>(uid).EntityPrototype?.ID ?? "(no prototype)";
 
         private static readonly DrydockManifestMember[] ReapplyCarried =
             DrydockCodecManifestMembers.Members.Where(m => m.Kind == DrydockMemberKind.ReapplyCarried).ToArray();
@@ -196,7 +226,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             var registration = factory.GetRegistration(member.Component);
             if (!entMan.TryGetComponent(uid, registration.Type, out var component))
             {
-                apply.Miss(member);
+                apply.Miss(member, PrototypeOf(entMan, uid));
                 return;
             }
 
@@ -223,6 +253,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             var map = await pair.CreateTestMap();
             var slots = server.System<ItemSlotsSystem>();
             CodecNotes.Clear();
+            ManifestFailures.Clear();
 
             var storageIds = new List<string>();
             var stored = new Dictionary<string, string?>();
@@ -281,6 +312,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             });
 
             await pair.CleanReturnAsync();
+            AssertManifestHeld();
         }
 
         /// <summary>
@@ -297,6 +329,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             var entMan = server.EntMan;
             var map = await pair.CreateTestMap();
             CodecNotes.Clear();
+            ManifestFailures.Clear();
 
             bool authored = false, nullBefore = false;
             var storedVolume = Content.Shared.FixedPoint.FixedPoint2.Zero;
@@ -358,6 +391,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             });
 
             await pair.CleanReturnAsync();
+            AssertManifestHeld();
         }
 
         /// <summary>
@@ -459,15 +493,34 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                     SetManifestMember(entMan, factory, held.Uid, held.Member, held.Value, manifest, dirty: true);
             });
 
+            var unwritable = ManifestUnwritable
+                .GroupBy(u => $"{u.Member.Key} on {u.Prototype ?? "(no prototype)"}", StringComparer.Ordinal)
+                .ToDictionary(g => g.Key, g => g.Count(), StringComparer.Ordinal);
             CodecNotes.Add($"[ladder] codec round trip {manifest.Trip}: manifest members set before init {manifest.Set(DrydockApplyMoment.BeforeInit)}, "
                            + $"at the seam {manifest.Set(DrydockApplyMoment.Seam)}, after startup {manifest.Set(DrydockApplyMoment.AfterStart)}, "
                            + $"after the power solve {manifest.Set(DrydockApplyMoment.AfterPowerSolve)} ({Top(manifest.LaterByMember)}); component gone at its moment: {Top(manifest.Missing)}; "
-                           + $"not written, by type: {Top(ManifestUnwritable)}; components stripped at the store: {Top(ManifestStripped)}.");
+                           + $"not written at the store: {Top(unwritable)}; components stripped at the store: {Top(ManifestStripped)}.");
             CodecNotes.Add($"[ladder] codec round trip {manifest.Trip}: cable receivers: {manifest.Repaired} re-paired with the stored provider, "
                            + $"{manifest.AlreadyPaired} already on it, {manifest.StoredUnpaired} stored unpaired and still so; refused: {Top(manifest.Refused)}.");
             CodecNotes.Add($"[ladder] codec round trip {manifest.Trip}: seam members by prototype: {Top(manifest.SeamByPrototype)}.");
             if (ManifestOff.Count > 0)
                 CodecNotes.Add($"[ladder] codec round trip {manifest.Trip}: manifest held off by LADDER_MANIFEST_OFF ({string.Join(",", ManifestOff)}): {Top(manifest.OffByKey)}.");
+
+            // With every member applied, a lost one fails the test once its report has printed, where holding members off
+            // is how a loss is shown on purpose.
+            if (ManifestOff.Count == 0)
+            {
+                var lost = ManifestUnwritable
+                    .GroupBy(u => u.ToString(), StringComparer.Ordinal)
+                    .Select(g => $"not written at the store: {g.Key} x{g.Count()}")
+                    .Concat(manifest.Missing.Select(m => $"component gone at its moment: {m.Key} x{m.Value}"))
+                    .Concat(manifest.Refused.Select(r => $"refused by the load: {r.Key} x{r.Value}"))
+                    .Select(line => $"codec round trip {manifest.Trip}: {line}")
+                    .ToList();
+                ManifestFailures.AddRange(lost);
+                CodecNotes.AddRange(lost.Select(line => $"[ladder] MANIFEST FAILURE {line}"));
+            }
+
             ManifestUnwritable.Clear();
             ManifestStripped.Clear();
 
@@ -982,7 +1035,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                 {
                     if (!entMan.TryGetComponent<PinpointerComponent>(held.Uid, out var pinpointer))
                     {
-                        manifest.Miss(held.Member);
+                        manifest.Miss(held.Member, PrototypeOf(entMan, held.Uid));
                         continue;
                     }
 
@@ -996,7 +1049,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                 {
                     if (!entMan.TryGetComponent<Content.Server._Mono.ScuttleDevice.ScuttleDeviceComponent>(held.Uid, out var scuttle))
                     {
-                        manifest.Miss(held.Member);
+                        manifest.Miss(held.Member, PrototypeOf(entMan, held.Uid));
                         continue;
                     }
 
@@ -1011,17 +1064,17 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                     continue;
                 }
 
+                var receiverProto = PrototypeOf(entMan, held.Uid);
                 if (!entMan.TryGetComponent<ExtensionCableReceiverComponent>(held.Uid, out var receiver))
                 {
-                    manifest.Miss(held.Member);
+                    manifest.Miss(held.Member, receiverProto);
                     continue;
                 }
 
-                var receiverProto = entMan.GetComponent<MetaDataComponent>(held.Uid).EntityPrototype?.ID ?? "(no prototype)";
                 if (held.Value is not EntityUid providerUid)
                 {
                     if (receiver.Provider != null)
-                        manifest.Refuse($"{receiverProto} stored unpaired, paired at startup");
+                        manifest.Refuse(held.Member, receiverProto, "stored unpaired, paired at startup");
                     else
                         manifest.StoredUnpaired++;
 
@@ -1030,7 +1083,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
 
                 if (!entMan.TryGetComponent<ExtensionCableProviderComponent>(providerUid, out var provider))
                 {
-                    manifest.Refuse($"{receiverProto} stored provider not on the image");
+                    manifest.Refuse(held.Member, receiverProto, "its stored provider is not on the image");
                     continue;
                 }
 
@@ -1047,7 +1100,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                 }
                 else
                 {
-                    manifest.Refuse($"{receiverProto} to {entMan.GetComponent<MetaDataComponent>(providerUid).EntityPrototype?.ID ?? "(no prototype)"}");
+                    manifest.Refuse(held.Member, receiverProto, $"the cable system would not pair it with {PrototypeOf(entMan, providerUid)}");
                 }
             }
 

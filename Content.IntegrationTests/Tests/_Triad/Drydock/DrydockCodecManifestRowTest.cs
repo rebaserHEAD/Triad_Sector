@@ -56,7 +56,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             EntityUid? pairedAtStartup = null;
             (bool Found, object? Value) pairedRead = default, loneRead = default, pairedBeforeInit = default;
             bool pairedRowHasKey = false, loneRowNull = false;
-            var unwritable = new Dictionary<string, int>();
+            var unwritable = new List<DrydockUnwritableMember>();
 
             await server.WaitPost(() =>
             {
@@ -153,7 +153,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             bool hadCut = false, hadPulse = false, pulseWritten = true;
             (bool Found, object? Value) cut = default;
             object? setBack = null;
-            var unwritable = new Dictionary<string, int>();
+            var unwritable = new List<DrydockUnwritableMember>();
 
             await server.WaitPost(() =>
             {
@@ -205,7 +205,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
 
             NetEntity turbineNet = default;
             (bool Found, object? Value) named = default, offImage = default;
-            var unwritable = new Dictionary<string, int>();
+            var unwritable = new List<DrydockUnwritableMember>();
             const string key = "GasTurbineMonitor.turbine";
 
             await server.WaitPost(() =>
@@ -252,7 +252,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             return (false, null);
         }
 
-        private static MappingDataNode? Manifest(IEntityManager entMan, IComponentFactory factory, DrydockCodec codec, EntityUid uid, Dictionary<string, int> unwritable) =>
+        private static MappingDataNode? Manifest(IEntityManager entMan, IComponentFactory factory, DrydockCodec codec, EntityUid uid, List<DrydockUnwritableMember> unwritable) =>
             codec.WriteManifest((uid, entMan.GetComponent<MetaDataComponent>(uid)), entMan.GetComponents(uid).ToList(), factory, unwritable);
 
         /// <summary>A codec whose stable ids are the given entities' positions, resolved back to the same entities.</summary>

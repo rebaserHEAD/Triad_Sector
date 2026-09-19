@@ -100,6 +100,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             var protoMan = server.ResolveDependency<IPrototypeManager>();
             var timing = server.ResolveDependency<IGameTiming>();
             CodecNotes.Clear();
+            ManifestFailures.Clear();
 
             var map = await pair.CreateTestMap();
             EntityUid grid = default;
@@ -179,6 +180,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             await server.WaitPost(() => entMan.DeleteEntity(second.Retrieved));
             await pair.RunTicksSync(3);
             await pair.CleanReturnAsync();
+            AssertManifestHeld();
         }
 
         private static int Ticks(IGameTiming timing, double seconds) => (int) Math.Ceiling(seconds / timing.TickPeriod.TotalSeconds);
