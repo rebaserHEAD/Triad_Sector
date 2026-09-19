@@ -106,6 +106,9 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
     /// </summary>
     [TestFixture]
     [Explicit("Exploratory fidelity ladder. Run rungs deliberately and read their reports.")]
+    // Serial: a rung's times are read as budgets and its notes as that rung's report, and neither holds with rungs
+    // running beside each other.
+    [NonParallelizable]
     [TestOf(typeof(DrydockFidelitySystem))]
     public sealed partial class DrydockFidelityLadderLocalTest
     {

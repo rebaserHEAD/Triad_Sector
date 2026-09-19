@@ -442,28 +442,29 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             var copiedAtSeam = 0;
             var addedAtSeam = 0;
 
+            // Pass (i), at the seam: into the slot init re-added, so a startup handler already sees the restored state.
+            // A key nothing re-added yet waits, because a startup handler may still add it (a gas canister does,
+            // SharedGasCanisterSystem.cs:33-37), and adding the stored one now would make that a duplicate.
             void AtSeam(Entity<MetaDataComponent> entity)
             {
-                if (!heldBack.Remove(entity.Owner, out var held))
+                if (!heldBack.TryGetValue(entity.Owner, out var held))
                     return;
 
-                foreach (var (key, stored) in held)
+                foreach (var key in held.Keys.ToList())
                 {
-                    if (itemSlots.TryGetSlot(entity.Owner, key, out var live))
-                    {
-                        // Into the live instance, not in place of it: the component that re-added the slot holds a
-                        // reference to that instance as its own data field. CopyFrom is ItemSlotsSystem's alone
-                        // (RA0002), so the scaffolding calls it by name; a loader in the server needs a ruling on
-                        // how it gets that access.
-                        CopySlot.Invoke(live, new object[] { stored });
-                        copiedAtSeam++;
-                    }
-                    else
-                    {
-                        itemSlots.AddItemSlot(entity.Owner, key, stored);
-                        addedAtSeam++;
-                    }
+                    if (!itemSlots.TryGetSlot(entity.Owner, key, out var live))
+                        continue;
+
+                    // Into the live instance, not in place of it: the component that re-added the slot holds a
+                    // reference to that instance as its own data field. CopyFrom is ItemSlotsSystem's alone (RA0002);
+                    // the server's loader does this from a Triad partial of that system (ruled), the scaffolding by name.
+                    CopySlot.Invoke(live, new object[] { held[key] });
+                    held.Remove(key);
+                    copiedAtSeam++;
                 }
+
+                if (held.Count == 0)
+                    heldBack.Remove(entity.Owner);
             }
 
             var heldBackSlots = heldBack.Values.Sum(held => held.Count);
@@ -476,6 +477,29 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             {
                 entMan.EntityInitialized -= AtSeam;
             }
+
+            // Pass (ii), once after startup, since the engine raises nothing per entity after StartEntity
+            // (IEntityManager.cs:55-56): into the slot startup re-added, or the stored slot added whole where nothing
+            // re-added it (a dispenser's, whose adders run at map init and from its parts, neither of which runs).
+            var copiedAfterStartup = 0;
+            foreach (var (uid, held) in heldBack)
+            {
+                foreach (var (key, storedSlot) in held)
+                {
+                    if (itemSlots.TryGetSlot(uid, key, out var live))
+                    {
+                        CopySlot.Invoke(live, new object[] { storedSlot });
+                        copiedAfterStartup++;
+                    }
+                    else
+                    {
+                        itemSlots.AddItemSlot(uid, key, storedSlot);
+                        addedAtSeam++;
+                    }
+                }
+            }
+
+            heldBack.Clear();
 
             startTime = phase.Elapsed;
 
@@ -494,8 +518,8 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                            + $"(its ComponentAdd saw prototype data), {added} added as read, {removed} prototype component(s) removed before init.");
             CodecNotes.Add($"         overwritten, top: {Top(overwroteByType)}");
             CodecNotes.Add($"         removed: {Top(removedByType)}");
-            CodecNotes.Add($"[ladder] codec round trip {trip}: {heldBackSlots} item slot(s) held back from init; at the seam {copiedAtSeam} copied into the slot init re-added, "
-                           + $"{addedAtSeam} added whole, {heldBack.Count} entit(y/ies) whose held-back slots the seam never reached.");
+            CodecNotes.Add($"[ladder] codec round trip {trip}: {heldBackSlots} item slot(s) held back from init; at the seam {copiedAtSeam} copied into the slot init re-added; "
+                           + $"after startup {copiedAfterStartup} copied into the slot startup re-added, {addedAtSeam} added whole because nothing re-added them.");
             // SetData dirties; the engine's ResetNetTicks runs after it inside startup. What is still marked modified in
             // this tick after the load is what PVS sends again, a network cost rather than a correctness one.
             var now = server.ResolveDependency<IGameTiming>().CurTick;
