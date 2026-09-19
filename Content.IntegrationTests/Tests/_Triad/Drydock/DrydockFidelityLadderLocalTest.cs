@@ -344,7 +344,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             var recipes = new List<string>();
             string? doorPath = null;
             EntityUid? litMatch = null;
-            await server.WaitPost(() => recipes = ApplyLivedIn(pair, grid, out doorPath, out litMatch));
+            await server.WaitPost(() => recipes = ApplyLivedIn(pair, grid, rung, out doorPath, out litMatch));
 
             await pair.RunTicksSync(PreSettleTicks);
 
@@ -362,8 +362,10 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             sb.AppendLine($"[ladder] rung {rung} {vesselId} through {(EngineMode ? "the engine serializer" : CodecMode ? "the grid image" : "the drydock")}");
             sb.AppendLine($"[ladder] lived-in recipes applied: {(recipes.Count == 0 ? "none" : string.Join(", ", recipes))}");
             var findingKinds = new HashSet<string>(StringComparer.Ordinal);
+            var secondUnexplained = new List<string>();
             var findings = Report(sb, rung, vesselId, 1, first, EngineMode || CodecMode ? null : RetrieveGrants, gasRooms, doorPath, protoMan, findingKinds)
-                           + Report(sb, rung, vesselId, 2, second, EngineMode || CodecMode ? null : RetrieveRestamps, gasRooms, doorPath, protoMan, findingKinds);
+                           + Report(sb, rung, vesselId, 2, second, EngineMode || CodecMode ? null : RetrieveRestamps, gasRooms, doorPath, protoMan, findingKinds, secondUnexplained);
+            AppendShapes(sb, rung, vesselId, first, second, secondUnexplained);
 
             // A codec-mode run over many rungs stops on a rung that brings new kinds of finding faster than they can be
             // read, or one that failed, and the rest report themselves skipped rather than burying the stop under a
@@ -441,6 +443,64 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
 
             CodecNotes.Add($"[ladder] new-kind stop seeded with {_seenFindingKinds.Count} kind(s) from the dumps of rungs before {rung}.");
             return _seenFindingKinds;
+        }
+
+        /// <summary>
+        /// Round trip 2's unexplained lines (findings and settling) against the same key on round trip 1, because a line
+        /// that shows on both trips says nothing by itself about which way it is heading. <c>oscillates</c>: trip 2 goes
+        /// back to trip 1's stored value (period two, as a sink's visual following whichever solution updated last).
+        /// <c>repeats</c>: the same change both trips, a fixed loss re-applied. <c>compounds</c>: a number moving the same
+        /// way again to somewhere new, which is finding F36's signature, an init or startup handler applying a relative
+        /// change to a persisted value (a grid's alerter list growing by one per restore); every one is listed.
+        /// <c>trip2-only</c>: not on trip 1. Live values under load compound too, so a compounds line is read, not believed.
+        /// </summary>
+        private static void AppendShapes(StringBuilder sb, int rung, string vesselId, RoundTripResult first, RoundTripResult second, List<string> lines)
+        {
+            var shapes = new Dictionary<string, int>(StringComparer.Ordinal);
+            var compounding = new List<string>();
+
+            foreach (var line in lines)
+            {
+                if (!line.StartsWith("CHANGED", StringComparison.Ordinal) || KeyOf(line) is not { } key
+                    || !second.Before.Values.TryGetValue(key, out var b2) || !second.After.Values.TryGetValue(key, out var a2))
+                {
+                    continue;
+                }
+
+                var b1 = first.Before.Values.GetValueOrDefault(key);
+                var a1 = first.After.Values.GetValueOrDefault(key);
+
+                string shape;
+                if (b1 == null || a1 == null || a1 == b1)
+                    shape = "trip2-only";
+                else if (a2 == b1)
+                    shape = "oscillates";
+                else if (b2 == b1 && a2 == a1)
+                    shape = "repeats";
+                else if (Number(b1) is { } nb1 && Number(a1) is { } na1 && Number(b2) is { } nb2 && Number(a2) is { } na2
+                         && Math.Sign(na1 - nb1) != 0 && Math.Sign(na2 - nb2) == Math.Sign(na1 - nb1) && na2 != na1)
+                    shape = "compounds";
+                else if (ListLength(a1) is { } l1 && ListLength(b1) is { } l0 && ListLength(a2) is { } l2 && l1 > l0 && l2 > l1)
+                    shape = "compounds";
+                else
+                    shape = "other";
+
+                shapes[shape] = shapes.GetValueOrDefault(shape) + 1;
+                if (shape == "compounds")
+                    compounding.Add($"{key}: {OneLine(b1)} -> {OneLine(a1)}, then {OneLine(a2)}");
+            }
+
+            sb.AppendLine($"[ladder] round trip 2 against 1, {lines.Count} unexplained line(s): "
+                          + (shapes.Count == 0 ? "none compared" : string.Join(", ", shapes.OrderBy(s => s.Key, StringComparer.Ordinal).Select(s => $"{s.Key} {s.Value}"))) + ".");
+            foreach (var line in compounding)
+                sb.AppendLine($"[ladder-compounds] rung={rung} vessel={vesselId} {line}");
+        }
+
+        /// <summary>A rendered list's length, counted as its <c>- </c> lines, or null for anything that is not one.</summary>
+        private static int? ListLength(string render)
+        {
+            var count = render.Split('\n').Count(line => line.TrimStart().StartsWith("- ", StringComparison.Ordinal));
+            return count > 0 ? count : null;
         }
 
         /// <summary>
@@ -522,11 +582,17 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
         /// a wires panel open, a gravity generator switched off, a lathe queue
         /// (not in engine mode, which cannot write one), a restocked vendor, and a sidearm fired. Each recipe takes the first
         /// matching entity in tree order (the deck spot is a chair, else a computer) and is skipped when
-        /// the hull has none. Returns the ones applied, the path the detector names the opened door by, and the match
+        /// the hull has none. Returns the ones applied, the path the detector names the recipe's door by, and the match
         /// <see cref="RoundTrip"/> lights in the tick the store is claimed.
+        ///
+        /// <para>The three toggles (the door, the panel, gravity) run in both polarities, flipped on an even rung and left
+        /// as the hull came on an odd one, because a recipe that only ever turns a thing off hides every defect that brings
+        /// it back off: gravity switched off on every rung is how a restored ship coming back without gravity went unseen
+        /// (GravitySystem.cs:27-55). The polarity is in the recipe's name either way.</para>
         /// </summary>
-        private static List<string> ApplyLivedIn(TestPair pair, EntityUid grid, out string? doorPath, out EntityUid? litMatch)
+        private static List<string> ApplyLivedIn(TestPair pair, EntityUid grid, int rung, out string? doorPath, out EntityUid? litMatch)
         {
+            var flip = rung % 2 == 0;
             var server = pair.Server;
             var entMan = server.EntMan;
             var protoMan = server.ResolveDependency<IPrototypeManager>();
@@ -637,11 +703,18 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                                           && entMan.HasComponent<DoorComponent>(uid));
             if (door is { } interior)
             {
-                // TryOpen refuses an unpowered or bolted door; forcing the open is still a state a door can be stored in.
-                var doors = server.System<SharedDoorSystem>();
-                if (!doors.TryOpen(interior))
-                    doors.StartOpening(interior);
-                applied.Add("open-door");
+                if (flip)
+                {
+                    // TryOpen refuses an unpowered or bolted door; forcing the open is still a state a door can be stored in.
+                    var doors = server.System<SharedDoorSystem>();
+                    if (!doors.TryOpen(interior))
+                        doors.StartOpening(interior);
+                    applied.Add("open-door");
+                }
+                else
+                {
+                    applied.Add("door-left-closed");
+                }
 
                 // The detector names a direct child of the grid by prototype and tile (DrydockFidelitySystem.DeepPaths).
                 var xform = entMan.GetComponent<TransformComponent>(interior);
@@ -652,18 +725,27 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                 }
             }
 
-            if (First((uid, _) => uid != door && entMan.HasComponent<WiresPanelComponent>(uid)) is { } paneled
-                && server.System<SharedWiresSystem>().TogglePanel(paneled, entMan.GetComponent<WiresPanelComponent>(paneled), true))
+            if (First((uid, _) => uid != door && entMan.HasComponent<WiresPanelComponent>(uid)) is { } paneled)
             {
-                applied.Add("open-panel");
+                if (!flip)
+                    applied.Add("panel-left-closed");
+                else if (server.System<SharedWiresSystem>().TogglePanel(paneled, entMan.GetComponent<WiresPanelComponent>(paneled), true))
+                    applied.Add("open-panel");
             }
 
             if (First((uid, id) => id.StartsWith("GravityGenerator", StringComparison.Ordinal)
                                    && entMan.HasComponent<PowerChargeComponent>(uid)) is { } gravity)
             {
-                // The console's switch message: the only public path to a charged machine's on switch.
-                entMan.EventBus.RaiseLocalEvent(gravity, new SwitchChargingMachineMessage(false));
-                applied.Add("gravity-off");
+                if (flip)
+                {
+                    // The console's switch message: the only public path to a charged machine's on switch.
+                    entMan.EventBus.RaiseLocalEvent(gravity, new SwitchChargingMachineMessage(false));
+                    applied.Add("gravity-off");
+                }
+                else
+                {
+                    applied.Add("gravity-left-on");
+                }
             }
 
             // The engine serializer has no writer for LatheRecipeBatch (DrydockSerializationGap.CapturedTypes), so a
@@ -1036,7 +1118,8 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             List<(string Recipe, List<Vector2i> Tiles)> gasRooms,
             string? doorPath,
             IPrototypeManager protoMan,
-            HashSet<string> findingKinds)
+            HashSet<string> findingKinds,
+            List<string>? unexplained = null)
         {
             // A time's render carries its clock-relative half, which moves every tick, so a time key is live only when its
             // meaning moved during the window; any other key is live when its rendered value moved.
@@ -1138,6 +1221,8 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
 
             foreach (var line in findings)
                 findingKinds.Add(StopKindOf(line));
+
+            unexplained?.AddRange(findings.Concat(settlingLines));
 
             Dump(rung, vesselId, trip, result, findings.Concat(settlingLines).Concat(predictedLines));
 
