@@ -515,10 +515,11 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
 
         /// <summary>
         /// Whether a collection compounds across the two trips, or null where either rendering does not list its entries.
-        /// It compounds when it gains entries on both trips, which is growth per store whatever it gains, and when trip 2
-        /// loses an entry trip 1 had already lost, which is the same loss again. Losing different entries once each is two
-        /// one-off losses: a UI cache that loses a machine's state on trip 1, has it filled again, and loses the wires
-        /// state on trip 2 reads as compounding by count and is nothing of the kind (ruled 2026-09-19).
+        /// It compounds when it grows on both trips, which is growth per store whatever it gained, and when trip 2 loses an
+        /// entry trip 1 had already lost, which is the same loss again. Losing different entries once each is two one-off
+        /// losses: a UI cache that loses a machine's state on trip 1, has it filled again, and loses the wires state on
+        /// trip 2 reads as compounding by count and is nothing of the kind (ruled 2026-09-19). Growth is counted rather
+        /// than read entry by entry, because an entry whose value changed is a different entry to a set and no gain at all.
         /// </summary>
         private static bool? CollectionCompounds(string b1, string a1, string b2, string a2)
         {
@@ -529,7 +530,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             }
 
             var lostOnce = before1.Except(after1).ToHashSet(StringComparer.Ordinal);
-            return after1.Except(before1).Any() && after2.Except(before2).Any()
+            return after1.Count > before1.Count && after2.Count > before2.Count
                    || lostOnce.Count > 0 && before2.Except(after2).Any(entry => lostOnce.Contains(entry));
         }
 
@@ -968,6 +969,8 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                     "Losing the same entry again is the same loss again.");
                 Assert.That(Shape("count=2 [A, B]", "count=1 [B]", "count=1 [B]", "count=0 []"), Is.EqualTo("other"),
                     "Losing a different entry each trip is two one-off losses, which the count alone would call growth.");
+                Assert.That(Shape("count=1 [A=1]", "count=1 [A=2]", "count=1 [A=3]", "count=1 [A=4]"), Is.EqualTo("other"),
+                    "An entry whose value moved is a different entry to a set and no gain at all, so it does not compound.");
             });
         }
 
