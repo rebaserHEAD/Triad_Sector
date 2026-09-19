@@ -62,7 +62,8 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
     /// <para>One departure from the design stop: the load goes back onto the hull's own map, as the engine mode does,
     /// and not onto a paused staging map. The whole load runs inside one <c>WaitPost</c>, so no tick can run between
     /// its phases, which is what the pause was for, and a fresh map would lack the atmosphere the rung gives this
-    /// one.</para>
+    /// one. The store's despawn is the drydock's, on a paused staging map deleted with the hull (<see cref="Despawn"/>),
+    /// and what it leaves behind is checked before the load (<see cref="Leftovers"/>).</para>
     ///
     /// <para>The seam between each entity's init and its startup (<c>EntityInitialized</c>) carries the item slots held
     /// back from init (<see cref="HoldBackSlots"/>) and the manifest's seam members. The manifest (F33,
@@ -185,20 +186,21 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
         private static readonly Dictionary<string, int> ManifestStripped = new(StringComparer.Ordinal);
 
         /// <summary>
-        /// What the manifest lost on this test's round trips while every member was applied (<see cref="ManifestOff"/> empty):
-        /// a member no serializer wrote at the store, one whose component was gone at its moment, one the load refused.
-        /// Each is a failure, not a note (ruled 2026-09-19), raised by <see cref="AssertManifestHeld"/> once the report has
-        /// printed.
+        /// What the loop lost or left on this test's round trips. The manifest's, while every member was applied
+        /// (<see cref="ManifestOff"/> empty): a member no serializer wrote at the store, one whose component was gone at its
+        /// moment, one the load refused. The despawn's, always: an entity it left behind (<see cref="Leftovers"/>). Each is
+        /// a failure, not a note (ruled 2026-09-19), raised by <see cref="AssertLoopHeld"/> once the report has printed.
         /// </summary>
-        private static readonly List<string> ManifestFailures = new();
+        private static readonly List<string> LoopFailures = new();
 
-        private static void AssertManifestHeld()
+        private static void AssertLoopHeld()
         {
-            var failures = ManifestFailures.ToList();
-            ManifestFailures.Clear();
+            var failures = LoopFailures.ToList();
+            LoopFailures.Clear();
             Assert.That(failures, Is.Empty,
-                "With every manifest member applied, none may be lost: each named here was not written at the store, had "
-                + "its component gone at its moment, or was refused by the load.");
+                "Nothing may be lost or left on the loop: each named here is a manifest member not written at the store, "
+                + "one whose component was gone at its moment or one the load refused, with every member applied, or an "
+                + "entity the store's despawn left behind.");
         }
 
         private static string PrototypeOf(IEntityManager entMan, EntityUid uid) =>
@@ -249,7 +251,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             var map = await pair.CreateTestMap();
             var slots = server.System<ItemSlotsSystem>();
             CodecNotes.Clear();
-            ManifestFailures.Clear();
+            LoopFailures.Clear();
 
             var storageIds = new List<string>();
             var stored = new Dictionary<string, string?>();
@@ -308,7 +310,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             });
 
             await pair.CleanReturnAsync();
-            AssertManifestHeld();
+            AssertLoopHeld();
         }
 
         /// <summary>
@@ -325,7 +327,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             var entMan = server.EntMan;
             var map = await pair.CreateTestMap();
             CodecNotes.Clear();
-            ManifestFailures.Clear();
+            LoopFailures.Clear();
 
             bool authored = false, nullBefore = false;
             var storedVolume = Content.Shared.FixedPoint.FixedPoint2.Zero;
@@ -387,7 +389,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             });
 
             await pair.CleanReturnAsync();
-            AssertManifestHeld();
+            AssertLoopHeld();
         }
 
         /// <summary>
@@ -444,6 +446,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             var mobsBefore = 0;
             var mobsUnsavable = 0;
             var droppedUnder = new Dictionary<string, int>();
+            DespawnWatch despawn = default!;
             await server.WaitPost(() =>
             {
                 droppedUnder = DroppedUnderUnsavable(entMan, grid);
@@ -464,10 +467,14 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                 var store = System.Diagnostics.Stopwatch.StartNew();
                 image = CodecStore(pair, grid);
                 LastStoreTime = store.Elapsed;
-                entMan.DeleteEntity(grid);
+                despawn = Despawn(pair, grid);
             });
 
             await pair.RunTicksSync((int) Math.Ceiling(ClockGapSeconds / timing.TickPeriod.TotalSeconds));
+
+            // Before the load, so nothing it brings in is taken for a leftover.
+            var leftovers = new List<string>();
+            await server.WaitPost(() => leftovers = Leftovers(entMan, despawn));
 
             EntityUid loaded = default;
             var mobsAfter = 0;
@@ -503,9 +510,17 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                     .Concat(manifest.Refused.Select(r => $"refused by the load: {r.Key} x{r.Value}"))
                     .Select(line => $"codec round trip {manifest.Trip}: {line}")
                     .ToList();
-                ManifestFailures.AddRange(lost);
+                LoopFailures.AddRange(lost);
                 CodecNotes.AddRange(lost.Select(line => $"[ladder] MANIFEST FAILURE {line}"));
             }
+
+            // Whatever the manifest does, a leftover of the despawn fails.
+            CodecNotes.Add($"[ladder] codec round trip {manifest.Trip}: despawn "
+                           + (DespawnGridOnly ? "of the grid alone (LADDER_DESPAWN=grid-only, the control)" : "with its staging map")
+                           + $": {despawn.Hull.Count} entities in the hull, {despawn.Made.Count} made during it, {leftovers.Count} left over.");
+            var left = leftovers.Select(line => $"codec round trip {manifest.Trip}: despawn: {line}").ToList();
+            LoopFailures.AddRange(left);
+            CodecNotes.AddRange(left.Select(line => $"[ladder] DESPAWN FAILURE {line}"));
 
             ManifestUnwritable.Clear();
             ManifestStripped.Clear();
@@ -516,6 +531,85 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             CodecNotes.Add($"[ladder] dropped with an unsavable parent: {droppedUnder.Values.Sum()} entit(y/ies)"
                            + (droppedUnder.Count == 0 ? "." : ": " + string.Join(", ", droppedUnder.OrderByDescending(d => d.Value).ThenBy(d => d.Key, StringComparer.Ordinal).Select(d => $"{d.Key} x{d.Value}")) + "."));
             return loaded;
+        }
+
+        /// <summary>
+        /// <c>LADDER_DESPAWN=grid-only</c>: the despawn's control, the hull deleted where it stands, as this loop did before
+        /// it despawned the way the store does.
+        /// </summary>
+        private static readonly bool DespawnGridOnly = Environment.GetEnvironmentVariable("LADDER_DESPAWN") == "grid-only";
+
+        /// <summary>Every entity that was in the hull at the store, with its prototype, and every one made during the despawn.</summary>
+        private sealed record DespawnWatch(Dictionary<EntityUid, string> Hull, List<EntityUid> Made);
+
+        /// <summary>
+        /// The store's despawn, as the drydock's does it: the hull moved onto a fresh paused staging map
+        /// (DrydockSystem.Freeze.cs:301-311, :460), then the grid and the map deleted, in the order the drydock queues them
+        /// (DrydockSystem.cs:655-666). Whatever a terminate handler throws out of the hull, a disposal unit's contents
+        /// (DisposalUnitSystem.cs:41-44) among them, lands on the staging map and goes with it.
+        /// </summary>
+        private static DespawnWatch Despawn(TestPair pair, EntityUid grid)
+        {
+            var server = pair.Server;
+            var entMan = server.EntMan;
+            var watch = new DespawnWatch(
+                server.System<DrydockFidelitySystem>().GridTreeList(grid).ToDictionary(uid => uid, uid => PrototypeOf(entMan, uid)),
+                new List<EntityUid>());
+
+            void Made(Entity<MetaDataComponent> entity) => watch.Made.Add(entity.Owner);
+
+            entMan.EntityAdded += Made;
+            try
+            {
+                if (DespawnGridOnly)
+                {
+                    entMan.DeleteEntity(grid);
+                    return watch;
+                }
+
+                var maps = server.System<SharedMapSystem>();
+                var staging = maps.CreateMap(out _, runMapInit: true);
+                maps.SetPaused(staging, true);
+                server.System<SharedTransformSystem>().SetCoordinates(grid, new EntityCoordinates(staging, System.Numerics.Vector2.Zero));
+                entMan.DeleteEntity(grid);
+                entMan.DeleteEntity(staging);
+                return watch;
+            }
+            finally
+            {
+                entMan.EntityAdded -= Made;
+            }
+        }
+
+        /// <summary>
+        /// What the despawn left, read after the clock gap and before the load: an entity that was in the hull and still
+        /// exists, or one made during the despawn that outlives it (a respawn, a puddle, a ghost, debris on another map),
+        /// each named with where it is now. Each fails the test (ruled 2026-09-19).
+        /// </summary>
+        private static List<string> Leftovers(IEntityManager entMan, DespawnWatch watch)
+        {
+            var left = new List<string>();
+            foreach (var (uid, prototype) in watch.Hull)
+            {
+                if (entMan.EntityExists(uid))
+                    left.Add($"{prototype} {uid} was in the hull at the store and is still here, {WhereIs(entMan, uid)}");
+            }
+
+            foreach (var uid in watch.Made)
+            {
+                if (entMan.EntityExists(uid))
+                    left.Add($"{PrototypeOf(entMan, uid)} {uid} was made during the despawn and outlives it, {WhereIs(entMan, uid)}");
+            }
+
+            return left;
+        }
+
+        private static string WhereIs(IEntityManager entMan, EntityUid uid)
+        {
+            var xform = entMan.GetComponent<TransformComponent>(uid);
+            return xform.ParentUid.IsValid()
+                ? $"on map {xform.MapID} under {PrototypeOf(entMan, xform.ParentUid)} {xform.ParentUid} at {xform.LocalPosition}"
+                : "in nullspace";
         }
 
         /// <summary>
