@@ -515,11 +515,13 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
 
         /// <summary>
         /// Whether a collection compounds across the two trips, or null where either rendering does not list its entries.
-        /// It compounds when it grows on both trips, which is growth per store whatever it gained, and when trip 2 loses an
-        /// entry trip 1 had already lost, which is the same loss again. Losing different entries once each is two one-off
-        /// losses: a UI cache that loses a machine's state on trip 1, has it filled again, and loses the wires state on
-        /// trip 2 reads as compounding by count and is nothing of the kind (ruled 2026-09-19). Growth is counted rather
-        /// than read entry by entry, because an entry whose value changed is a different entry to a set and no gain at all.
+        /// It compounds when it grows on both trips, and when it ends smaller after trip 2 than it ended after trip 1:
+        /// each store leaving it worse off is growth per store read the other way. Both are measured as sizes, because an
+        /// entry whose value changed is a different entry to a set and neither a gain nor a loss.
+        ///
+        /// <para>What that leaves out is a fixed loss re-applied: a UI cache that loses two states, has one of them filled
+        /// again between the trips and loses it a second time ends empty both times and accumulates nothing (ruled
+        /// 2026-09-19, on an air alarm that comes back unpowered for half a second and so misses its own refill).</para>
         /// </summary>
         private static bool? CollectionCompounds(string b1, string a1, string b2, string a2)
         {
@@ -529,9 +531,8 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                 return null;
             }
 
-            var lostOnce = before1.Except(after1).ToHashSet(StringComparer.Ordinal);
             return after1.Count > before1.Count && after2.Count > before2.Count
-                   || lostOnce.Count > 0 && before2.Except(after2).Any(entry => lostOnce.Contains(entry));
+                   || after2.Count < after1.Count;
         }
 
         /// <summary>
@@ -932,8 +933,8 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
         /// The compounds shape's control, with no server: growth per store is a step taken again, so a value that takes the
         /// same step twice compounds and one that lands somewhere new each time does not, however far it goes the same way.
         /// A pre-rolled fizziness threshold is the second of those, and its own class judges it. A collection is judged by
-        /// its entries instead: gaining any on both trips compounds, losing the same entry again compounds, and losing a
-        /// different one each trip does not (ruled 2026-09-19).
+        /// where it ends instead: growing on both trips compounds, so does ending smaller after trip 2 than after trip 1,
+        /// and a loss re-applied to the same size does not (ruled 2026-09-19).
         /// </summary>
         [Test]
         public void OnlyAStepTakenAgainCompounds()
@@ -965,10 +966,10 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                     "A list that gains entries on both trips compounds.");
                 Assert.That(Shape("- a", "- a\n- b", "- a\n- b", "- a\n- b\n- c\n- d"), Is.EqualTo(Compounds),
                     "It compounds whatever it gains, and however many: growth per store is growth.");
-                Assert.That(Shape("count=2 [A, B]", "count=1 [B]", "count=2 [A, C]", "count=1 [C]"), Is.EqualTo(Compounds),
-                    "Losing the same entry again is the same loss again.");
-                Assert.That(Shape("count=2 [A, B]", "count=1 [B]", "count=1 [B]", "count=0 []"), Is.EqualTo("other"),
-                    "Losing a different entry each trip is two one-off losses, which the count alone would call growth.");
+                Assert.That(Shape("count=3 [A, B, C]", "count=2 [B, C]", "count=2 [B, C]", "count=1 [C]"), Is.EqualTo(Compounds),
+                    "A collection that ends smaller after each trip is growth per store read the other way.");
+                Assert.That(Shape("count=2 [A, B]", "count=0 []", "count=1 [B]", "count=0 []"), Is.EqualTo("other"),
+                    "One that ends empty both times, having had an entry filled in between, is a fixed loss re-applied.");
                 Assert.That(Shape("count=1 [A=1]", "count=1 [A=2]", "count=1 [A=3]", "count=1 [A=4]"), Is.EqualTo("other"),
                     "An entry whose value moved is a different entry to a set and no gain at all, so it does not compound.");
             });
