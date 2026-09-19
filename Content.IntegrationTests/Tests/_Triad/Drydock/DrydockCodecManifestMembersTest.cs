@@ -209,6 +209,8 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                     "An entry key on a member not listed as an entry went unreported.");
                 Assert.That(Wrong(factory, gravity with { SkipWhen = "NoSuchFlag" }), Is.Not.Null,
                     "A skip flag that is not a member went unreported.");
+                Assert.That(Wrong(factory, gravity with { Kind = DrydockMemberKind.PrototypeId }), Is.Not.Null,
+                    "A prototype id on a member that holds no prototype went unreported.");
 
                 Assert.That(Wrong(factory, song), Is.Null, "The control's control: the song resolves as a member, so only its type can fail it.");
                 Assert.That(gravityVerdict, Is.EqualTo((true, (string?) null)), "The control's control: a bool member is written, and writes.");
@@ -466,7 +468,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                 DrydockMemberKind.ReapplyCarried when !dataField && !computed =>
                     "listed as re-applied, but nothing carries it: it is neither a data field nor a computed-field backing member",
                 DrydockMemberKind.Field or DrydockMemberKind.AbsoluteTime or DrydockMemberKind.ViaSystem or DrydockMemberKind.Reference
-                    or DrydockMemberKind.Entry or DrydockMemberKind.Rederive when dataField =>
+                    or DrydockMemberKind.Entry or DrydockMemberKind.Rederive or DrydockMemberKind.PrototypeId when dataField =>
                     "a data field, which the codec carries already: a census error, or the entry is a re-apply",
                 DrydockMemberKind.AbsoluteTime when type != typeof(TimeSpan) =>
                     $"listed as a time, but it is a {type.Name}",
@@ -476,6 +478,8 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                     "listed as a dictionary entry without its key or its value type",
                 DrydockMemberKind.Entry when !typeof(IDictionary).IsAssignableFrom(type) =>
                     $"listed as a dictionary entry, but it is a {type.Name}",
+                DrydockMemberKind.PrototypeId when !typeof(IPrototype).IsAssignableFrom(type) =>
+                    $"listed as a prototype id, but it is a {type.Name}",
                 _ => null,
             };
         }

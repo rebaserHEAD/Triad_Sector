@@ -9,12 +9,16 @@ using Content.Server._Triad.Drydock.Codec;
 using Content.Server.Power.Components;
 using Content.Server.Wires;
 using Content.Shared.Coordinates;
+using Content.Shared.Lathe;
 using Content.Shared.Power;
+using Content.Shared.Research.Prototypes;
 using Robust.Shared.GameObjects;
 using Robust.Shared.Map;
 using Robust.Shared.Map.Components;
 using Robust.Shared.Maths;
+using Robust.Shared.Prototypes;
 using Robust.Shared.Serialization.Manager;
+using Robust.Shared.Serialization.Markdown;
 using Robust.Shared.Serialization.Markdown.Mapping;
 using Robust.Shared.Serialization.Markdown.Value;
 using Robust.Shared.Timing;
@@ -232,6 +236,59 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                 Assert.That(named.Value, Is.EqualTo(turbineNet), "It has to come back as the named entity's network id.");
                 Assert.That(offImage.Found, Is.True, "A reference off the image has to be written too.");
                 Assert.That(offImage.Value, Is.Null, "And read back as null, not as an invalid network id.");
+            });
+
+            await pair.CleanReturnAsync();
+        }
+
+        /// <summary>
+        /// A lathe's current recipe is a registered prototype, so it travels as its id and comes back as the registered
+        /// instance, not as a copy of its definition; an id no recipe has any more reads as null and is counted.
+        /// </summary>
+        [Test]
+        public async Task ALathesCurrentRecipeTravelsAsItsId()
+        {
+            await using var pair = await PoolManager.GetServerClient();
+            var server = pair.Server;
+            var entMan = server.EntMan;
+            var factory = server.ResolveDependency<IComponentFactory>();
+            const string key = "Lathe.CurrentRecipe";
+            const string gone = "DrydockNoSuchRecipe";
+
+            LatheRecipePrototype recipe = default!;
+            DataNode? written = null;
+            (bool Found, object? Value) read = default, stale = default;
+            var unresolved = new List<string>();
+            var unwritable = new List<DrydockUnwritableMember>();
+
+            await server.WaitPost(() =>
+            {
+                recipe = server.ResolveDependency<IPrototypeManager>().EnumeratePrototypes<LatheRecipePrototype>().First();
+                var lathe = entMan.SpawnEntity("Autolathe", MapCoordinates.Nullspace);
+                entMan.GetComponent<LatheComponent>(lathe).CurrentRecipe = recipe;
+
+                var codec = Codec(server.ResolveDependency<ISerializationManager>(), entMan, server.ResolveDependency<IGameTiming>(), lathe);
+                var row = Manifest(entMan, factory, codec, lathe, unwritable);
+                written = row != null && row.TryGet(key, out var node) ? node : null;
+                read = ReadAt(codec, factory, row, DrydockApplyMoment.BeforeInit, key);
+
+                // The same row with an id no recipe has, as a prototype migration that removed it would leave it.
+                var old = row!.Copy();
+                old[key] = new ValueDataNode(gone);
+                stale = ReadAt(codec, factory, old, DrydockApplyMoment.BeforeInit, key);
+                unresolved = codec.Unresolved.Select(u => u.Id).ToList();
+            });
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(unwritable, Is.Empty, "Nothing on the lathe may be left out as unwritable.");
+                Assert.That(written, Is.InstanceOf<ValueDataNode>(), "The recipe has to be written as a value, not as a mapping of its definition.");
+                Assert.That((written as ValueDataNode)?.Value, Is.EqualTo(recipe.ID), "And that value has to be the recipe's id.");
+                Assert.That(read.Found, Is.True, "The recipe has to be read before init.");
+                Assert.That(read.Value, Is.SameAs(recipe), "It has to come back as the registered prototype, not as a copy of it.");
+                Assert.That(stale.Found, Is.True, "An id that no longer resolves has to be read too.");
+                Assert.That(stale.Value, Is.Null, "As null, not as a throw or a made-up recipe.");
+                Assert.That(unresolved, Is.EquivalentTo(new[] { gone }), "And be counted, by its id.");
             });
 
             await pair.CleanReturnAsync();

@@ -1202,6 +1202,8 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                            + $"(its ComponentAdd saw prototype data), {added} added as read, {removed} prototype component(s) removed before init.");
             CodecNotes.Add($"         overwritten, top: {Top(overwroteByType)}");
             CodecNotes.Add($"         removed: {Top(removedByType)}");
+            CodecNotes.Add($"[ladder] codec round trip {trip}: prototype ids the manifest read that no longer resolve, set as null: "
+                           + (codec.Unresolved.Count == 0 ? "none." : string.Join(", ", codec.Unresolved.Select(u => $"{u.Member.Key} '{u.Id}'")) + "."));
             CodecNotes.Add($"[ladder] codec round trip {trip}: {heldBackSlots} item slot(s) held back from init; at the seam {copiedAtSeam} copied into the slot init re-added; "
                            + $"after startup {copiedAfterStartup} copied into the slot startup re-added, {addedAtSeam} added whole because nothing re-added them.");
             // SetData dirties; the engine's ResetNetTicks runs after it inside startup. What is still marked modified in

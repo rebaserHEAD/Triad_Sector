@@ -47,6 +47,12 @@ public enum DrydockMemberKind
     /// <see cref="DrydockManifestMember.EntryKey"/> and holding a <see cref="DrydockManifestMember.EntryType"/>. An entry
     /// the dictionary does not hold is not written, so the load leaves it absent as well.</summary>
     Entry,
+
+    /// <summary>A registered prototype kept on a component (a lathe's current recipe), carried as its id and read back as
+    /// the registered instance, never written whole as a definition: a stored grid has to stay editable for prototype
+    /// migrations, which rewrite an id and cannot reach a buried copy. An id that no longer resolves reads as null and is
+    /// counted.</summary>
+    PrototypeId,
 }
 
 /// <param name="Row">The census join's row id (resources/2026-09-17-census-join.tsv, column f33).</param>
@@ -187,7 +193,10 @@ public static class DrydockCodecManifestMembers
         new DrydockManifestMember(291, "KitchenSpike", "MeatSource1p", Before, Field),
         new DrydockManifestMember(291, "KitchenSpike", "PrototypesToSpawn", Before, Field),
         new DrydockManifestMember(291, "KitchenSpike", "Victim", Before, Field),
-        new DrydockManifestMember(293, "Lathe", "CurrentRecipe", Before, Field),
+        // By id: the recipe the lathe is making is a registered prototype. One that no longer resolves finishes with nothing
+        // and keeps the materials its start took (LatheSystem.cs:285-291, :324-375); the migration that removes a recipe
+        // owns that refund, as an edit to the stored ship in the database.
+        new DrydockManifestMember(293, "Lathe", "CurrentRecipe", Before, DrydockMemberKind.PrototypeId),
         new DrydockManifestMember(502, "LinkedLifecycleGridChild", "LinkedUid", Before, Field),
         new DrydockManifestMember(503, "LinkedLifecycleGridParent", "LinkedEntities", Before, Field),
         new DrydockManifestMember(481, "Mail", "IsEnabled", Before, Field),

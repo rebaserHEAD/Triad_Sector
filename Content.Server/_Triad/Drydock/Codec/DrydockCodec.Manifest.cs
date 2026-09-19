@@ -4,6 +4,7 @@ using System.Linq;
 using System.Reflection;
 using Content.Server.Power.Components;
 using Robust.Shared.GameObjects;
+using Robust.Shared.Prototypes;
 using Robust.Shared.Serialization.Manager.Attributes;
 using Robust.Shared.Serialization.Manager.Definition;
 using Robust.Shared.Serialization.Markdown;
@@ -129,6 +130,8 @@ public sealed partial class DrydockCodec
             Entity<ExtensionCableProviderComponent> provider => provider.Owner,
             // A network id means nothing in another round, so the entity it names travels, as a stable id.
             NetEntity net when member.Kind == DrydockMemberKind.Reference => _entMan.GetEntity(net),
+            // A registered prototype travels as its id, never as its definition.
+            IPrototype prototype when member.Kind == DrydockMemberKind.PrototypeId => prototype.ID,
             _ => value,
         }, alwaysWrite: true, context: Context);
     }
@@ -136,18 +139,38 @@ public sealed partial class DrydockCodec
     /// <summary>
     /// The type the manifest hands the serializer for a member's value, or null when it hands it none: a re-applied member
     /// is not written, a re-derived one is written as a marker and a time goes through the time-offset adapter. A network
-    /// reference and a cable receiver's provider travel as the entity they name. The build-time test writes a sample of
-    /// every type this gives.
+    /// reference and a cable receiver's provider travel as the entity they name, and a prototype as its id. The
+    /// build-time test writes a sample of every type this gives.
     /// </summary>
     public static Type? WrittenAs(DrydockManifestMember member, MemberInfo info)
     {
         if (member.Kind is DrydockMemberKind.ReapplyCarried or DrydockMemberKind.Rederive or DrydockMemberKind.AbsoluteTime)
             return null;
 
+        if (member.Kind == DrydockMemberKind.PrototypeId)
+            return typeof(string);
+
         var type = TypeOf(member, info);
         return member.Kind == DrydockMemberKind.Reference || (Nullable.GetUnderlyingType(type) ?? type) == typeof(Entity<ExtensionCableProviderComponent>)
             ? typeof(EntityUid)
             : type;
+    }
+
+    /// <summary>
+    /// Every prototype-id member this codec read whose id no prototype of its kind has any more, with the id: each came
+    /// back null (<see cref="DrydockMemberKind.PrototypeId"/>).
+    /// </summary>
+    public List<(DrydockManifestMember Member, string Id)> Unresolved { get; } = new();
+
+    /// <summary>A prototype id read back as the registered prototype, or as null, counted, when none of its kind has it.</summary>
+    private IPrototype? ReadPrototype(DrydockManifestMember member, Type type, ValueDataNode node)
+    {
+        var prototypes = _entMan.EntitySysManager.DependencyCollection.Resolve<IPrototypeManager>();
+        if (prototypes.TryIndex(Nullable.GetUnderlyingType(type) ?? type, node.Value, out var prototype))
+            return prototype;
+
+        Unresolved.Add((member, node.Value));
+        return null;
     }
 
     /// <summary>The type a member's value travels as: the entry's for a dictionary entry, the member's own otherwise.</summary>
@@ -158,7 +181,8 @@ public sealed partial class DrydockCodec
     /// The members of <paramref name="moment"/> a manifest row holds, decoded: a reference resolves through the load's
     /// stable ids, a game time against the clock at load, an explicit null to null. A network id comes back as the loaded
     /// entity's own, or null when it named nothing on the image. A member set through its system (a receiver's provider, a
-    /// pinpointer's target) comes back as the entity, for the loader to hand to that system.
+    /// pinpointer's target) comes back as the entity, for the loader to hand to that system. A prototype id comes back as
+    /// the registered prototype, or null when it no longer resolves (<see cref="Unresolved"/>).
     /// </summary>
     public IEnumerable<(DrydockManifestMember Member, object? Value)> ReadManifest(MappingDataNode row, DrydockApplyMoment moment, IComponentFactory factory)
     {
@@ -187,6 +211,8 @@ public sealed partial class DrydockCodec
                     : null;
             else if (member.Kind == DrydockMemberKind.ViaSystem && type != typeof(string))
                 value = _serialization.Read(typeof(EntityUid), node, context: Context, notNullableOverride: true);
+            else if (member.Kind == DrydockMemberKind.PrototypeId)
+                value = ReadPrototype(member, type, (ValueDataNode) node);
             else
                 value = _serialization.Read(type, node, context: Context);
 
