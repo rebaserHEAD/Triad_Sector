@@ -34,8 +34,21 @@ namespace Content.Server._Triad.Drydock.Codec;
 public static class DrydockTimeOffsetAdapter
 {
     /// <summary>
-    /// What a live field stores. A map-initialized entity stores its deadline's distance from the
-    /// moment it paused, or from the clock if it is running; anything earlier in its life stores a
+    /// The row tokens for the three values the codebase uses as sentinels rather than deadlines: zero for "never" (or
+    /// "overdue since the start"), and the two ends for "not before the end of time". Each travels as itself, never as a
+    /// distance from the clock, because a distance turns "never" into a deadline already past (a microwave's malfunction
+    /// time, zero until it cooks metal, came back overdue and blew the microwave up). The engine never meets this: its
+    /// writer leaves a field at its default out of the file, and every such field defaults to zero.
+    /// </summary>
+    public const string ZeroToken = "~zero";
+
+    public const string MaxToken = "~max";
+
+    public const string MinToken = "~min";
+
+    /// <summary>
+    /// What a live field stores. A sentinel stores its token. Otherwise a map-initialized entity stores its deadline's
+    /// distance from the moment it paused, or from the clock if it is running; anything earlier in its life stores a
     /// literal zero, matching the engine.
     /// </summary>
     /// <param name="pauseTime">
@@ -44,6 +57,15 @@ public static class DrydockTimeOffsetAdapter
     /// </param>
     public static ValueDataNode Write(TimeSpan value, EntityLifeStage lifeStage, TimeSpan curTime, TimeSpan? pauseTime)
     {
+        if (value == TimeSpan.Zero)
+            return new ValueDataNode(ZeroToken);
+
+        if (value == TimeSpan.MaxValue)
+            return new ValueDataNode(MaxToken);
+
+        if (value == TimeSpan.MinValue)
+            return new ValueDataNode(MinToken);
+
         if (lifeStage < EntityLifeStage.MapInitialized)
             return new ValueDataNode("0");
 
@@ -52,11 +74,22 @@ public static class DrydockTimeOffsetAdapter
     }
 
     /// <summary>
-    /// What a stored offset becomes. One branch, unlike <see cref="Write"/>: the stored distance
-    /// measured forward from the clock at load, clamped rather than wrapped at either end.
+    /// What a stored offset becomes. A sentinel token comes back exactly. Otherwise one branch, unlike
+    /// <see cref="Write"/>: the stored distance measured forward from the clock at load, clamped rather than wrapped at
+    /// either end.
     /// </summary>
     public static TimeSpan Read(ValueDataNode node, TimeSpan curTime)
     {
+        switch (node.Value)
+        {
+            case ZeroToken:
+                return TimeSpan.Zero;
+            case MaxToken:
+                return TimeSpan.MaxValue;
+            case MinToken:
+                return TimeSpan.MinValue;
+        }
+
         if (!double.TryParse(node.Value, NumberStyles.Float, CultureInfo.InvariantCulture, out var seconds))
             throw new FormatException($"Drydock codec: a time offset row held '{node.Value}', which is not a number.");
 

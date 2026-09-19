@@ -496,6 +496,57 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                 sb.AppendLine($"[ladder-compounds] rung={rung} vessel={vesselId} {line}");
         }
 
+        /// <summary>
+        /// Which sentinel a rendered time is, from its raw half (<c>raw|relative</c>): zero, the maximum or the minimum, which
+        /// mean "never" or "not before the end of time" rather than a deadline, or null for an ordinary time. A move onto or
+        /// off one is never a time that kept its meaning, whatever its relative half says: a zero that came back as the store's
+        /// offset measured from the load clock has the same relative half and is a deadline already past (a disposal unit's
+        /// next pressurisation, and a microwave's malfunction time that blew the microwave up).
+        /// </summary>
+        private static int? TimeSentinel(string render)
+        {
+            var bar = render.IndexOf('|');
+            if (bar <= 0 || !double.TryParse(render.AsSpan(0, bar), System.Globalization.NumberStyles.Float,
+                    System.Globalization.CultureInfo.InvariantCulture, out var raw))
+            {
+                return null;
+            }
+
+            const double end = 9.2e11; // TimeSpan.MaxValue is 922337203685.477 s.
+            return raw == 0 ? 0 : raw >= end ? 1 : raw <= -end ? -1 : null;
+        }
+
+        /// <summary>
+        /// A live time that went the wrong way across the round trip: it moved one way during the live window (a countdown
+        /// falling) and the other way from before to after by more than the tolerance (the countdown back at its start). The
+        /// window says what the clock does to it, so a move against that is the round trip, not the clock, and is a finding
+        /// rather than live (a scuttle device's remaining time reset to full, 590.967 to 600.000). Times only: a live number
+        /// under load (a battery, a supply ramp) turns round on its own.
+        /// </summary>
+        private static bool MovedAgainstItsWindow(string key, RoundTripResult result)
+        {
+            if (!key.EndsWith(DrydockFidelitySystem.TimeSuffix, StringComparison.Ordinal)
+                || RawTime(result.Early.Values.GetValueOrDefault(key)) is not { } early
+                || RawTime(result.Before.Values.GetValueOrDefault(key)) is not { } before
+                || RawTime(result.After.Values.GetValueOrDefault(key)) is not { } after)
+            {
+                return false;
+            }
+
+            var window = Math.Sign(before - early);
+            return window != 0 && Math.Sign(after - before) == -window && Math.Abs(after - before) > TimeToleranceSeconds;
+        }
+
+        /// <summary>The raw half of a rendered time (<c>raw|relative</c>), in seconds, or null for anything else.</summary>
+        private static double? RawTime(string? render)
+        {
+            var bar = render?.IndexOf('|') ?? -1;
+            return bar > 0 && double.TryParse(render.AsSpan(0, bar), System.Globalization.NumberStyles.Float,
+                System.Globalization.CultureInfo.InvariantCulture, out var raw)
+                ? raw
+                : null;
+        }
+
         /// <summary>A rendered list's length, counted as its <c>- </c> lines, or null for anything that is not one.</summary>
         private static int? ListLength(string render)
         {
@@ -1219,7 +1270,8 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                 }
 
                 if (line.StartsWith("CHANGED") && key != null && key.EndsWith(DrydockFidelitySystem.TimeSuffix)
-                    && DrydockFidelitySystem.TimeKeepsItsMeaning(result.Before.Values[key], result.After.Values[key], TimeToleranceSeconds))
+                    && DrydockFidelitySystem.TimeKeepsItsMeaning(result.Before.Values[key], result.After.Values[key], TimeToleranceSeconds)
+                    && TimeSentinel(result.Before.Values[key]) == TimeSentinel(result.After.Values[key]))
                 {
                     timeKept++;
                     continue;
@@ -1246,7 +1298,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
 
                 var recovery = RecoveryOf(key, result);
 
-                if (key != null && live.Contains(key))
+                if (key != null && live.Contains(key) && !MovedAgainstItsWindow(key, result))
                     liveLines.Add(line);
                 else if (grants != null && IsGrant(line, grants))
                     grantLines.Add(line);

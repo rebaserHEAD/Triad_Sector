@@ -371,6 +371,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             // Nothing runs between the write and this read, so the clock has not moved and a time reads back
             // at the same moment.
             var nullLostByRead = CountNullness(component, restored, type.Name, ReadNulls);
+            CountTimeSentinels(component, type);
 
             var lostByWrite = new HashSet<string>(StringComparer.Ordinal);
             foreach (var (member, detail) in LiveDifferences(component, restored, type.Name, FirstRead))
@@ -727,6 +728,57 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             return lost;
         }
 
+        /// <summary>
+        /// The size of what the codec rebased before the sentinel tokens: the time-offset data fields holding exactly zero,
+        /// the maximum or the minimum at store, which the codec used to write as a distance from the clock and so turned
+        /// from "never" into a deadline. Top-level fields only. A count, not a finding.
+        /// </summary>
+        private static void CountTimeSentinels(IComponent component, Type type)
+        {
+            if (!TimeOffsetMembers.TryGetValue(type, out var members))
+            {
+                const BindingFlags flags = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.DeclaredOnly;
+                members = new List<MemberInfo>();
+                for (var declaring = type; declaring != null && declaring != typeof(object); declaring = declaring.BaseType)
+                {
+                    foreach (var member in declaring.GetFields(flags).Cast<MemberInfo>().Concat(declaring.GetProperties(flags)))
+                    {
+                        if (member.GetCustomAttribute<Robust.Shared.Serialization.Manager.Attributes.DataFieldBaseAttribute>()?.CustomTypeSerializer
+                            == typeof(Robust.Shared.Serialization.TypeSerializers.Implementations.Custom.TimeOffsetSerializer))
+                        {
+                            members.Add(member);
+                        }
+                    }
+                }
+
+                TimeOffsetMembers[type] = members;
+            }
+
+            foreach (var member in members)
+            {
+                TimeOffsetValues++;
+                var sentinel = Get(member, component) switch
+                {
+                    TimeSpan span when span == TimeSpan.Zero => "zero",
+                    TimeSpan span when span == TimeSpan.MaxValue => "max",
+                    TimeSpan span when span == TimeSpan.MinValue => "min",
+                    _ => null,
+                };
+
+                if (sentinel != null)
+                {
+                    var key = $"{type.Name}.{member.Name} ({sentinel})";
+                    TimeSentinels[key] = TimeSentinels.GetValueOrDefault(key) + 1;
+                }
+            }
+        }
+
+        private static readonly Dictionary<Type, List<MemberInfo>> TimeOffsetMembers = new();
+
+        private static readonly Dictionary<string, int> TimeSentinels = new(StringComparer.Ordinal);
+
+        private static long TimeOffsetValues;
+
         /// <summary>F37's count over one side of the comparison.</summary>
         private sealed class NullTally
         {
@@ -988,6 +1040,12 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                             await TestContext.Out.WriteLineAsync($"[codec-roundtrip]     {member} x{count}");
                     }
                 }
+
+                await TestContext.Out.WriteLineAsync(
+                    $"[codec-roundtrip] time sentinels: {TimeSentinels.Values.Sum()} of {TimeOffsetValues} time-offset value(s) over {Hulls} hull(s) held exactly "
+                    + $"zero, the maximum or the minimum at store, across {TimeSentinels.Count} member(s); before the sentinel tokens each was written as a distance from the clock.");
+                foreach (var (member, count) in TimeSentinels.OrderByDescending(kv => kv.Value).ThenBy(kv => kv.Key, StringComparer.Ordinal))
+                    await TestContext.Out.WriteLineAsync($"[codec-roundtrip]     {member} x{count}");
 
                 foreach (var path in Unloadable)
                     await TestContext.Out.WriteLineAsync($"[codec-roundtrip] did not load: {path}");
