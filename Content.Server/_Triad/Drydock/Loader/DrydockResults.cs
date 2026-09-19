@@ -134,6 +134,12 @@ public sealed class DrydockLoadResult
     /// <summary>Prototype ids a manifest member read that no longer resolve, set as null.</summary>
     public IReadOnlyList<(DrydockManifestMember Member, string Id)> UnresolvedPrototypes { get; init; } = Array.Empty<(DrydockManifestMember, string)>();
 
+    /// <summary>
+    /// References the image could not keep, by member path and whether the member is nullable: a nullable member reads as
+    /// null, one that is not is left invalid.
+    /// </summary>
+    public IReadOnlyList<(string Member, bool Nullable)> Severed { get; init; } = Array.Empty<(string, bool)>();
+
     /// <summary>Queued lathe batches left out for a recipe that no longer resolves, by recipe id.</summary>
     public IReadOnlyList<string> DroppedBatches { get; init; } = Array.Empty<string>();
 

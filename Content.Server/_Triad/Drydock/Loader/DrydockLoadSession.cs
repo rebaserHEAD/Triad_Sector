@@ -163,6 +163,7 @@ public sealed class DrydockLoadSession
         _codec = new DrydockCodec(
             _system.Serialization,
             _system.Entities,
+            _system.Prototypes,
             _system.Timing,
             _ => throw new InvalidOperationException("The load allocates nothing."),
             id => deserializer.UidMap.TryGetValue((int) id, out var uid)
@@ -509,6 +510,7 @@ public sealed class DrydockLoadSession
             AppearanceComponents = appearances,
             AppearanceStillDirty = stillDirty,
             UnresolvedPrototypes = _codec!.Unresolved.ToList(),
+            Severed = _codec.Severed.ToList(),
             DroppedBatches = _codec.Context.DroppedBatches.ToList(),
             TilesStored = stored.Count,
             TilesRestored = restored.Count,

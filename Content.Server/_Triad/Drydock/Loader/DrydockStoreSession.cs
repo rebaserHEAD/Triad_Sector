@@ -42,6 +42,7 @@ public sealed class DrydockStoreSession
         _codec = new DrydockCodec(
             system.Serialization,
             system.Entities,
+            system.Prototypes,
             system.Timing,
             uid => ids.TryGetValue(uid, out var id) ? id : null,
             _ => throw new InvalidOperationException("The store resolves nothing."));

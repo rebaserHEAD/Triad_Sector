@@ -61,6 +61,9 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                 Assert.That(DrydockAppearanceTypes.TryResolve(reflection, typeof(bool).AssemblyQualifiedName!, out var boolean), Is.True, "A primitive the baseline stored resolves.");
                 Assert.That(boolean, Is.EqualTo(typeof(bool)));
 
+                Assert.That(DrydockAppearanceTypes.TryResolve(reflection, typeof(byte).AssemblyQualifiedName!, out var octet), Is.True, "A byte, which a power cell's charge level is, resolves.");
+                Assert.That(octet, Is.EqualTo(typeof(byte)));
+
                 Assert.That(DrydockAppearanceTypes.TryResolve(reflection, typeof(Robust.Shared.Maths.Color).AssemblyQualifiedName!, out var color), Is.True, "Color, which is not networked by attribute, resolves by name.");
                 Assert.That(color, Is.EqualTo(typeof(Robust.Shared.Maths.Color)));
 

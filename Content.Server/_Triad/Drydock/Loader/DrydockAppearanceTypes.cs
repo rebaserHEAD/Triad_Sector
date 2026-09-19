@@ -17,12 +17,13 @@ public static class DrydockAppearanceTypes
 {
     /// <summary>
     /// Plain value types an appearance entry carries that are neither an enum nor networked by attribute. Named by type,
-    /// never by namespace or assembly, and each here because a stored image held it (the 2026-09-19 baseline over the
-    /// standing rungs: bool, int, float, string and Color, none of them networked by attribute).
+    /// never by namespace or assembly, and each here because a stored image held it (the 2026-09-19 runs over the
+    /// standing rungs and the workbench: bool, byte, int, float, string and Color, none of them networked by attribute).
     /// </summary>
     private static readonly Type[] EngineValueTypes =
     {
         typeof(bool),
+        typeof(byte),
         typeof(int),
         typeof(float),
         typeof(string),

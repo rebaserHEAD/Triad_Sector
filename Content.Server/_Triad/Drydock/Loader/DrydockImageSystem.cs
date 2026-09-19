@@ -34,6 +34,7 @@ public sealed partial class DrydockImageSystem : EntitySystem
     [Dependency] internal IComponentFactory ComponentFactory = default!;
     [Dependency] internal ITileDefinitionManager TileDefinitions = default!;
     [Dependency] internal IReflectionManager Reflection = default!;
+    [Dependency] internal IPrototypeManager Prototypes = default!;
     [Dependency] internal SharedMapSystem Maps = default!;
     [Dependency] internal SharedTransformSystem Xforms = default!;
     [Dependency] internal MetaDataSystem Meta = default!;
