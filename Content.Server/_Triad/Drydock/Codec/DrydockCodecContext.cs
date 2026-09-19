@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Globalization;
 using Robust.Shared.IoC;
 using Robust.Shared.Serialization;
@@ -69,6 +70,12 @@ public sealed class DrydockCodecContext :
     /// <inheritdoc/>
     public bool WritingReadingPrototypes => false;
 
+    /// <summary>
+    /// The recipe of every queued lathe batch this context's reads left out because no prototype has that recipe any
+    /// more (<see cref="DrydockLatheQueueReader"/>), one entry per batch.
+    /// </summary>
+    public List<string> DroppedBatches { get; } = new();
+
     /// <param name="allocate">
     /// The entity's stable id, minting one if this is the first capture that has seen it. Null means
     /// the entity is not part of this image, and the reference is written as
@@ -97,13 +104,17 @@ public sealed class DrydockCodecContext :
         // (<see cref="DrydockSerializationGap.CapturedTypes"/>). They are registered here rather
         // than as the engine's default for their type, because the gap is ours: the serializability
         // audit measures what the engine covers without us, and it must keep measuring that.
-        SerializerProvider.RegisterSerializer(new DrydockLatheRecipeBatchSerializer(this, entMan));
+        var batch = new DrydockLatheRecipeBatchSerializer(this, entMan);
+        SerializerProvider.RegisterSerializer(batch);
         SerializerProvider.RegisterSerializer(new DrydockMarketDataSerializer());
 
         // Their copy halves, at the list each is held in rather than per element: the engine copies a list's
         // elements through a delegate that never consults a context (DrydockLatheQueueCopier says where).
         SerializerProvider.RegisterSerializer(new DrydockLatheQueueCopier());
         SerializerProvider.RegisterSerializer(new DrydockMarketDataListCopier());
+
+        // The lathe queue's read, at the list too, so a batch for a removed recipe is left out rather than failing it.
+        SerializerProvider.RegisterSerializer(new DrydockLatheQueueReader(this, batch));
     }
 
     public ValidationNode Validate(

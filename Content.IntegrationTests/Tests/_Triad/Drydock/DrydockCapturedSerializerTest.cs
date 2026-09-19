@@ -2,6 +2,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Threading.Tasks;
 using Content.Server._Triad.Drydock;
 using Content.Server._Triad.Drydock.Codec;
@@ -16,6 +17,7 @@ using Robust.Shared.Prototypes;
 using Robust.Shared.Serialization.Manager;
 using Robust.Shared.Serialization.Markdown.Mapping;
 using Robust.Shared.Serialization.Markdown.Sequence;
+using Robust.Shared.Serialization.Markdown.Value;
 using Robust.Shared.Timing;
 
 namespace Content.IntegrationTests.Tests._Triad.Drydock
@@ -110,6 +112,73 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                     "and its index, which the queue de-queues by and the constructor would otherwise hand out fresh");
                 Assert.That(batch.Actor, Is.EqualTo(actorNet),
                     "the actor, which stores as the entity's stable id and comes back through the same pair");
+            });
+
+            await pair.CleanReturnAsync();
+        }
+
+        /// <summary>
+        /// A queued batch whose recipe no prototype has any more is left out and counted, and the rest of the queue
+        /// comes back: a removed recipe must never fail a load. Nothing is refunded because nothing was taken, since a
+        /// lathe takes materials as each item starts (<c>Content.Server/Lathe/LatheSystem.cs:284-289</c>). The control
+        /// is that same row read as one batch, which is how the queue was read before it had a reader of its own.
+        /// </summary>
+        [Test]
+        public async Task ALatheBatchForARemovedRecipeIsLeftOut()
+        {
+            await using var pair = await PoolManager.GetServerClient();
+            var server = pair.Server;
+            var entMan = server.EntMan;
+            var serialization = server.ResolveDependency<ISerializationManager>();
+            var protoMan = server.ResolveDependency<IPrototypeManager>();
+            var timing = server.ResolveDependency<IGameTiming>();
+
+            var ids = new StableIds();
+            var codec = new DrydockCodec(serialization, entMan, timing, ids.Allocate, ids.Resolve);
+            var map = await pair.CreateTestMap();
+
+            const string removed = "DrydockCodecRemovedRecipe";
+            var restored = new List<LatheRecipeBatch>();
+            var kept = 0;
+            var batchReaderRefused = false;
+
+            await server.WaitPost(() =>
+            {
+                var uid = entMan.SpawnEntity("DrydockCodecLatheDummy", new EntityCoordinates(map.MapUid, default));
+                var component = entMan.GetComponent<LatheComponent>(uid);
+                var recipe = protoMan.Index<LatheRecipePrototype>(Recipe);
+
+                component.Queue.Add(new LatheRecipeBatch(recipe, 1, 5, null));
+                component.Queue.Add(new LatheRecipeBatch(recipe, 0, 2, null));
+                kept = component.Queue[1].Index;
+
+                var written = codec.Write((uid, entMan.GetComponent<MetaDataComponent>(uid)), component);
+
+                // What a migration that removes a recipe leaves behind in a ship stored before it.
+                var queued = (SequenceDataNode) written["queue"];
+                ((MappingDataNode) queued[0])["recipe"] = new ValueDataNode(removed);
+
+                restored = codec.Read<LatheComponent>(written).Queue;
+
+                try
+                {
+                    serialization.Read(typeof(LatheRecipeBatch), queued[0], context: codec.Context, notNullableOverride: true);
+                }
+                catch (Exception e)
+                {
+                    batchReaderRefused = e is UnknownPrototypeException || e.InnerException is UnknownPrototypeException;
+                }
+            });
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(batchReaderRefused, Is.True,
+                    "The control: a batch naming a removed recipe has to fail the batch reader, which is why the queue reads through its own.");
+                Assert.That(restored.Select(batch => batch.Index), Is.EqualTo(new[] { kept }),
+                    "The batch whose recipe is still there has to come back, and only it.");
+                Assert.That(restored[0].ItemsRequested, Is.EqualTo(2), "with what it held");
+                Assert.That(codec.Context.DroppedBatches, Is.EqualTo(new[] { removed }),
+                    "and the one left out has to be counted, by the recipe it named.");
             });
 
             await pair.CleanReturnAsync();

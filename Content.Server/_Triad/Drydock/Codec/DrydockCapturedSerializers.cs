@@ -12,6 +12,7 @@ using Robust.Shared.Serialization;
 using Robust.Shared.Serialization.Manager;
 using Robust.Shared.Serialization.Markdown;
 using Robust.Shared.Serialization.Markdown.Mapping;
+using Robust.Shared.Serialization.Markdown.Sequence;
 using Robust.Shared.Serialization.Markdown.Validation;
 using Robust.Shared.Serialization.Markdown.Value;
 using Robust.Shared.Serialization.TypeSerializers.Interfaces;
@@ -36,6 +37,9 @@ namespace Content.Server._Triad.Drydock.Codec;
 /// each type's copy half is registered at the list its component holds it in instead
 /// (<see cref="DrydockLatheQueueCopier"/>, <see cref="DrydockMarketDataListCopier"/>), which the component's
 /// generated copy looks up on the context first.</para>
+///
+/// <para>The lathe queue's read is taken over at the list too, for another reason: a batch whose recipe no
+/// prototype has any more is left out of the list rather than failing it (<see cref="DrydockLatheQueueReader"/>).</para>
 /// </summary>
 internal static class DrydockCapturedKeys
 {
@@ -94,11 +98,14 @@ internal static class DrydockCapturedKeys
 /// the next round. It is written as the entity it names, through the context's own entity writer, so
 /// it becomes a stable id like every other reference in the image and comes back resolved through
 /// the same pair.</para>
+///
+/// <para>A recipe no prototype has any more fails this reader, which has to return a batch. The queue's
+/// own reader (<see cref="DrydockLatheQueueReader"/>) leaves such a batch out before it gets here.</para>
 /// </summary>
 public sealed class DrydockLatheRecipeBatchSerializer : ITypeSerializer<LatheRecipeBatch, MappingDataNode>
 {
     private const string IndexKey = "index";
-    private const string RecipeKey = "recipe";
+    internal const string RecipeKey = "recipe";
     private const string ActorKey = "actor";
     private const string PrintedKey = "itemsPrinted";
     private const string RequestedKey = "itemsRequested";
@@ -170,6 +177,75 @@ public sealed class DrydockLatheRecipeBatchSerializer : ITypeSerializer<LatheRec
         {
             Index = DrydockCapturedKeys.Integer(node, IndexKey),
         };
+    }
+}
+
+/// <summary>
+/// The read half of <see cref="DrydockLatheRecipeBatchSerializer"/> for the whole queue, so that a batch whose recipe
+/// no prototype has any more is left out and the load goes on. The batch reader cannot drop one, since it has to
+/// return a batch, and a removed recipe must never fail a load. Each one left out is recorded in
+/// <see cref="DrydockCodecContext.DroppedBatches"/>.
+///
+/// <para>A queued batch has taken no materials yet: a lathe takes them as each item starts
+/// (<c>Content.Server/Lathe/LatheSystem.cs:284-289</c>), so leaving the batch out refunds nothing and loses only the
+/// order. The item in production is the manifest's <c>Lathe.CurrentRecipe</c>, which a removed recipe reads back as
+/// null (<see cref="DrydockMemberKind.PrototypeId"/>); its materials are the migration's to refund.</para>
+/// </summary>
+public sealed class DrydockLatheQueueReader : ITypeReader<List<LatheRecipeBatch>, SequenceDataNode>
+{
+    private readonly DrydockCodecContext _context;
+    private readonly DrydockLatheRecipeBatchSerializer _batch;
+
+    public DrydockLatheQueueReader(DrydockCodecContext context, DrydockLatheRecipeBatchSerializer batch)
+    {
+        _context = context;
+        _batch = batch;
+    }
+
+    public ValidationNode Validate(
+        ISerializationManager serializationManager,
+        SequenceDataNode node,
+        IDependencyCollection dependencies,
+        ISerializationContext? context = null)
+    {
+        var entries = new List<ValidationNode>();
+        foreach (var entry in node)
+        {
+            entries.Add(entry is MappingDataNode batch
+                ? _batch.Validate(serializationManager, batch, dependencies, context)
+                : new ErrorNode(entry, "A lathe queue entry is not a mapping."));
+        }
+
+        return new ValidatedSequenceNode(entries);
+    }
+
+    public List<LatheRecipeBatch> Read(
+        ISerializationManager serializationManager,
+        SequenceDataNode node,
+        IDependencyCollection dependencies,
+        SerializationHookContext hookCtx,
+        ISerializationContext? context = null,
+        ISerializationManager.InstantiationDelegate<List<LatheRecipeBatch>>? instanceProvider = null)
+    {
+        var queue = instanceProvider?.Invoke() ?? new List<LatheRecipeBatch>();
+        var prototypes = dependencies.Resolve<IPrototypeManager>();
+
+        foreach (var entry in node)
+        {
+            if (entry is not MappingDataNode batch)
+                throw new FormatException("Drydock codec: a lathe queue entry is not a mapping.");
+
+            var recipe = DrydockCapturedKeys.Text(batch, DrydockLatheRecipeBatchSerializer.RecipeKey);
+            if (!prototypes.HasIndex<LatheRecipePrototype>(recipe))
+            {
+                _context.DroppedBatches.Add(recipe);
+                continue;
+            }
+
+            queue.Add(_batch.Read(serializationManager, batch, dependencies, hookCtx, context));
+        }
+
+        return queue;
     }
 }
 
