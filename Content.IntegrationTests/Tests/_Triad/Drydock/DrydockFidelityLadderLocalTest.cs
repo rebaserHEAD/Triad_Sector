@@ -196,7 +196,8 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
 
         /// <summary>
         /// The ladder's classification registry, keyed <c>Component.member</c> or <c>Component.*</c>. Every
-        /// entry is an explained difference; anything not here is a finding until explained. This is the seed
+        /// entry is an explained difference; anything not here is a finding until explained, and so is a line that
+        /// compounds across the two trips, whatever its entry says (<see cref="Compounding"/>). This is the seed
         /// of the census registry the grid image design calls for. Internal, for the manifest test's check that no member
         /// the manifest carries is classified here (DrydockCodecManifestMembersTest).
         /// </summary>
@@ -511,20 +512,19 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
         }
 
         /// <summary>
-        /// The family a line sorts into, and whether it was held back because it compounds: a CHANGED line on round trip 2
-        /// that compounds against round trip 1 is growth per store, class 2 of the bar, which is a finding whatever family
-        /// explains its cause, so no family, old or new, absorbs it (ruled 2026-09-19). Round trip 1 has nothing to compound
+        /// Whether a CHANGED line on round trip 2 compounds against round trip 1. That is growth per store, class 2 of the
+        /// bar, a finding whatever explains its cause, so neither a family nor the registry absorbs it (ruled 2026-09-19);
+        /// only the live bucket, which its own clock rule judges, still takes one. Round trip 1 has nothing to compound
         /// against, so <paramref name="previous"/> is null there.
         /// </summary>
-        private static (KnownFamily? Family, bool Compounds) FamilyFor(string line, string key, RoundTripResult result, RoundTripResult? previous)
-        {
-            if (KnownFamilies.FirstOrDefault(f => f.Matches(line, key, result)) is not { } family)
-                return (null, false);
+        private static bool Compounding(string line, string key, RoundTripResult result, RoundTripResult? previous) =>
+            previous != null && line.StartsWith("CHANGED", StringComparison.Ordinal) && ShapeOf(key, previous, result) == Compounds;
 
-            return previous != null && line.StartsWith("CHANGED", StringComparison.Ordinal) && ShapeOf(key, previous, result) == Compounds
-                ? (family, true)
-                : (family, false);
-        }
+        /// <summary>The family a line sorts into, and whether it was held back because it compounds (<see cref="Compounding"/>).</summary>
+        private static (KnownFamily? Family, bool Compounds) FamilyFor(string line, string key, RoundTripResult result, RoundTripResult? previous) =>
+            KnownFamilies.FirstOrDefault(f => f.Matches(line, key, result)) is { } family
+                ? (family, Compounding(line, key, result, previous))
+                : (null, false);
 
         /// <summary>
         /// Which sentinel a rendered time is, from its raw half (<c>raw|relative</c>): zero, the maximum or the minimum, which
@@ -756,6 +756,49 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                 Assert.That(FamilyFor(line, key, repeats, first), Is.EqualTo((h12, false)), "A line repeating round trip 1's change is the family's.");
                 Assert.That(FamilyFor(line, key, grows, first), Is.EqualTo((h12, true)), "A line growing again on round trip 2 must be held back from the family.");
             });
+        }
+
+        /// <summary>
+        /// The no-growth guard on the registry, through the report itself: a line the registry classifies as derived (a BUI
+        /// state cache) stays classified on round trip 1 and when it repeats, and is a finding when it grows again on round
+        /// trip 2. The server is only for the prototypes the report reads.
+        /// </summary>
+        [Test]
+        public async Task TheRegistryNeverAbsorbsALineThatCompounds()
+        {
+            await using var pair = await PoolManager.GetServerClient();
+            var protoMan = pair.Server.ResolveDependency<IPrototypeManager>();
+            const string key = "ComputerShuttle@0,0|UserInterfaceComponent.~States";
+
+            // Early as before, so the key is not live and reaches the registry.
+            RoundTripResult Trip(string before, string after)
+            {
+                var early = new DrydockStateSnapshot();
+                var stored = new DrydockStateSnapshot();
+                var loaded = new DrydockStateSnapshot();
+                early.Values[key] = before;
+                stored.Values[key] = before;
+                loaded.Values[key] = after;
+                return new RoundTripResult(early, stored, loaded, loaded, EntityUid.Invalid, 0, 0, 0, null);
+            }
+
+            int Findings(RoundTripResult result, RoundTripResult? previous) =>
+                Report(new StringBuilder(), 0, "control", previous == null ? 1 : 2, result, null,
+                    new List<(string Recipe, List<Vector2i> Tiles)>(), null, protoMan, new HashSet<string>(StringComparer.Ordinal), previous: previous);
+
+            var first = Trip("1", "2");
+            var repeats = Trip("1", "2");
+            var grows = Trip("2", "3");
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(Registry.ContainsKey("UserInterfaceComponent.~States"), Is.True, "The control's control: the key has to be the registry's.");
+                Assert.That(Findings(first, null), Is.Zero, "The control: on round trip 1 the registry classifies the line.");
+                Assert.That(Findings(repeats, first), Is.Zero, "A line repeating round trip 1's change stays classified.");
+                Assert.That(Findings(grows, first), Is.EqualTo(1), "A line growing again on round trip 2 has to be a finding.");
+            });
+
+            await pair.CleanReturnAsync();
         }
 
         private const string CollectionMasterMember = "PowerMonitoringDeviceComponent.~CollectionMaster";
@@ -1393,6 +1436,8 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             var predictedSeen = new HashSet<PredictedRow>();
             var familyLines = new Dictionary<KnownFamily, List<string>>();
             var familyGrew = new Dictionary<KnownFamily, int>();
+            var registryGrew = 0;
+            var heldBack = new List<(string By, string Line)>();
             var timeKept = 0;
 
             var diff = DrydockStateSnapshot.Diff(result.Before, result.After);
@@ -1433,6 +1478,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                     if (grew)
                     {
                         familyGrew[family] = familyGrew.GetValueOrDefault(family) + 1;
+                        heldBack.Add(($"family {family.Name}", line));
                         findings.Add(line);
                         continue;
                     }
@@ -1462,7 +1508,18 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                 else if (RecreatedTransient(line, key, result, protoMan) != null)
                     recreatedLines.Add(line);
                 else if (key != null && Classify(key, result, recovery, out var belowFloor) is { } _)
-                    (belowFloor ? belowFloorLines : classifiedLines).Add(line);
+                {
+                    if (Compounding(line, key, result, previous))
+                    {
+                        registryGrew++;
+                        heldBack.Add(("registry", line));
+                        findings.Add(line);
+                    }
+                    else
+                    {
+                        (belowFloor ? belowFloorLines : classifiedLines).Add(line);
+                    }
+                }
                 else if (recovery == Recovery.Settled)
                     settledLines.Add(line);
                 else if (recovery == Recovery.Settling)
@@ -1566,6 +1623,13 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                                   + $". {family.Receipt}");
                 }
             }
+
+            if (previous != null)
+                sb.AppendLine($"[ladder] round trip {trip}: {registryGrew} line(s) the registry classifies compound across the trips, left as findings.");
+
+            // Every line the no-growth rule kept from an explanation, one per line so a run over many rungs can be grepped.
+            foreach (var (by, line) in heldBack)
+                sb.AppendLine($"[ladder-held-back] rung={rung} vessel={vesselId} trip={trip} by={by} {OneLine(line, 300)}");
 
             AppendKinds(sb, rung, vesselId, trip, "finding", findings, examples: 2);
             AppendKinds(sb, rung, vesselId, trip, "settling", settlingLines, examples: 1);
