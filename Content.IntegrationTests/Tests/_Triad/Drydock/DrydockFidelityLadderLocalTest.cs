@@ -690,10 +690,10 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                 "OWED to H12, wire layout and timed wire re-arm: the state data is set by each wire's action as it is added "
                 + "(WiresSystem.cs:143, :167, through SetData at :812), the statuses are refilled from the wires by "
                 + "UpdateUserInterface (:528), and both run from map init (:469-488), which the silent map-init stamp never "
-                + "raises. Sorted only where the same entity's wire list also came back empty. A UI state cache that lost the "
-                + "wires state and nothing else sorts here too: what it lost is the wires interface's own state, and H12 is "
-                + "the handler that fills it again.",
-                (_, key, result) => (OwedToH12.Contains(key[(key.IndexOf('|') + 1)..]) || LostOnlyTheWiresState(key, result))
+                + "raises. Sorted only where the same entity's wire list also came back empty. A UI state cache whose only "
+                + "unexplained loss is the wires state sorts here too: nothing pushes that state at open, and the H12 "
+                + "handler ends with WiresSystem.UpdateUserInterface (Surveyor's sweep, 2026-09-19).",
+                (_, key, result) => (OwedToH12.Contains(key[(key.IndexOf('|') + 1)..]) || CacheWaitsOn(key, result) == "H12")
                                     && result.After.Values.TryGetValue(key[..key.IndexOf('|')] + "|WiresComponent.~WiresList", out var wires)
                                     && wires.StartsWith("count=0", StringComparison.Ordinal)),
 
@@ -721,25 +721,36 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                                        && result.After.Values.TryGetValue(key, out var after)
                                        && after == "null"),
 
-            // Ruled 2026-09-19: the cache is not a class of its own; a line sorts only where every state it lost is one
-            // something fills again, and the wires state only on H12's own condition.
-            new("BUI state cache refilled on open",
-                "Accepted: UserInterfaceComponent.States holds the last state the server sent each open interface, and a "
-                + "load has no client with one open. What a player opens on a restored machine is filled at the open or "
-                + "before it: an air alarm's ActivateInWorld handler opens the interface, syncs its devices and calls "
-                + "UpdateUI in the same tick (AirAlarmSystem.cs:180, :255-273, :638-669), and every sensor packet refills "
-                + "it again (:561); a holopad fills its state on BeforeActivatableUIOpen, before the interface opens "
-                + "(HolopadSystem.cs:52, :86-89, :467-498), and its update loop refills it while one is open (:455). The "
-                + "wires state is owed to H12 instead, and sorts here only where that entity's wire list also came back "
-                + "empty, which is the H12 family's own condition. A state nothing here explains keeps the line a finding.",
-                (line, key, result) => line.StartsWith("CHANGED", StringComparison.Ordinal)
-                                       && SnapshotMember(key) == "UserInterfaceComponent.~States"
-                                       && result.Before.Values.TryGetValue(key, out var before)
-                                       && result.After.Values.TryGetValue(key, out var after)
-                                       && LostStates(before, after).All(state => RefilledOnOpen.Contains(state)
-                                                                                 || state == "WiresBoundUserInterfaceState"
-                                                                                 && result.After.Values.TryGetValue(key[..key.IndexOf('|')] + "|WiresComponent.~WiresList", out var wires)
-                                                                                 && wires.StartsWith("count=0", StringComparison.Ordinal))),
+            // Sorted by state type rather than by prototype (Surveyor's sweep, ruled 2026-09-19:
+            // resources/2026-09-19-bui-state-cache-sweep.tsv, join row 427).
+            new("BUI state cache, pushed at open by the owning system",
+                "Accepted: UserInterfaceComponent.States holds the last state the server sent each open interface, it is "
+                + "not saved, and a load has no client with one open. A client opening a BUI calls UpdateState only where "
+                + "the cache holds an entry (SharedUserInterfaceSystem.cs:1104-1121), so an empty cache is a blank window "
+                + "unless the owning system pushes at open, and these systems do: an air alarm's ActivateInWorld handler "
+                + "opens the interface, syncs its devices and calls UpdateUI in the same tick (AirAlarmSystem.cs:255-273); "
+                + "a holopad fills its state on BeforeActivatableUIOpen (HolopadSystem.cs:52, :86-89, :467-498); a gas "
+                + "mixer (GasMixerSystem.cs:151-155), a lathe (LatheSystem.cs:91) and a research client "
+                + "(ResearchSystem.Client.cs:79-81) each push theirs. Sorted only where every state the cache lost is one "
+                + "of those; a cache waiting on a handler sorts into that handler's family, and one waiting on two stays a "
+                + "finding, because no single family explains it.",
+                (line, key, result) => line.StartsWith("CHANGED", StringComparison.Ordinal) && CacheWaitsOn(key, result) == string.Empty),
+
+            // The three the sweep found nothing pushing at open. Each sorts where its handler is the only one the cache
+            // is waiting on; H21 is a new handler, the network configurator's own open push.
+            new("owed: H10",
+                "OWED to H10, the research client's re-link: a research console pushes its console state at open only "
+                + "while its client is linked to a server, and the H10 re-link raises ResearchRegistrationChangedEvent, "
+                + "which refills it (Surveyor's sweep, 2026-09-19). Sorted where the console state is the only one the "
+                + "cache is waiting on.",
+                (line, key, result) => line.StartsWith("CHANGED", StringComparison.Ordinal) && CacheWaitsOn(key, result) == "H10"),
+
+            new("owed: H21",
+                "OWED to H21, the network configurator's open push: nothing fills its list state at open, so a "
+                + "configurator in a locker or a toolbox comes back with a blank window until H21 subscribes "
+                + "BoundUIOpenedEvent to UpdateListUiState (spec resources/2026-09-18-handler-specs/"
+                + "H21-network-configurator-open-push.md). Sorted where that state is the only one the cache is waiting on.",
+                (line, key, result) => line.StartsWith("CHANGED", StringComparison.Ordinal) && CacheWaitsOn(key, result) == "H21"),
 
             // Ruled 2026-09-19, deliberately narrow: it may never absorb the state the load gets wrong.
             new("charge state caught up with a live battery",
@@ -791,22 +802,59 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                                       && (member == $"{entry.Component}Component.{entry.Member}" || member == $"{entry.Component}Component.~{entry.Member}")));
 
         /// <summary>
-        /// Whether a UI state cache lost the wires state and nothing else, which makes the line H12's rather than the
-        /// cache family's: what it lost is the wires interface's own state, and H12 is the handler that fills it again.
+        /// Which handler a UI state cache is waiting on: the empty string where every state it lost is pushed at open and
+        /// it waits on nothing, the handler's name where that handler is the only one it waits on, and null where it waits
+        /// on two of them, where a state is one nobody has read yet, or where the line is not a cache at all. A line is one
+        /// dictionary and sorts once, so a cache waiting on two handlers is explained by neither and stays a finding.
         /// </summary>
-        private static bool LostOnlyTheWiresState(string key, RoundTripResult result) =>
-            SnapshotMember(key) == "UserInterfaceComponent.~States"
-            && result.Before.Values.TryGetValue(key, out var before)
-            && result.After.Values.TryGetValue(key, out var after)
-            && LostStates(before, after).ToList() is { Count: > 0 } lost
-            && lost.All(state => state == "WiresBoundUserInterfaceState");
+        private static string? CacheWaitsOn(string key, RoundTripResult result)
+        {
+            if (SnapshotMember(key) != "UserInterfaceComponent.~States"
+                || !result.Before.Values.TryGetValue(key, out var before)
+                || !result.After.Values.TryGetValue(key, out var after))
+            {
+                return null;
+            }
 
-        /// <summary>The BUI states something fills again at or before an open, so a cache that lost one is full by the time
-        /// a player sees the interface.</summary>
-        private static readonly HashSet<string> RefilledOnOpen = new(StringComparer.Ordinal)
+            var waiting = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var state in LostStates(before, after))
+            {
+                if (PushedAtOpen.Contains(state))
+                    continue;
+
+                if (!OwedStates.TryGetValue(state, out var handler))
+                    return null;
+
+                waiting.Add(handler);
+            }
+
+            return waiting.Count switch
+            {
+                0 => string.Empty,
+                1 => waiting.Single(),
+                _ => null,
+            };
+        }
+
+        /// <summary>
+        /// The BUI states the owning system pushes at or before the open, so a cache that lost one is full by the time a
+        /// player sees the interface (Surveyor's sweep, resources/2026-09-19-bui-state-cache-sweep.tsv).
+        /// </summary>
+        private static readonly HashSet<string> PushedAtOpen = new(StringComparer.Ordinal)
         {
             "AirAlarmUIState",
             "HolopadBoundInterfaceState",
+            "GasMixerBoundUserInterfaceState",
+            "LatheUpdateState",
+            "ResearchClientBoundInterfaceState",
+        };
+
+        /// <summary>The BUI states nothing pushes at open, by the handler owed the push.</summary>
+        private static readonly Dictionary<string, string> OwedStates = new(StringComparer.Ordinal)
+        {
+            ["ResearchConsoleBoundInterfaceState"] = "H10",
+            ["WiresBoundUserInterfaceState"] = "H12",
+            ["NetworkConfiguratorUserInterfaceState"] = "H21",
         };
 
         /// <summary>
@@ -904,9 +952,9 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
         };
 
         /// <summary>
-        /// The UI cache family's control, with no server: a cache that lost only states something fills again sorts, the
-        /// wires state with them only where the wire list came back empty as the H12 family requires, a cache that lost the
-        /// wires state alone sorts as H12's, and a cache that lost anything else stays a finding.
+        /// The UI cache families' control, with no server: a cache sorts by the state types it lost, into the family where
+        /// every one of them is pushed at open, into the family of the one handler it waits on where there is exactly one,
+        /// and nowhere at all where it waits on two or where a state is one nobody has read yet.
         /// </summary>
         [Test]
         public void OnlyAUiCacheWhoseLostStatesAreExplainedSorts()
@@ -915,6 +963,8 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             const string key = $"{path}|UserInterfaceComponent.~States";
             const string alarm = "count=1 [Key=<AirAlarmUIState>]";
             const string alarmAndWires = "count=2 [Key=<AirAlarmUIState>, Key=<WiresBoundUserInterfaceState>]";
+            const string console = "count=2 [Key=<ResearchConsoleBoundInterfaceState>, Key=<WiresBoundUserInterfaceState>]";
+            const string configurator = "count=1 [List=<NetworkConfiguratorUserInterfaceState>]";
             const string nothing = "count=0 []";
 
             string? Sorted(string before, string after, string wires)
@@ -929,16 +979,20 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
 
             Assert.Multiple(() =>
             {
-                Assert.That(Sorted(alarm, nothing, nothing), Is.EqualTo("BUI state cache refilled on open"),
-                    "A cache that lost only a state the open fills again has to sort.");
-                Assert.That(Sorted(alarmAndWires, nothing, nothing), Is.EqualTo("BUI state cache refilled on open"),
-                    "The wires state sorts with it where the wire list came back empty.");
-                Assert.That(Sorted(alarmAndWires, nothing, "count=2 [- a, - b]"), Is.Null,
-                    "With the wires themselves back, the wires state is owed to nothing and the line stays a finding.");
-                Assert.That(Sorted("count=1 [Key=<FireControlConsoleBoundInterfaceState>]", nothing, nothing), Is.Null,
-                    "A state nothing here explains keeps the line a finding.");
+                Assert.That(Sorted(alarm, nothing, nothing), Is.EqualTo("BUI state cache, pushed at open by the owning system"),
+                    "A cache that lost only states the owning system pushes at open has to sort into the family.");
                 Assert.That(Sorted(alarmAndWires, alarm, nothing), Is.EqualTo("owed: H12"),
-                    "A cache that lost the wires state and nothing else is H12's, not this family's.");
+                    "One waiting on the wires state alone is H12's.");
+                Assert.That(Sorted(alarmAndWires, nothing, nothing), Is.EqualTo("owed: H12"),
+                    "So is one that lost a pushed state beside it, since only the wires state is waiting.");
+                Assert.That(Sorted(configurator, nothing, nothing), Is.EqualTo("owed: H21"),
+                    "A configurator's list state is H21's until that handler pushes it.");
+                Assert.That(Sorted(console, nothing, nothing), Is.Null,
+                    "A cache waiting on two handlers, H10 for the console state and H12 for the wires, is explained by neither.");
+                Assert.That(Sorted(alarmAndWires, nothing, "count=2 [- a, - b]"), Is.Null,
+                    "With the wires themselves back, H12's own condition fails and the line stays a finding.");
+                Assert.That(Sorted("count=1 [Key=<FireControlConsoleBoundInterfaceState>]", nothing, nothing), Is.Null,
+                    "A state nobody has read yet keeps the line a finding.");
             });
         }
 
