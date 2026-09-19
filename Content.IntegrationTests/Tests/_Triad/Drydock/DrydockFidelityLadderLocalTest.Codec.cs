@@ -6,6 +6,7 @@ using System.Linq;
 using System.Text.Json.Nodes;
 using System.Threading.Tasks;
 using Content.IntegrationTests.Pair;
+using Content.Server._Triad.Drydock;
 using Content.Server._Triad.Drydock.Codec;
 using Content.Server.Chemistry.Components;
 using Content.Shared.Chemistry;
@@ -186,8 +187,26 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
 
             CodecImage image = default!;
             var mapUid = EntityUid.Invalid;
+            var fidelity = server.System<DrydockFidelitySystem>();
+            var mobsBefore = 0;
+            var mobsUnsavable = 0;
+            var droppedUnder = new Dictionary<string, int>();
             await server.WaitPost(() =>
             {
+                droppedUnder = DroppedUnderUnsavable(entMan, grid);
+
+                // The image carries no minds and no corpses, and keeps pets, so a kept living NPC has to round-trip; the
+                // census counts them at each end, because a diff with no line for a mob cannot say which it was.
+                foreach (var uid in fidelity.GridTreeList(grid))
+                {
+                    if (entMan.GetComponent<MetaDataComponent>(uid).EntityPrototype is not { } proto || !proto.ID.StartsWith("Mob", StringComparison.Ordinal))
+                        continue;
+
+                    mobsBefore++;
+                    if (!proto.MapSavable)
+                        mobsUnsavable++;
+                }
+
                 mapUid = entMan.GetComponent<TransformComponent>(grid).MapUid!.Value;
                 var store = System.Diagnostics.Stopwatch.StartNew();
                 image = CodecStore(pair, grid);
@@ -198,7 +217,19 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             await pair.RunTicksSync((int) Math.Ceiling(ClockGapSeconds / timing.TickPeriod.TotalSeconds));
 
             EntityUid loaded = default;
-            await server.WaitPost(() => loaded = CodecLoad(pair, image, mapUid));
+            var mobsAfter = 0;
+            await server.WaitPost(() =>
+            {
+                loaded = CodecLoad(pair, image, mapUid);
+                mobsAfter = fidelity.GridTreeList(loaded)
+                    .Count(uid => entMan.GetComponent<MetaDataComponent>(uid).EntityPrototype?.ID.StartsWith("Mob", StringComparison.Ordinal) == true);
+            });
+
+            var mobsStored = image.Entities.Count(e => e.Prototype?.StartsWith("Mob", StringComparison.Ordinal) == true);
+            CodecNotes.Add($"[ladder] mob census: {mobsBefore} Mob* entit(y/ies) aboard before the store ({mobsUnsavable} of them unsavable), "
+                           + $"{mobsStored} in the image, {mobsAfter} after the load.");
+            CodecNotes.Add($"[ladder] dropped with an unsavable parent: {droppedUnder.Values.Sum()} entit(y/ies)"
+                           + (droppedUnder.Count == 0 ? "." : ": " + string.Join(", ", droppedUnder.OrderByDescending(d => d.Value).ThenBy(d => d.Key, StringComparer.Ordinal).Select(d => $"{d.Key} x{d.Value}")) + "."));
             return loaded;
         }
 
@@ -232,6 +263,33 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                 ids[aboard[i]] = i + 1;
 
             return (aboard, ids, unsaved);
+        }
+
+        /// <summary>
+        /// What the store's walk leaves out without choosing to: every entity under an unsavable one, which goes with its
+        /// parent whatever it is itself (an item in a pet's hands, a bag on a wheelchair). The unsavable entities are the
+        /// engine's rule; what rides under them is cargo the scope rule does not excuse, so it is counted by prototype.
+        /// </summary>
+        private static Dictionary<string, int> DroppedUnderUnsavable(IEntityManager entMan, EntityUid grid)
+        {
+            var dropped = new Dictionary<string, int>(StringComparer.Ordinal);
+            var stack = new Stack<(EntityUid Uid, bool UnderUnsavable)>();
+            stack.Push((grid, false));
+            while (stack.TryPop(out var entry))
+            {
+                var unsavable = entMan.GetComponent<MetaDataComponent>(entry.Uid).EntityPrototype is { MapSavable: false };
+                if (entry.UnderUnsavable)
+                {
+                    var proto = entMan.GetComponent<MetaDataComponent>(entry.Uid).EntityPrototype?.ID ?? "(no prototype)";
+                    dropped[proto] = dropped.GetValueOrDefault(proto) + 1;
+                }
+
+                var children = entMan.GetComponent<TransformComponent>(entry.Uid).ChildEnumerator;
+                while (children.MoveNext(out var child))
+                    stack.Push((child, entry.UnderUnsavable || unsavable));
+            }
+
+            return dropped;
         }
 
         /// <summary>
