@@ -49,9 +49,9 @@
       # gained by doing special handling for Stacks, especially since most
       # of the items that use Stack aren't even remotely edible.
       - Stack
-      - SpaceCash # Frontier - Cash
+      # - SpaceCash # Frontier - Cash # Triad: no such component in this fork (cash is already covered by Stack)
       - IdCard # Frontier - ID
-      - WebCocoon # Frontier
+      # - WebCocoon # Frontier # Triad: no such component in this fork
       - Pda # Frontier - ID by proxy
     whitelist:
       components:
