@@ -59,11 +59,14 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
         /// <summary>Long enough for the power chain to come up and every receiver to read powered before a recipe starts.</summary>
         private const double WorkbenchPowerSeconds = 5;
 
-        /// <summary>Long enough for a fryer to fry once (its interval is 5 s) before the store.</summary>
-        private const double WorkbenchRecipeSeconds = 6;
+        /// <summary>
+        /// Long enough for a fryer to fry three times (a tick after its start, then every 5 s) and not a fourth, which a
+        /// potato slice needs to become fries and count one crisping cycle.
+        /// </summary>
+        private const double WorkbenchRecipeSeconds = 12;
 
-        /// <summary>A cook, a grind and a manual flush last this long, so each is still under way at the store.</summary>
-        private static readonly TimeSpan WorkbenchLongTimer = TimeSpan.FromSeconds(60);
+        /// <summary>A cook, a grind and a manual flush last this long, so each is still under way after both round trips.</summary>
+        private static readonly TimeSpan WorkbenchLongTimer = TimeSpan.FromSeconds(180);
 
         /// <param name="Components">The snapshot component names (<c>PdaComponent</c>) whose keys the recipe's control prints.</param>
         /// <param name="Paths">The snapshot paths of the recipe's entities, <c>Prototype@x,y</c>.</param>
@@ -74,6 +77,12 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
 
             /// <summary>Holds the recipe's state still just before the store and says what it is (a fryer that has fried once).</summary>
             public Func<List<string>>? BeforeStore { get; init; }
+
+            /// <summary>
+            /// Reads the recipe's entities on the grid the second round trip returned: what to print, and what is wrong. What
+            /// is wrong fails the rung only when no manifest member is held off, since holding them off is how a loss is shown.
+            /// </summary>
+            public Func<EntityUid, (List<string> Notes, List<string> Wrong)>? AfterLoad { get; init; }
         }
 
         private static IEnumerable<TestCaseData> WorkbenchWaves() => new[] { new TestCaseData(1).SetName("Workbench_Wave1") };
@@ -138,6 +147,23 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             foreach (var recipe in recipes)
                 AppendRecipeControl(sb, recipe, first, second);
 
+            var wrong = new List<string>();
+            await server.WaitPost(() =>
+            {
+                foreach (var recipe in recipes)
+                {
+                    if (recipe.AfterLoad is not { } read)
+                        continue;
+
+                    var (notes, bad) = read(second.Retrieved);
+                    foreach (var note in notes)
+                        sb.AppendLine($"[workbench] recipe {recipe.Number} after the loads: {note}");
+                    foreach (var line in bad)
+                        sb.AppendLine($"[workbench] recipe {recipe.Number} WRONG after the loads: {line}");
+                    wrong.AddRange(bad.Select(line => $"recipe {recipe.Number}: {line}"));
+                }
+            });
+
             foreach (var note in CodecNotes)
                 sb.AppendLine(note);
             CodecNotes.Clear();
@@ -147,6 +173,8 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
 
             Assert.That(recipes, Is.Not.Empty, "The control: the wave placed no recipe.");
             Assert.That(first.Before.Entities, Is.GreaterThan(0), "The control: round trip 1 compared no entities.");
+            if (ManifestOff.Count == 0)
+                Assert.That(wrong, Is.Empty, "With every manifest member applied, each recipe's after-load reading has to hold; the report names each that does not.");
 
             await server.WaitPost(() => entMan.DeleteEntity(second.Retrieved));
             await pair.RunTicksSync(3);
@@ -301,8 +329,36 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                         comp.CurrentCookTimerTime = (uint) WorkbenchLongTimer.TotalSeconds;
                         containers.Insert(entMan.SpawnEntity("FoodMeat", At(9, 5)), comp.Storage);
                         entMan.System<MicrowaveSystem>().Wzhzhzh(microwave, comp, null);
-                        return new List<string> { $"cooking {entMan.HasComponent<ActiveMicrowaveComponent>(microwave)}, {WorkbenchLongTimer.TotalSeconds}s set" };
-                    }));
+                        var active = entMan.GetComponentOrNull<ActiveMicrowaveComponent>(microwave);
+                        return new List<string> { $"cooking {active != null}, {WorkbenchLongTimer.TotalSeconds}s set, malfunction time {active?.MalfunctionTime.ToString() ?? "none"}" };
+                    })
+                {
+                    // The zero-time control: its malfunction time is zero, meaning none, and a zero rebased into a deadline
+                    // already past made the microwave explode on its first tick after a load.
+                    AfterLoad = retrieved =>
+                    {
+                        var notes = new List<string>();
+                        var bad = new List<string>();
+                        var found = 0;
+                        var query = entMan.EntityQueryEnumerator<MicrowaveComponent, TransformComponent>();
+                        while (query.MoveNext(out var uid, out var comp, out var xform))
+                        {
+                            if (xform.GridUid != retrieved)
+                                continue;
+
+                            found++;
+                            var active = entMan.GetComponentOrNull<ActiveMicrowaveComponent>(uid);
+                            notes.Add($"microwave there, broken {comp.Broken}, cooking {active != null}, malfunction time {active?.MalfunctionTime.ToString() ?? "none"}");
+                            if (comp.Broken || active is { } cooking && cooking.MalfunctionTime != TimeSpan.Zero)
+                                bad.Add("the microwave has to come back whole, its malfunction time still zero");
+                        }
+
+                        if (found == 0)
+                            bad.Add("the microwave has to come back at all");
+
+                        return (notes, bad);
+                    },
+                });
             }
 
             // 5. A grinder mid-work. Its component and its start are the system's own (Access), so both go by reflection.
@@ -333,7 +389,9 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             // 6. A disposal unit engaged with something inside, its flush a minute off.
             {
                 var unit = Place(entMan, grid, "DisposalUnit", 13, 5);
-                recipes.Add(new WorkbenchRecipe(6, "disposal unit", "DisposalUnit.NextFlush", new[] { "DisposalUnitComponent" },
+                // The power receiver's keys beside the unit's: row 475's loss needs a power-off edge after the load, which
+                // nulls the flush (SharedDisposalUnitSystem.cs:249-252), and only then an on edge that re-rolls it (:256-259).
+                recipes.Add(new WorkbenchRecipe(6, "disposal unit", "DisposalUnit.NextFlush", new[] { "DisposalUnitComponent", "ApcPowerReceiverComponent" },
                     new List<string> { PathOf("DisposalUnit", 13, 5) },
                     () =>
                     {
@@ -357,15 +415,17 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                         var solutions = entMan.System<SharedSolutionContainerSystem>();
                         var oiled = solutions.TryGetSolution(fryer, comp.SolutionName, out var vat, out _)
                                     && solutions.TryAddReagent(vat.Value, "Cornoil", 50, out _);
-                        // Paper, not meat: raw meat in 550 K oil turns into cooked meat on the floor on its own, which takes
-                        // the fried item out of the basket before the store.
-                        var inserted = containers.Insert(entMan.SpawnEntity("Paper", At(5, 8)), comp.Storage);
-                        return new List<string> { $"oil added {oiled}, paper inserted {inserted}, powered {entMan.System<PowerReceiverSystem>().IsPowered(fryer)}" };
+                        // A potato slice: two fries turn it into fries, which only then take PreventCrisping, and a third fry
+                        // counts one cycle (DeepFryerSystem.cs:292-317). Raw meat would cook into cooked meat on the floor.
+                        // And paper beside it: fries never take DeepFried, and paper does, for the fried name and original name.
+                        var inserted = containers.Insert(entMan.SpawnEntity("FoodPotatoSlice", At(5, 8)), comp.Storage)
+                                       && containers.Insert(entMan.SpawnEntity("Paper", At(5, 8)), comp.Storage);
+                        return new List<string> { $"oil added {oiled}, potato slice and paper inserted {inserted}, powered {entMan.System<PowerReceiverSystem>().IsPowered(fryer)}" };
                     })
                 {
-                    // Fried once by now. The fryer fries every 5 s, and a second fry inside the live window chars the item,
-                    // so the next fry is put a minute off: the store then holds a fried item with its next fry pending,
-                    // which is what the re-applied NextFryTime is about.
+                    // Three fries by now, one a tick after the start and one each 5 s. A fourth inside the live window would
+                    // count another cycle or burn it, so the next fry is put a minute off: the store then holds fries with
+                    // one crisping cycle and a fry pending, which is what the re-applied NextFryTime is about.
                     BeforeStore = () =>
                     {
                         var comp = entMan.GetComponent<DeepFryerComponent>(fryer);
@@ -373,30 +433,63 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                         typeof(DeepFryerComponent).GetProperty(nameof(DeepFryerComponent.NextFryTime))!
                             .SetValue(comp, server.ResolveDependency<IGameTiming>().CurTime + WorkbenchLongTimer);
                         var held = comp.Storage.ContainedEntities
-                            .Select(item => $"{entMan.GetComponent<MetaDataComponent>(item).EntityPrototype?.ID ?? "(no prototype)"} named '{entMan.GetComponent<MetaDataComponent>(item).EntityName}'")
+                            .Select(item => $"{entMan.GetComponent<MetaDataComponent>(item).EntityPrototype?.ID ?? "(no prototype)"} named '{entMan.GetComponent<MetaDataComponent>(item).EntityName}'"
+                                            + (entMan.TryGetComponent<Content.Server._NF.Kitchen.Components.PreventCrispingComponent>(item, out var crisp) ? $" cycles {crisp.Cycles}" : " no PreventCrisping"))
                             .ToList();
                         return new List<string> { $"basket holds {held.Count}: {string.Join(", ", held)}; vat {comp.Solution.Volume}u; next fry {WorkbenchLongTimer.TotalSeconds}s off" };
                     },
                 });
             }
 
-            // 8. A scuttle device armed, its countdown running.
+            // 8. Two scuttle devices armed, one of each polarity: the Wyvern keeps its countdown across a map change, the
+            // RazorN asks to be disarmed by one (nuke.yml:95), and storage is a map change.
             {
-                var scuttle = Place(entMan, grid, "ScuttleDeviceRazorN", 8, 8);
-                recipes.Add(new WorkbenchRecipe(8, "scuttle device",
-                    "ScuttleDevice.RemainingTime, CooldownTime, Armed, PlayedNukeSong, NukeSongLength, SelectedNukeSong, PlayedAlertSound",
+                var keeps = Place(entMan, grid, "ScuttleDeviceWyvern", 8, 8);
+                var disarms = Place(entMan, grid, "ScuttleDeviceRazorN", 9, 9);
+                recipes.Add(new WorkbenchRecipe(8, "scuttle devices",
+                    "ScuttleDevice.RemainingTime, CooldownTime, Armed, PlayedNukeSong, NukeSongLength, SelectedNukeSong, PlayedAlertSound, ArmedMap",
                     new[] { "ScuttleDeviceComponent" },
-                    new List<string> { PathOf("ScuttleDeviceRazorN", 8, 8) },
+                    new List<string> { PathOf("ScuttleDeviceWyvern", 8, 8), PathOf("ScuttleDeviceRazorN", 9, 9) },
                     () =>
                     {
-                        // This device's own timer is 20 s, which a restored countdown would finish inside the run; a long
-                        // one keeps the countdown the thing measured, not a detonation.
-                        var comp = entMan.GetComponent<ScuttleDeviceComponent>(scuttle);
-                        comp.Timer = TimeSpan.FromMinutes(10);
-                        comp.RemainingTime = comp.Timer;
-                        entMan.System<ScuttleDeviceSystem>().ArmBomb(scuttle);
-                        return new List<string> { $"armed {entMan.GetComponent<ScuttleDeviceComponent>(scuttle).Armed}" };
-                    }));
+                        var notes = new List<string>();
+                        foreach (var device in new[] { keeps, disarms })
+                        {
+                            // The RazorN's own timer is 20 s, which a restored countdown would finish inside the run; a long
+                            // one keeps the countdown the thing measured, not a detonation.
+                            var comp = entMan.GetComponent<ScuttleDeviceComponent>(device);
+                            comp.Timer = TimeSpan.FromMinutes(10);
+                            comp.RemainingTime = comp.Timer;
+                            entMan.System<ScuttleDeviceSystem>().ArmBomb(device);
+                            notes.Add($"{entMan.GetComponent<MetaDataComponent>(device).EntityPrototype?.ID} armed {comp.Armed}, disarms on a map change {comp.DisarmOnMapChange}");
+                        }
+
+                        return notes;
+                    })
+                {
+                    AfterLoad = retrieved =>
+                    {
+                        var notes = new List<string>();
+                        var bad = new List<string>();
+                        var query = entMan.EntityQueryEnumerator<ScuttleDeviceComponent, TransformComponent, MetaDataComponent>();
+                        while (query.MoveNext(out _, out var comp, out var xform, out var meta))
+                        {
+                            if (xform.GridUid != retrieved)
+                                continue;
+
+                            var id = meta.EntityPrototype?.ID;
+                            notes.Add($"{id}: armed {comp.Armed}, remaining {comp.RemainingTime.TotalSeconds:F1}s of {comp.Timer.TotalSeconds:F0}s, armed map {comp.ArmedMap} (on map {xform.MapID})");
+                            // Two round trips run well over half a minute of countdown; one reset to the full timer on a
+                            // load leaves it within a few seconds of it.
+                            if (id == "ScuttleDeviceWyvern" && (!comp.Armed || comp.ArmedMap != xform.MapID || comp.RemainingTime > comp.Timer - TimeSpan.FromSeconds(30)))
+                                bad.Add($"{id} has to come back armed, its countdown kept (more than 30 s down after two trips) and its armed map the map it loaded onto");
+                            if (id == "ScuttleDeviceRazorN" && (comp.Armed || comp.RemainingTime != comp.Timer))
+                                bad.Add($"{id} has to come back disarmed by never being armed, its countdown at its full timer");
+                        }
+
+                        return (notes, bad);
+                    },
+                });
             }
 
             // 9. Monitors naming their machines. The link member is set as its link would set it; the readings the panels

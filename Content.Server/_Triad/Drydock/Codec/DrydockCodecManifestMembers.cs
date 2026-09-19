@@ -42,6 +42,10 @@ public enum DrydockMemberKind
     /// stable id and set back as the loaded entity's NetEntity, or null when it names nothing on the image.</summary>
     Reference,
 
+    /// <summary>Not carried: the loader works it out again from the loaded entity at its moment (a scuttle device's
+    /// armed map, from its transform). The row holds only a marker, so the loader knows the member is owed.</summary>
+    Rederive,
+
     /// <summary>One entry of a dictionary member that is otherwise not carried (a wire's state data), keyed by
     /// <see cref="DrydockManifestMember.EntryKey"/> and holding a <see cref="DrydockManifestMember.EntryType"/>. An entry
     /// the dictionary does not hold is not written, so the load leaves it absent as well.</summary>
@@ -57,6 +61,8 @@ public enum DrydockMemberKind
 /// <param name="EntryType">For an <see cref="DrydockMemberKind.Entry"/>, the type of the value under the key.</param>
 /// <param name="OwedWith">The rebuild handler (resources/2026-09-18-rebuild-list.tsv) the member waits for. An owed member
 /// is listed so the build-time test keeps guarding it, and is not written until the handler exists.</param>
+/// <param name="SkipWhen">A bool member of the same component; while it is true the member is not written, so the loaded
+/// entity keeps its default. A scuttle device that disarms on a map change comes back disarmed by never being armed.</param>
 public sealed record DrydockManifestMember(
     int Row,
     string Component,
@@ -66,7 +72,8 @@ public sealed record DrydockManifestMember(
     string? OnlyWith = null,
     Enum? EntryKey = null,
     Type? EntryType = null,
-    string? OwedWith = null)
+    string? OwedWith = null,
+    string? SkipWhen = null)
 {
     /// <summary>The member's key in a manifest row: <c>Component.Member</c>, and the entry's key after it for an entry.</summary>
     public string Key => EntryKey == null
@@ -208,9 +215,14 @@ public static class DrydockCodecManifestMembers
         new DrydockManifestMember(362, "ReagentDispenser", "DispenseAmount", Before, Field),
         new DrydockManifestMember(509, "RechargeableBlocking", "Discharged", Before, Field),
         new DrydockManifestMember(371, "RotatingLight", "Enabled", Before, Field),
-        new DrydockManifestMember(507, "ScuttleDevice", "RemainingTime", Before, Field),
+        // Storage is a map change. A device that asked to be disarmed by one comes back disarmed, by never being armed:
+        // DisarmBomb on its first tick would announce a disarm nobody made (ScuttleDeviceSystem.cs:177, :269-276).
+        // At the seam: ComponentInit resets it to the full timer (ScuttleDeviceSystem.cs:65-68), which the workbench caught.
+        new DrydockManifestMember(507, "ScuttleDevice", "RemainingTime", DrydockApplyMoment.Seam, Field, SkipWhen: "DisarmOnMapChange"),
         new DrydockManifestMember(507, "ScuttleDevice", "CooldownTime", Before, Field),
-        new DrydockManifestMember(507, "ScuttleDevice", "Armed", Before, Field),
+        new DrydockManifestMember(507, "ScuttleDevice", "Armed", Before, Field, SkipWhen: "DisarmOnMapChange"),
+        // One that does not keeps its countdown, and its armed map is the map it loads onto.
+        new DrydockManifestMember(507, "ScuttleDevice", "ArmedMap", DrydockApplyMoment.AfterStart, DrydockMemberKind.Rederive),
         new DrydockManifestMember(507, "ScuttleDevice", "PlayedNukeSong", Before, Field),
         new DrydockManifestMember(507, "ScuttleDevice", "NukeSongLength", Before, Field),
         new DrydockManifestMember(507, "ScuttleDevice", "SelectedNukeSong", Before, Field),
@@ -260,7 +272,6 @@ public static class DrydockCodecManifestMembers
         new DrydockNotCarried(494, "DisposalHolder", "Container", "the container itself, rebuilt by the container system"),
         new DrydockNotCarried(495, "ForensicScanner", "CancelToken", "a live CancellationTokenSource"),
         new DrydockNotCarried(481, "Mail", "PriorityCancelToken", "a live CancellationTokenSource"),
-        new DrydockNotCarried(507, "ScuttleDevice", "ArmedMap", "a MapId, which means nothing in another round"),
         new DrydockNotCarried(507, "ScuttleDevice", "AlertAudioStream", "a playing audio entity"),
         new DrydockNotCarried(435, "Wires", "StateData",
             "boxed values, most of them live CancellationTokenSources; PowerWireActionKey.CutWires travels as an entry of its own, and .Pulsed is owed with H12"));

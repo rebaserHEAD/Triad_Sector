@@ -9,6 +9,7 @@ using Robust.Shared.Serialization.Manager.Definition;
 using Robust.Shared.Serialization.Markdown;
 using Robust.Shared.Serialization.Markdown.Mapping;
 using Robust.Shared.Serialization.Markdown.Value;
+using Robust.Shared.Serialization.Markdown.Value;
 
 namespace Content.Server._Triad.Drydock.Codec;
 
@@ -22,6 +23,9 @@ public sealed partial class DrydockCodec
     /// <summary>The row an entity's manifest members travel in, keyed <c>Component.Member</c>.</summary>
     public const string ManifestRow = "~manifest";
 
+    /// <summary>What a <see cref="DrydockMemberKind.Rederive"/> member's row holds: only that it is owed.</summary>
+    private const string RederiveMarker = "~rederive";
+
     private static readonly ILookup<string, DrydockManifestMember> MembersByComponent =
         DrydockCodecManifestMembers.Members.ToLookup(member => member.Component, StringComparer.Ordinal);
 
@@ -31,7 +35,9 @@ public sealed partial class DrydockCodec
     /// <summary>
     /// An entity's manifest members, or null when it carries none. A member the codec carries already is not written
     /// again (<see cref="DrydockMemberKind.ReapplyCarried"/>), nor is one owed with a handler that does not exist yet
-    /// (<see cref="DrydockManifestMember.OwedWith"/>), nor a dictionary entry the dictionary does not hold. A null value is
+    /// (<see cref="DrydockManifestMember.OwedWith"/>), nor one whose <see cref="DrydockManifestMember.SkipWhen"/> flag is
+    /// set, nor a dictionary entry the dictionary does not hold. A member the loader works out again
+    /// (<see cref="DrydockMemberKind.Rederive"/>) is written as a marker and read back as null. A null value is
     /// written as an explicit null, so the read sets it rather than leaving whatever non-null default the prototype gave
     /// the new component. A value no serializer can write is counted in <paramref name="unwritable"/> by its type and left out.
     /// </summary>
@@ -52,8 +58,22 @@ public sealed partial class DrydockCodec
                 if (member.Kind == DrydockMemberKind.ReapplyCarried || member.OwedWith != null || member.OnlyWith is { } with && !names.Contains(with))
                     continue;
 
+                if (member.SkipWhen is { } flag
+                    && DrydockCodecManifestMembers.Resolve(component.GetType(), flag) is { } flagInfo
+                    && Get(flagInfo, component) is true)
+                {
+                    continue;
+                }
+
                 var info = DrydockCodecManifestMembers.Resolve(component.GetType(), member.Member)
                            ?? throw new InvalidOperationException($"Drydock codec: {member.Key} is in the manifest and not on the component.");
+
+                // Owed, not carried: the loader works it out again from the loaded entity.
+                if (member.Kind == DrydockMemberKind.Rederive)
+                {
+                    (row ??= new MappingDataNode())[member.Key] = new ValueDataNode(RederiveMarker);
+                    continue;
+                }
 
                 var value = Get(info, component);
                 if (member.EntryKey is { } entryKey)
@@ -119,7 +139,7 @@ public sealed partial class DrydockCodec
             if (member.Moment != moment)
                 continue;
 
-            if (node is ValueDataNode { IsNull: true })
+            if (node is ValueDataNode { IsNull: true } || member.Kind == DrydockMemberKind.Rederive)
             {
                 yield return (member, null);
                 continue;

@@ -104,6 +104,8 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                     "An entry of a member that is not a dictionary went unreported.");
                 Assert.That(Wrong(factory, gravity with { EntryKey = PowerWireActionKey.CutWires }), Is.Not.Null,
                     "An entry key on a member not listed as an entry went unreported.");
+                Assert.That(Wrong(factory, gravity with { SkipWhen = "NoSuchFlag" }), Is.Not.Null,
+                    "A skip flag that is not a member went unreported.");
             });
 
             await pair.CleanReturnAsync();
@@ -124,12 +126,19 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             if (entry.Kind != DrydockMemberKind.Entry && (entry.EntryKey != null || entry.EntryType != null))
                 return "carries an entry key or type, but is not listed as an entry";
 
+            if (entry.SkipWhen is { } flag
+                && (DrydockCodecManifestMembers.Resolve(registration.Type, flag) is not { } flagMember
+                    || DrydockCodecManifestMembers.MemberType(flagMember) != typeof(bool)))
+            {
+                return $"skipped when {flag}, which is not a bool member of {registration.Type.Name}";
+            }
+
             return entry.Kind switch
             {
                 DrydockMemberKind.ReapplyCarried when !dataField && !computed =>
                     "listed as re-applied, but nothing carries it: it is neither a data field nor a computed-field backing member",
                 DrydockMemberKind.Field or DrydockMemberKind.AbsoluteTime or DrydockMemberKind.ViaSystem or DrydockMemberKind.Reference
-                    or DrydockMemberKind.Entry when dataField =>
+                    or DrydockMemberKind.Entry or DrydockMemberKind.Rederive when dataField =>
                     "a data field, which the codec carries already: a census error, or the entry is a re-apply",
                 DrydockMemberKind.AbsoluteTime when type != typeof(TimeSpan) =>
                     $"listed as a time, but it is a {type.Name}",

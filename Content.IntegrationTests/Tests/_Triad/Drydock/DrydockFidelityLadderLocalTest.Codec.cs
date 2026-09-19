@@ -991,6 +991,20 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                     continue;
                 }
 
+                // A scuttle device's armed map, worked out again: the map it has loaded onto.
+                if (held.Member is { Component: "ScuttleDevice", Member: nameof(Content.Server._Mono.ScuttleDevice.ScuttleDeviceComponent.ArmedMap) })
+                {
+                    if (!entMan.TryGetComponent<Content.Server._Mono.ScuttleDevice.ScuttleDeviceComponent>(held.Uid, out var scuttle))
+                    {
+                        manifest.Miss(held.Member);
+                        continue;
+                    }
+
+                    scuttle.ArmedMap = entMan.GetComponent<TransformComponent>(held.Uid).MapID;
+                    manifest.Count(held.Member);
+                    continue;
+                }
+
                 if (held.Member is not { Component: "ExtensionCableReceiver", Member: nameof(ExtensionCableReceiverComponent.Provider) })
                 {
                     SetManifestMember(entMan, factory, held.Uid, held.Member, held.Value, manifest);
