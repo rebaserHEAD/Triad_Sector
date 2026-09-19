@@ -246,6 +246,12 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                 hullEntities++;
                 var entity = new Entity<MetaDataComponent>(uid, meta);
 
+                if (meta.EntityLifeStage < EntityLifeStage.MapInitialized)
+                {
+                    var proto = meta.EntityPrototype?.ID ?? "(no prototype)";
+                    report.PreMapInit[proto] = report.PreMapInit.GetValueOrDefault(proto) + 1;
+                }
+
                 foreach (var component in entMan.GetComponents(uid))
                 {
                     var type = component.GetType();
@@ -918,6 +924,13 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             public int Components;
             public int Keys;
 
+            /// <summary>
+            /// Entities met before their map init, by prototype. The store's owed rule is to refuse a hull holding one,
+            /// because an entity whose init has not run yet is not the entity the image describes, and the loader stamps
+            /// map-init on everything it makes. A hull from its file has none: the walk runs after the map loader's init.
+            /// </summary>
+            public readonly Dictionary<string, int> PreMapInit = new(StringComparer.Ordinal);
+
             // The four codec steps alone, apart from loading hulls, walking them and comparing trees,
             // because the wall time moves with whatever else the machine is doing and says nothing
             // about the codec. The third leg runs only on drift and is left out.
@@ -1040,6 +1053,13 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                             await TestContext.Out.WriteLineAsync($"[codec-roundtrip]     {member} x{count}");
                     }
                 }
+
+                await TestContext.Out.WriteLineAsync(
+                    $"[codec-roundtrip] entities met before their map init: {PreMapInit.Values.Sum()} of {Entities} over {Hulls} hull(s)"
+                    + (PreMapInit.Count == 0
+                        ? ", as a hull from its file should have; the store's owed rule is to refuse a hull holding one."
+                        : ": " + string.Join(", ", PreMapInit.OrderByDescending(kv => kv.Value).ThenBy(kv => kv.Key, StringComparer.Ordinal).Select(kv => $"{kv.Key} x{kv.Value}"))
+                          + ". The store's owed rule is to refuse a hull holding one."));
 
                 await TestContext.Out.WriteLineAsync(
                     $"[codec-roundtrip] time sentinels: {TimeSentinels.Values.Sum()} of {TimeOffsetValues} time-offset value(s) over {Hulls} hull(s) held exactly "
