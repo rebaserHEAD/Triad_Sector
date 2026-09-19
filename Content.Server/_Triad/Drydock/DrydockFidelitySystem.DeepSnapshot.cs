@@ -200,10 +200,15 @@ public sealed partial class DrydockFidelitySystem
                || typeof(IPrototype).IsAssignableFrom(type);
     }
 
-    public DrydockStateSnapshot DeepSnapshotGrid(EntityUid grid)
+    /// <param name="tieBreak">
+    /// An identity that survives the round trip, used only to order siblings that tie on everything a path is built
+    /// from; null leaves them in walk order. The codec ladder passes the image's stable id, because two anchored pipes
+    /// on one tile tie, and a load walks them in a different order and swaps their states.
+    /// </param>
+    public DrydockStateSnapshot DeepSnapshotGrid(EntityUid grid, Func<EntityUid, long?>? tieBreak = null)
     {
         var snapshot = new DrydockStateSnapshot();
-        var pathOf = DeepPaths(grid, snapshot);
+        var pathOf = DeepPaths(grid, snapshot, tieBreak);
         var writer = new DrydockEntityPathWriter(_serialization, target => RefPath(target, pathOf));
         var now = _timing.CurTime;
 
@@ -372,10 +377,11 @@ public sealed partial class DrydockFidelitySystem
     /// and tile; a contained entity by its container and prototype; any other child by its prototype.
     /// Siblings that share a name are suffixed <c>#n</c> in container order when contained, else anchored
     /// first and then in local-position order, so removing one entity renumbers only its own prototype's
-    /// siblings. Uncontained siblings whose anchoring and position both tie are paired by walk order and
-    /// counted in <see cref="DrydockStateSnapshot.TieBroken"/>.
+    /// siblings. Uncontained siblings whose anchoring and position both tie are paired by
+    /// <paramref name="tieBreak"/> when one is given, else by walk order, and counted in
+    /// <see cref="DrydockStateSnapshot.TieBroken"/> either way.
     /// </summary>
-    private Dictionary<EntityUid, string> DeepPaths(EntityUid grid, DrydockStateSnapshot snapshot)
+    private Dictionary<EntityUid, string> DeepPaths(EntityUid grid, DrydockStateSnapshot snapshot, Func<EntityUid, long?>? tieBreak)
     {
         var nodes = GridTreeListWithParents(grid);
         var pathOf = new Dictionary<EntityUid, string>(nodes.Count);
@@ -432,11 +438,13 @@ public sealed partial class DrydockFidelitySystem
             {
                 // Anchored first: two of one prototype on one tile, one anchored and one loose, share a
                 // position, and pairing them by walk order swaps their states across a round trip.
+                // The tie-break is last and stable, so with none the order is the walk's, as it always was.
                 var ordered = group
                     .OrderBy(n => n.Slot)
                     .ThenBy(n => n.Anchored ? 0 : 1)
                     .ThenBy(n => n.Pos.X)
                     .ThenBy(n => n.Pos.Y)
+                    .ThenBy(n => tieBreak?.Invoke(nodes[n.Node].Uid) ?? 0)
                     .ToList();
 
                 for (var i = 0; i < ordered.Count; i++)

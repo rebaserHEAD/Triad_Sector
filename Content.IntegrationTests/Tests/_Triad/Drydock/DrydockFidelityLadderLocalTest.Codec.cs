@@ -203,19 +203,12 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
         }
 
         /// <summary>
-        /// Every saved entity aboard, walked from the grid as the corpus harness walks it, each component the engine
-        /// would save written by the codec and carried as JSON text. An entity whose prototype is not savable is left
-        /// out with everything under it, as the engine's own save does, and a reference to it is off the image.
+        /// The store's walk and its id pass: every savable entity from the grid down, each given its stable id in walk
+        /// order. An entity whose prototype is not savable is left out with everything under it. The snapshots before a
+        /// store take their tie-break from the same walk, so the ids they order by are the ids the image carries.
         /// </summary>
-        private static CodecImage CodecStore(TestPair pair, EntityUid grid)
+        private static (List<EntityUid> Aboard, Dictionary<EntityUid, long> Ids, int Unsaved) StoreWalk(IEntityManager entMan, EntityUid grid)
         {
-            var server = pair.Server;
-            var entMan = server.EntMan;
-            var factory = server.ResolveDependency<IComponentFactory>();
-            var tileDefs = server.ResolveDependency<ITileDefinitionManager>();
-            var storeCollections = Collections.Now();
-            var part = System.Diagnostics.Stopwatch.StartNew();
-
             var aboard = new List<EntityUid>();
             var unsaved = 0;
             var stack = new Stack<EntityUid>();
@@ -237,6 +230,52 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             var ids = new Dictionary<EntityUid, long>();
             for (var i = 0; i < aboard.Count; i++)
                 ids[aboard[i]] = i + 1;
+
+            return (aboard, ids, unsaved);
+        }
+
+        /// <summary>
+        /// The deep snapshot's tie-break in codec mode (DrydockFidelitySystem.DeepSnapshot.cs, DeepPaths): before a
+        /// store, the id the store's walk will give; after a load, the id the image carried, from the deserializer's
+        /// map. Two anchored pipes on one tile tie on everything a path is built from, and without this a load that
+        /// walks them the other way swaps their states (112 of 112 such pairs were permutations on their tile,
+        /// 2026-09-18). Null outside codec mode, which leaves the walk order as it was.
+        /// </summary>
+        private static Func<EntityUid, long?>? TieBreakBefore(IEntityManager entMan, EntityUid grid)
+        {
+            if (!CodecMode)
+                return null;
+
+            var ids = StoreWalk(entMan, grid).Ids;
+            return uid => ids.TryGetValue(uid, out var id) ? id : null;
+        }
+
+        private static Func<EntityUid, long?>? TieBreakAfter()
+        {
+            if (!CodecMode || LastLoadIds is not { } ids)
+                return null;
+
+            return uid => ids.TryGetValue(uid, out var id) ? id : null;
+        }
+
+        /// <summary>The last load's entities by the stable id each was loaded under.</summary>
+        private static Dictionary<EntityUid, long>? LastLoadIds;
+
+        /// <summary>
+        /// Every saved entity aboard, walked from the grid as the corpus harness walks it, each component the engine
+        /// would save written by the codec and carried as JSON text. An entity whose prototype is not savable is left
+        /// out with everything under it, as the engine's own save does, and a reference to it is off the image.
+        /// </summary>
+        private static CodecImage CodecStore(TestPair pair, EntityUid grid)
+        {
+            var server = pair.Server;
+            var entMan = server.EntMan;
+            var factory = server.ResolveDependency<IComponentFactory>();
+            var tileDefs = server.ResolveDependency<ITileDefinitionManager>();
+            var storeCollections = Collections.Now();
+            var part = System.Diagnostics.Stopwatch.StartNew();
+
+            var (aboard, ids, unsaved) = StoreWalk(entMan, grid);
 
             var idPass = part.Elapsed;
 
@@ -397,6 +436,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
 
             deserializer.CreateEntities();
             var gridUid = deserializer.UidMap[(int) image.GridId];
+            LastLoadIds = deserializer.UidMap.ToDictionary(entry => entry.Value, entry => (long) entry.Key);
 
             createTime = phase.Elapsed;
             phase.Restart();

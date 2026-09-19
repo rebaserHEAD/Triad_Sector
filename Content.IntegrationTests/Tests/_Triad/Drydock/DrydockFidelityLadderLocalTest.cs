@@ -361,17 +361,34 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             var sb = new StringBuilder();
             sb.AppendLine($"[ladder] rung {rung} {vesselId} through {(EngineMode ? "the engine serializer" : CodecMode ? "the grid image" : "the drydock")}");
             sb.AppendLine($"[ladder] lived-in recipes applied: {(recipes.Count == 0 ? "none" : string.Join(", ", recipes))}");
-            var findings = Report(sb, rung, vesselId, 1, first, EngineMode || CodecMode ? null : RetrieveGrants, gasRooms, doorPath, protoMan)
-                           + Report(sb, rung, vesselId, 2, second, EngineMode || CodecMode ? null : RetrieveRestamps, gasRooms, doorPath, protoMan);
+            var findingKinds = new HashSet<string>(StringComparer.Ordinal);
+            var findings = Report(sb, rung, vesselId, 1, first, EngineMode || CodecMode ? null : RetrieveGrants, gasRooms, doorPath, protoMan, findingKinds)
+                           + Report(sb, rung, vesselId, 2, second, EngineMode || CodecMode ? null : RetrieveRestamps, gasRooms, doorPath, protoMan, findingKinds);
+
+            // A codec-mode run over many rungs stops on a rung that brings new kinds of finding faster than they can be
+            // read, or one that failed, and the rest report themselves skipped rather than burying the stop under a
+            // hundred more reports. The new kinds are printed whether or not they stop it: they are the run's product.
+            if (CodecMode)
+            {
+                var seen = SeenFindingKinds(rung);
+                var fresh = findingKinds.Where(kind => !seen.Contains(kind)).OrderBy(kind => kind, StringComparer.Ordinal).ToList();
+                foreach (var note in CodecNotes)
+                    sb.AppendLine(note);
+                CodecNotes.Clear();
+
+                sb.AppendLine($"[ladder] rung {rung} {vesselId}: {fresh.Count} new finding kind(s) against {seen.Count} seen on earlier rungs.");
+                foreach (var kind in fresh)
+                    sb.AppendLine($"[ladder-new] rung={rung} vessel={vesselId} kind={kind}");
+
+                seen.UnionWith(findingKinds);
+                if (fresh.Count > CodecStopNewKinds)
+                    CodecStopped = $"rung {rung} {vesselId}, {fresh.Count} new finding kinds";
+            }
+
             foreach (var note in CodecNotes)
                 sb.AppendLine(note);
             sb.AppendLine($"[ladder] rung {rung} {vesselId}: {first.Before.Entities} entities, {findings} finding line(s), {clock.Elapsed.TotalSeconds:F1}s wall before cleanup");
             await TestContext.Out.WriteLineAsync(sb.ToString());
-
-            // A codec-mode run over many rungs stops on a rung too large to sort, or one that logged an error, and the rest
-            // report themselves skipped rather than burying the stop under a hundred more reports.
-            if (CodecMode && findings > CodecStopFindings)
-                CodecStopped = $"rung {rung} {vesselId}, {findings} findings";
 
             Assert.That(first.Before.Entities, Is.GreaterThan(0), "The control: round trip 1 compared no entities.");
             Assert.That(second.Before.Entities, Is.GreaterThan(0), "The control: round trip 2 compared no entities.");
@@ -381,9 +398,103 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             await pair.CleanReturnAsync();
         }
 
-        private const int CodecStopFindings = 400;
+        /// <summary>
+        /// A codec-mode run stops on a rung that brings more than this many finding kinds (verb and
+        /// <c>Component.member</c>, as <see cref="KindOf"/> gives them) that no earlier rung had, or on any failure.
+        /// Kinds rather than lines, because a known kind repeats with hull size and a line count stops the run on
+        /// volume alone (rung 31, Stubby: 408 lines, 2 new kinds).
+        /// </summary>
+        private const int CodecStopNewKinds = 20;
 
         private static string? CodecStopped;
+
+        private static HashSet<string>? _seenFindingKinds;
+
+        /// <summary>
+        /// The finding kinds earlier rungs had. Seeded once, from the dumps in <c>LADDER_DUMP</c> of the rungs before the
+        /// first one this run takes, so a run resumed partway does not count every kind it meets as new. A dump holds the
+        /// settling and predicted lines too, so the seed can hold a kind that was never a finding; that errs toward not
+        /// stopping on it.
+        /// </summary>
+        private static HashSet<string> SeenFindingKinds(int rung)
+        {
+            if (_seenFindingKinds != null)
+                return _seenFindingKinds;
+
+            _seenFindingKinds = new HashSet<string>(StringComparer.Ordinal);
+            var directory = Environment.GetEnvironmentVariable("LADDER_DUMP");
+            if (string.IsNullOrEmpty(directory) || !System.IO.Directory.Exists(directory))
+                return _seenFindingKinds;
+
+            foreach (var file in System.IO.Directory.EnumerateFiles(directory, "rung*_trip*.txt"))
+            {
+                var name = System.IO.Path.GetFileName(file);
+                if (name.Length < 7 || !int.TryParse(name.AsSpan(4, 3), out var earlier) || earlier >= rung)
+                    continue;
+
+                foreach (var line in System.IO.File.ReadLines(file))
+                {
+                    if (line.Length > 0 && char.IsUpper(line[0]))
+                        _seenFindingKinds.Add(KindOf(line));
+                }
+            }
+
+            CodecNotes.Add($"[ladder] new-kind stop seeded with {_seenFindingKinds.Count} kind(s) from the dumps of rungs before {rung}.");
+            return _seenFindingKinds;
+        }
+
+        /// <summary>
+        /// A codec-mode family: lines whose cause is read in code and cited, sorted apart so that a rung's findings are
+        /// what nobody has explained. A line sorts only when its predicate holds; anything near it that does not stays
+        /// a finding.
+        /// </summary>
+        private sealed record KnownFamily(string Name, string Receipt, Func<string, string, RoundTripResult, bool> Matches);
+
+        private static readonly KnownFamily[] KnownFamilies =
+        {
+            new("occluder-rewound",
+                "Same vertices, other winding: the default polygon is clockwise (OccluderComponent.cs:26-32), the engine's "
+                + "writer omits it as default (OccluderComponent.g.cs:249) but the codec writes it, and PhysicsHullSerializer "
+                + "returns ComputePoints' counter-clockwise hull (PhysicsHullSerializer.cs:25). Its consumers ignore winding: "
+                + "the renderer normalises it (Clyde.LightRendering.cs:1730-1736), shared edges key undirected "
+                + "(ClientOccluderSystem.cs:324-334), bounds come from the vertices (OccluderSystem.cs:110). Not verified in a client.",
+                (line, key, result) => line.StartsWith("CHANGED", StringComparison.Ordinal)
+                                       && key.EndsWith("|OccluderComponent._polygon", StringComparison.Ordinal)
+                                       && result.Before.Values.TryGetValue(key, out var before)
+                                       && result.After.Values.TryGetValue(key, out var after)
+                                       && SameVertexSet(before, after)),
+            new("F23-trade-crate",
+                "OWED, not explained: a trade crate's init re-draws its destination, re-sets its icon, relabels it and restarts "
+                + "its express deadline (CargoSystem.TradeCrates.cs:53-81); the loader is to store the destination by prototype.",
+                (_, key, result) => TradeCrateMembers.Contains(key[(key.IndexOf('|') + 1)..])
+                                    && result.Before.Values.ContainsKey(key[..key.IndexOf('|')] + "|TradeCrateComponent.<present>")),
+        };
+
+        /// <summary>What <c>OnTradeCrateInit</c> rewrites (CargoSystem.TradeCrates.cs:58-80), as deep-snapshot members.</summary>
+        private static readonly HashSet<string> TradeCrateMembers = new(StringComparer.Ordinal)
+        {
+            "TradeCrateComponent.~DestinationStation",
+            $"TradeCrateComponent.~ExpressDeliveryTime{DrydockFidelitySystem.TimeSuffix}",
+            "Appearance.TradeCrateVisuals.DestinationIcon",
+            "Appearance.TradeCrateVisuals.IsPriority",
+            "LabelComponent.CurrentLabel",
+            "MetaDataComponent.name",
+        };
+
+        /// <summary>Two polygon renders (one <c>- x,y</c> per vertex) holding the same vertices in any order.</summary>
+        private static bool SameVertexSet(string before, string after)
+        {
+            static List<string> Vertices(string render) => render.Split('\n')
+                .Select(line => line.Trim())
+                .Where(line => line.StartsWith("- ", StringComparison.Ordinal))
+                .Select(line => line[2..].Trim())
+                .OrderBy(v => v, StringComparer.Ordinal)
+                .ToList();
+
+            var a = Vertices(before);
+            var b = Vertices(after);
+            return a.Count >= 3 && a.SequenceEqual(b);
+        }
 
         /// <summary>
         /// Puts the hull into states a lived-in ship has and a shuttle file does not: damage on a wall and
@@ -695,7 +806,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             var fidelity = server.System<DrydockFidelitySystem>();
 
             DrydockStateSnapshot early = default!;
-            await server.WaitPost(() => early = fidelity.DeepSnapshotGrid(grid));
+            await server.WaitPost(() => early = fidelity.DeepSnapshotGrid(grid, TieBreakBefore(server.EntMan, grid)));
             await pair.RunTicksSync(LiveWindowTicks);
 
             DrydockStateSnapshot before = default!;
@@ -704,7 +815,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                 if (lightAtClaim is { } match && server.EntMan.TryGetComponent<MatchstickComponent>(match, out var stick))
                     server.System<MatchstickSystem>().Ignite((match, stick), match);
 
-                before = fidelity.DeepSnapshotGrid(grid);
+                before = fidelity.DeepSnapshotGrid(grid, TieBreakBefore(server.EntMan, grid));
             });
 
             var clockBefore = timing.CurTime;
@@ -720,7 +831,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             var running = false;
             await server.WaitPost(() =>
             {
-                after = fidelity.DeepSnapshotGrid(retrieved);
+                after = fidelity.DeepSnapshotGrid(retrieved, TieBreakAfter());
                 running = !server.EntMan.GetComponent<MetaDataComponent>(retrieved).EntityPaused;
             });
             var elapsed = (timing.CurTime - clockBefore).TotalSeconds;
@@ -732,7 +843,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             await pair.RunTicksSync((int) Math.Ceiling(LateSeconds / timing.TickPeriod.TotalSeconds));
 
             DrydockStateSnapshot late = default!;
-            await server.WaitPost(() => late = fidelity.DeepSnapshotGrid(retrieved));
+            await server.WaitPost(() => late = fidelity.DeepSnapshotGrid(retrieved, TieBreakAfter()));
 
             return new RoundTripResult(early, before, after, late, retrieved, elapsed, shipSeconds, tickSeconds, mapInit);
         }
@@ -906,7 +1017,8 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             HashSet<string>? grants,
             List<(string Recipe, List<Vector2i> Tiles)> gasRooms,
             string? doorPath,
-            IPrototypeManager protoMan)
+            IPrototypeManager protoMan,
+            HashSet<string> findingKinds)
         {
             // A time's render carries its clock-relative half, which moves every tick, so a time key is live only when its
             // meaning moved during the window; any other key is live when its rendered value moved.
@@ -928,6 +1040,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             var movedLines = new List<string>();
             var predictedLines = new List<string>();
             var predictedSeen = new HashSet<PredictedRow>();
+            var familyLines = new Dictionary<KnownFamily, List<string>>();
             var timeKept = 0;
 
             var diff = DrydockStateSnapshot.Diff(result.Before, result.After);
@@ -957,6 +1070,16 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                 {
                     predictedLines.Add(line);
                     predictedSeen.UnionWith(rows);
+                    continue;
+                }
+
+                // A family whose cause is read in code, which would otherwise bury the new ones by its volume.
+                if (CodecMode && key != null && KnownFamilies.FirstOrDefault(f => f.Matches(line, key, result)) is { } family)
+                {
+                    if (!familyLines.TryGetValue(family, out var members))
+                        familyLines[family] = members = new List<string>();
+
+                    members.Add(line);
                     continue;
                 }
 
@@ -994,6 +1117,9 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                 if (before != after)
                     findings.Add($"CHANGED  grid|{member}#total: {before} -> {after}");
             }
+
+            foreach (var line in findings)
+                findingKinds.Add(KindOf(line));
 
             Dump(rung, vesselId, trip, result, findings.Concat(settlingLines).Concat(predictedLines));
 
@@ -1067,6 +1193,12 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             {
                 AppendKinds(sb, rung, vesselId, trip, "predicted", predictedLines, examples: 0);
                 AppendPredicted(sb, trip, predictedSeen, result);
+
+                foreach (var family in KnownFamilies)
+                {
+                    var lines = familyLines.GetValueOrDefault(family) ?? new List<string>();
+                    sb.AppendLine($"[ladder] family {family.Name}: {lines.Count} line(s). {family.Receipt}");
+                }
             }
 
             AppendKinds(sb, rung, vesselId, trip, "finding", findings, examples: 2);
