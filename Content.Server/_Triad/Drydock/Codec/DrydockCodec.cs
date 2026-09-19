@@ -22,7 +22,7 @@ namespace Content.Server._Triad.Drydock.Codec;
 /// a prototype: the whole component is written, and the delta against the prototype is taken
 /// afterwards, at the level where the prototype is known.</para>
 /// </summary>
-public sealed class DrydockCodec
+public sealed partial class DrydockCodec
 {
     private readonly ISerializationManager _serialization;
     private readonly DrydockCodecFieldPass _pass;
@@ -43,9 +43,12 @@ public sealed class DrydockCodec
         Func<long, EntityUid> resolve)
     {
         _serialization = serialization;
+        _factory = entMan.ComponentFactory;
         Context = new DrydockCodecContext(serialization, entMan, allocate, resolve);
         _pass = new DrydockCodecFieldPass(serialization, Context, entMan, timing);
     }
+
+    private readonly IComponentFactory _factory;
 
     /// <summary>
     /// The component as it will be stored.
@@ -61,6 +64,7 @@ public sealed class DrydockCodec
             component.GetType(), component, alwaysWrite: true, context: Context);
 
         _pass.AfterWrite(entity, component, mapping);
+        RemoveNotCarried(component.GetType(), mapping);
         return mapping;
     }
 

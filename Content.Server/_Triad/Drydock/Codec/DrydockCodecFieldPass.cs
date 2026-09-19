@@ -96,6 +96,24 @@ public sealed class DrydockCodecFieldPass
     }
 
     /// <summary>
+    /// An absolute game time held by an entity, as a row stores it: an offset from now, allowing for the time the entity
+    /// has been paused, exactly as a time-offset data field is written. For a manifest member, which has no data field to
+    /// be written as.
+    /// </summary>
+    public ValueDataNode WriteTime(Entity<MetaDataComponent> entity, TimeSpan value) =>
+        DrydockTimeOffsetAdapter.Write(value, entity.Comp.EntityLifeStage, _timing.CurTime, PauseTimeOf(entity));
+
+    /// <summary>The read half of <see cref="WriteTime"/>, against the clock at load.</summary>
+    public TimeSpan ReadTime(ValueDataNode node) => DrydockTimeOffsetAdapter.Read(node, _timing.CurTime);
+
+    /// <summary>
+    /// The engine's write subtracts the clock reading at which the entity paused. Content cannot see that field, so it is
+    /// reconstructed: GetPauseTime is how long it has been paused.
+    /// </summary>
+    private TimeSpan? PauseTimeOf(Entity<MetaDataComponent> entity) =>
+        entity.Comp.EntityPaused ? _timing.CurTime - _metaData.GetPauseTime(entity.Owner, entity.Comp) : null;
+
+    /// <summary>
     /// Runs on the mapping the engine's whole-component writer produced, in place.
     /// </summary>
     public void AfterWrite(Entity<MetaDataComponent> entity, IComponent component, MappingDataNode mapping)
@@ -105,13 +123,7 @@ public sealed class DrydockCodecFieldPass
         if (entries.Length == 0 && computedFields.Length == 0)
             return;
 
-        // The engine's write subtracts the clock reading at which the entity paused. Content cannot
-        // see that field, so reconstruct it: GetPauseTime is how long it has been paused.
-        var pauseTime = entity.Comp.EntityPaused
-            ? _timing.CurTime - _metaData.GetPauseTime(entity.Owner, entity.Comp)
-            : (TimeSpan?) null;
-
-        var walk = new WalkState(entity.Comp.EntityLifeStage, _timing.CurTime, pauseTime);
+        var walk = new WalkState(entity.Comp.EntityLifeStage, _timing.CurTime, PauseTimeOf(entity));
 
         foreach (var entry in entries)
         {

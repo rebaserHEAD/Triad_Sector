@@ -9,6 +9,8 @@ using Content.IntegrationTests.Pair;
 using Content.Server._Triad.Drydock;
 using Content.Server._Triad.Drydock.Codec;
 using Content.Server.Chemistry.Components;
+using Content.Server.Power.Components;
+using Content.Server.Power.EntitySystems;
 using Content.Shared.Chemistry;
 using Content.Shared.Containers.ItemSlots;
 using Robust.Shared.EntitySerialization;
@@ -60,10 +62,13 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
     /// its phases, which is what the pause was for, and a fresh map would lack the atmosphere the rung gives this
     /// one.</para>
     ///
-    /// <para>The seam between each entity's init and its startup (<c>EntityInitialized</c>) carries one thing today:
-    /// the item slots held back from init (<see cref="HoldBackSlots"/>). The manifest's members that are not data
-    /// fields (F33) are not carried yet; a copy only ever moves data fields, so such a member would get in by being
-    /// set before init, or at the seam for one an init handler resets.</para>
+    /// <para>The seam between each entity's init and its startup (<c>EntityInitialized</c>) carries the item slots held
+    /// back from init (<see cref="HoldBackSlots"/>) and the manifest's seam members. The manifest (F33,
+    /// <see cref="DrydockCodecManifestMembers"/>) carries what a copy of data fields cannot, in a row of its own, and
+    /// sets each member at its moment: before init with the rows, at the seam for one an init handler resets, after
+    /// every entity has started (a cable receiver's provider, through the cable system), and one tick after the load
+    /// for one the first power solve resets. A data field listed as carried-and-reapplied is taken off its component
+    /// after the rows and set back at its moment.</para>
     /// </summary>
     public sealed partial class DrydockFidelityLadderLocalTest
     {
@@ -102,6 +107,77 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
         private sealed record CodecEntity(long Id, string? Prototype, bool MapInitialized, bool Paused, Dictionary<string, string> Rows);
 
         private sealed record CodecImage(long GridId, List<CodecEntity> Entities, string Tiles, int Unsaved, int Bytes);
+
+        /// <summary>A manifest member decoded at the rows, or taken off its component there, held for its moment.</summary>
+        private sealed record HeldMember(EntityUid Uid, DrydockManifestMember Member, object? Value);
+
+        /// <summary>One load's manifest: what waits for a later moment, and what each moment set, missed or refused.</summary>
+        private sealed class ManifestApply
+        {
+            public int Trip;
+            public readonly List<HeldMember> Held = new();
+            public readonly Dictionary<string, int> Missing = new(StringComparer.Ordinal);
+            public readonly Dictionary<string, int> Refused = new(StringComparer.Ordinal);
+            public int Repaired;
+            public int AlreadyPaired;
+            public int StoredUnpaired;
+            public readonly Dictionary<string, int> LaterByMember = new(StringComparer.Ordinal);
+            private readonly Dictionary<DrydockApplyMoment, int> _set = new();
+
+            public void Count(DrydockManifestMember member)
+            {
+                _set[member.Moment] = _set.GetValueOrDefault(member.Moment) + 1;
+                if (member.Moment != DrydockApplyMoment.BeforeInit)
+                    LaterByMember[$"{member.Component}.{member.Member}"] = LaterByMember.GetValueOrDefault($"{member.Component}.{member.Member}") + 1;
+            }
+
+            public int Set(DrydockApplyMoment moment) => _set.GetValueOrDefault(moment);
+
+            public void Miss(DrydockManifestMember member) =>
+                Missing[$"{member.Component}.{member.Member}"] = Missing.GetValueOrDefault($"{member.Component}.{member.Member}") + 1;
+
+            public void Refuse(string key) => Refused[key] = Refused.GetValueOrDefault(key) + 1;
+        }
+
+        /// <summary>The last load's manifest, for the round trip's pass after the power solve.</summary>
+        private static ManifestApply? LastManifest;
+
+        private static readonly Dictionary<string, int> ManifestUnwritable = new(StringComparer.Ordinal);
+
+        private static readonly Dictionary<string, int> ManifestStripped = new(StringComparer.Ordinal);
+
+        private static readonly DrydockManifestMember[] ReapplyCarried =
+            DrydockCodecManifestMembers.Members.Where(m => m.Kind == DrydockMemberKind.ReapplyCarried).ToArray();
+
+        /// <summary>
+        /// A manifest member set straight onto its component. A member that goes through a system is the caller's; one
+        /// whose component the entity no longer has at its moment is counted, not set.
+        /// </summary>
+        private static void SetManifestMember(
+            IEntityManager entMan,
+            IComponentFactory factory,
+            EntityUid uid,
+            DrydockManifestMember member,
+            object? value,
+            ManifestApply apply,
+            bool dirty = false)
+        {
+            if (member.Kind == DrydockMemberKind.ViaSystem)
+                throw new InvalidOperationException($"Codec loop: {member.Component}.{member.Member} goes through its system, and the loop has no path for it.");
+
+            var registration = factory.GetRegistration(member.Component);
+            if (!entMan.TryGetComponent(uid, registration.Type, out var component))
+            {
+                apply.Miss(member);
+                return;
+            }
+
+            DrydockCodec.SetMember(component, member, value);
+            if (dirty && registration.NetID != null)
+                entMan.Dirty(uid, component);
+
+            apply.Count(member);
+        }
 
         /// <summary>
         /// The seam's hardest case: a reagent dispenser registers its beaker slot at map init and its storage slots
@@ -224,6 +300,26 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                 mobsAfter = fidelity.GridTreeList(loaded)
                     .Count(uid => entMan.GetComponent<MetaDataComponent>(uid).EntityPrototype?.ID.StartsWith("Mob", StringComparison.Ordinal) == true);
             });
+
+            // The manifest's last moment, one tick after the load: a member the first power solve resets (a door's timer,
+            // a fryer's, a flush's) is set back once it has run, and dirtied, since startup's reset of the net ticks is past.
+            await pair.RunTicksSync(1);
+            var manifest = LastManifest!;
+            await server.WaitPost(() =>
+            {
+                var factory = server.ResolveDependency<IComponentFactory>();
+                foreach (var held in manifest.Held.Where(h => h.Member.Moment == DrydockApplyMoment.AfterPowerSolve))
+                    SetManifestMember(entMan, factory, held.Uid, held.Member, held.Value, manifest, dirty: true);
+            });
+
+            CodecNotes.Add($"[ladder] codec round trip {manifest.Trip}: manifest members set before init {manifest.Set(DrydockApplyMoment.BeforeInit)}, "
+                           + $"at the seam {manifest.Set(DrydockApplyMoment.Seam)}, after startup {manifest.Set(DrydockApplyMoment.AfterStart)}, "
+                           + $"after the power solve {manifest.Set(DrydockApplyMoment.AfterPowerSolve)} ({Top(manifest.LaterByMember)}); component gone at its moment: {Top(manifest.Missing)}; "
+                           + $"not written, by type: {Top(ManifestUnwritable)}; components stripped at the store: {Top(ManifestStripped)}.");
+            CodecNotes.Add($"[ladder] codec round trip {manifest.Trip}: cable receivers: {manifest.Repaired} re-paired with the stored provider, "
+                           + $"{manifest.AlreadyPaired} already on it, {manifest.StoredUnpaired} stored unpaired and still so; refused: {Top(manifest.Refused)}.");
+            ManifestUnwritable.Clear();
+            ManifestStripped.Clear();
 
             var mobsStored = image.Entities.Count(e => e.Prototype?.StartsWith("Mob", StringComparison.Ordinal) == true);
             CodecNotes.Add($"[ladder] mob census: {mobsBefore} Mob* entit(y/ies) aboard before the store ({mobsUnsavable} of them unsavable), "
@@ -354,9 +450,19 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             {
                 var meta = entMan.GetComponent<MetaDataComponent>(uid);
                 var rows = new Dictionary<string, string>();
+                var kept = new List<IComponent>();
                 foreach (var component in entMan.GetComponents(uid))
                 {
                     var registration = factory.GetRegistration(component.GetType());
+
+                    // A component the manifest strips names a round, a crew member or a live link, and is not the ship's.
+                    if (DrydockCodecManifestMembers.Stripped.ContainsKey(registration.Name))
+                    {
+                        ManifestStripped[registration.Name] = ManifestStripped.GetValueOrDefault(registration.Name) + 1;
+                        continue;
+                    }
+
+                    kept.Add(component);
                     if (registration.Unsaved)
                         continue;
 
@@ -390,6 +496,13 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                 appearanceTime += appearanceCost;
                 if (appearanceCost > dearestAppearance)
                     dearestAppearance = appearanceCost;
+
+                if (codec.WriteManifest((uid, meta), kept, factory, ManifestUnwritable) is { } manifestRow)
+                {
+                    var text = DrydockNodeJson.Encode(manifestRow).ToJsonString();
+                    rows[DrydockCodec.ManifestRow] = text;
+                    bytes += text.Length;
+                }
 
                 entities.Add(new CodecEntity(
                     ids[uid],
@@ -516,6 +629,8 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             var removedByType = new Dictionary<string, int>(StringComparer.Ordinal);
             var heldBack = new Dictionary<EntityUid, Dictionary<string, ItemSlot>>();
             var appearanceApplied = 0;
+            var manifest = new ManifestApply();
+            LastManifest = manifest;
 
             foreach (var (uid, data) in deserializer.Entities)
             {
@@ -523,8 +638,8 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                 foreach (var (name, row) in entityRows)
                 {
                     // The grid's own grid component came in through the skeleton with its chunks; a copy of the row,
-                    // which has none, would empty it. The appearance row is not a component and goes in after them.
-                    if ((uid == gridUid && name == "MapGrid") || name == AppearanceRow)
+                    // which has none, would empty it. The appearance and manifest rows are not components and go in after them.
+                    if ((uid == gridUid && name == "MapGrid") || name == AppearanceRow || name == DrydockCodec.ManifestRow)
                         continue;
 
                     var registration = factory.GetRegistration(name);
@@ -556,6 +671,30 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                 // stored value with the truth, and a key nothing recomputes keeps it.
                 if (entityRows.TryGetValue(AppearanceRow, out var appearanceRow))
                     appearanceApplied += ReadAppearance(pair, codec, uid, appearanceRow);
+
+                // The manifest (F33): the members before init set now, the rest decoded now and held for their moment.
+                if (entityRows.TryGetValue(DrydockCodec.ManifestRow, out var manifestRow))
+                {
+                    foreach (var (member, value) in codec.ReadManifest(manifestRow, DrydockApplyMoment.BeforeInit, factory))
+                        SetManifestMember(entMan, factory, uid, member, value, manifest);
+
+                    foreach (var moment in new[] { DrydockApplyMoment.Seam, DrydockApplyMoment.AfterStart, DrydockApplyMoment.AfterPowerSolve })
+                    {
+                        foreach (var (member, value) in codec.ReadManifest(manifestRow, moment, factory))
+                            manifest.Held.Add(new HeldMember(uid, member, value));
+                    }
+                }
+
+                // A member the rows carry but an init, startup or power handler resets: taken off the component as the row
+                // left it, to be set back at its moment.
+                foreach (var member in ReapplyCarried)
+                {
+                    if (!entityRows.ContainsKey(member.Component)
+                        || !entMan.TryGetComponent(uid, factory.GetRegistration(member.Component).Type, out var carrier))
+                        continue;
+
+                    manifest.Held.Add(new HeldMember(uid, member, DrydockCodec.GetMember(carrier, member)));
+                }
 
                 if (entMan.GetComponent<MetaDataComponent>(uid).EntityPrototype is not { } prototype)
                     continue;
@@ -595,8 +734,29 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             // Pass (i), at the seam: into the slot init re-added, so a startup handler already sees the restored state.
             // A key nothing re-added yet waits, because a startup handler may still add it (a gas canister does,
             // SharedGasCanisterSystem.cs:33-37), and adding the stored one now would make that a duplicate.
+            var seamMembers = manifest.Held.Where(h => h.Member.Moment == DrydockApplyMoment.Seam).ToLookup(h => h.Uid);
+            var metaSystem = server.System<MetaDataSystem>();
+
             void AtSeam(Entity<MetaDataComponent> entity)
             {
+                // The manifest's seam members: after the init handler that resets them, before any startup handler reads them.
+                foreach (var member in seamMembers[entity.Owner])
+                {
+                    if (member.Member is { Component: "MetaData", Member: nameof(MetaDataComponent.EntityName) })
+                    {
+                        // Through the system, which raises the rename the name's other readers follow.
+                        if (member.Value is string name)
+                        {
+                            metaSystem.SetEntityName(entity.Owner, name, entity.Comp);
+                            manifest.Count(member.Member);
+                        }
+
+                        continue;
+                    }
+
+                    SetManifestMember(entMan, factory, member.Uid, member.Member, member.Value, manifest);
+                }
+
                 if (!heldBack.TryGetValue(entity.Owner, out var held))
                     return;
 
@@ -651,6 +811,57 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
 
             heldBack.Clear();
 
+            // The manifest's after-startup members, once every entity has started: a receiver's provider, set back through
+            // the cable system, because startup paired it with whichever provider was nearest and connectable then.
+            var cables = server.System<ExtensionCableSystem>();
+            foreach (var held in manifest.Held.Where(h => h.Member.Moment == DrydockApplyMoment.AfterStart))
+            {
+                if (held.Member is not { Component: "ExtensionCableReceiver", Member: nameof(ExtensionCableReceiverComponent.Provider) })
+                {
+                    SetManifestMember(entMan, factory, held.Uid, held.Member, held.Value, manifest);
+                    continue;
+                }
+
+                if (!entMan.TryGetComponent<ExtensionCableReceiverComponent>(held.Uid, out var receiver))
+                {
+                    manifest.Miss(held.Member);
+                    continue;
+                }
+
+                var receiverProto = entMan.GetComponent<MetaDataComponent>(held.Uid).EntityPrototype?.ID ?? "(no prototype)";
+                if (held.Value is not EntityUid providerUid)
+                {
+                    if (receiver.Provider != null)
+                        manifest.Refuse($"{receiverProto} stored unpaired, paired at startup");
+                    else
+                        manifest.StoredUnpaired++;
+
+                    continue;
+                }
+
+                if (!entMan.TryGetComponent<ExtensionCableProviderComponent>(providerUid, out var provider))
+                {
+                    manifest.Refuse($"{receiverProto} stored provider not on the image");
+                    continue;
+                }
+
+                if (receiver.Provider?.Owner == providerUid)
+                {
+                    manifest.AlreadyPaired++;
+                    continue;
+                }
+
+                if (cables.TryPairReceiver((held.Uid, receiver), (providerUid, provider)))
+                {
+                    manifest.Repaired++;
+                    manifest.Count(held.Member);
+                }
+                else
+                {
+                    manifest.Refuse($"{receiverProto} to {entMan.GetComponent<MetaDataComponent>(providerUid).EntityPrototype?.ID ?? "(no prototype)"}");
+                }
+            }
+
             startTime = phase.Elapsed;
 
             // The engine's reading of the tiles against the image's own.
@@ -661,6 +872,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                 .ToHashSet();
 
             var trip = CodecNotes.Count(note => note.Contains(" entities stored (", StringComparison.Ordinal)) + 1;
+            manifest.Trip = trip;
             CodecNotes.Add($"[ladder] codec round trip {trip}: {image.Entities.Count} entities stored ({image.Unsaved} unsavable left out with what they held), "
                            + $"{image.Entities.Sum(e => e.Rows.Count)} rows, {image.Bytes} bytes of JSON text; "
                            + $"tiles {stored.Count} stored, {restored.Count} restored, {stored.Except(restored).Count()} missing, {restored.Except(stored).Count()} extra.");

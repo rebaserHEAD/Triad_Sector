@@ -41,7 +41,15 @@ public enum DrydockMemberKind
 /// <param name="Row">The census join's row id (resources/2026-09-17-census-join.tsv, column f33).</param>
 /// <param name="Component">The component's registration name.</param>
 /// <param name="Member">The field or property on the component or one of its base types.</param>
-public sealed record DrydockManifestMember(int Row, string Component, string Member, DrydockApplyMoment Moment, DrydockMemberKind Kind);
+/// <param name="OnlyWith">A component the entity must also carry for the member to travel: a fried item's name is the
+/// member, and every entity has a name.</param>
+public sealed record DrydockManifestMember(
+    int Row,
+    string Component,
+    string Member,
+    DrydockApplyMoment Moment,
+    DrydockMemberKind Kind,
+    string? OnlyWith = null);
 
 /// <param name="Reason">Why it is not carried, which is the whole point of listing it.</param>
 public sealed record DrydockNotCarried(int Row, string Component, string Member, string Reason);
@@ -69,7 +77,7 @@ public static class DrydockCodecManifestMembers
         new DrydockManifestMember(223, "ExpendableLight", "CurrentState", DrydockApplyMoment.Seam, Field),
         // The fry handler takes the current name as the original and prefixes it again (DeepFryerSystem.cs:746-751).
         new DrydockManifestMember(448, "DeepFried", "OriginalName", DrydockApplyMoment.Seam, DrydockMemberKind.ReapplyCarried),
-        new DrydockManifestMember(448, "MetaData", "EntityName", DrydockApplyMoment.Seam, DrydockMemberKind.ViaSystem),
+        new DrydockManifestMember(448, "MetaData", "EntityName", DrydockApplyMoment.Seam, DrydockMemberKind.ViaSystem, OnlyWith: "DeepFried"),
         // Init also re-arms a Timer.Spawn at the full duration (CargoSystem.TradeCrates.cs:77-80), which this does not
         // re-arm; the remedy is a marked edit leaving a stored deadline alone, after which before-init is right.
         new DrydockManifestMember(456, "TradeCrate", "ExpressDeliveryTime", DrydockApplyMoment.Seam, Time),
