@@ -142,7 +142,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             await using var pair = await PoolManager.GetServerClient();
             var factory = pair.Server.ResolveDependency<IComponentFactory>();
             var gravity = DrydockCodecManifestMembers.Members.Single(m => m.Component == "GravityGenerator");
-            var fryer = DrydockCodecManifestMembers.Members.Single(m => m.Component == "DeepFryer");
+            var reapplied = DrydockCodecManifestMembers.Members.Single(m => m.Kind == DrydockMemberKind.ReapplyCarried);
             var cutWires = DrydockCodecManifestMembers.Members.Single(m => Equals(m.EntryKey, PowerWireActionKey.CutWires));
 
             // The writability check pointed at the member a store found unwritable, which resolves, and at collections one
@@ -170,7 +170,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                     "A component that is not registered went unreported.");
                 Assert.That(Wrong(factory, gravity with { Member = "GravityActiveThatIsNot" }), Is.Not.Null,
                     "A member that does not exist went unreported.");
-                Assert.That(Wrong(factory, fryer with { Kind = DrydockMemberKind.Field }), Is.Not.Null,
+                Assert.That(Wrong(factory, reapplied with { Kind = DrydockMemberKind.Field }), Is.Not.Null,
                     "A data field listed as carried by the manifest went unreported, and it would be written twice.");
                 Assert.That(Wrong(factory, gravity with { Kind = DrydockMemberKind.ReapplyCarried }), Is.Not.Null,
                     "A member listed as re-applied that nothing carries went unreported.");

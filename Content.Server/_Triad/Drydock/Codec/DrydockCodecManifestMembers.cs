@@ -15,9 +15,6 @@ public enum DrydockApplyMoment
 
     /// <summary>After <c>StartEntities</c>: a startup handler resets it.</summary>
     AfterStart,
-
-    /// <summary>After the first power solve: a power-edge handler resets it.</summary>
-    AfterPowerSolve,
 }
 
 /// <summary>How a manifest member travels.</summary>
@@ -93,10 +90,13 @@ public sealed record DrydockNotCarried(int Row, string Component, string Member,
 ///
 /// <para>Out by scope (the image carries no mobs): rows 316, 449, 450, 452, 454, 505 and 508. Out by verdict: rows 104,
 /// 399, 400, and 498 (a worn stethoscope goes ashore with its wearer), and row 507's music state, listed in
-/// <see cref="NotCarried"/>. Out as unreachable: row 506, whose console no prototype carries. Out as not reproduced:
-/// row 475, a disposal unit's next flush, which only a power-off edge would lose (SharedDisposalUnitSystem.cs:249-252)
-/// and the load path has none, while the on edge's ManualEngage keeps the smaller of the carried time and a fresh one
-/// (:686). Row 453 is a data field list the codec carries.</para>
+/// <see cref="NotCarried"/>. Out as unreachable: row 506, whose console no prototype carries. Out with the fourth moment,
+/// after the first power solve, which was cut (ruled 2026-09-19): rows 204, 474, 475 and 476, a door's auto-close, a
+/// fryer's next fry, a disposal unit's flush and a cargo telepad's cycle, each of which the power edge re-arms to a full
+/// delay or restarts from idle with nothing lost, so the ladder sorts them as accepted. Row 204's time is still carried,
+/// by the computed-field manifest, so a door is not snapped shut at init, and row 475 was never reproduced
+/// (ManualEngage keeps the smaller time, SharedDisposalUnitSystem.cs:686). Row 453 is a data field list the codec
+/// carries.</para>
 /// </summary>
 public static class DrydockCodecManifestMembers
 {
@@ -115,11 +115,6 @@ public static class DrydockCodecManifestMembers
         // Init also re-arms a Timer.Spawn at the full duration (CargoSystem.TradeCrates.cs:77-80), which this does not
         // re-arm; the remedy is a marked edit leaving a stored deadline alone, after which before-init is right.
         new DrydockManifestMember(456, "TradeCrate", "ExpressDeliveryTime", DrydockApplyMoment.Seam, Time),
-
-        // clobber:power-edge, after the first power solve. All three are carried already and only re-applied.
-        new DrydockManifestMember(476, "CargoTelepad", "CurrentState", DrydockApplyMoment.AfterPowerSolve, DrydockMemberKind.ReapplyCarried),
-        new DrydockManifestMember(474, "DeepFryer", "NextFryTime", DrydockApplyMoment.AfterPowerSolve, DrydockMemberKind.ReapplyCarried),
-        new DrydockManifestMember(204, "Door", "NextStateChange", DrydockApplyMoment.AfterPowerSolve, DrydockMemberKind.ReapplyCarried),
 
         // clobber:startup, after StartEntities.
         new DrydockManifestMember(477, "ExtensionCableReceiver", "Provider", DrydockApplyMoment.AfterStart, DrydockMemberKind.ViaSystem),

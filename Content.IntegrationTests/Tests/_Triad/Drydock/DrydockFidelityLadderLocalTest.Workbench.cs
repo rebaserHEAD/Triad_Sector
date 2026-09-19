@@ -438,7 +438,8 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             // 7. A fryer with oil and an item, which the wait before the store fries once.
             {
                 var fryer = Place(entMan, grid, "KitchenDeepFryer", 5, 8);
-                recipes.Add(new WorkbenchRecipe(7, "deep fryer", "DeepFryer.NextFryTime; PreventCrisping.Cycles; DeepFried.OriginalName; MetaData.EntityName",
+                recipes.Add(new WorkbenchRecipe(7, "deep fryer",
+                    "PreventCrisping.Cycles; DeepFried.OriginalName; MetaData.EntityName; DeepFryer.NextFryTime, re-armed by the power edge and accepted",
                     new[] { "DeepFryerComponent", "PreventCrispingComponent", "DeepFriedComponent", "MetaDataComponent" },
                     new List<string> { PathOf("KitchenDeepFryer", 5, 8) },
                     () =>
@@ -456,8 +457,8 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                     })
                 {
                     // Three fries by now, one a tick after the start and one each 5 s. A fourth inside the live window would
-                    // count another cycle or burn it, so the next fry is put a minute off: the store then holds fries with
-                    // one crisping cycle and a fry pending, which is what the re-applied NextFryTime is about.
+                    // count another cycle or burn it, so the next fry is put three minutes off: the store then holds fries
+                    // with one crisping cycle and a fry pending, whose timer the load's power edge re-arms to a full interval.
                     BeforeStore = () =>
                     {
                         var comp = entMan.GetComponent<DeepFryerComponent>(fryer);

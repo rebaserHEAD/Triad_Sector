@@ -67,10 +67,10 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
     /// <para>The seam between each entity's init and its startup (<c>EntityInitialized</c>) carries the item slots held
     /// back from init (<see cref="HoldBackSlots"/>) and the manifest's seam members. The manifest (F33,
     /// <see cref="DrydockCodecManifestMembers"/>) carries what a copy of data fields cannot, in a row of its own, and
-    /// sets each member at its moment: before init with the rows, at the seam for one an init handler resets, after
-    /// every entity has started (a cable receiver's provider, through the cable system), and one tick after the load
-    /// for one the first power solve resets. A data field listed as carried-and-reapplied is taken off its component
-    /// after the rows and set back at its moment.</para>
+    /// sets each member at its moment: before init with the rows, at the seam for one an init handler resets, and after
+    /// every entity has started (a cable receiver's provider, through the cable system). A data field listed as
+    /// carried-and-reapplied is taken off its component after the rows and set back at its moment. What the first power
+    /// solve re-arms has no moment; the ladder sorts it as accepted.</para>
     /// </summary>
     public sealed partial class DrydockFidelityLadderLocalTest
     {
@@ -168,7 +168,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             public void SeamOn(string key) => SeamByPrototype[key] = SeamByPrototype.GetValueOrDefault(key) + 1;
         }
 
-        /// <summary>The last load's manifest, for the round trip's pass after the power solve.</summary>
+        /// <summary>The last load's manifest, for the round trip's notes and failures.</summary>
         private static ManifestApply? LastManifest;
 
         /// <summary>
@@ -217,8 +217,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             EntityUid uid,
             DrydockManifestMember member,
             object? value,
-            ManifestApply apply,
-            bool dirty = false)
+            ManifestApply apply)
         {
             if (member.Kind == DrydockMemberKind.ViaSystem)
                 throw new InvalidOperationException($"Codec loop: {member.Component}.{member.Member} goes through its system, and the loop has no path for it.");
@@ -231,9 +230,6 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             }
 
             DrydockCodec.SetMember(component, member, value);
-            if (dirty && registration.NetID != null)
-                entMan.Dirty(uid, component);
-
             apply.Count(member);
         }
 
@@ -482,23 +478,13 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                     .Count(uid => entMan.GetComponent<MetaDataComponent>(uid).EntityPrototype?.ID.StartsWith("Mob", StringComparison.Ordinal) == true);
             });
 
-            // The manifest's last moment, one tick after the load: a member the first power solve resets (a door's timer,
-            // a fryer's) is set back once it has run, and dirtied, since startup's reset of the net ticks is past.
-            await pair.RunTicksSync(1);
             var manifest = LastManifest!;
-            await server.WaitPost(() =>
-            {
-                var factory = server.ResolveDependency<IComponentFactory>();
-                foreach (var held in manifest.Held.Where(h => h.Member.Moment == DrydockApplyMoment.AfterPowerSolve))
-                    SetManifestMember(entMan, factory, held.Uid, held.Member, held.Value, manifest, dirty: true);
-            });
-
             var unwritable = ManifestUnwritable
                 .GroupBy(u => $"{u.Member.Key} on {u.Prototype ?? "(no prototype)"}", StringComparer.Ordinal)
                 .ToDictionary(g => g.Key, g => g.Count(), StringComparer.Ordinal);
             CodecNotes.Add($"[ladder] codec round trip {manifest.Trip}: manifest members set before init {manifest.Set(DrydockApplyMoment.BeforeInit)}, "
-                           + $"at the seam {manifest.Set(DrydockApplyMoment.Seam)}, after startup {manifest.Set(DrydockApplyMoment.AfterStart)}, "
-                           + $"after the power solve {manifest.Set(DrydockApplyMoment.AfterPowerSolve)} ({Top(manifest.LaterByMember)}); component gone at its moment: {Top(manifest.Missing)}; "
+                           + $"at the seam {manifest.Set(DrydockApplyMoment.Seam)}, after startup {manifest.Set(DrydockApplyMoment.AfterStart)} "
+                           + $"({Top(manifest.LaterByMember)}); component gone at its moment: {Top(manifest.Missing)}; "
                            + $"not written at the store: {Top(unwritable)}; components stripped at the store: {Top(ManifestStripped)}.");
             CodecNotes.Add($"[ladder] codec round trip {manifest.Trip}: cable receivers: {manifest.Repaired} re-paired with the stored provider, "
                            + $"{manifest.AlreadyPaired} already on it, {manifest.StoredUnpaired} stored unpaired and still so; refused: {Top(manifest.Refused)}.");
@@ -884,7 +870,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                             SetManifestMember(entMan, factory, uid, member, value, manifest);
                     }
 
-                    foreach (var moment in new[] { DrydockApplyMoment.Seam, DrydockApplyMoment.AfterStart, DrydockApplyMoment.AfterPowerSolve })
+                    foreach (var moment in new[] { DrydockApplyMoment.Seam, DrydockApplyMoment.AfterStart })
                     {
                         foreach (var (member, value) in codec.ReadManifest(manifestRow, moment, factory))
                         {

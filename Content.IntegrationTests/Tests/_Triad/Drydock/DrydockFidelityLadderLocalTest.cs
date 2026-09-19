@@ -648,6 +648,28 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                 (_, key, result) => OwedToH12.Contains(key[(key.IndexOf('|') + 1)..])
                                     && result.After.Values.TryGetValue(key[..key.IndexOf('|')] + "|WiresComponent.~WiresList", out var wires)
                                     && wires.StartsWith("count=0", StringComparison.Ordinal)),
+
+            // What the manifest's fourth moment, after the first power solve, set back before it was cut (ruled 2026-09-19).
+            new("re-armed by the power edge",
+                "Accepted: the power edge a load raises re-arms a timer to its full delay or restarts an idle cycle, and nothing "
+                + "is lost (Surveyor's consequence triage, 2026-09-19). An open door's auto-close to a full AutoCloseDelay "
+                + "(AirlockSystem.cs:36-53, SharedAirlockSystem.cs:106-127); a fryer's next fry to a full FryInterval "
+                + "(DeepFryerSystem.cs:481-486); an engaged disposal unit's flush through ManualEngage, which keeps the smaller "
+                + "(SharedDisposalUnitSystem.cs:241-261, :686); a cargo telepad back to idle, its accumulator at its delay, "
+                + "holding no order, since orders live in the station's database (CargoSystem.Telepad.cs:40-46, :131-152, :66-69).",
+                (line, key, _) => line.StartsWith("CHANGED", StringComparison.Ordinal)
+                                  && RearmedByThePowerEdge.Contains(key[(key.IndexOf('|') + 1)..])),
+        };
+
+        /// <summary>What the power edge a load raises re-arms or restarts, as deep-snapshot members.</summary>
+        private static readonly HashSet<string> RearmedByThePowerEdge = new(StringComparer.Ordinal)
+        {
+            $"DoorComponent.~NextStateChange{DrydockFidelitySystem.TimeSuffix}",
+            $"DeepFryerComponent.NextFryTime{DrydockFidelitySystem.TimeSuffix}",
+            $"DisposalUnitComponent.NextFlush{DrydockFidelitySystem.TimeSuffix}",
+            "CargoTelepadComponent.CurrentState",
+            "CargoTelepadComponent.Accumulator",
+            "Appearance.CargoTelepadVisuals.State",
         };
 
         /// <summary>
