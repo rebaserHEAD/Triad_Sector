@@ -170,7 +170,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             "ShipOwnershipComponent.LastStatusChangeTime",
         };
 
-        private enum StateClass
+        internal enum StateClass
         {
             /// <summary>Simulation state that moves on its own. Accepted while it is settling, settled or within
             /// <see cref="LiveTolerance"/> of its stored value; a jump past that stays a finding. A time is a
@@ -197,21 +197,23 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
         /// <summary>
         /// The ladder's classification registry, keyed <c>Component.member</c> or <c>Component.*</c>. Every
         /// entry is an explained difference; anything not here is a finding until explained. This is the seed
-        /// of the census registry the grid image design calls for.
+        /// of the census registry the grid image design calls for. Internal, for the manifest test's check that no member
+        /// the manifest carries is classified here (DrydockCodecManifestMembersTest).
         /// </summary>
-        private static readonly Dictionary<string, (StateClass Class, string Reason)> Registry = new(StringComparer.Ordinal)
+        internal static readonly Dictionary<string, (StateClass Class, string Reason)> Registry = new(StringComparer.Ordinal)
         {
+            // Not here, because the manifest carries them and a difference on one is its failure: an extension-cable
+            // receiver's provider, an APC's and a SMES's last charge state, a SMES's last charge level, a wire panel's
+            // visibility (rows 477, 85, 39, 38 and 437).
             ["HTNComponent.~PlanAccumulator"] = (StateClass.Volatile, "NPC planner tick accumulator"),
             ["HTNComponent.~PlanningJob"] = (StateClass.Volatile, "in-flight planner job"),
             ["HTNComponent.~PlanningToken"] = (StateClass.Volatile, "in-flight planner cancellation token"),
             ["GridAtmosphereComponent.~EqualizationQueueCycleControl"] = (StateClass.Volatile, "atmos processing cursor"),
             ["UserInterfaceComponent.~States"] = (StateClass.Derived, "BUI state cache, rebuilt on the next UI update"),
-            ["ApcComponent.~LastChargeState"] = (StateClass.Derived, "APC visual and UI update throttle cache"),
             ["ApcComponent.~LastExternalState"] = (StateClass.Derived, "APC visual and UI update throttle cache"),
             ["ApcComponent.~LastChargeStateTime"] = (StateClass.Derived, "APC visual and UI update throttle cache"),
             ["ApcPowerProviderComponent.~LinkedReceivers"] = (StateClass.Derived, "receiver pairing is reassigned on reconnect"),
             ["ExtensionCableProviderComponent.~LinkedReceivers"] = (StateClass.Derived, "receiver pairing is reassigned on reconnect"),
-            ["ExtensionCableReceiverComponent.~Provider"] = (StateClass.Derived, "receiver pairing is reassigned on reconnect"),
             ["ApcPowerReceiverComponent.~Provider"] = (StateClass.Derived, "receiver pairing is reassigned on reconnect"),
             ["ThermalSignatureComponent.*"] = (StateClass.Live, "heat signature accumulator"),
             ["BatteryComponent.CurrentCharge"] = (StateClass.Live, "battery charge under load"),
@@ -220,13 +222,10 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             ["HTNComponent.CheckServices"] = (StateClass.Volatile, "planner flag toggled every planning cycle (HTNSystem)"),
             ["PressurizedSolutionComponent.SprayFizzinessThresholdRoll"] = (StateClass.Volatile, "RNG threshold pre-rolled for prediction; a re-roll keeps the odds"),
             ["ShipActivityComponent.*"] = (StateClass.Volatile, "inactivity counters, re-measured every check interval (LimitedShuttleSystem.Update)"),
-            ["WiresPanelComponent.~Visible"] = (StateClass.Derived, "panel sprite visibility; appearance only"),
-            ["SmesComponent.~LastChargeState"] = (StateClass.Derived, "SMES visual and UI update throttle cache"),
             ["HandheldLightComponent.~Level"] = (StateClass.Derived, "light level appearance cache"),
             ["GridPathfindingComponent.~Chunks"] = (StateClass.Derived, "pathfinding graph, rebuilt after load"),
             ["GasCanisterComponent.~LastPressure"] = (StateClass.Derived, "canister UI and appearance cache"),
             ["Appearance.ApcVisuals.ChargeState"] = (StateClass.Derived, "follows the APC battery, which the retrieve brownout drains"),
-            ["SmesComponent.~LastChargeLevel"] = (StateClass.Derived, "SMES visual and UI update throttle cache"),
             ["PowerNetworkBatteryComponent.~NetworkBattery"] = (StateClass.Derived, "the power solver's battery record, rebuilt with the net"),
             ["PowerSupplierComponent.~NetworkSupply"] = (StateClass.Derived, "the power solver's supplier record, rebuilt with the net"),
             ["RadiationReceiverComponent.~CurrentRadiation"] = (StateClass.Volatile, "radiation reading, recomputed every radiation update"),

@@ -133,6 +133,29 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
         }
 
         /// <summary>
+        /// A member the manifest carries is one whose loss is a finding, so the fidelity ladder's registry must not classify
+        /// it: an entry there sorts its difference as explained (live, volatile or derived), which would hide the manifest
+        /// failing to carry it. Checked by the keys the deep snapshot gives the member, its own and its component's wildcard.
+        /// </summary>
+        [Test]
+        public async Task NoManifestMemberIsClassifiedByTheLadder()
+        {
+            await using var pair = await PoolManager.GetServerClient();
+            var factory = pair.Server.ResolveDependency<IComponentFactory>();
+
+            var both = Classified(factory, DrydockCodecManifestMembers.Members, DrydockFidelityLadderLocalTest.Registry.Keys);
+            await TestContext.Out.WriteLineAsync(
+                $"[manifest] {DrydockCodecManifestMembers.Members.Length} member entries against the ladder's {DrydockFidelityLadderLocalTest.Registry.Count} "
+                + $"registry entries: {both.Count} classified by both.");
+            foreach (var line in both)
+                await TestContext.Out.WriteLineAsync($"[manifest]   {line}");
+
+            Assert.That(both, Is.Empty, "A member the manifest carries must not be classified by the ladder's registry; the list above names each that is.");
+
+            await pair.CleanReturnAsync();
+        }
+
+        /// <summary>
         /// The control: each check above is an absence, which a broken check reports too, so the same check is pointed at
         /// entries corrupted one way each.
         /// </summary>
@@ -196,9 +219,47 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                 Assert.That(songs, Does.Contain(nameof(ResolvedSoundSpecifier)),
                     "A collection of a type no serializer writes went unreported: its empty sample writes, so what it holds has to be sampled on its own.");
                 Assert.That(anything, Is.Not.Null, "A member declared as object went unreported.");
+
+                Assert.That(Classified(factory, new[] { gravity }, new[] { "GravityGeneratorComponent.~GravityActive" }), Is.Not.Empty,
+                    "A registry entry classifying a carried member by its own key went unreported.");
+                Assert.That(Classified(factory, new[] { gravity }, new[] { "GravityGeneratorComponent.*" }), Is.Not.Empty,
+                    "A registry entry classifying a carried member by its component's wildcard went unreported.");
+                Assert.That(Classified(factory, new[] { reapplied }, new[] { "DeepFriedComponent.OriginalName" }), Is.Not.Empty,
+                    "A registry entry classifying a carried data field, whose key has no tilde, went unreported.");
+                Assert.That(Classified(factory, new[] { gravity }, new[] { "GravityGeneratorComponent.GravityActive" }), Is.Empty,
+                    "The control's control: a member that is not a data field is keyed with a tilde, so the key without one is not its.");
             });
 
             await pair.CleanReturnAsync();
+        }
+
+        /// <summary>
+        /// The members the given registry keys classify, each by the keys the deep snapshot gives it:
+        /// <c>XComponent.Member</c> for a data field and <c>XComponent.~Member</c> for anything else
+        /// (DrydockFidelitySystem.DeepSnapshot.cs:510, :561), and its component's <c>XComponent.*</c>.
+        /// </summary>
+        private static List<string> Classified(IComponentFactory factory, IEnumerable<DrydockManifestMember> members, IEnumerable<string> registry)
+        {
+            var keys = registry.ToHashSet(StringComparer.Ordinal);
+            var both = new List<string>();
+            foreach (var entry in members)
+            {
+                if (!factory.TryGetRegistration(entry.Component, out var registration)
+                    || DrydockCodecManifestMembers.Resolve(registration.Type, entry.Member) is not { } member)
+                {
+                    continue;
+                }
+
+                var type = registration.Type.Name;
+                var own = member.GetCustomAttribute<DataFieldBaseAttribute>() != null ? $"{type}.{entry.Member}" : $"{type}.~{entry.Member}";
+                foreach (var key in new[] { own, $"{type}.*" })
+                {
+                    if (keys.Contains(key))
+                        both.Add($"row {entry.Row} {entry.Key} is classified by the ladder as {key}");
+                }
+            }
+
+            return both;
         }
 
         /// <summary>
