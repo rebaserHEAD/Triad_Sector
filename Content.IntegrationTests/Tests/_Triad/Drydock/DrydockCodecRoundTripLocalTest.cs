@@ -3,6 +3,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Reflection;
 using System.Threading.Tasks;
 using Content.Server._Triad.Drydock.Codec;
 using Content.Shared._NF.Shipyard.Prototypes;
@@ -114,6 +115,8 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             Assert.That(report.Hulls, Is.GreaterThan(0), "The control: no hull was loaded, so nothing was measured.");
             Assert.That(report.Components, Is.GreaterThan(0), "The control: no component was compared.");
             Assert.That(report.Entities, Is.GreaterThan(report.Hulls), "The control: hulls carried no entities beyond themselves.");
+            Assert.That(ScalarsCompared, Is.GreaterThan(0),
+                "The control: the live comparison compared no scalar, so a clean result from it would mean nothing.");
             Assert.That(report.Keys, Is.GreaterThan(0),
                 "The control: every component compared wrote an empty mapping, so a clean corpus here would mean the codec wrote nothing rather than that it wrote everything.");
 
@@ -165,6 +168,9 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                 uid => ids.TryGetValue(uid, out var id) ? id : null,
                 id => entities.TryGetValue(id, out var uid) ? uid : EntityUid.Invalid);
 
+            OnImage = ids.Keys.ToHashSet();
+            var writeBefore = report.WriteClock.Elapsed;
+            var jsonBefore = report.JsonClock.Elapsed;
             var hullEntities = 0;
             var hullComponents = 0;
             var hullKeys = 0;
@@ -201,6 +207,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                 }
             }
 
+            report.HullWrite(hull, hullEntities, report.WriteClock.Elapsed - writeBefore, report.JsonClock.Elapsed - jsonBefore);
             report.Hulls++;
             report.Entities += hullEntities;
             report.Components += hullComponents;
@@ -294,6 +301,17 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             finally
             {
                 report.ReadClock.Stop();
+            }
+
+            // Against the live component, not against another write: a value the first write loses writes the
+            // same again, so a comparison of writes cannot see it (F35's airtight 15 wrote as 14 and 14 again).
+            // Nothing runs between the write and this read, so the clock has not moved and a time reads back
+            // at the same moment.
+            foreach (var (member, detail) in LiveDifferences(component, restored, type.Name))
+            {
+                report.Add("the first write lost it", hull, type, detail);
+                report.LostMember(member);
+                found = true;
             }
 
             MappingDataNode second;
@@ -435,6 +453,109 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             }
         }
 
+        /// <summary>
+        /// The scalar data-field members of a component, and of each data definition one level below it, that the
+        /// restored component holds differently from the live one. Scalars only, because equality means what it
+        /// says for them; a collection or a definition deeper down is left to the detector.
+        /// </summary>
+        private static IEnumerable<(string Member, string Detail)> LiveDifferences(object live, object restored, string path, int depth = 0)
+        {
+            foreach (var member in ScalarAndNested(live.GetType()))
+            {
+                var before = Get(member, live);
+                var after = Get(member, restored);
+                var name = $"{path}.{member.Name}";
+
+                if (IsScalar(MemberType(member)))
+                {
+                    ScalarsCompared++;
+
+                    // A reference to an entity off the image reads back invalid by rule (F32, carve-out e): the grid's
+                    // own parent, its map, on every hull. Severed, counted apart, not lost.
+                    if (before is EntityUid target && target.IsValid() && !OnImage.Contains(target)
+                        && after is EntityUid restoredTarget && !restoredTarget.IsValid())
+                    {
+                        Severed++;
+                        continue;
+                    }
+
+                    if (!SameScalar(before, after))
+                        yield return (name, $"{name}: {Cut($"{before}")} -> {Cut($"{after}")}");
+
+                    continue;
+                }
+
+                if (depth == 0 && before != null && after != null && before.GetType() == after.GetType())
+                {
+                    foreach (var nested in LiveDifferences(before, after, name, depth + 1))
+                        yield return nested;
+                }
+            }
+        }
+
+        private static readonly Dictionary<Type, List<MemberInfo>> MemberCache = new();
+
+        /// <summary>The live comparison's own coverage: a clean result over no comparisons would read as clean.</summary>
+        private static long ScalarsCompared;
+
+        private static long Severed;
+
+        /// <summary>The entities on the hull being measured, so a reference off it is told from a lost one.</summary>
+        private static HashSet<EntityUid> OnImage = new();
+
+        private static List<MemberInfo> ScalarAndNested(Type type)
+        {
+            if (MemberCache.TryGetValue(type, out var cached))
+                return cached;
+
+            const System.Reflection.BindingFlags flags = System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public
+                                                         | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.DeclaredOnly;
+            var members = new List<MemberInfo>();
+            for (var declaring = type; declaring != null && declaring != typeof(object); declaring = declaring.BaseType)
+            {
+                foreach (var member in declaring.GetFields(flags).Cast<MemberInfo>().Concat(declaring.GetProperties(flags)))
+                {
+                    if (member.GetCustomAttribute<Robust.Shared.Serialization.Manager.Attributes.DataFieldBaseAttribute>() == null)
+                        continue;
+
+                    var memberType = MemberType(member);
+                    if (IsScalar(memberType) || typeof(Robust.Shared.Serialization.ISerializationGenerated).IsAssignableFrom(memberType))
+                        members.Add(member);
+                }
+            }
+
+            MemberCache[type] = members;
+            return members;
+        }
+
+        private static Type MemberType(MemberInfo member) =>
+            member is FieldInfo field ? field.FieldType : ((PropertyInfo) member).PropertyType;
+
+        private static object? Get(MemberInfo member, object target) =>
+            member is FieldInfo field ? field.GetValue(target) : ((PropertyInfo) member).GetValue(target);
+
+        private static bool IsScalar(Type type)
+        {
+            type = Nullable.GetUnderlyingType(type) ?? type;
+            return type.IsPrimitive || type.IsEnum || type == typeof(string) || type == typeof(decimal)
+                   || type == typeof(TimeSpan) || type == typeof(Content.Shared.FixedPoint.FixedPoint2)
+                   || type == typeof(System.Numerics.Vector2) || type == typeof(Robust.Shared.Maths.Angle)
+                   || type == typeof(Robust.Shared.Maths.Color) || type == typeof(EntityUid) || type == typeof(NetEntity);
+        }
+
+        /// <summary>
+        /// A time is written as seconds with a fraction, so it is compared to the millisecond. A colour is written at
+        /// 8 bits a channel, and that loss is accepted precision (ruled 2026-09-18), so it is compared to 1/255.
+        /// </summary>
+        private static bool SameScalar(object? before, object? after) => (before, after) switch
+        {
+            (TimeSpan a, TimeSpan b) => Math.Abs((a - b).TotalMilliseconds) < 1,
+            (Robust.Shared.Maths.Color a, Robust.Shared.Maths.Color b) =>
+                Math.Abs(a.R - b.R) <= 1f / 255 && Math.Abs(a.G - b.G) <= 1f / 255
+                && Math.Abs(a.B - b.B) <= 1f / 255 && Math.Abs(a.A - b.A) <= 1f / 255,
+            _ => Equals(before, after),
+        };
+
         private static string Reason(Exception e)
         {
             var message = e.Message;
@@ -469,6 +590,17 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             public readonly System.Diagnostics.Stopwatch RewriteClock = new();
 
             public readonly List<string> Unloadable = new();
+
+            // The write of one whole hull, the number the no-bystander-tick rule turns on: a store writes on the main
+            // thread, so a multi-second hull means slicing the write.
+            private readonly List<(string Hull, int Entities, TimeSpan Write, TimeSpan Json)> _hullWrites = new();
+            private readonly Dictionary<string, int> _lostMembers = new(StringComparer.Ordinal);
+
+            public void HullWrite(string hull, int entities, TimeSpan write, TimeSpan json) =>
+                _hullWrites.Add((hull, entities, write, json));
+
+            public void LostMember(string member) =>
+                _lostMembers[member] = _lostMembers.GetValueOrDefault(member) + 1;
 
             private readonly List<string> _hulls = new();
             private readonly Dictionary<string, int> _byKind = new(StringComparer.Ordinal);
@@ -512,6 +644,24 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                     + $"write {WriteClock.Elapsed.TotalSeconds:F1}s, json {JsonClock.Elapsed.TotalSeconds:F1}s, "
                     + $"read {ReadClock.Elapsed.TotalSeconds:F1}s, second write {RewriteClock.Elapsed.TotalSeconds:F1}s; "
                     + "the third leg, loading, walking and comparing are the rest.");
+
+                foreach (var (hull, entities, write, json) in _hullWrites.OrderByDescending(h => h.Write).Take(5))
+                {
+                    await TestContext.Out.WriteLineAsync(
+                        $"[codec-roundtrip] hull write, slowest first: {write.TotalMilliseconds:F0} ms to write {entities} entit(y/ies), "
+                        + $"{json.TotalMilliseconds:F0} ms more to JSON, {hull}");
+                }
+
+                await TestContext.Out.WriteLineAsync(
+                    $"[codec-roundtrip] live comparison: {ScalarsCompared} scalar value(s) compared against the live component, "
+                    + $"{_lostMembers.Values.Sum()} lost by the first write, {Severed} reference(s) off the image severed by rule.");
+
+                if (_lostMembers.Count > 0)
+                {
+                    await TestContext.Out.WriteLineAsync($"[codec-roundtrip] the first write lost it, by member ({_lostMembers.Count}):");
+                    foreach (var (member, count) in _lostMembers.OrderByDescending(kv => kv.Value).ThenBy(kv => kv.Key, StringComparer.Ordinal))
+                        await TestContext.Out.WriteLineAsync($"[codec-roundtrip]     {member} x{count}");
+                }
 
                 foreach (var path in Unloadable)
                     await TestContext.Out.WriteLineAsync($"[codec-roundtrip] did not load: {path}");
