@@ -366,7 +366,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             var findingKinds = new HashSet<string>(StringComparer.Ordinal);
             var secondUnexplained = new List<string>();
             var findings = Report(sb, rung, vesselId, 1, first, EngineMode || CodecMode ? null : RetrieveGrants, gasRooms, doorPath, protoMan, findingKinds)
-                           + Report(sb, rung, vesselId, 2, second, EngineMode || CodecMode ? null : RetrieveRestamps, gasRooms, doorPath, protoMan, findingKinds, secondUnexplained);
+                           + Report(sb, rung, vesselId, 2, second, EngineMode || CodecMode ? null : RetrieveRestamps, gasRooms, doorPath, protoMan, findingKinds, secondUnexplained, previous: first);
             AppendShapes(sb, rung, vesselId, first, second, secondUnexplained);
 
             // A codec-mode run over many rungs stops on a rung that brings new kinds of finding faster than they can be
@@ -464,39 +464,66 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
 
             foreach (var line in lines)
             {
-                if (!line.StartsWith("CHANGED", StringComparison.Ordinal) || KeyOf(line) is not { } key
-                    || !second.Before.Values.TryGetValue(key, out var b2) || !second.After.Values.TryGetValue(key, out var a2))
-                {
+                if (!line.StartsWith("CHANGED", StringComparison.Ordinal) || KeyOf(line) is not { } key || ShapeOf(key, first, second) is not { } shape)
                     continue;
-                }
-
-                var b1 = first.Before.Values.GetValueOrDefault(key);
-                var a1 = first.After.Values.GetValueOrDefault(key);
-
-                string shape;
-                if (b1 == null || a1 == null || a1 == b1)
-                    shape = "trip2-only";
-                else if (a2 == b1)
-                    shape = "oscillates";
-                else if (b2 == b1 && a2 == a1)
-                    shape = "repeats";
-                else if (Number(b1) is { } nb1 && Number(a1) is { } na1 && Number(b2) is { } nb2 && Number(a2) is { } na2
-                         && Math.Sign(na1 - nb1) != 0 && Math.Sign(na2 - nb2) == Math.Sign(na1 - nb1) && na2 != na1)
-                    shape = "compounds";
-                else if (ListLength(a1) is { } l1 && ListLength(b1) is { } l0 && ListLength(a2) is { } l2 && l1 > l0 && l2 > l1)
-                    shape = "compounds";
-                else
-                    shape = "other";
 
                 shapes[shape] = shapes.GetValueOrDefault(shape) + 1;
-                if (shape == "compounds")
-                    compounding.Add($"{key}: {OneLine(b1)} -> {OneLine(a1)}, then {OneLine(a2)}");
+                if (shape == Compounds)
+                {
+                    compounding.Add($"{key}: {OneLine(first.Before.Values.GetValueOrDefault(key) ?? "<absent>")} -> "
+                                    + $"{OneLine(first.After.Values.GetValueOrDefault(key) ?? "<absent>")}, then {OneLine(second.After.Values[key])}");
+                }
             }
 
             sb.AppendLine($"[ladder] round trip 2 against 1, {lines.Count} unexplained line(s): "
                           + (shapes.Count == 0 ? "none compared" : string.Join(", ", shapes.OrderBy(s => s.Key, StringComparer.Ordinal).Select(s => $"{s.Key} {s.Value}"))) + ".");
             foreach (var line in compounding)
                 sb.AppendLine($"[ladder-compounds] rung={rung} vessel={vesselId} {line}");
+        }
+
+        private const string Compounds = "compounds";
+
+        /// <summary>
+        /// A round trip 2 key's shape against round trip 1 (<see cref="AppendShapes"/> names each), or null when round trip
+        /// 2 lacks it on either side.
+        /// </summary>
+        private static string? ShapeOf(string key, RoundTripResult first, RoundTripResult second)
+        {
+            if (!second.Before.Values.TryGetValue(key, out var b2) || !second.After.Values.TryGetValue(key, out var a2))
+                return null;
+
+            var b1 = first.Before.Values.GetValueOrDefault(key);
+            var a1 = first.After.Values.GetValueOrDefault(key);
+
+            if (b1 == null || a1 == null || a1 == b1)
+                return "trip2-only";
+            if (a2 == b1)
+                return "oscillates";
+            if (b2 == b1 && a2 == a1)
+                return "repeats";
+            if (Number(b1) is { } nb1 && Number(a1) is { } na1 && Number(b2) is { } nb2 && Number(a2) is { } na2
+                && Math.Sign(na1 - nb1) != 0 && Math.Sign(na2 - nb2) == Math.Sign(na1 - nb1) && na2 != na1)
+                return Compounds;
+            if (ListLength(a1) is { } l1 && ListLength(b1) is { } l0 && ListLength(a2) is { } l2 && l1 > l0 && l2 > l1)
+                return Compounds;
+
+            return "other";
+        }
+
+        /// <summary>
+        /// The family a line sorts into, and whether it was held back because it compounds: a CHANGED line on round trip 2
+        /// that compounds against round trip 1 is growth per store, class 2 of the bar, which is a finding whatever family
+        /// explains its cause, so no family, old or new, absorbs it (ruled 2026-09-19). Round trip 1 has nothing to compound
+        /// against, so <paramref name="previous"/> is null there.
+        /// </summary>
+        private static (KnownFamily? Family, bool Compounds) FamilyFor(string line, string key, RoundTripResult result, RoundTripResult? previous)
+        {
+            if (KnownFamilies.FirstOrDefault(f => f.Matches(line, key, result)) is not { } family)
+                return (null, false);
+
+            return previous != null && line.StartsWith("CHANGED", StringComparison.Ordinal) && ShapeOf(key, previous, result) == Compounds
+                ? (family, true)
+                : (family, false);
         }
 
         /// <summary>
@@ -578,7 +605,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
         /// <summary>
         /// A codec-mode family: lines whose cause is read in code and cited, sorted apart so that a rung's findings are
         /// what nobody has explained. A line sorts only when its predicate holds; anything near it that does not stays
-        /// a finding.
+        /// a finding, and so does a line that compounds across the two trips, whatever its predicate (<see cref="FamilyFor"/>).
         /// </summary>
         private sealed record KnownFamily(string Name, string Receipt, Func<string, string, RoundTripResult, bool> Matches);
 
@@ -622,6 +649,41 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                                     && result.After.Values.TryGetValue(key[..key.IndexOf('|')] + "|WiresComponent.~WiresList", out var wires)
                                     && wires.StartsWith("count=0", StringComparison.Ordinal)),
         };
+
+        /// <summary>
+        /// The no-growth guard's control, with no server: a wire panel's statuses sort into the H12 family on round trip 1,
+        /// where there is nothing to compound against, and on round trip 2 when they repeat the same change, but not when
+        /// they grow again.
+        /// </summary>
+        [Test]
+        public void AFamilyNeverAbsorbsALineThatCompounds()
+        {
+            const string path = "AirlockGlass@1,1";
+            const string key = path + "|WiresComponent.~Statuses";
+            const string line = "CHANGED  " + key + ": before -> after";
+
+            RoundTripResult Trip(string before, string after)
+            {
+                var stored = new DrydockStateSnapshot();
+                var loaded = new DrydockStateSnapshot();
+                stored.Values[key] = before;
+                loaded.Values[key] = after;
+                loaded.Values[path + "|WiresComponent.~WiresList"] = "count=0 []";
+                return new RoundTripResult(new DrydockStateSnapshot(), stored, loaded, new DrydockStateSnapshot(), EntityUid.Invalid, 0, 0, 0, null);
+            }
+
+            var first = Trip("- a", "- a\n- b");
+            var repeats = Trip("- a", "- a\n- b");
+            var grows = Trip("- a\n- b", "- a\n- b\n- c");
+            var h12 = KnownFamilies.Single(family => family.Name == "owed: H12");
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(FamilyFor(line, key, first, null), Is.EqualTo((h12, false)), "The control: on round trip 1 the family takes the line.");
+                Assert.That(FamilyFor(line, key, repeats, first), Is.EqualTo((h12, false)), "A line repeating round trip 1's change is the family's.");
+                Assert.That(FamilyFor(line, key, grows, first), Is.EqualTo((h12, true)), "A line growing again on round trip 2 must be held back from the family.");
+            });
+        }
 
         private const string CollectionMasterMember = "PowerMonitoringDeviceComponent.~CollectionMaster";
         private const string ChildDevicesMember = "PowerMonitoringDeviceComponent.~ChildDevices";
@@ -1233,7 +1295,8 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             string? doorPath,
             IPrototypeManager protoMan,
             HashSet<string> findingKinds,
-            List<string>? unexplained = null)
+            List<string>? unexplained = null,
+            RoundTripResult? previous = null)
         {
             // A time's render carries its clock-relative half, which moves every tick, so a time key is live only when its
             // meaning moved during the window; any other key is live when its rendered value moved.
@@ -1256,6 +1319,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             var predictedLines = new List<string>();
             var predictedSeen = new HashSet<PredictedRow>();
             var familyLines = new Dictionary<KnownFamily, List<string>>();
+            var familyGrew = new Dictionary<KnownFamily, int>();
             var timeKept = 0;
 
             var diff = DrydockStateSnapshot.Diff(result.Before, result.After);
@@ -1289,9 +1353,17 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                     continue;
                 }
 
-                // A family whose cause is read in code, which would otherwise bury the new ones by its volume.
-                if (CodecMode && key != null && KnownFamilies.FirstOrDefault(f => f.Matches(line, key, result)) is { } family)
+                // A family whose cause is read in code, which would otherwise bury the new ones by its volume; never one that
+                // compounds across the two trips, which stays a finding.
+                if (CodecMode && key != null && FamilyFor(line, key, result, previous) is ({ } family, var grew))
                 {
+                    if (grew)
+                    {
+                        familyGrew[family] = familyGrew.GetValueOrDefault(family) + 1;
+                        findings.Add(line);
+                        continue;
+                    }
+
                     if (!familyLines.TryGetValue(family, out var members))
                         familyLines[family] = members = new List<string>();
 
@@ -1415,7 +1487,10 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                 foreach (var family in KnownFamilies)
                 {
                     var lines = familyLines.GetValueOrDefault(family) ?? new List<string>();
-                    sb.AppendLine($"[ladder] family {family.Name}: {lines.Count} line(s). {family.Receipt}");
+                    var grew = familyGrew.GetValueOrDefault(family);
+                    sb.AppendLine($"[ladder] family {family.Name}: {lines.Count} line(s)"
+                                  + (grew > 0 ? $", and {grew} it matched that compound across the trips, left as findings" : "")
+                                  + $". {family.Receipt}");
                 }
             }
 

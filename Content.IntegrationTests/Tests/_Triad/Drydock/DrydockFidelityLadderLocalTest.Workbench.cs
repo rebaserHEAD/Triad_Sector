@@ -142,7 +142,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             var secondUnexplained = new List<string>();
             var noRooms = new List<(string Recipe, List<Vector2i> Tiles)>();
             var findings = Report(sb, rung, vesselId, 1, first, null, noRooms, null, protoMan, findingKinds)
-                           + Report(sb, rung, vesselId, 2, second, null, noRooms, null, protoMan, findingKinds, secondUnexplained);
+                           + Report(sb, rung, vesselId, 2, second, null, noRooms, null, protoMan, findingKinds, secondUnexplained, previous: first);
             AppendShapes(sb, rung, vesselId, first, second, secondUnexplained);
 
             foreach (var recipe in recipes)
