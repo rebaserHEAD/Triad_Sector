@@ -71,6 +71,9 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
         private sealed record WorkbenchRecipe(int Number, string Name, string Members, string[] Components, List<string> Paths, Func<List<string>> Start)
         {
             public readonly List<string> Setup = new();
+
+            /// <summary>Holds the recipe's state still just before the store and says what it is (a fryer that has fried once).</summary>
+            public Func<List<string>>? BeforeStore { get; init; }
         }
 
         private static IEnumerable<TestCaseData> WorkbenchWaves() => new[] { new TestCaseData(1).SetName("Workbench_Wave1") };
@@ -109,6 +112,14 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                     recipe.Setup.AddRange(recipe.Start());
             });
             await pair.RunTicksSync(Ticks(timing, WorkbenchRecipeSeconds));
+            await server.WaitPost(() =>
+            {
+                foreach (var recipe in recipes)
+                {
+                    if (recipe.BeforeStore is { } hold)
+                        recipe.Setup.AddRange(hold().Select(line => $"before the store: {line}"));
+                }
+            });
 
             var first = await RoundTrip(pair, grid, Guid.Empty, EntityUid.Invalid, null);
             var second = await RoundTrip(pair, first.Retrieved, Guid.Empty, EntityUid.Invalid, null);
@@ -346,9 +357,27 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                         var solutions = entMan.System<SharedSolutionContainerSystem>();
                         var oiled = solutions.TryGetSolution(fryer, comp.SolutionName, out var vat, out _)
                                     && solutions.TryAddReagent(vat.Value, "Cornoil", 50, out _);
-                        containers.Insert(entMan.SpawnEntity("FoodMeat", At(5, 8)), comp.Storage);
-                        return new List<string> { $"oil added {oiled}, an item in the basket, fried by the {WorkbenchRecipeSeconds}s wait" };
-                    }));
+                        // Paper, not meat: raw meat in 550 K oil turns into cooked meat on the floor on its own, which takes
+                        // the fried item out of the basket before the store.
+                        var inserted = containers.Insert(entMan.SpawnEntity("Paper", At(5, 8)), comp.Storage);
+                        return new List<string> { $"oil added {oiled}, paper inserted {inserted}, powered {entMan.System<PowerReceiverSystem>().IsPowered(fryer)}" };
+                    })
+                {
+                    // Fried once by now. The fryer fries every 5 s, and a second fry inside the live window chars the item,
+                    // so the next fry is put a minute off: the store then holds a fried item with its next fry pending,
+                    // which is what the re-applied NextFryTime is about.
+                    BeforeStore = () =>
+                    {
+                        var comp = entMan.GetComponent<DeepFryerComponent>(fryer);
+                        // The fryer system's own member (Access), so by reflection.
+                        typeof(DeepFryerComponent).GetProperty(nameof(DeepFryerComponent.NextFryTime))!
+                            .SetValue(comp, server.ResolveDependency<IGameTiming>().CurTime + WorkbenchLongTimer);
+                        var held = comp.Storage.ContainedEntities
+                            .Select(item => $"{entMan.GetComponent<MetaDataComponent>(item).EntityPrototype?.ID ?? "(no prototype)"} named '{entMan.GetComponent<MetaDataComponent>(item).EntityName}'")
+                            .ToList();
+                        return new List<string> { $"basket holds {held.Count}: {string.Join(", ", held)}; vat {comp.Solution.Volume}u; next fry {WorkbenchLongTimer.TotalSeconds}s off" };
+                    },
+                });
             }
 
             // 8. A scuttle device armed, its countdown running.
@@ -360,6 +389,11 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                     new List<string> { PathOf("ScuttleDeviceRazorN", 8, 8) },
                     () =>
                     {
+                        // This device's own timer is 20 s, which a restored countdown would finish inside the run; a long
+                        // one keeps the countdown the thing measured, not a detonation.
+                        var comp = entMan.GetComponent<ScuttleDeviceComponent>(scuttle);
+                        comp.Timer = TimeSpan.FromMinutes(10);
+                        comp.RemainingTime = comp.Timer;
                         entMan.System<ScuttleDeviceSystem>().ArmBomb(scuttle);
                         return new List<string> { $"armed {entMan.GetComponent<ScuttleDeviceComponent>(scuttle).Armed}" };
                     }));
@@ -393,11 +427,43 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
         private static void AppendRecipeControl(StringBuilder sb, WorkbenchRecipe recipe, RoundTripResult first, RoundTripResult second)
         {
             sb.AppendLine($"[workbench] recipe {recipe.Number} {recipe.Name}: members {recipe.Members}; setup: {string.Join("; ", recipe.Setup)}");
+
+            // How much of each recipe entity, and of what it holds, each snapshot saw: a whole entity missing shows here
+            // before any key does.
+            foreach (var path in recipe.Paths)
+            {
+                int Under(Content.Server._Triad.Drydock.DrydockStateSnapshot snapshot, string suffix) =>
+                    snapshot.Values.Keys.Count(key => key.StartsWith(path + suffix, StringComparison.Ordinal));
+                sb.AppendLine($"[workbench]   keys under {path}: own early/before/after/late "
+                              + $"{Under(first.Early, "|")}/{Under(first.Before, "|")}/{Under(first.After, "|")}/{Under(first.Late, "|")}, "
+                              + $"held {Under(first.Early, "/")}/{Under(first.Before, "/")}/{Under(first.After, "/")}/{Under(first.Late, "/")} on trip 1");
+
+                var leftInWindow = first.Early.Values.Keys
+                    .Where(key => key.StartsWith(path + "/", StringComparison.Ordinal) && !first.Before.Values.ContainsKey(key))
+                    .Select(key => key[..key.IndexOf('|')])
+                    .Distinct()
+                    .Take(4)
+                    .ToList();
+                if (leftInWindow.Count > 0)
+                {
+                    sb.AppendLine($"[workbench]   held entities gone between early and before (the live window): {string.Join(", ", leftInWindow)}");
+                    var cameInWindow = first.Before.Values.Keys
+                        .Where(key => !first.Early.Values.ContainsKey(key) && key.Contains("|MetaDataComponent.<present>", StringComparison.Ordinal))
+                        .Select(key => key[..key.IndexOf('|')])
+                        .Take(6)
+                        .ToList();
+                    sb.AppendLine($"[workbench]   entities anywhere on the grid that came in the same window: {(cameInWindow.Count == 0 ? "none" : string.Join(", ", cameInWindow))}");
+                }
+            }
+
             var shown = 0;
             foreach (var (trip, result) in new[] { (1, first), (2, second) })
             {
+                // A machine's board, parts and sound entities are the same on every machine and would fill the budget.
                 var keys = result.Before.Values.Keys.Concat(result.After.Values.Keys)
                     .Where(key => recipe.Paths.Any(path => key.StartsWith(path + "|", StringComparison.Ordinal) || key.StartsWith(path + "/", StringComparison.Ordinal)))
+                    .Where(key => !key.Contains("/machine_board/", StringComparison.Ordinal) && !key.Contains("/machine_parts/", StringComparison.Ordinal)
+                                  && !key.Contains("/Audio|", StringComparison.Ordinal))
                     .Where(key => recipe.Components.Any(component => key.Contains("|" + component + ".", StringComparison.Ordinal)))
                     .Distinct()
                     .OrderBy(key => key, StringComparer.Ordinal)
@@ -408,7 +474,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
 
                 foreach (var key in keys)
                 {
-                    if (shown++ >= 40)
+                    if (shown++ >= 60)
                         break;
 
                     var before = ValueIn(result.Before, key);
