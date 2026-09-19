@@ -74,6 +74,30 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
         /// <summary>The whole store of the last round trip: the walk, every component's write and its JSON, and the tiles.</summary>
         private static TimeSpan LastStoreTime;
 
+        /// <summary>
+        /// The parts of the last store a sliced write has to budget: the id pass (the walk and the id assignment) that
+        /// runs whole before the first slice, the tile table and the appearance rows that are units of their own, and
+        /// the dearest single component writes (the write and its JSON), which bound how far one slice can overrun.
+        /// Garbage collections are counted by generation over the whole store and over each dearest write, because a
+        /// collection that lands inside one write is a pause no time check between writes can cut.
+        /// </summary>
+        private static StoreTimes LastStoreTimes = new(TimeSpan.Zero, TimeSpan.Zero, TimeSpan.Zero, TimeSpan.Zero, 0, new List<DearWrite>(), default);
+
+        private readonly record struct Collections(int Gen0, int Gen1, int Gen2)
+        {
+            public static Collections Now() => new(GC.CollectionCount(0), GC.CollectionCount(1), GC.CollectionCount(2));
+
+            public Collections Since(Collections start) => new(Gen0 - start.Gen0, Gen1 - start.Gen1, Gen2 - start.Gen2);
+
+            public override string ToString() => $"GC {Gen0}/{Gen1}/{Gen2}";
+        }
+
+        private sealed record DearWrite(TimeSpan Time, string Component, string? Prototype, Collections During);
+
+        private sealed record StoreTimes(TimeSpan IdPass, TimeSpan Tiles, TimeSpan Appearance, TimeSpan DearestAppearance, int Writes, List<DearWrite> Dearest, Collections During);
+
+        private const int DearestKept = 3;
+
         private sealed record CodecEntity(long Id, string? Prototype, bool MapInitialized, bool Paused, Dictionary<string, string> Rows);
 
         private sealed record CodecImage(long GridId, List<CodecEntity> Entities, string Tiles, int Unsaved, int Bytes);
@@ -189,6 +213,8 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             var entMan = server.EntMan;
             var factory = server.ResolveDependency<IComponentFactory>();
             var tileDefs = server.ResolveDependency<ITileDefinitionManager>();
+            var storeCollections = Collections.Now();
+            var part = System.Diagnostics.Stopwatch.StartNew();
 
             var aboard = new List<EntityUid>();
             var unsaved = 0;
@@ -212,6 +238,8 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             for (var i = 0; i < aboard.Count; i++)
                 ids[aboard[i]] = i + 1;
 
+            var idPass = part.Elapsed;
+
             var codec = new DrydockCodec(
                 server.ResolveDependency<ISerializationManager>(),
                 entMan,
@@ -221,6 +249,10 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
 
             var entities = new List<CodecEntity>();
             var bytes = 0;
+            var writes = 0;
+            var dearest = new List<DearWrite>();
+            var appearanceTime = TimeSpan.Zero;
+            var dearestAppearance = TimeSpan.Zero;
             foreach (var uid in aboard)
             {
                 var meta = entMan.GetComponent<MetaDataComponent>(uid);
@@ -231,11 +263,24 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                     if (registration.Unsaved)
                         continue;
 
+                    var writeCollections = Collections.Now();
+                    part.Restart();
                     var text = DrydockNodeJson.Encode(codec.Write((uid, meta), component)).ToJsonString();
+                    var cost = part.Elapsed;
+                    writes++;
+                    if (dearest.Count < DearestKept || cost > dearest[^1].Time)
+                    {
+                        dearest.Add(new DearWrite(cost, registration.Name, meta.EntityPrototype?.ID, Collections.Now().Since(writeCollections)));
+                        dearest.Sort((a, b) => b.Time.CompareTo(a.Time));
+                        if (dearest.Count > DearestKept)
+                            dearest.RemoveAt(DearestKept);
+                    }
+
                     rows[registration.Name] = text;
                     bytes += text.Length;
                 }
 
+                part.Restart();
                 if (entMan.TryGetComponent<AppearanceComponent>(uid, out var appearance)
                     && WriteAppearance(entMan, server.ResolveDependency<ISerializationManager>(), codec, appearance) is { } appearanceRow)
                 {
@@ -243,6 +288,11 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                     rows[AppearanceRow] = text;
                     bytes += text.Length;
                 }
+
+                var appearanceCost = part.Elapsed;
+                appearanceTime += appearanceCost;
+                if (appearanceCost > dearestAppearance)
+                    dearestAppearance = appearanceCost;
 
                 entities.Add(new CodecEntity(
                     ids[uid],
@@ -254,6 +304,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
 
             // The chunk size is an internal data field, so it is taken from the grid component's own row, which carries it
             // when it is not the default (MapGridComponent.cs:45-46).
+            part.Restart();
             var gridComp = entMan.GetComponent<MapGridComponent>(grid);
             var gridRow = (MappingDataNode) DrydockNodeJson.Decode(JsonNode.Parse(entities.Single(e => e.Id == ids[grid]).Rows["MapGrid"])!);
             var chunkSize = gridRow.TryGet<ValueDataNode>("chunkSize", out var sizeNode)
@@ -266,6 +317,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                 id => tileDefs[id].ID);
 
             var tilesText = DrydockNodeJson.Encode(tiles).ToJsonString();
+            LastStoreTimes = new StoreTimes(idPass, part.Elapsed, appearanceTime, dearestAppearance, writes, dearest, Collections.Now().Since(storeCollections));
             return new CodecImage(ids[grid], entities, tilesText, unsaved, bytes + tilesText.Length);
         }
 
@@ -538,6 +590,12 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             CodecNotes.Add($"[ladder] codec round trip {trip}: load by phase, {image.Entities.Count} entities: skeleton {skeletonTime.TotalMilliseconds:F0} ms, "
                            + $"CreateEntities {createTime.TotalMilliseconds:F0} ms, rows and re-parent {rowsTime.TotalMilliseconds:F0} ms, "
                            + $"StartEntities {startTime.TotalMilliseconds:F0} ms; the store took {LastStoreTime.TotalMilliseconds:F0} ms.");
+            var parts = LastStoreTimes;
+            CodecNotes.Add($"[ladder] codec round trip {trip}: store parts: id pass {parts.IdPass.TotalMilliseconds:F1} ms (un-sliced), "
+                           + $"tile table {parts.Tiles.TotalMilliseconds:F1} ms, appearance rows {parts.Appearance.TotalMilliseconds:F1} ms "
+                           + $"(dearest one {parts.DearestAppearance.TotalMilliseconds:F2} ms), {parts.Writes} component write(s), {parts.During} over the store; dearest single writes: "
+                           + string.Join(", ", parts.Dearest.Select(d => $"{d.Component} on {d.Prototype ?? "(no prototype)"} {d.Time.TotalMilliseconds:F2} ms ({d.During})"))
+                           + ".");
             CodecNotes.Add($"[ladder] codec round trip {trip}: {appearanceApplied} appearance entr(y/ies) set before init; "
                            + $"not stored, by value type: {Top(AppearanceSkipped)}; "
                            + $"{stillDirty} of {appearances} appearance component(s) still marked modified in the load's tick.");
