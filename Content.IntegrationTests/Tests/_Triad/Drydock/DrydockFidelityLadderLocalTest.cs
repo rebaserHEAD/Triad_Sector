@@ -659,7 +659,39 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                 + "holding no order, since orders live in the station's database (CargoSystem.Telepad.cs:40-46, :131-152, :66-69).",
                 (line, key, _) => line.StartsWith("CHANGED", StringComparison.Ordinal)
                                   && RearmedByThePowerEdge.Contains(key[(key.IndexOf('|') + 1)..])),
+
+            // Ruled 2026-09-19, deliberately narrow: it may never absorb the state the load gets wrong.
+            new("charge state caught up with a live battery",
+                "Accepted: an APC recomputes its charge state at most once a second (ApcSystem.cs:151), so a battery that "
+                + "crossed the 0.9 threshold in the last second before the store is stored a window behind itself, and the load "
+                + "computes it fresh from the same battery, whose charge the registry already treats as live "
+                + "(BatteryComponent.CurrentCharge, \"battery charge under load\"). Sorted only where the state settled, the "
+                + "after value being the late one, and is the Full that the loaded battery's own charge gives under "
+                + "CalcChargeState (ApcSystem.cs:197-209). Any other move, a Full the battery does not justify or the Lack of a "
+                + "battery not yet synced among them, stays a finding.",
+                (line, key, result) => line.StartsWith("CHANGED", StringComparison.Ordinal)
+                                       && SnapshotMember(key) == "ApcComponent.~LastChargeState"
+                                       && result.After.Values.TryGetValue(key, out var state)
+                                       && state == "Full"
+                                       && result.Late.Values.TryGetValue(key, out var late)
+                                       && late == state
+                                       && ChargeRatio(result.After.Values, key[..key.IndexOf('|')]) is { } ratio
+                                       && ratio > ApcComponent.HighPowerThreshold),
         }.Concat(NotCarriedFamilies()).ToArray();
+
+        /// <summary>
+        /// How full the battery of the entity at <paramref name="path"/> is, from a snapshot's values, or null when it has
+        /// no battery or no capacity. This is the ratio <see cref="ApcSystem"/> reads
+        /// (<c>ApcSystem.cs:202</c>), taken from the component rather than the power solver's copy of it.
+        /// </summary>
+        private static float? ChargeRatio(Dictionary<string, string> values, string path) =>
+            values.TryGetValue($"{path}|BatteryComponent.CurrentCharge", out var charge)
+            && values.TryGetValue($"{path}|BatteryComponent.MaxCharge", out var capacity)
+            && float.TryParse(charge, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var held)
+            && float.TryParse(capacity, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var max)
+            && max > 0
+                ? held / max
+                : null;
 
         /// <summary>
         /// A family for each member the manifest leaves out on purpose and marks as sorting so
@@ -709,6 +741,41 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                     "A member left out without opting in has to stay a finding.");
                 Assert.That(Sorted("grid|TargetSeekerAlertGridComponent.Alerters"), Is.Null,
                     "The alerter list, left out because a carried copy grows, has to stay a finding.");
+            });
+        }
+
+        /// <summary>
+        /// The charge-state family's control, with no server: a state that settled on the Full the loaded battery's own
+        /// charge gives sorts into it, and nothing else does. The line this family may never take is the one the load used
+        /// to get wrong, a full battery reading Lack.
+        /// </summary>
+        [Test]
+        public void OnlyAChargeStateTheLoadedBatteryJustifiesSorts()
+        {
+            const string apc = "APCBasic@1,-10";
+            const string state = $"{apc}|ApcComponent.~LastChargeState";
+
+            string? Sorted(string after, string late, float charge)
+            {
+                var result = new RoundTripResult(new DrydockStateSnapshot(), new DrydockStateSnapshot(), new DrydockStateSnapshot(),
+                    new DrydockStateSnapshot(), EntityUid.Invalid, 0, 0, 0, null);
+                result.After.Values[state] = after;
+                result.Late.Values[state] = late;
+                result.After.Values[$"{apc}|BatteryComponent.CurrentCharge"] = charge.ToString(System.Globalization.CultureInfo.InvariantCulture);
+                result.After.Values[$"{apc}|BatteryComponent.MaxCharge"] = "50000";
+                return FamilyFor($"CHANGED  {state}: Charging -> {after}", state, result, null).Family?.Name;
+            }
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(Sorted("Full", "Full", 50000), Is.EqualTo("charge state caught up with a live battery"),
+                    "A state that settled on the Full the loaded battery gives has to sort.");
+                Assert.That(Sorted("Lack", "Lack", 50000), Is.Null,
+                    "The Lack of a battery not yet synced has to stay a finding, whatever the battery holds.");
+                Assert.That(Sorted("Full", "Full", 25000), Is.Null,
+                    "A Full the battery's own charge does not give has to stay a finding.");
+                Assert.That(Sorted("Full", "Charging", 50000), Is.Null,
+                    "A state still moving at the late snapshot has to stay a finding.");
             });
         }
 
