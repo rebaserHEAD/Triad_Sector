@@ -546,10 +546,11 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             var mobsBefore = 0;
             var mobsUnsavable = 0;
             var droppedUnder = new Dictionary<string, int>();
+            var unsavable = new Dictionary<string, int>();
             DespawnWatch despawn = default!;
             await server.WaitPost(() =>
             {
-                droppedUnder = DroppedUnderUnsavable(entMan, grid);
+                (droppedUnder, unsavable) = UnsavableAtTheStore(entMan, grid);
 
                 // The image carries no minds and no corpses, and keeps pets, so a kept living NPC has to round-trip; the
                 // census counts them at each end, because a diff with no line for a mob cannot say which it was.
@@ -630,6 +631,8 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                            + $"{mobsStored} in the image, {mobsAfter} after the load.");
             CodecNotes.Add($"[ladder] dropped with an unsavable parent: {droppedUnder.Values.Sum()} entit(y/ies)"
                            + (droppedUnder.Count == 0 ? "." : ": " + string.Join(", ", droppedUnder.OrderByDescending(d => d.Value).ThenBy(d => d.Key, StringComparer.Ordinal).Select(d => $"{d.Key} x{d.Value}")) + "."));
+            CodecNotes.Add($"[ladder] unsavable at the store: {unsavable.Values.Sum()} entit(y/ies), by prototype"
+                           + (unsavable.Count == 0 ? ": none." : ": " + Top(unsavable) + "."));
             return loaded;
         }
 
@@ -748,27 +751,32 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
         /// What the store's walk leaves out without choosing to: every entity under an unsavable one, which goes with its
         /// parent whatever it is itself (an item in a pet's hands, a bag on a wheelchair). The unsavable entities are the
         /// engine's rule; what rides under them is cargo the scope rule does not excuse, so it is counted by prototype.
+        ///
+        /// <para>The unsavable entities themselves are counted by prototype too, because most of them are the sounds
+        /// playing at the store, an alarm or a machine's start-up, and their number moves from run to run. Counted
+        /// apart, that movement reads as what it is rather than as the store losing something new.</para>
         /// </summary>
-        private static Dictionary<string, int> DroppedUnderUnsavable(IEntityManager entMan, EntityUid grid)
+        private static (Dictionary<string, int> Dropped, Dictionary<string, int> Unsavable) UnsavableAtTheStore(IEntityManager entMan, EntityUid grid)
         {
             var dropped = new Dictionary<string, int>(StringComparer.Ordinal);
+            var unsavableByPrototype = new Dictionary<string, int>(StringComparer.Ordinal);
             var stack = new Stack<(EntityUid Uid, bool UnderUnsavable)>();
             stack.Push((grid, false));
             while (stack.TryPop(out var entry))
             {
                 var unsavable = entMan.GetComponent<MetaDataComponent>(entry.Uid).EntityPrototype is { MapSavable: false };
+                var proto = entMan.GetComponent<MetaDataComponent>(entry.Uid).EntityPrototype?.ID ?? "(no prototype)";
                 if (entry.UnderUnsavable)
-                {
-                    var proto = entMan.GetComponent<MetaDataComponent>(entry.Uid).EntityPrototype?.ID ?? "(no prototype)";
                     dropped[proto] = dropped.GetValueOrDefault(proto) + 1;
-                }
+                else if (unsavable)
+                    unsavableByPrototype[proto] = unsavableByPrototype.GetValueOrDefault(proto) + 1;
 
                 var children = entMan.GetComponent<TransformComponent>(entry.Uid).ChildEnumerator;
                 while (children.MoveNext(out var child))
                     stack.Push((child, entry.UnderUnsavable || unsavable));
             }
 
-            return dropped;
+            return (dropped, unsavableByPrototype);
         }
 
         /// <summary>
