@@ -71,6 +71,9 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
         /// <summary>What the codec round trips measured, printed after the rung's report.</summary>
         private static readonly List<string> CodecNotes = new();
 
+        /// <summary>The whole store of the last round trip: the walk, every component's write and its JSON, and the tiles.</summary>
+        private static TimeSpan LastStoreTime;
+
         private sealed record CodecEntity(long Id, string? Prototype, bool MapInitialized, bool Paused, Dictionary<string, string> Rows);
 
         private sealed record CodecImage(long GridId, List<CodecEntity> Entities, string Tiles, int Unsaved, int Bytes);
@@ -162,7 +165,9 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             await server.WaitPost(() =>
             {
                 mapUid = entMan.GetComponent<TransformComponent>(grid).MapUid!.Value;
+                var store = System.Diagnostics.Stopwatch.StartNew();
                 image = CodecStore(pair, grid);
+                LastStoreTime = store.Elapsed;
                 entMan.DeleteEntity(grid);
             });
 
@@ -279,6 +284,10 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                     row => row.Key,
                     row => (MappingDataNode) DrydockNodeJson.Decode(JsonNode.Parse(row.Value)!)));
 
+            // Each phase timed, because the engine's two (CreateEntities, StartEntities) run whole and cannot be sliced by us.
+            var phase = System.Diagnostics.Stopwatch.StartNew();
+            TimeSpan skeletonTime, createTime, rowsTime, startTime;
+
             // 1. The skeleton.
             var groups = new SortedDictionary<string, SequenceDataNode>(StringComparer.Ordinal);
             foreach (var entity in image.Entities)
@@ -321,6 +330,9 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                 ["entities"] = entityGroups,
             };
 
+            skeletonTime = phase.Elapsed;
+            phase.Restart();
+
             // 2. The engine's allocation and component pass.
             // The entity-system collection, not the root one: the deserializer injects systems (SharedMapSystem among
             // them), and MapLoaderSystem hands it its own injected collection, which is this one.
@@ -333,6 +345,9 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
 
             deserializer.CreateEntities();
             var gridUid = deserializer.UidMap[(int) image.GridId];
+
+            createTime = phase.Elapsed;
+            phase.Restart();
 
             // 3. The rows.
             var codec = new DrydockCodec(
@@ -417,6 +432,9 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                 newParent: entMan.GetComponent<TransformComponent>(mapUid));
             deserializer.Result.Orphans.Clear();
 
+            rowsTime = phase.Elapsed;
+            phase.Restart();
+
             // 5. The engine's startup, with the silent map-init stamp, and the seam between each entity's init and its
             // startup (EntityManager.cs:1060, before StartEntity at EntityDeserializer.cs:977-982), where the held-back
             // slots go in: into the slot an init handler re-added, or added whole where nothing re-added it.
@@ -459,6 +477,8 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                 entMan.EntityInitialized -= AtSeam;
             }
 
+            startTime = phase.Elapsed;
+
             // The engine's reading of the tiles against the image's own.
             var stored = DrydockTileTable.Read(tileTable, name => tileDefs[name].TileId).ToHashSet();
             var restored = server.System<SharedMapSystem>()
@@ -491,6 +511,9 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                     stillDirty++;
             }
 
+            CodecNotes.Add($"[ladder] codec round trip {trip}: load by phase, {image.Entities.Count} entities: skeleton {skeletonTime.TotalMilliseconds:F0} ms, "
+                           + $"CreateEntities {createTime.TotalMilliseconds:F0} ms, rows and re-parent {rowsTime.TotalMilliseconds:F0} ms, "
+                           + $"StartEntities {startTime.TotalMilliseconds:F0} ms; the store took {LastStoreTime.TotalMilliseconds:F0} ms.");
             CodecNotes.Add($"[ladder] codec round trip {trip}: {appearanceApplied} appearance entr(y/ies) set before init; "
                            + $"not stored, by value type: {Top(AppearanceSkipped)}; "
                            + $"{stillDirty} of {appearances} appearance component(s) still marked modified in the load's tick.");
@@ -524,7 +547,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                     // The value is declared as object, so its own type rides beside it for the read.
                     row[keyNode.Value] = new MappingDataNode
                     {
-                        ["type"] = new ValueDataNode(value.GetType().FullName!),
+                        ["type"] = new ValueDataNode(value.GetType().AssemblyQualifiedName!),
                         ["value"] = serialization.WriteValue(value.GetType(), value, alwaysWrite: true, context: codec.Context),
                     };
                 }
@@ -552,10 +575,11 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             {
                 var stored = (MappingDataNode) entry;
                 var typeName = stored.Get<ValueDataNode>("type").Value;
-                // The core library's types (bool, int, float, string) by the runtime, the game's by the engine's
-                // reflection manager, which only knows the game's assemblies.
+                // Stored assembly-qualified, as the drydock's own appearance capture does, so the runtime resolves any
+                // loaded assembly (Robust.Shared.Maths's Color is in none the engine's reflection manager lists); the
+                // reflection manager by full name is the fallback for a name that has lost its assembly.
                 var type = Type.GetType(typeName)
-                           ?? reflection.GetType(typeName)
+                           ?? reflection.GetType(typeName.Split(',')[0])
                            ?? throw new FormatException($"Codec loop: appearance value type {typeName} is unknown.");
 
                 var key = (Enum) serialization.Read(typeof(Enum), new ValueDataNode(keyText), context: codec.Context, notNullableOverride: true)!;

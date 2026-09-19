@@ -286,6 +286,20 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                 Assert.Ignore($"The codec-mode run stopped at {stopped}.");
 
             var clock = System.Diagnostics.Stopwatch.StartNew();
+            try
+            {
+                await RungBody(rung, vesselId, clock);
+            }
+            catch when (CodecMode)
+            {
+                // Any failure stops a codec-mode run, not only the pool's error check at the end.
+                CodecStopped ??= $"rung {rung} {vesselId}, which failed";
+                throw;
+            }
+        }
+
+        private async Task RungBody(int rung, string vesselId, System.Diagnostics.Stopwatch clock)
+        {
             await using var pair = await PoolManager.GetServerClient();
             var server = pair.Server;
             var entMan = server.EntMan;
@@ -361,15 +375,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
 
             await server.WaitPost(() => entMan.DeleteEntity(second.Retrieved));
             await pair.RunTicksSync(3);
-            try
-            {
-                await pair.CleanReturnAsync();
-            }
-            catch when (CodecMode)
-            {
-                CodecStopped ??= $"rung {rung} {vesselId}, which logged an error or failed to return clean";
-                throw;
-            }
+            await pair.CleanReturnAsync();
         }
 
         private const int CodecStopFindings = 400;
