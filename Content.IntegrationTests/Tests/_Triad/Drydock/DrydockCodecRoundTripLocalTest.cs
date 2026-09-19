@@ -25,13 +25,14 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
     /// the grid image holds water: it answers the codec's half of the question before the image
     /// writer or the loader exist.
     ///
-    /// <para>Per component of every entity on every vessel file, four steps and three questions.
-    /// Write it through <see cref="DrydockCodec"/>; encode the node tree to JSON and decode it back,
-    /// which is what a row is; read the decoded tree back to a component; write that component
-    /// again. The questions are whether the write throws at all, whether the JSON round trip changes
-    /// the tree, and whether the second write equals the first. That last one is the assertion the
-    /// design page calls idempotence, and it is the one that catches a field that writes but does
-    /// not read back, which a single write cannot see.</para>
+    /// <para>Per component of every entity on every vessel file, five steps. Write it through
+    /// <see cref="DrydockCodec"/>; encode the node tree to JSON and decode it back, which is what a row
+    /// is; read the decoded tree back to a component; copy that into what the entity's prototype would
+    /// add, as the load does; write the read component again. The questions are whether the write
+    /// throws at all, whether the JSON round trip changes the tree, whether the read and then the copy
+    /// hold what the live component held, whether the copy throws, and whether the second write equals
+    /// the first. That last one is the assertion the design page calls idempotence, and it is the one
+    /// that catches a field that writes but does not read back, which a single write cannot see.</para>
     ///
     /// <para>This is a measurement, not a gate, and it is reported as one: nothing here asserts a
     /// clean corpus, because the point is to find out. What it does assert is its own coverage, so a
@@ -44,7 +45,9 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
     /// so it says nothing about whether a restored component behaves: a startup handler, an election
     /// in query order and the power solver's first tick are the loader's business and no round trip
     /// reaches them. It runs on hulls as their files describe them, which is one shape of grid; a
-    /// ship that has been lived in reaches states no file contains. And a component excluded from
+    /// ship that has been lived in reaches states no file contains, and some failures need one: the
+    /// engine copies a list element by element, so a copy that throws per element is only met by a
+    /// list that has one, and no shuttle file queues a lathe (the ladder's lived-in pass does). And a component excluded from
     /// the walk below is unmeasured rather than clean.</para>
     ///
     /// <para>Run: <c>dotnet test Content.IntegrationTests --no-build --filter "FullyQualifiedName~DrydockCodecRoundTripLocalTest" --logger "console;verbosity=detailed"</c>.</para>
@@ -115,8 +118,12 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             Assert.That(report.Hulls, Is.GreaterThan(0), "The control: no hull was loaded, so nothing was measured.");
             Assert.That(report.Components, Is.GreaterThan(0), "The control: no component was compared.");
             Assert.That(report.Entities, Is.GreaterThan(report.Hulls), "The control: hulls carried no entities beyond themselves.");
-            Assert.That(ScalarsCompared, Is.GreaterThan(0),
+            Assert.That(FirstRead.Compared, Is.GreaterThan(0),
                 "The control: the live comparison compared no scalar, so a clean result from it would mean nothing.");
+            Assert.That(report.Copies, Is.GreaterThan(0),
+                "The control: no component was copied the load's way, so a copy that never threw would mean nothing.");
+            Assert.That(Copied.Compared, Is.GreaterThan(0),
+                "The control: the copy's live comparison compared no scalar.");
             Assert.That(report.Keys, Is.GreaterThan(0),
                 "The control: every component compared wrote an empty mapping, so a clean corpus here would mean the codec wrote nothing rather than that it wrote everything.");
 
@@ -196,7 +203,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
 
                     hullComponents++;
 
-                    var (found, keys) = RoundTrip(codec, entity, component, type, hull, report);
+                    var (found, keys) = RoundTrip(serialization, factory, codec, entity, component, type, hull, report);
                     hullKeys += keys;
 
                     if (keys == 0)
@@ -221,6 +228,8 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
         /// and a codec that wrote an empty mapping for every component would round-trip perfectly.
         /// </summary>
         private static (bool Found, int Keys) RoundTrip(
+            ISerializationManager serialization,
+            IComponentFactory factory,
             DrydockCodec codec,
             Entity<MetaDataComponent> entity,
             IComponent component,
@@ -307,10 +316,31 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             // same again, so a comparison of writes cannot see it (F35's airtight 15 wrote as 14 and 14 again).
             // Nothing runs between the write and this read, so the clock has not moved and a time reads back
             // at the same moment.
-            foreach (var (member, detail) in LiveDifferences(component, restored, type.Name))
+            var lostByWrite = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var (member, detail) in LiveDifferences(component, restored, type.Name, FirstRead))
             {
                 report.Add("the first write lost it", hull, type, detail);
                 report.LostMember(member);
+                lostByWrite.Add(member);
+                found = true;
+            }
+
+            if (Copy(serialization, factory, codec, entity, restored, type, hull, report) is { } target)
+            {
+                // Against the live component again, with what the write already lost left out: a member lost there
+                // reads the same wrong value into the copy, and it is one loss, not two.
+                foreach (var (member, detail) in LiveDifferences(component, target, type.Name, Copied))
+                {
+                    if (lostByWrite.Contains(member))
+                        continue;
+
+                    report.Add("the copy lost it", hull, type, detail);
+                    report.LostByCopy(member);
+                    found = true;
+                }
+            }
+            else
+            {
                 found = true;
             }
 
@@ -364,6 +394,113 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             }
 
             return (found, keys);
+        }
+
+        /// <summary>
+        /// The load's own copy (<c>DrydockFidelityLadderLocalTest.CodecLoad</c>): the read component copied under the
+        /// codec's context into what the entity's prototype would add, or into a fresh one when the prototype has none,
+        /// which is the loader's path for a hooked component it adds. The read never copies, so a half of the pipeline
+        /// only the load runs had nothing measuring it until a ladder rung happened to carry the case (the lathe
+        /// queue, 2026-09-18). Null when the copy threw, reported with the member it threw on.
+        /// </summary>
+        private static IComponent? Copy(
+            ISerializationManager serialization,
+            IComponentFactory factory,
+            DrydockCodec codec,
+            Entity<MetaDataComponent> entity,
+            IComponent restored,
+            Type type,
+            string hull,
+            Report report)
+        {
+            var registration = factory.GetRegistration(type);
+            var target = factory.GetComponent(registration);
+
+            if (entity.Comp.EntityPrototype?.Components.TryGetValue(registration.Name, out var prototype) == true)
+            {
+                // What the entity manager does with a prototype's component, which is the engine's business: a throw
+                // here is reported apart, so it is not taken for ours.
+                try
+                {
+                    serialization.CopyTo(prototype.Component, ref target, notNullableOverride: true);
+                }
+                catch (Exception e)
+                {
+                    report.Add("the prototype's own copy threw", hull, type, Reason(e));
+                    return null;
+                }
+            }
+
+            report.CopyClock.Start();
+            try
+            {
+                serialization.CopyTo(restored, ref target, codec.Context, notNullableOverride: true);
+                report.Copies++;
+                return target;
+            }
+            catch (Exception e)
+            {
+                report.Add("copy threw", hull, type, $"{CopyCulprit(serialization, factory, registration, restored, codec)}: {Reason(e)}");
+                return null;
+            }
+            finally
+            {
+                report.CopyClock.Stop();
+            }
+        }
+
+        /// <summary>
+        /// Which top-level data field a failed copy threw on, found by copying each one alone: a fresh component with
+        /// only that member taken from the read one, copied the same way. Runs only after a throw, so its cost is the
+        /// failure's.
+        /// </summary>
+        private static string CopyCulprit(
+            ISerializationManager serialization,
+            IComponentFactory factory,
+            ComponentRegistration registration,
+            IComponent restored,
+            DrydockCodec codec)
+        {
+            foreach (var member in DataFields(registration.Type))
+            {
+                object source = factory.GetComponent(registration);
+                switch (member)
+                {
+                    case FieldInfo field:
+                        field.SetValue(source, field.GetValue(restored));
+                        break;
+                    case PropertyInfo { CanWrite: true } property:
+                        property.SetValue(source, property.GetValue(restored));
+                        break;
+                    default:
+                        continue;
+                }
+
+                object? probe = factory.GetComponent(registration);
+                try
+                {
+                    serialization.CopyTo(source, ref probe, codec.Context, notNullableOverride: true);
+                }
+                catch (Exception)
+                {
+                    return $"{registration.Type.Name}.{member.Name}";
+                }
+            }
+
+            return $"{registration.Type.Name}, no single member alone";
+        }
+
+        private static IEnumerable<MemberInfo> DataFields(Type type)
+        {
+            const BindingFlags flags = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.DeclaredOnly;
+            for (var declaring = type; declaring != null && declaring != typeof(object); declaring = declaring.BaseType)
+            {
+                foreach (var member in declaring.GetFields(flags).Cast<MemberInfo>().Concat(declaring.GetProperties(flags)))
+                {
+                    if (member.GetCustomAttribute<Robust.Shared.Serialization.Manager.Attributes.DataFieldBaseAttribute>() != null)
+                        yield return member;
+                }
+            }
         }
 
         /// <summary>
@@ -458,7 +595,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
         /// restored component holds differently from the live one. Scalars only, because equality means what it
         /// says for them; a collection or a definition deeper down is left to the detector.
         /// </summary>
-        private static IEnumerable<(string Member, string Detail)> LiveDifferences(object live, object restored, string path, int depth = 0)
+        private static IEnumerable<(string Member, string Detail)> LiveDifferences(object live, object restored, string path, LiveTally tally, int depth = 0)
         {
             foreach (var member in ScalarAndNested(live.GetType()))
             {
@@ -468,14 +605,14 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
 
                 if (IsScalar(MemberType(member)))
                 {
-                    ScalarsCompared++;
+                    tally.Compared++;
 
                     // A reference to an entity off the image reads back invalid by rule (F32, carve-out e): the grid's
                     // own parent, its map, on every hull. Severed, counted apart, not lost.
                     if (before is EntityUid target && target.IsValid() && !OnImage.Contains(target)
                         && after is EntityUid restoredTarget && !restoredTarget.IsValid())
                     {
-                        Severed++;
+                        tally.Severed++;
                         continue;
                     }
 
@@ -487,7 +624,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
 
                 if (depth == 0 && before != null && after != null && before.GetType() == after.GetType())
                 {
-                    foreach (var nested in LiveDifferences(before, after, name, depth + 1))
+                    foreach (var nested in LiveDifferences(before, after, name, tally, depth + 1))
                         yield return nested;
                 }
             }
@@ -495,10 +632,18 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
 
         private static readonly Dictionary<Type, List<MemberInfo>> MemberCache = new();
 
-        /// <summary>The live comparison's own coverage: a clean result over no comparisons would read as clean.</summary>
-        private static long ScalarsCompared;
+        /// <summary>A live comparison's own coverage: a clean result over no comparisons would read as clean.</summary>
+        private sealed class LiveTally
+        {
+            public long Compared;
+            public long Severed;
+        }
 
-        private static long Severed;
+        /// <summary>The read component against the live one.</summary>
+        private static readonly LiveTally FirstRead = new();
+
+        /// <summary>The load's copy target against the live one.</summary>
+        private static readonly LiveTally Copied = new();
 
         /// <summary>The entities on the hull being measured, so a reference off it is told from a lost one.</summary>
         private static HashSet<EntityUid> OnImage = new();
@@ -588,6 +733,10 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             public readonly System.Diagnostics.Stopwatch JsonClock = new();
             public readonly System.Diagnostics.Stopwatch ReadClock = new();
             public readonly System.Diagnostics.Stopwatch RewriteClock = new();
+            public readonly System.Diagnostics.Stopwatch CopyClock = new();
+
+            /// <summary>Components the load's copy was made for and did not throw on.</summary>
+            public int Copies;
 
             public readonly List<string> Unloadable = new();
 
@@ -601,6 +750,11 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
 
             public void LostMember(string member) =>
                 _lostMembers[member] = _lostMembers.GetValueOrDefault(member) + 1;
+
+            private readonly Dictionary<string, int> _lostByCopy = new(StringComparer.Ordinal);
+
+            public void LostByCopy(string member) =>
+                _lostByCopy[member] = _lostByCopy.GetValueOrDefault(member) + 1;
 
             private readonly List<string> _hulls = new();
             private readonly Dictionary<string, int> _byKind = new(StringComparer.Ordinal);
@@ -638,12 +792,13 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                     + $"{Entities} entit(y/ies) and {Components} component(s) carrying {Keys} key(s) compared in {elapsed.TotalSeconds:F1}s; "
                     + $"{findings} finding(s) across {_byKind.Count} kind(s).");
 
-                var codec = WriteClock.Elapsed + JsonClock.Elapsed + ReadClock.Elapsed + RewriteClock.Elapsed;
+                var codec = WriteClock.Elapsed + JsonClock.Elapsed + ReadClock.Elapsed + CopyClock.Elapsed + RewriteClock.Elapsed;
                 await TestContext.Out.WriteLineAsync(
                     $"[codec-roundtrip] codec steps {codec.TotalSeconds:F1}s of the {elapsed.TotalSeconds:F1}s: "
                     + $"write {WriteClock.Elapsed.TotalSeconds:F1}s, json {JsonClock.Elapsed.TotalSeconds:F1}s, "
-                    + $"read {ReadClock.Elapsed.TotalSeconds:F1}s, second write {RewriteClock.Elapsed.TotalSeconds:F1}s; "
-                    + "the third leg, loading, walking and comparing are the rest.");
+                    + $"read {ReadClock.Elapsed.TotalSeconds:F1}s, copy {CopyClock.Elapsed.TotalSeconds:F1}s, "
+                    + $"second write {RewriteClock.Elapsed.TotalSeconds:F1}s; "
+                    + "the third leg, the prototype copies, loading, walking and comparing are the rest.");
 
                 foreach (var (hull, entities, write, json) in _hullWrites.OrderByDescending(h => h.Write).Take(5))
                 {
@@ -653,13 +808,25 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                 }
 
                 await TestContext.Out.WriteLineAsync(
-                    $"[codec-roundtrip] live comparison: {ScalarsCompared} scalar value(s) compared against the live component, "
-                    + $"{_lostMembers.Values.Sum()} lost by the first write, {Severed} reference(s) off the image severed by rule.");
+                    $"[codec-roundtrip] live comparison: {FirstRead.Compared} scalar value(s) compared against the live component, "
+                    + $"{_lostMembers.Values.Sum()} lost by the first write, {FirstRead.Severed} reference(s) off the image severed by rule.");
 
                 if (_lostMembers.Count > 0)
                 {
                     await TestContext.Out.WriteLineAsync($"[codec-roundtrip] the first write lost it, by member ({_lostMembers.Count}):");
                     foreach (var (member, count) in _lostMembers.OrderByDescending(kv => kv.Value).ThenBy(kv => kv.Key, StringComparer.Ordinal))
+                        await TestContext.Out.WriteLineAsync($"[codec-roundtrip]     {member} x{count}");
+                }
+
+                await TestContext.Out.WriteLineAsync(
+                    $"[codec-roundtrip] the load's copy: {Copies} component(s) copied, {_byKind.GetValueOrDefault("copy threw")} threw; "
+                    + $"{Copied.Compared} scalar value(s) on the copy target compared against the live component, "
+                    + $"{_lostByCopy.Values.Sum()} lost by the copy beyond what the write lost, {Copied.Severed} severed by rule.");
+
+                if (_lostByCopy.Count > 0)
+                {
+                    await TestContext.Out.WriteLineAsync($"[codec-roundtrip] the copy lost it, by member ({_lostByCopy.Count}):");
+                    foreach (var (member, count) in _lostByCopy.OrderByDescending(kv => kv.Value).ThenBy(kv => kv.Key, StringComparer.Ordinal))
                         await TestContext.Out.WriteLineAsync($"[codec-roundtrip]     {member} x{count}");
                 }
 
