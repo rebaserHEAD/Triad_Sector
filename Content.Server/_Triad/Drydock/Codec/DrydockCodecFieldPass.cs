@@ -446,8 +446,7 @@ public sealed class DrydockCodecFieldPass
             if (pair.Value is not { } element || !NeedsWalking(element))
                 continue;
 
-            var keyNode = _serialization.WriteValue(pair.Key.GetType(), pair.Key, alwaysWrite: true, context: _context);
-            if (keyNode is not ValueDataNode { Value: var key } || !mapping.TryGet(key, out var child))
+            if (DictionaryKey(dictionary, pair.Key) is not { Value: var key } || !mapping.TryGet(key, out var child))
                 throw new FormatException($"Drydock codec: {path} holds an entry keyed {pair.Key} that its row has no member for.");
 
             ReadWalkValue(element, child, $"{path}[{key}]");
@@ -666,9 +665,9 @@ public sealed class DrydockCodecFieldPass
 
             // The key as the manager wrote it, which is the key DictionarySerializer put in the
             // node. Asking the manager rather than calling ToString is what keeps a key type with
-            // its own serializer matching.
-            var keyNode = _serialization.WriteValue(pair.Key.GetType(), pair.Key, alwaysWrite: true, context: _context);
-            if (keyNode is not ValueDataNode { Value: var key } || !mapping.TryGet(key, out var child))
+            // its own serializer matching, and asking by the dictionary's declared key type is what
+            // keeps an Enum-keyed one matching (<see cref="DictionaryKey"/>).
+            if (DictionaryKey(dictionary, pair.Key) is not { Value: var key } || !mapping.TryGet(key, out var child))
                 throw new InvalidOperationException($"Drydock codec: {path} holds an entry keyed {pair.Key} that its own written mapping has no member for.");
 
             WalkValue(element, child, walk, $"{path}[{key}]");
@@ -709,6 +708,22 @@ public sealed class DrydockCodecFieldPass
             if (element != null && NeedsWalking(element))
                 throw new InvalidOperationException($"Drydock codec: {path} holds data definitions and wrote as {node.GetType().Name}, which this pass cannot walk.");
         }
+    }
+
+    /// <summary>
+    /// The key a dictionary's row is keyed by, which is the key written as the dictionary's DECLARED key type rather
+    /// than as the key's own. The two differ wherever the declared type is <see cref="Enum"/>: the engine's enum
+    /// serializer writes a concrete enum as its member name and the generic one writes <c>enum.Type.Member</c>, and a
+    /// component keyed by <see cref="Enum"/> (an intrinsic UI, keyed by whatever UI key its own enum declares) has rows
+    /// under the second spelling. Null where the dictionary names no key type at all.
+    /// </summary>
+    private ValueDataNode? DictionaryKey(IDictionary dictionary, object key)
+    {
+        var declared = dictionary.GetType().GetInterfaces()
+            .FirstOrDefault(candidate => candidate.IsGenericType && candidate.GetGenericTypeDefinition() == typeof(IDictionary<,>))
+            ?.GetGenericArguments()[0] ?? key.GetType();
+
+        return _serialization.WriteValue(declared, key, alwaysWrite: true, context: _context) as ValueDataNode;
     }
 
     /// <summary>

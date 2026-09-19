@@ -19,6 +19,7 @@ using Content.Shared.FixedPoint;
 using Content.Shared.Medical;
 using Content.Shared.Robotics;
 using Content.Shared.Robotics.Components;
+using Content.Shared.UserInterface;
 using Content.Shared.Weapons.Melee;
 using Robust.Shared.GameObjects;
 using Robust.Shared.Map;
@@ -1258,6 +1259,54 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
 
                 Assert.That(severed.Count(entry => entry.Nullable), Is.EqualTo(3), "Three severed references were in nullable members.");
                 Assert.That(severed.Count(entry => !entry.Nullable), Is.EqualTo(1), "and one was not, which is what the count is for");
+            });
+
+            await pair.CleanReturnAsync();
+        }
+
+        /// <summary>
+        /// A dictionary keyed by <see cref="Enum"/> rather than by a concrete enum. The engine writes such a key as
+        /// <c>enum.Type.Member</c> and a concrete one as the member name alone, and the walk looked its rows up by the
+        /// key's own runtime type, which gives the second spelling. Nothing had reached one until a nullable reference
+        /// below it gave the walk a reason to descend, and then every hull carrying an intrinsic UI failed its load. The
+        /// walk asks by the dictionary's declared key type now.
+        /// </summary>
+        [Test]
+        public async Task AnEnumKeyedDictionaryIsWalkedByItsDeclaredKeyType()
+        {
+            await using var pair = await PoolManager.GetServerClient();
+            var server = pair.Server;
+            var entMan = server.EntMan;
+            var serialization = server.ResolveDependency<ISerializationManager>();
+            var timing = server.ResolveDependency<IGameTiming>();
+            var map = await pair.CreateTestMap();
+
+            var keys = new List<string>();
+            IntrinsicUIComponent restored = default!;
+
+            await server.WaitPost(() =>
+            {
+                var uid = entMan.SpawnEntity("MobObserver", new EntityCoordinates(map.MapUid, default));
+                var component = entMan.GetComponent<IntrinsicUIComponent>(uid);
+                keys.AddRange(component.UIs.Keys.Select(key => key.ToString()!));
+
+                // The image holds the observer alone, so the action entities its init made are off it.
+                var codec = new DrydockCodec(
+                    serialization,
+                    entMan,
+                    timing,
+                    target => target == uid ? 1 : null,
+                    id => id == 1 ? uid : EntityUid.Invalid);
+
+                restored = codec.Read<IntrinsicUIComponent>(codec.Write((uid, entMan.GetComponent<MetaDataComponent>(uid)), component));
+            });
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(keys, Is.Not.Empty, "The control: the entity has to carry an intrinsic UI, which is keyed by Enum.");
+                Assert.That(restored.UIs.Keys.Select(key => key.ToString()), Is.EquivalentTo(keys), "Every key has to come back.");
+                Assert.That(restored.UIs.Values.Select(entry => entry.ToggleActionEntity), Is.All.Null,
+                    "And the action entity, which the image could not keep, reads null in a nullable member.");
             });
 
             await pair.CleanReturnAsync();
