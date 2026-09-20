@@ -2478,14 +2478,14 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                 .Select(key => key[..key.IndexOf('|')]).Distinct().OrderBy(p => p, StringComparer.Ordinal).ToList();
             foreach (var path in firelocks)
                 sb.AppendLine($"[ladder] alarm control trip {trip} firelock {path} (early, before, after, late): "
-                              + Line(path, "DoorComponent.State", "LastAlarmState", "NetworkAlarmStates", "FirelockComponent.Pressure", "FirelockComponent.Temperature", "FirelockComponent.Powered", "ApcPowerReceiverComponent.~Powered"));
+                              + Line(path, "DoorComponent.State", "LastAlarmState", "NetworkAlarmStates", "AtmosMonitorVisuals", "FirelockComponent.Pressure", "FirelockComponent.Temperature", "FirelockComponent.Powered", "ApcPowerReceiverComponent.~Powered"));
 
             var alarms = everyKey.Where(key => key.Contains("|AirAlarmComponent.", StringComparison.Ordinal) || key.Contains("|AtmosAlarmableComponent.", StringComparison.Ordinal))
                 .Select(key => key[..key.IndexOf('|')]).Distinct().Except(firelocks).OrderBy(p => p, StringComparer.Ordinal).ToList();
             var unsettledAlarms = new List<string>();
             foreach (var path in alarms)
             {
-                var line = Line(path, "LastAlarmState", "NetworkAlarmStates", "~SensorData", "~VentData", "~ScrubberData", "ApcPowerReceiverComponent.~Powered");
+                var line = Line(path, "LastAlarmState", "NetworkAlarmStates", "AtmosMonitorVisuals", "~SensorData", "~VentData", "~ScrubberData", "ApcPowerReceiverComponent.~Powered");
                 sb.AppendLine($"[ladder] alarm control trip {trip} alarm {path} (early, before, after, late): {line}");
                 if (line.Contains("UNSETTLED", StringComparison.Ordinal))
                     unsettledAlarms.Add(path);
