@@ -12,9 +12,13 @@ namespace Content.Server._Triad.DeviceNetwork;
 /// same gate and no more.
 ///
 /// <para>The gate is <see cref="DeviceNetworkComponent.AutoConnect"/>, or a singleton server that is
-/// <see cref="SingletonDeviceNetServerComponent.Active"/> (the crew monitoring server has <c>autoConnect: false</c> and is
-/// joined by its own system when it is the active one). A device a player or an admin disconnected stays out, because
-/// disconnecting clears <c>AutoConnect</c> and the clear is saved. The frequencies are not resolved again from their
+/// <see cref="SingletonDeviceNetServerComponent.Active"/> and has an address. The crew monitoring server has
+/// <c>autoConnect: false</c> and <c>Active</c> defaults to true, so the address is what says it was ever joined: the owner
+/// treats a server as THE active one only when <c>Active</c> and the address is not empty
+/// (<c>SingletonDeviceNetServerSystem.TryGetActiveServerAddress</c>, :70-74), and hands that address out without joining it, so
+/// that set is what a restore has to join. An active server with no address is one the owner joins itself at the first request
+/// (:78-83), and joining it here would give it an address it never had. A device a player or an admin disconnected stays out,
+/// because disconnecting clears <c>AutoConnect</c> and the clear is saved. The frequencies are not resolved again from their
 /// prototype ids: the resolved values are data fields already, and resolving them again would undo a retune.</para>
 ///
 /// <para>A device already in its network is left alone, because <c>ConnectDevice</c> on one that is connected with a
@@ -38,9 +42,11 @@ public sealed class DeviceNetworkRestoreSystem : EntitySystem
             if (TerminatingOrDeleted(uid) || !TryComp<DeviceNetworkComponent>(uid, out var device))
                 continue;
 
-            // Read only: the singleton's Active is its own system's to write.
+            // Read only: the singleton's Active is its own system's to write. An active singleton with no address is one the owner
+            // joins itself on the first request for the active server, so it is left out here (see the class summary).
             var joins = device.AutoConnect
-                        || (TryComp<SingletonDeviceNetServerComponent>(uid, out var server) && server.Active);
+                        || (TryComp<SingletonDeviceNetServerComponent>(uid, out var server) && server.Active
+                            && !string.IsNullOrEmpty(device.Address));
             if (!joins || _networks.IsDeviceConnected(uid, device))
                 continue;
 

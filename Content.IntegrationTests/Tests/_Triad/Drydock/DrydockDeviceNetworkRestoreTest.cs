@@ -110,6 +110,62 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
         }
 
         /// <summary>
+        /// An active singleton server with no address was never joined (the owner joins it at the first request for the active
+        /// server), so a restore leaves it out and its address stays empty; joining it would give it one it never had.
+        /// </summary>
+        [Test]
+        public async Task AnActiveSingletonServerWithNoAddressIsLeftOutAndKeepsNoAddress()
+        {
+            await using var pair = await PoolManager.GetServerClient();
+            var server = pair.Server;
+            var entMan = server.EntMan;
+            var map = await pair.CreateTestMap();
+            var networks = server.System<DeviceNetworkSystem>();
+            var image = server.System<DrydockImageSystem>();
+            var fidelity = server.System<DrydockFidelitySystem>();
+
+            var grid = map.Grid.Owner;
+            bool activeBefore = false, joinedBefore = true;
+            string addressBefore = "unset";
+            await server.WaitPost(() =>
+            {
+                var crewServer = entMan.SpawnEntity("CrewMonitoringServer", new EntityCoordinates(grid, 0.5f, 0.5f));
+                activeBefore = entMan.GetComponent<SingletonDeviceNetServerComponent>(crewServer).Active;
+                joinedBefore = networks.IsDeviceConnected(crewServer, null);
+                addressBefore = entMan.GetComponent<DeviceNetworkComponent>(crewServer).Address;
+            });
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(activeBefore, Is.True, "The control: a server nobody has asked for is Active by default.");
+                Assert.That(joinedBefore, Is.False, "The control: and is in no network.");
+                Assert.That(addressBefore, Is.Empty, "The control: and has no address.");
+            });
+
+            DrydockLoadResult result = default!;
+            await server.WaitPost(() =>
+            {
+                var stored = image.Store(grid);
+                image.Despawn(grid);
+                result = image.Load(stored.Image, map.MapUid);
+            });
+
+            await server.WaitAssertion(() =>
+            {
+                var after = fidelity.GridTreeList(result.Grid)
+                    .Single(uid => entMan.GetComponent<MetaDataComponent>(uid).EntityPrototype?.ID == "CrewMonitoringServer");
+
+                Assert.Multiple(() =>
+                {
+                    Assert.That(networks.IsDeviceConnected(after, null), Is.False, "A never-joined server stays out of its network.");
+                    Assert.That(entMan.GetComponent<DeviceNetworkComponent>(after).Address, Is.Empty, "And gets no address it never had.");
+                });
+            });
+
+            await pair.CleanReturnAsync();
+        }
+
+        /// <summary>
         /// The restore handler contract: an entry an earlier handler deleted is skipped without a throw, a device already in its
         /// network is left alone (its address is not reassigned), and no component is added to any entity on the list.
         /// </summary>
