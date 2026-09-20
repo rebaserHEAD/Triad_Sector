@@ -773,7 +773,8 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                 + "unless the owning system pushes at open, and these systems do: an air alarm's ActivateInWorld handler "
                 + "opens the interface, syncs its devices and calls UpdateUI in the same tick (AirAlarmSystem.cs:255-273); "
                 + "a holopad fills its state on BeforeActivatableUIOpen (HolopadSystem.cs:52, :86-89, :467-498); a gas "
-                + "mixer (GasMixerSystem.cs:151-155), a lathe (LatheSystem.cs:91) and a research client "
+                + "mixer (GasMixerSystem.cs:151-155), a volume pump (GasVolumePumpSystem.cs:155-156), a filter "
+                + "(GasFilterSystem.cs:124-125), a lathe (LatheSystem.cs:91) and a research client "
                 + "(ResearchSystem.Client.cs:79-81) each push theirs. Sorted only where every state the cache lost is one "
                 + "of those; a cache waiting on a handler sorts into that handler's family, and one waiting on two stays a "
                 + "finding, because no single family explains it.",
@@ -888,6 +889,8 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             "AirAlarmUIState",
             "HolopadBoundInterfaceState",
             "GasMixerBoundUserInterfaceState",
+            "GasVolumePumpBoundUserInterfaceState",
+            "GasFilterBoundUserInterfaceState",
             "LatheUpdateState",
             "ResearchClientBoundInterfaceState",
         };
