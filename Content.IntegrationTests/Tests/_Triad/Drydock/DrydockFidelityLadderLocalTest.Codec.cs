@@ -9,6 +9,8 @@ using Content.IntegrationTests.Pair;
 using Content.Server._Triad.Drydock;
 using Content.Server._Triad.Drydock.Codec;
 using Content.Server._Triad.Drydock.Loader;
+using Content.Server.DeviceNetwork.Systems;
+using Content.Shared.DeviceNetwork.Components;
 using Content.Server.Chemistry.Components;
 using Content.Server.Power.Components;
 using Content.Server.Pinpointer;
@@ -434,6 +436,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             var droppedUnder = new Dictionary<string, int>();
             var unsavable = new Dictionary<string, int>();
             DespawnWatch despawn = default!;
+            var devicesBefore = new Dictionary<long, DeviceMembership>();
             await server.WaitPost(() =>
             {
                 (droppedUnder, unsavable) = UnsavableAtTheStore(entMan, grid);
@@ -451,6 +454,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                 }
 
                 mapUid = entMan.GetComponent<TransformComponent>(grid).MapUid!.Value;
+                devicesBefore = CaptureDevices(entMan, system, grid);
                 var store = System.Diagnostics.Stopwatch.StartNew();
                 stored = StoreTimed(entMan, system, grid);
                 LastStoreTime = store.Elapsed;
@@ -466,11 +470,13 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             EntityUid loaded = default;
             DrydockLoadResult result = default!;
             var mobsAfter = 0;
+            var deviceLosses = new List<string>();
             LoadTimes loadTimes = default;
             await server.WaitPost(() =>
             {
                 (result, loadTimes) = LoadTimed(system, stored.Image, mapUid);
                 loaded = result.Grid;
+                deviceLosses = DeviceLosses(entMan, result, devicesBefore);
                 LastLoadIds = result.Ids.ToDictionary(entry => entry.Key, entry => entry.Value);
                 mobsAfter = fidelity.GridTreeList(loaded)
                     .Count(uid => entMan.GetComponent<MetaDataComponent>(uid).EntityPrototype?.ID.StartsWith("Mob", StringComparison.Ordinal) == true);
@@ -543,6 +549,14 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                 CodecNotes.AddRange(lost.Select(line => $"[ladder] MANIFEST FAILURE {line}"));
             }
 
+            // H18: every device that was in its network at the store is in it again after the load, at the address it had. A
+            // device that was out, by a disconnect or an unrequested server, is not required to join.
+            CodecNotes.Add($"[ladder] codec round trip {trip}: device network: {devicesBefore.Count} device(s) aboard, "
+                           + $"{devicesBefore.Values.Count(d => d.Connected)} in their network at the store, {deviceLosses.Count} not back in it at their address.");
+            var deviceFailures = deviceLosses.Select(line => $"codec round trip {trip}: device network: {line}").ToList();
+            LoopFailures.AddRange(deviceFailures);
+            CodecNotes.AddRange(deviceFailures.Select(line => $"[ladder] DEVICE NETWORK FAILURE {line}"));
+
             // Whatever the manifest does, a leftover of the despawn fails.
             CodecNotes.Add($"[ladder] codec round trip {trip}: despawn "
                            + (DespawnGridOnly ? "of the grid alone (LADDER_DESPAWN=grid-only, the control)" : "with its staging map")
@@ -559,6 +573,46 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             CodecNotes.Add($"[ladder] unsavable at the store: {unsavable.Values.Sum()} entit(y/ies), by prototype"
                            + (unsavable.Count == 0 ? ": none." : ": " + Top(unsavable) + "."));
             return loaded;
+        }
+
+        /// <summary>A device's place in its network at the store: whether it was in it, and the address it held.</summary>
+        private readonly record struct DeviceMembership(string Prototype, bool Connected, string Address);
+
+        /// <summary>Every device aboard by the stable id the store will give it, with whether it is in its network now.</summary>
+        private static Dictionary<long, DeviceMembership> CaptureDevices(IEntityManager entMan, DrydockImageSystem system, EntityUid grid)
+        {
+            var networks = entMan.System<DeviceNetworkSystem>();
+            var devices = new Dictionary<long, DeviceMembership>();
+            foreach (var (uid, id) in system.Walk(grid).Ids)
+            {
+                if (entMan.TryGetComponent<DeviceNetworkComponent>(uid, out var device))
+                    devices[id] = new DeviceMembership(PrototypeOf(entMan, uid), networks.IsDeviceConnected(uid, device), device.Address);
+            }
+
+            return devices;
+        }
+
+        /// <summary>The devices that were in their network at the store and are not in it after the load, or are at another address.</summary>
+        private static List<string> DeviceLosses(IEntityManager entMan, DrydockLoadResult result, Dictionary<long, DeviceMembership> before)
+        {
+            var networks = entMan.System<DeviceNetworkSystem>();
+            var byId = result.Ids.ToDictionary(entry => entry.Value, entry => entry.Key);
+            var losses = new List<string>();
+            foreach (var (id, was) in before.Where(entry => entry.Value.Connected))
+            {
+                if (!byId.TryGetValue(id, out var uid) || !entMan.TryGetComponent<DeviceNetworkComponent>(uid, out var device))
+                {
+                    losses.Add($"{was.Prototype} (id {id}) did not come back");
+                    continue;
+                }
+
+                if (!networks.IsDeviceConnected(uid, device))
+                    losses.Add($"{was.Prototype} (id {id}) is not in its network");
+                else if (device.Address != was.Address)
+                    losses.Add($"{was.Prototype} (id {id}) is at {device.Address}, not {was.Address}");
+            }
+
+            return losses;
         }
 
         /// <summary>Each phase of the last load, timed here because the server loader times nothing.</summary>
