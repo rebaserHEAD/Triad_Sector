@@ -255,6 +255,25 @@ public sealed partial class DrydockCodec
     public static void SetMember(IComponent component, DrydockManifestMember member, object? value)
     {
         var info = DrydockCodecManifestMembers.Resolve(component.GetType(), member.Member);
+
+        // Poured into the dictionary the component already holds, never assigned: the member can be readonly, and
+        // anything already holding that instance keeps the one it has. Cleared first, so a pair the image does not carry
+        // does not survive the load. A member written as null clears it and leaves it empty, never null.
+        if (member.Kind == DrydockMemberKind.Fill)
+        {
+            if (info == null || Get(info, component) is not IDictionary live)
+                throw new InvalidOperationException($"Drydock codec: {member.Key} is a {member.Kind} and is not a dictionary on the component.");
+
+            live.Clear();
+            if (value is IDictionary stored)
+            {
+                foreach (DictionaryEntry entry in stored)
+                    live[entry.Key] = entry.Value;
+            }
+
+            return;
+        }
+
         if (member.EntryKey is { } entryKey)
         {
             if (info == null || Get(info, component) is not IDictionary entries)

@@ -53,6 +53,14 @@ public enum DrydockMemberKind
     /// migrations, which rewrite an id and cannot reach a buried copy. An id that no longer resolves reads as null and is
     /// counted.</summary>
     PrototypeId,
+
+    /// <summary>A whole dictionary whose keys are not known in advance (an alarmable's state per sender, keyed by device
+    /// address), written and read as itself and then poured into the dictionary the component already holds: the load
+    /// clears that dictionary and copies the stored pairs in, and never assigns the member. Assignment is what a
+    /// <c>readonly</c> field refuses and what would strand anything already holding the old instance. Clear first, or a
+    /// pair the image does not carry survives the load under its own key. Use <see cref="Entry"/> instead when the key is
+    /// fixed and only one entry travels.</summary>
+    Fill,
 }
 
 /// <param name="Row">The census join's row id (resources/2026-09-17-census-join.tsv, column f33).</param>
@@ -156,6 +164,14 @@ public static class DrydockCodecManifestMembers
         new DrydockManifestMember(85, "Apc", "LastChargeState", Before, Field),
         new DrydockManifestMember(492, "ApcNetSwitch", "State", Before, Field),
         new DrydockManifestMember(103, "AtmosAlarmable", "IgnoreAlarms", Before, Field),
+
+        // Row 104 travels with row 33 or not at all. LastAlarmState is the highest of the states in this map, and the
+        // first power-on edge after a load recomputes it: carrying the state alone leaves Danger to be checked against an
+        // empty map, so the check disagrees, writes Normal and raises it, and every firelock that was holding a fire shut
+        // opens (AtmosAlarmableSystem.cs:62-80, :170-186). With both carried the equality holds and no event fires.
+        // The keys are device net addresses, so this member is only sound with H18 in: a device joins its network on
+        // restore at the address it had (DeviceNetworkRestoreSystem), and without that the stored keys name nobody.
+        new DrydockManifestMember(104, "AtmosAlarmable", "NetworkAlarmStates", Before, DrydockMemberKind.Fill),
         new DrydockManifestMember(107, "AtmosAlertsComputer", "SilencedDevices", Before, Field),
         new DrydockManifestMember(125, "BiomassReclaimer", "BloodReagent", Before, Field),
         new DrydockManifestMember(126, "BiomassReclaimer", "CurrentExpectedYield", Before, Field),
