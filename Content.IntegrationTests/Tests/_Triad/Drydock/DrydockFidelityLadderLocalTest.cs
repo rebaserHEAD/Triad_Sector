@@ -523,7 +523,17 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
         /// again between the trips and loses it a second time ends empty both times and accumulates nothing (ruled
         /// 2026-09-19, on an air alarm that comes back unpowered for half a second and so misses its own refill).</para>
         /// </summary>
-        private static bool? CollectionCompounds(string b1, string a1, string b2, string a2)
+        private static bool? CollectionCompounds(string b1, string a1, string b2, string a2) =>
+            CollectionGrew(b1, a1, b2, a2) is not { } grew
+                ? null
+                : grew || Entries(a2)!.Count < Entries(a1)!.Count;
+
+        /// <summary>
+        /// The growth arm of <see cref="CollectionCompounds"/> alone: a collection bigger after each trip than it was
+        /// before it. Null where either rendering does not list its entries. Asked apart because growth holds a line back
+        /// from every family, where ending smaller does not hold back a BUI state cache (ruled 2026-09-19).
+        /// </summary>
+        private static bool? CollectionGrew(string b1, string a1, string b2, string a2)
         {
             if (Entries(b1) is not { } before1 || Entries(a1) is not { } after1
                 || Entries(b2) is not { } before2 || Entries(a2) is not { } after2)
@@ -531,8 +541,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                 return null;
             }
 
-            return after1.Count > before1.Count && after2.Count > before2.Count
-                   || after2.Count < after1.Count;
+            return after1.Count > before1.Count && after2.Count > before2.Count;
         }
 
         /// <summary>
@@ -570,13 +579,47 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
         /// only the live bucket, which its own clock rule judges, still takes one. Round trip 1 has nothing to compound
         /// against, so <paramref name="previous"/> is null there.
         /// </summary>
-        private static bool Compounding(string line, string key, RoundTripResult result, RoundTripResult? previous) =>
-            previous != null && line.StartsWith("CHANGED", StringComparison.Ordinal) && ShapeOf(key, previous, result) == Compounds;
+        private static bool Compounding(string line, string key, RoundTripResult result, RoundTripResult? previous, KnownFamily? family = null)
+        {
+            if (previous == null || !line.StartsWith("CHANGED", StringComparison.Ordinal) || ShapeOf(key, previous, result) != Compounds)
+                return false;
+
+            // Ruled 2026-09-19: the guard has two arms and only one of them fits a BUI state cache. The cache is bounded
+            // at empty and filled again at the open, by the system that owns each state or by the handler owed it, so a
+            // cache that ends smaller after every store accumulates nothing and is not growth per store read the other
+            // way. That is true of the member whatever family a line sorts into, which is why this is keyed by the member
+            // and not by the family. Growth still holds a cache line back, as it holds back every line. Counted so the
+            // exemption is visible in the report.
+            if (SnapshotMember(key) != CacheMember
+                || CollectionGrew(
+                    previous.Before.Values.GetValueOrDefault(key) ?? string.Empty,
+                    previous.After.Values.GetValueOrDefault(key) ?? string.Empty,
+                    result.Before.Values.GetValueOrDefault(key) ?? string.Empty,
+                    result.After.Values.GetValueOrDefault(key) ?? string.Empty) != false)
+            {
+                return true;
+            }
+
+            CacheLinesExempted++;
+            return false;
+        }
+
+        /// <summary>The family for a cache every state of which is pushed at open, by name.</summary>
+        private const string CacheFamily = "BUI state cache, pushed at open by the owning system";
+
+        /// <summary>The member the ends-smaller arm does not hold back.</summary>
+        private const string CacheMember = "UserInterfaceComponent.~States";
+
+        /// <summary>
+        /// How many cache lines that arm let through since the last report, printed by <see cref="Report"/> so an
+        /// exemption nobody reads cannot grow quietly. Static because the ladder runs a rung at a time.
+        /// </summary>
+        private static int CacheLinesExempted;
 
         /// <summary>The family a line sorts into, and whether it was held back because it compounds (<see cref="Compounding"/>).</summary>
         private static (KnownFamily? Family, bool Compounds) FamilyFor(string line, string key, RoundTripResult result, RoundTripResult? previous) =>
             KnownFamilies.FirstOrDefault(f => f.Matches(line, key, result)) is { } family
-                ? (family, Compounding(line, key, result, previous))
+                ? (family, Compounding(line, key, result, previous, family))
                 : (null, false);
 
         /// <summary>
@@ -690,9 +733,9 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                 "OWED to H12, wire layout and timed wire re-arm: the state data is set by each wire's action as it is added "
                 + "(WiresSystem.cs:143, :167, through SetData at :812), the statuses are refilled from the wires by "
                 + "UpdateUserInterface (:528), and both run from map init (:469-488), which the silent map-init stamp never "
-                + "raises. Sorted only where the same entity's wire list also came back empty. A UI state cache whose only "
-                + "unexplained loss is the wires state sorts here too: nothing pushes that state at open, and the H12 "
-                + "handler ends with WiresSystem.UpdateUserInterface (Surveyor's sweep, 2026-09-19).",
+                + "raises. Sorted only where the same entity's wire list also came back empty, for a wire's own state and "
+                + "for a UI state cache whose only unexplained loss is the wires state alike: nothing pushes that state at "
+                + "open, and the H12 handler ends with WiresSystem.UpdateUserInterface (Surveyor's sweep, 2026-09-19).",
                 (_, key, result) => (OwedToH12.Contains(key[(key.IndexOf('|') + 1)..]) || CacheWaitsOn(key, result) == "H12")
                                     && result.After.Values.TryGetValue(key[..key.IndexOf('|')] + "|WiresComponent.~WiresList", out var wires)
                                     && wires.StartsWith("count=0", StringComparison.Ordinal)),
@@ -723,7 +766,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
 
             // Sorted by state type rather than by prototype (Surveyor's sweep, ruled 2026-09-19:
             // resources/2026-09-19-bui-state-cache-sweep.tsv, join row 427).
-            new("BUI state cache, pushed at open by the owning system",
+            new(CacheFamily,
                 "Accepted: UserInterfaceComponent.States holds the last state the server sent each open interface, it is "
                 + "not saved, and a load has no client with one open. A client opening a BUI calls UpdateState only where "
                 + "the cache holds an entry (SharedUserInterfaceSystem.cs:1104-1121), so an empty cache is a blank window "
@@ -954,7 +997,8 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
         /// <summary>
         /// The UI cache families' control, with no server: a cache sorts by the state types it lost, into the family where
         /// every one of them is pushed at open, into the family of the one handler it waits on where there is exactly one,
-        /// and nowhere at all where it waits on two or where a state is one nobody has read yet.
+        /// and nowhere at all where it waits on two or where a state is one nobody has read yet. The wire list's own
+        /// condition is not asked of a cache line, which the handler's push cures whatever the list did.
         /// </summary>
         [Test]
         public void OnlyAUiCacheWhoseLostStatesAreExplainedSorts()
@@ -990,9 +1034,58 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                 Assert.That(Sorted(console, nothing, nothing), Is.Null,
                     "A cache waiting on two handlers, H10 for the console state and H12 for the wires, is explained by neither.");
                 Assert.That(Sorted(alarmAndWires, nothing, "count=2 [- a, - b]"), Is.Null,
-                    "With the wires themselves back, H12's own condition fails and the line stays a finding.");
+                    "With the wires themselves back, H12's list condition fails and the line stays a finding, for now.");
                 Assert.That(Sorted("count=1 [Key=<FireControlConsoleBoundInterfaceState>]", nothing, nothing), Is.Null,
                     "A state nobody has read yet keeps the line a finding.");
+            });
+        }
+
+        /// <summary>
+        /// The cache's exemption from the guard's ends-smaller arm, with no server: a cache that ends smaller after every
+        /// store stays with its family, because it is bounded at empty and filled again at the open; one that grows on both
+        /// trips is held back like any other line; and a line that is not a cache is held back by the same arm the cache is
+        /// exempt from (ruled 2026-09-19).
+        /// </summary>
+        [Test]
+        public void OnlyTheCacheIsExemptFromTheEndsSmallerArm()
+        {
+            const string path = "AirAlarm@-1,3";
+            const string cache = $"{path}|UserInterfaceComponent.~States";
+            const string statuses = $"{path}|WiresComponent.~Statuses";
+
+            RoundTripResult Trip(string key, string before, string after)
+            {
+                var stored = new DrydockStateSnapshot();
+                var loaded = new DrydockStateSnapshot();
+                stored.Values[key] = before;
+                loaded.Values[key] = after;
+                loaded.Values[$"{path}|WiresComponent.~WiresList"] = "count=0 []";
+                return new RoundTripResult(new DrydockStateSnapshot(), stored, loaded, loaded, EntityUid.Invalid, 0, 0, 0, null);
+            }
+
+            (KnownFamily? Family, bool Held) Sorted(string key, RoundTripResult first, RoundTripResult second) =>
+                FamilyFor($"CHANGED  {key}: before -> after", key, second, first);
+
+            var cacheFamily = KnownFamilies.Single(family => family.Name == CacheFamily);
+            var h12 = KnownFamilies.Single(family => family.Name == "owed: H12");
+
+            var drains = Sorted(cache,
+                Trip(cache, "count=2 [Key=<AirAlarmUIState>, InteractionWindow=<HolopadBoundInterfaceState>]", "count=1 [Key=<AirAlarmUIState>]"),
+                Trip(cache, "count=1 [Key=<AirAlarmUIState>]", "count=0 []"));
+
+            var grows = Sorted(cache,
+                Trip(cache, "count=0 []", "count=1 [Key=<AirAlarmUIState>]"),
+                Trip(cache, "count=1 [Key=<AirAlarmUIState>]", "count=2 [Key=<AirAlarmUIState>, InteractionWindow=<HolopadBoundInterfaceState>]"));
+
+            var wires = Sorted(statuses,
+                Trip(statuses, "- a\n- b\n- c", "- a\n- b"),
+                Trip(statuses, "- a\n- b", "- a"));
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(drains, Is.EqualTo((cacheFamily, false)), "A cache that ends smaller each store stays with its family.");
+                Assert.That(grows, Is.EqualTo((cacheFamily, true)), "One that grows on both trips is held back, as every family's line is.");
+                Assert.That(wires, Is.EqualTo((h12, true)), "And a line that is not a cache is still held back by the arm the cache is exempt from.");
             });
         }
 
@@ -1944,7 +2037,12 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             }
 
             if (previous != null)
+            {
                 sb.AppendLine($"[ladder] round trip {trip}: {registryGrew} line(s) the registry classifies compound across the trips, left as findings.");
+                sb.AppendLine($"[ladder] round trip {trip}: {CacheLinesExempted} BUI state cache line(s) ended smaller each store and were left with their family, "
+                              + "which is bounded at empty and filled at the open (ruled 2026-09-19); growth would still have held them back.");
+                CacheLinesExempted = 0;
+            }
 
             // Every line the no-growth rule kept from an explanation, one per line so a run over many rungs can be grepped.
             foreach (var (by, line) in heldBack)
