@@ -25,6 +25,9 @@ using Content.Shared.Disposal.Unit;
 using Content.Shared.Kitchen;
 using Content.Shared.Maps;
 using Content.Shared.PDA;
+using Content.Server._Crescent.Dispenser;
+using Content.Server._Triad.Drydock.Codec;
+using Content.Shared._Crescent.Dispenser;
 using Content.Shared.Projectiles;
 using Content.Shared.Throwing;
 using Robust.Shared.Containers;
@@ -258,6 +261,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
 
         private static string PathOf(string prototype, int x, int y) => $"{prototype}@{x},{y}";
 
+
         /// <summary>Every recipe of a wave, each on its own tiles; the wave is the rows of the recipe file.</summary>
         private static List<WorkbenchRecipe> PlaceWorkbenchWave(TestPair pair, EntityUid grid, int wave) =>
             wave switch
@@ -333,6 +337,66 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
 
                         if (darts != 1)
                             wrong.Add($"one dart has to come back, {darts} did");
+
+                        return (notes, wrong);
+                    },
+                });
+            }
+
+            // 2. A cargo chute mid-dispense. Its interaction deletes the trade good at the start and its update spawns the
+            // payment only once the timer reaches the dispense time (Content.Server/_Crescent/Dispenser/DispenserSystem.cs:66-73,
+            // :106-121), so a store inside that window holds the only record that anything was put in. Dispensing,
+            // DispensingItemId and DispenseTimer are plain fields, which is why the manifest carries them.
+            {
+                var chute = Place(entMan, grid, "CargoChuteMD", 8, 4);
+                recipes.Add(new WorkbenchRecipe(2, "cargo chute mid-dispense",
+                    "Dispenser.Dispensing, Dispenser.DispensingItemId, Dispenser.DispenseTimer",
+                    new[] { "DispenserComponent" },
+                    new List<string> { PathOf("CargoChuteMD", 8, 4) },
+                    () =>
+                    {
+                        var comp = entMan.GetComponent<DispenserComponent>(chute);
+                        var (input, output) = comp.Inventory.First();
+
+                        // Long enough that the dispense is still in flight at both stores, as a 0.25 s one never would be.
+                        comp.DispenseTime = (float) WorkbenchLongTimer.TotalSeconds;
+
+                        // What the interaction does, without a player to hold the good: the good goes in and is deleted,
+                        // and the dispense that owes the payment starts.
+                        var good = entMan.SpawnEntity(input, At(8, 4));
+                        entMan.System<DispenserSystem>().TryDispenseItem(chute, comp, output);
+                        entMan.DeleteEntity(good);
+
+                        return new List<string>
+                        {
+                            $"{input} put in and deleted, dispensing {comp.Dispensing} of {comp.DispensingItemId}, "
+                            + $"timer {comp.DispenseTimer} of {comp.DispenseTime}s",
+                        };
+                    })
+                {
+                    AfterLoad = loaded =>
+                    {
+                        var notes = new List<string>();
+                        var wrong = new List<string>();
+                        var chutes = 0;
+
+                        var query = entMan.EntityQueryEnumerator<DispenserComponent, TransformComponent>();
+                        while (query.MoveNext(out _, out var comp, out var xform))
+                        {
+                            if (xform.GridUid != loaded)
+                                continue;
+
+                            chutes++;
+                            notes.Add($"dispensing {comp.Dispensing} of '{comp.DispensingItemId}', timer {comp.DispenseTimer} of {comp.DispenseTime}s");
+
+                            if (!comp.Dispensing)
+                                wrong.Add("the chute stopped dispensing, so the trade good put in is paid for by nothing");
+                            else if (string.IsNullOrEmpty(comp.DispensingItemId))
+                                wrong.Add("the chute is dispensing nothing, so what it owes is lost");
+                        }
+
+                        if (chutes != 1)
+                            wrong.Add($"one chute has to come back, {chutes} did");
 
                         return (notes, wrong);
                     },
