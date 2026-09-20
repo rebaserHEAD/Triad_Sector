@@ -18,6 +18,20 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
     [TestOf(typeof(DrydockAppearanceTypes))]
     public sealed class DrydockAppearanceTypeGateTest
     {
+        /// <summary>Every C# integer and floating-point primitive, bool and string: all inert, all on the list.</summary>
+        private static readonly System.Type[] AdmittedPrimitives =
+        {
+            typeof(bool), typeof(byte), typeof(sbyte), typeof(short), typeof(ushort), typeof(int), typeof(uint),
+            typeof(long), typeof(ulong), typeof(float), typeof(double), typeof(string),
+        };
+
+        /// <summary>Value and reference types that are not on the list, and a few a row might try.</summary>
+        private static readonly System.Type[] RefusedValueTypes =
+        {
+            typeof(char), typeof(decimal), typeof(System.IntPtr), typeof(System.UIntPtr), typeof(object),
+            typeof(System.DateTime), typeof(System.Guid), typeof(System.Type), typeof(System.Delegate),
+        };
+
         [Test]
         public async Task ANameThatIsNotAnEnumNorNetworkedNorNamedIsRefused()
         {
@@ -37,6 +51,9 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                     "A dictionary with another key type must be refused.");
                 Assert.That(DrydockAppearanceTypes.TryResolve(reflection, typeof(System.Collections.Generic.List<string>).AssemblyQualifiedName!, out _), Is.False,
                     "Another generic must be refused.");
+                foreach (var refused in RefusedValueTypes)
+                    Assert.That(DrydockAppearanceTypes.TryResolve(reflection, refused.AssemblyQualifiedName!, out _), Is.False, $"{refused.Name} is not on the list and must be refused.");
+
                 Assert.That(DrydockAppearanceTypes.TryResolve(reflection, "No.Such.Type", out _), Is.False, "An unknown name must be refused.");
                 Assert.That(DrydockAppearanceTypes.TryResolve(reflection, string.Empty, out _), Is.False, "An empty name must be refused.");
             });
@@ -58,11 +75,11 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                 Assert.That(DrydockAppearanceTypes.TryResolve(reflection, typeof(DoorState).AssemblyQualifiedName!, out var door), Is.True);
                 Assert.That(door, Is.EqualTo(typeof(DoorState)));
 
-                Assert.That(DrydockAppearanceTypes.TryResolve(reflection, typeof(bool).AssemblyQualifiedName!, out var boolean), Is.True, "A primitive the baseline stored resolves.");
-                Assert.That(boolean, Is.EqualTo(typeof(bool)));
-
-                Assert.That(DrydockAppearanceTypes.TryResolve(reflection, typeof(byte).AssemblyQualifiedName!, out var octet), Is.True, "A byte, which a power cell's charge level is, resolves.");
-                Assert.That(octet, Is.EqualTo(typeof(byte)));
+                foreach (var primitive in AdmittedPrimitives)
+                {
+                    Assert.That(DrydockAppearanceTypes.TryResolve(reflection, primitive.AssemblyQualifiedName!, out var resolved), Is.True, $"{primitive.Name} resolves.");
+                    Assert.That(resolved, Is.EqualTo(primitive));
+                }
 
                 Assert.That(DrydockAppearanceTypes.TryResolve(reflection, typeof(Robust.Shared.Maths.Color).AssemblyQualifiedName!, out var color), Is.True, "Color, which is not networked by attribute, resolves by name.");
                 Assert.That(color, Is.EqualTo(typeof(Robust.Shared.Maths.Color)));

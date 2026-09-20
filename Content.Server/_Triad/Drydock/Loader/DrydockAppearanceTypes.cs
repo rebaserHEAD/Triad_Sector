@@ -16,16 +16,24 @@ namespace Content.Server._Triad.Drydock.Loader;
 public static class DrydockAppearanceTypes
 {
     /// <summary>
-    /// Plain value types an appearance entry carries that are neither an enum nor networked by attribute. Named by type,
-    /// never by namespace or assembly, and each here because a stored image held it (the 2026-09-19 runs over the
-    /// standing rungs and the workbench: bool, byte, int, float, string and Color, none of them networked by attribute).
+    /// Plain value types an appearance entry may carry that are neither an enum nor networked by attribute: every C#
+    /// integer and floating-point primitive, bool, string and Color, all inert values (ruled 2026-09-19: the standing rungs
+    /// are a sample of what a stored image holds, not the population, so the list is the set and not what a run happened to
+    /// show). Named by type, never by namespace or assembly. Not here: char, decimal, IntPtr, object, and everything else.
     /// </summary>
     private static readonly Type[] EngineValueTypes =
     {
         typeof(bool),
         typeof(byte),
+        typeof(sbyte),
+        typeof(short),
+        typeof(ushort),
         typeof(int),
+        typeof(uint),
+        typeof(long),
+        typeof(ulong),
         typeof(float),
+        typeof(double),
         typeof(string),
         typeof(Robust.Shared.Maths.Color),
     };
