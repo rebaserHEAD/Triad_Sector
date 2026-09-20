@@ -1992,6 +1992,12 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                               + $"next change {ValueIn(result.Before, path + nextChange)}, {ValueIn(result.After, path + nextChange)}, {ValueIn(result.Late, path + nextChange)}");
             }
 
+            // The alarm control: every firelock, air alarm and alarmable at the four moments. The diff lines only what differs
+            // between before and after, and after is 10 ticks past the load, so what a load does to a firelock later than that
+            // has no line; this prints the columns whole.
+            if (Environment.GetEnvironmentVariable("LADDER_CONTROL") == "alarms")
+                AppendAlarmControl(sb, trip, result);
+
             // Every match and smokable the hull carries: the recipe's lit pair and the unlit pair beside them. A lit one
             // comes back lit, so the late column is the measurement: a match's burn-out is a timer no store records
             // (MatchstickSystem.cs:91-98) and a smokable burns down only while the system holds it (SmokingSystem.cs:151-156).
@@ -2434,6 +2440,60 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             && result.Early.Values.TryGetValue(key, out var early)
             && result.Before.Values.TryGetValue(key, out var before)
             && DrydockFidelitySystem.TimeKeepsItsMeaning(early, before, TimeToleranceSeconds);
+
+        /// <summary>
+        /// <c>LADDER_CONTROL=alarms</c>: one line per firelock, and one per air alarm and alarmable, giving each alarm member and
+        /// the receiver's power at early, before, after and late (four values, in that order). A member whose late differs from its
+        /// before is marked UNSETTLED. Raw values, cut to one line each; a count is the value's <c>count=N</c>.
+        /// </summary>
+        private static void AppendAlarmControl(System.Text.StringBuilder sb, int trip, RoundTripResult result)
+        {
+            var snapshots = new[] { result.Early, result.Before, result.After, result.Late };
+            var everyKey = snapshots.SelectMany(snapshot => snapshot.Values.Keys).ToHashSet(StringComparer.Ordinal);
+
+            string Compact(string value)
+            {
+                var count = System.Text.RegularExpressions.Regex.Match(value, @"^count=(\d+)");
+                return count.Success ? count.Groups[1].Value : OneLine(value, 48);
+            }
+
+            string Member(string path, string member)
+            {
+                var values = snapshots.Select(snapshot => ValueIn(snapshot, $"{path}|{member}")).ToArray();
+                var unsettled = values[1] != values[3] ? " UNSETTLED" : string.Empty;
+                return $"{member[(member.IndexOf('.') + 1)..]} {string.Join(", ", values.Select(Compact))}{unsettled}";
+            }
+
+            List<string> Present(string path, params string[] needles) => everyKey
+                .Where(key => key.StartsWith(path + "|", StringComparison.Ordinal))
+                .Select(key => key[(path.Length + 1)..])
+                .Where(member => needles.Any(needle => member.Contains(needle, StringComparison.Ordinal)))
+                .OrderBy(member => member, StringComparer.Ordinal)
+                .ToList();
+
+            string Line(string path, params string[] needles) =>
+                string.Join("; ", Present(path, needles).Select(member => Member(path, member)));
+
+            var firelocks = everyKey.Where(key => key.Contains("|FirelockComponent.", StringComparison.Ordinal))
+                .Select(key => key[..key.IndexOf('|')]).Distinct().OrderBy(p => p, StringComparer.Ordinal).ToList();
+            foreach (var path in firelocks)
+                sb.AppendLine($"[ladder] alarm control trip {trip} firelock {path} (early, before, after, late): "
+                              + Line(path, "DoorComponent.State", "LastAlarmState", "NetworkAlarmStates", "FirelockComponent.Pressure", "FirelockComponent.Temperature", "FirelockComponent.Powered", "ApcPowerReceiverComponent.~Powered"));
+
+            var alarms = everyKey.Where(key => key.Contains("|AirAlarmComponent.", StringComparison.Ordinal) || key.Contains("|AtmosAlarmableComponent.", StringComparison.Ordinal))
+                .Select(key => key[..key.IndexOf('|')]).Distinct().Except(firelocks).OrderBy(p => p, StringComparer.Ordinal).ToList();
+            var unsettledAlarms = new List<string>();
+            foreach (var path in alarms)
+            {
+                var line = Line(path, "LastAlarmState", "NetworkAlarmStates", "~SensorData", "~VentData", "~ScrubberData", "ApcPowerReceiverComponent.~Powered");
+                sb.AppendLine($"[ladder] alarm control trip {trip} alarm {path} (early, before, after, late): {line}");
+                if (line.Contains("UNSETTLED", StringComparison.Ordinal))
+                    unsettledAlarms.Add(path);
+            }
+
+            sb.AppendLine($"[ladder] alarm control trip {trip}: {firelocks.Count} firelock(s), {alarms.Count} air alarm(s) and alarmable(s) other than firelocks; "
+                          + $"not settled by late: {(unsettledAlarms.Count == 0 ? "none" : string.Join(", ", unsettledAlarms))}");
+        }
 
         private static string ValueIn(DrydockStateSnapshot snapshot, string key) =>
             snapshot.Values.GetValueOrDefault(key, "<absent>");
