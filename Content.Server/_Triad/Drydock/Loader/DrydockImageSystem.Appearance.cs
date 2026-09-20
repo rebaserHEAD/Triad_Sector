@@ -31,7 +31,7 @@ public sealed partial class DrydockImageSystem
                 // The value is declared as object, so its own type rides beside it for the read.
                 row[keyNode.Value] = new MappingDataNode
                 {
-                    ["type"] = new ValueDataNode(value.GetType().AssemblyQualifiedName!),
+                    ["type"] = new ValueDataNode(DrydockAppearanceTypes.KeyOf(value.GetType())),
                     ["value"] = Serialization.WriteValue(value.GetType(), value, alwaysWrite: true, context: codec.Context),
                 };
             }

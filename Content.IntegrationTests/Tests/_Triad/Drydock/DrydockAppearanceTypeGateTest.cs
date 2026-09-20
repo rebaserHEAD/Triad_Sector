@@ -1,9 +1,11 @@
 #nullable enable
 
+using System.Collections.Generic;
 using System.Threading.Tasks;
 using Content.IntegrationTests.Pair;
 using Content.Server._Triad.Drydock.Loader;
 using Content.Shared.APC;
+using Content.Shared.Damage;
 using Content.Shared.Doors.Components;
 using Robust.Shared.Reflection;
 
@@ -11,49 +13,50 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
 {
     /// <summary>
     /// The one gate a stored appearance type name passes: the name comes out of a row, so it may pick a type only when it is
-    /// an enum, is networked by attribute, or is one of the plain value types the gate names. Anything else, above all a
-    /// type from the framework, is refused and never instantiated.
+    /// an exact key of the closed table, or resolves through the reflection manager to an enum or a type networked by
+    /// attribute. Anything else, above all a type from the framework, is refused and never instantiated.
     /// </summary>
     [TestFixture]
     [TestOf(typeof(DrydockAppearanceTypes))]
     public sealed class DrydockAppearanceTypeGateTest
     {
-        /// <summary>Every C# integer and floating-point primitive, bool and string: all inert, all on the list.</summary>
+        /// <summary>Every C# integer and floating-point primitive, bool and string: all inert, all in the table.</summary>
         private static readonly System.Type[] AdmittedPrimitives =
         {
             typeof(bool), typeof(byte), typeof(sbyte), typeof(short), typeof(ushort), typeof(int), typeof(uint),
             typeof(long), typeof(ulong), typeof(float), typeof(double), typeof(string),
         };
 
-        /// <summary>Value and reference types that are not on the list, and a few a row might try.</summary>
-        private static readonly System.Type[] RefusedValueTypes =
+        /// <summary>Types that are not in the table, and a few a row might try.</summary>
+        private static readonly System.Type[] RefusedTypes =
         {
             typeof(char), typeof(decimal), typeof(System.IntPtr), typeof(System.UIntPtr), typeof(object),
             typeof(System.DateTime), typeof(System.Guid), typeof(System.Type), typeof(System.Delegate),
+            typeof(System.Diagnostics.Process), typeof(System.IO.FileInfo),
+            typeof(Dictionary<string, object>), typeof(Dictionary<string, Dictionary<string, string>>),
+            typeof(Dictionary<int, string>), typeof(Dictionary<string, int>), typeof(List<string>),
         };
 
         [Test]
-        public async Task ANameThatIsNotAnEnumNorNetworkedNorNamedIsRefused()
+        public async Task ANameThatIsNotInTheTableNorAnEnumNorNetworkedIsRefused()
         {
             await using var pair = await PoolManager.GetServerClient();
             var reflection = pair.Server.ResolveDependency<IReflectionManager>();
 
             Assert.Multiple(() =>
             {
-                Assert.That(DrydockAppearanceTypes.TryResolve(reflection, typeof(System.Diagnostics.Process).AssemblyQualifiedName!, out _), Is.False,
-                    "A framework type, one that runs a process, must be refused.");
-                Assert.That(DrydockAppearanceTypes.TryResolve(reflection, "System.IO.FileInfo", out _), Is.False, "A bare framework name must be refused.");
-                Assert.That(DrydockAppearanceTypes.TryResolve(reflection, typeof(System.Collections.Generic.Dictionary<string, object>).AssemblyQualifiedName!, out _), Is.False,
-                    "A dictionary of anything but two strings must be refused.");
-                Assert.That(DrydockAppearanceTypes.TryResolve(reflection, typeof(System.Collections.Generic.Dictionary<string, System.Collections.Generic.Dictionary<string, string>>).AssemblyQualifiedName!, out _), Is.False,
-                    "A dictionary nested in a dictionary must be refused.");
-                Assert.That(DrydockAppearanceTypes.TryResolve(reflection, typeof(System.Collections.Generic.Dictionary<int, string>).AssemblyQualifiedName!, out _), Is.False,
-                    "A dictionary with another key type must be refused.");
-                Assert.That(DrydockAppearanceTypes.TryResolve(reflection, typeof(System.Collections.Generic.List<string>).AssemblyQualifiedName!, out _), Is.False,
-                    "Another generic must be refused.");
-                foreach (var refused in RefusedValueTypes)
-                    Assert.That(DrydockAppearanceTypes.TryResolve(reflection, refused.AssemblyQualifiedName!, out _), Is.False, $"{refused.Name} is not on the list and must be refused.");
+                foreach (var refused in RefusedTypes)
+                    Assert.That(DrydockAppearanceTypes.TryResolve(reflection, DrydockAppearanceTypes.KeyOf(refused), out _), Is.False, $"{refused} is not admitted and must be refused.");
 
+                // The assembly-qualified form is not read: nothing writes it, and a second accepted form is one more thing to hold.
+                foreach (var type in DrydockAppearanceTypes.Table)
+                    Assert.That(DrydockAppearanceTypes.TryResolve(reflection, type.AssemblyQualifiedName!, out _), Is.False, $"The assembly-qualified {type} must be refused.");
+
+                Assert.That(DrydockAppearanceTypes.TryResolve(reflection, typeof(Dictionary<string, string>).AssemblyQualifiedName!, out _), Is.False,
+                    "The assembly-qualified dictionary must be refused.");
+                Assert.That(DrydockAppearanceTypes.TryResolve(reflection, "System.Collections.Generic.Dictionary`2[System.String,System.Object]", out _), Is.False,
+                    "A dictionary of anything but two strings must be refused.");
+                Assert.That(DrydockAppearanceTypes.TryResolve(reflection, "System.Diagnostics.Process, System.Diagnostics.Process", out _), Is.False, "A name with a comma must be refused.");
                 Assert.That(DrydockAppearanceTypes.TryResolve(reflection, "No.Such.Type", out _), Is.False, "An unknown name must be refused.");
                 Assert.That(DrydockAppearanceTypes.TryResolve(reflection, string.Empty, out _), Is.False, "An empty name must be refused.");
             });
@@ -62,32 +65,35 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
         }
 
         [Test]
-        public async Task AnEnumANetworkedTypeAndANamedValueTypeResolve()
+        public async Task AnEnumANetworkedTypeAndEveryTableKeyResolve()
         {
             await using var pair = await PoolManager.GetServerClient();
             var reflection = pair.Server.ResolveDependency<IReflectionManager>();
 
             Assert.Multiple(() =>
             {
-                Assert.That(DrydockAppearanceTypes.TryResolve(reflection, typeof(ApcChargeState).AssemblyQualifiedName!, out var apc), Is.True, "An appearance enum resolves.");
+                Assert.That(DrydockAppearanceTypes.TryResolve(reflection, DrydockAppearanceTypes.KeyOf(typeof(ApcChargeState)), out var apc), Is.True, "An appearance enum resolves.");
                 Assert.That(apc, Is.EqualTo(typeof(ApcChargeState)));
 
-                Assert.That(DrydockAppearanceTypes.TryResolve(reflection, typeof(DoorState).AssemblyQualifiedName!, out var door), Is.True);
+                Assert.That(DrydockAppearanceTypes.TryResolve(reflection, DrydockAppearanceTypes.KeyOf(typeof(DoorState)), out var door), Is.True);
                 Assert.That(door, Is.EqualTo(typeof(DoorState)));
 
-                foreach (var primitive in AdmittedPrimitives)
+                Assert.That(DrydockAppearanceTypes.TryResolve(reflection, DrydockAppearanceTypes.KeyOf(typeof(DamageVisualizerGroupData)), out var networked), Is.True,
+                    "A class networked by attribute resolves.");
+                Assert.That(networked, Is.EqualTo(typeof(DamageVisualizerGroupData)));
+
+                // Every table key round-trips: the key the store writes for a table type is a hit on load, which guards a
+                // ToString format surprise in one assertion.
+                Assert.That(DrydockAppearanceTypes.Table, Is.SupersetOf(AdmittedPrimitives), "Every primitive is in the table.");
+                Assert.That(DrydockAppearanceTypes.Table, Does.Contain(typeof(Robust.Shared.Maths.Color)));
+                Assert.That(DrydockAppearanceTypes.Table, Does.Contain(typeof(Dictionary<string, string>)), "The one closed generic is in the table.");
+                foreach (var type in DrydockAppearanceTypes.Table)
                 {
-                    Assert.That(DrydockAppearanceTypes.TryResolve(reflection, primitive.AssemblyQualifiedName!, out var resolved), Is.True, $"{primitive.Name} resolves.");
-                    Assert.That(resolved, Is.EqualTo(primitive));
+                    Assert.That(DrydockAppearanceTypes.TryResolve(reflection, DrydockAppearanceTypes.KeyOf(type), out var resolved), Is.True, $"{type}'s key resolves.");
+                    Assert.That(resolved, Is.EqualTo(type));
                 }
 
-                Assert.That(DrydockAppearanceTypes.TryResolve(reflection, typeof(Robust.Shared.Maths.Color).AssemblyQualifiedName!, out var color), Is.True, "Color, which is not networked by attribute, resolves by name.");
-                Assert.That(color, Is.EqualTo(typeof(Robust.Shared.Maths.Color)));
-
-                Assert.That(DrydockAppearanceTypes.TryResolve(reflection, typeof(System.Collections.Generic.Dictionary<string, string>).AssemblyQualifiedName!, out var layers), Is.True,
-                    "The one closed generic, a dictionary of two strings, resolves.");
-                Assert.That(layers, Is.EqualTo(typeof(System.Collections.Generic.Dictionary<string, string>)));
-
+                Assert.That(DrydockAppearanceTypes.KeyOf(typeof(Dictionary<string, string>)), Does.Not.Contain("Version"), "A key carries no assembly clause.");
                 Assert.That(DrydockAppearanceTypes.IsAdmissible(typeof(ApcChargeState)), Is.True);
                 Assert.That(DrydockAppearanceTypes.IsAdmissible(typeof(System.Diagnostics.Process)), Is.False);
             });
