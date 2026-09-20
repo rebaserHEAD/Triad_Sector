@@ -11,8 +11,17 @@ using Robust.Shared.Timing;
 
 namespace Content.Server._Triad.Drydock.Loader;
 
-/// <summary>The store's walk: every savable entity from the grid down in walk order, and the stable id each is given.</summary>
-public readonly record struct DrydockWalk(List<EntityUid> Aboard, Dictionary<EntityUid, long> Ids, int Unsaved);
+/// <summary>
+/// The store's walk: every savable entity from the grid down in walk order, and the stable id each is given.
+/// <paramref name="UnsavedByPrototype"/> counts the entities the walk stopped at because their prototype is not savable, by
+/// prototype, and <paramref name="DroppedByPrototype"/> counts everything under them, which is left out with them.
+/// </summary>
+public readonly record struct DrydockWalk(
+    List<EntityUid> Aboard,
+    Dictionary<EntityUid, long> Ids,
+    int Unsaved,
+    Dictionary<string, int> UnsavedByPrototype,
+    Dictionary<string, int> DroppedByPrototype);
 
 /// <summary>
 /// A ship as rows and back: the store walks a grid into a <see cref="DrydockImage"/>, and the load builds one back onto a
@@ -53,6 +62,8 @@ public sealed partial class DrydockImageSystem : EntitySystem
     {
         var aboard = new List<EntityUid>();
         var unsaved = 0;
+        var unsavedBy = new Dictionary<string, int>(StringComparer.Ordinal);
+        var droppedBy = new Dictionary<string, int>(StringComparer.Ordinal);
         var stack = new Stack<EntityUid>();
         stack.Push(grid);
         while (stack.TryPop(out var uid))
@@ -60,6 +71,19 @@ public sealed partial class DrydockImageSystem : EntitySystem
             if (!IsStored(uid))
             {
                 unsaved++;
+                var name = PrototypeName(uid);
+                unsavedBy[name] = unsavedBy.GetValueOrDefault(name) + 1;
+
+                // Everything under it goes with it: counted, not stored.
+                var under = new Stack<EntityUid>();
+                PushChildren(uid, under);
+                while (under.TryPop(out var dropped))
+                {
+                    var droppedName = PrototypeName(dropped);
+                    droppedBy[droppedName] = droppedBy.GetValueOrDefault(droppedName) + 1;
+                    PushChildren(dropped, under);
+                }
+
                 continue;
             }
 
@@ -73,7 +97,16 @@ public sealed partial class DrydockImageSystem : EntitySystem
         for (var i = 0; i < aboard.Count; i++)
             ids[aboard[i]] = i + 1;
 
-        return new DrydockWalk(aboard, ids, unsaved);
+        return new DrydockWalk(aboard, ids, unsaved, unsavedBy, droppedBy);
+    }
+
+    private string PrototypeName(EntityUid uid) => MetaData(uid).EntityPrototype?.ID ?? "(no prototype)";
+
+    private void PushChildren(EntityUid uid, Stack<EntityUid> stack)
+    {
+        var children = Transform(uid).ChildEnumerator;
+        while (children.MoveNext(out var child))
+            stack.Push(child);
     }
 
     /// <summary>

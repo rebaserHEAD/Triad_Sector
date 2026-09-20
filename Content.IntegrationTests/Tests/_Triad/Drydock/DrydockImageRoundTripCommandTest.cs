@@ -82,6 +82,9 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                 entMan.SpawnEntity("APCBasic", wallTile);
                 locker = entMan.SpawnEntity("LockerSteel", lockerTile);
                 var crowbar = entMan.SpawnEntity("Crowbar", lockerTile);
+
+                // A mob is not savable: the walk leaves it out, and the command has to name it rather than count it.
+                entMan.SpawnEntity("MobMoth", new EntityCoordinates(grid, 0.5f, 0.5f));
                 Assert.That(containers.Insert(crowbar, containers.GetContainer(locker, "entity_storage")), Is.True, "The control: the crowbar has to go into the locker.");
             });
 
@@ -124,6 +127,8 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                 Assert.That(tree1, Does.Contain("WallSolid").And.Contain("APCBasic").And.Contain("LockerSteel").And.Contain("Crowbar"), "The wall, the APC, the locker and the crowbar have to come back.");
                 Assert.That(crowbarInLocker, Is.True, "The crowbar has to be in the locker.");
                 Assert.That(first.Any(line => line.StartsWith("ERROR:", StringComparison.Ordinal)), Is.False, $"No error line: {string.Join(" | ", first)}");
+                Assert.That(first.Any(line => line.StartsWith("Left out because its prototype is not savable:", StringComparison.Ordinal) && line.Contains("MobMoth x1", StringComparison.Ordinal)), Is.True,
+                    $"The command has to name what it leaves out by prototype: {string.Join(" | ", first)}");
             });
 
             // A second run, on the grid the first one made.

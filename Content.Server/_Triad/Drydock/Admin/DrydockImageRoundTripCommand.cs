@@ -127,6 +127,14 @@ public sealed class DrydockImageRoundTripCommand : IConsoleCommand
         shell.WriteLine($"Stored {filed.Entities.Count} entities ({filed.Unsaved} unsavable left out with what they held), {stored.Writes} component rows, "
                         + $"{filed.Bytes} bytes of JSON in {storeTime.TotalMilliseconds:F0} ms, as image {imageId}.");
 
+        // What the count stands for: the despawn deletes each of these, and nothing in the image brings it back.
+        if (walk.Unsaved > 0)
+        {
+            shell.WriteLine($"Left out because its prototype is not savable: {ByCount(walk.UnsavedByPrototype)}.");
+            if (walk.DroppedByPrototype.Count > 0)
+                shell.WriteLine($"Left out with them, held or carried: {ByCount(walk.DroppedByPrototype)}.");
+        }
+
         // From here the grid is deleted and the image is what remains.
         system.Despawn(grid);
         shell.WriteLine("Despawned the grid on a staging map.");
@@ -200,6 +208,10 @@ public sealed class DrydockImageRoundTripCommand : IConsoleCommand
             shell.WriteError("  (a half-built grid, if the load made one, was deleted first.)");
         }
     }
+
+    private static string ByCount(IReadOnlyDictionary<string, int> counts) =>
+        string.Join(", ", counts.OrderByDescending(entry => entry.Value).ThenBy(entry => entry.Key, StringComparer.Ordinal)
+            .Select(entry => $"{entry.Key} x{entry.Value}"));
 
     /// <summary>The filed image, when the memory store answered in this frame, which it always does.</summary>
     private static bool TryGet(Guid imageId, out DrydockImage? image)
