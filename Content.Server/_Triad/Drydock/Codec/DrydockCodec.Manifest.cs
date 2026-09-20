@@ -13,10 +13,14 @@ using Robust.Shared.Serialization.Markdown.Value;
 
 namespace Content.Server._Triad.Drydock.Codec;
 
-/// <summary>A manifest member a store could not write: the entity's prototype, the member, and what the serializer threw.</summary>
-public sealed record DrydockUnwritableMember(string? Prototype, DrydockManifestMember Member, string Exception, string Message)
+/// <summary>
+/// A manifest member a store could not write: the entity itself, its prototype, the member, and what the serializer
+/// threw. The entity is carried because a refusal names one hull's one entity, and a prototype cannot: a ship holds
+/// twenty of the same machine and the admin reading the refusal has to know which one to look at.
+/// </summary>
+public sealed record DrydockUnwritableMember(EntityUid Entity, string? Prototype, DrydockManifestMember Member, string Exception, string Message)
 {
-    public override string ToString() => $"{Member.Key} on {Prototype ?? "(no prototype)"}: {Exception}: {Message}";
+    public override string ToString() => $"{Member.Key} on {Prototype ?? "(no prototype)"} {Entity}: {Exception}: {Message}";
 }
 
 /// <summary>
@@ -102,7 +106,7 @@ public sealed partial class DrydockCodec
                 }
                 catch (Exception e) when (e is ArgumentException or InvalidOperationException or NotSupportedException)
                 {
-                    unwritable.Add(new DrydockUnwritableMember(entity.Comp.EntityPrototype?.ID, member, e.GetType().Name, e.Message));
+                    unwritable.Add(new DrydockUnwritableMember(entity.Owner, entity.Comp.EntityPrototype?.ID, member, e.GetType().Name, e.Message));
                     continue;
                 }
 

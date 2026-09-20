@@ -107,7 +107,7 @@ public sealed class DrydockImageRoundTripCommand : IConsoleCommand
         {
             shell.WriteError($"Refused: {stored.Unwritable.Count} manifest member(s) could not be written, so the image would lose them. The grid is untouched.");
             foreach (var member in stored.Unwritable)
-                shell.WriteError($"  {member.Prototype ?? "(no prototype)"} {member.Member.Key}: {member.Exception}: {member.Message}");
+                shell.WriteError($"  {member.Prototype ?? "(no prototype)"} {member.Entity} {member.Member.Key}: {member.Exception}: {member.Message}");
 
             return;
         }
