@@ -2476,23 +2476,29 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
 
             var firelocks = everyKey.Where(key => key.Contains("|FirelockComponent.", StringComparison.Ordinal))
                 .Select(key => key[..key.IndexOf('|')]).Distinct().OrderBy(p => p, StringComparer.Ordinal).ToList();
+            var unsettled = new List<string>();
             foreach (var path in firelocks)
-                sb.AppendLine($"[ladder] alarm control trip {trip} firelock {path} (early, before, after, late): "
-                              + Line(path, "DoorComponent.State", "LastAlarmState", "NetworkAlarmStates", "AtmosMonitorVisuals", "FirelockComponent.Pressure", "FirelockComponent.Temperature", "FirelockComponent.Powered", "ApcPowerReceiverComponent.~Powered"));
+            {
+                var line = Line(path, "DoorComponent.State", "LastAlarmState", "NetworkAlarmStates", "AtmosMonitorVisuals", "FirelockComponent.Pressure", "FirelockComponent.Temperature", "FirelockComponent.Powered", "ApcPowerReceiverComponent.~Powered");
+                sb.AppendLine($"[ladder] alarm control trip {trip} firelock {path} (early, before, after, late): {line}");
+                if (line.Contains("UNSETTLED", StringComparison.Ordinal))
+                    unsettled.Add(path);
+            }
 
             var alarms = everyKey.Where(key => key.Contains("|AirAlarmComponent.", StringComparison.Ordinal) || key.Contains("|AtmosAlarmableComponent.", StringComparison.Ordinal))
                 .Select(key => key[..key.IndexOf('|')]).Distinct().Except(firelocks).OrderBy(p => p, StringComparer.Ordinal).ToList();
-            var unsettledAlarms = new List<string>();
             foreach (var path in alarms)
             {
                 var line = Line(path, "LastAlarmState", "NetworkAlarmStates", "AtmosMonitorVisuals", "~SensorData", "~VentData", "~ScrubberData", "ApcPowerReceiverComponent.~Powered");
                 sb.AppendLine($"[ladder] alarm control trip {trip} alarm {path} (early, before, after, late): {line}");
                 if (line.Contains("UNSETTLED", StringComparison.Ordinal))
-                    unsettledAlarms.Add(path);
+                    unsettled.Add(path);
             }
 
+            // Firelocks count here as well as alarms: a door that reopened after the load is marked on its own line, and a
+            // summary that left it out read "not settled by late: none" over a page of doors that were.
             sb.AppendLine($"[ladder] alarm control trip {trip}: {firelocks.Count} firelock(s), {alarms.Count} air alarm(s) and alarmable(s) other than firelocks; "
-                          + $"not settled by late: {(unsettledAlarms.Count == 0 ? "none" : string.Join(", ", unsettledAlarms))}");
+                          + $"not settled by late: {(unsettled.Count == 0 ? "none" : string.Join(", ", unsettled))}");
         }
 
         private static string ValueIn(DrydockStateSnapshot snapshot, string key) =>
