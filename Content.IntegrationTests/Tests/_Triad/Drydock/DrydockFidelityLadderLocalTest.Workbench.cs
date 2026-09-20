@@ -25,6 +25,8 @@ using Content.Shared.Disposal.Unit;
 using Content.Shared.Kitchen;
 using Content.Shared.Maps;
 using Content.Shared.PDA;
+using Content.Shared.Projectiles;
+using Content.Shared.Throwing;
 using Robust.Shared.Containers;
 using Robust.Shared.GameObjects;
 using Robust.Shared.Map;
@@ -85,7 +87,8 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             public Func<EntityUid, (List<string> Notes, List<string> Wrong)>? AfterLoad { get; init; }
         }
 
-        private static IEnumerable<TestCaseData> WorkbenchWaves() => new[] { new TestCaseData(1).SetName("Workbench_Wave1") };
+        private static IEnumerable<TestCaseData> WorkbenchWaves() =>
+            new[] { new TestCaseData(1).SetName("Workbench_Wave1"), new TestCaseData(2).SetName("Workbench_Wave2") };
 
         [TestCaseSource(nameof(WorkbenchWaves))]
         public async Task Workbench(int wave)
@@ -256,11 +259,92 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
         private static string PathOf(string prototype, int x, int y) => $"{prototype}@{x},{y}";
 
         /// <summary>Every recipe of a wave, each on its own tiles; the wave is the rows of the recipe file.</summary>
-        private static List<WorkbenchRecipe> PlaceWorkbenchWave(TestPair pair, EntityUid grid, int wave)
-        {
-            if (wave != 1)
-                throw new ArgumentOutOfRangeException(nameof(wave), wave, "Only wave 1 is built.");
+        private static List<WorkbenchRecipe> PlaceWorkbenchWave(TestPair pair, EntityUid grid, int wave) =>
+            wave switch
+            {
+                1 => PlaceWave1(pair, grid),
+                2 => PlaceWave2(pair, grid),
+                _ => throw new ArgumentOutOfRangeException(nameof(wave), wave, "Waves 1 and 2 are built."),
+            };
 
+        /// <summary>
+        /// Wave 2, from the Surveyor's re-cut recipe file: what one entity holds another by, where the holding is state no
+        /// prototype carries. Built a recipe at a time, each on its own tiles, as wave 1's are.
+        /// </summary>
+        private static List<WorkbenchRecipe> PlaceWave2(TestPair pair, EntityUid grid)
+        {
+            var server = pair.Server;
+            var entMan = server.EntMan;
+            var recipes = new List<WorkbenchRecipe>();
+            EntityCoordinates At(int x, int y) => new(grid, x + 0.5f, y + 0.5f);
+
+            // 33. A dart embedded in a wall. The pairing is two halves at once: the dart names the wall in
+            // EmbeddedIntoUid and the wall names the dart in EmbeddedObjects, and the dart is parented to the wall and
+            // made static by the embed (SharedProjectileSystem.cs:426-454). The store's despawn is the second question
+            // here: EmbeddedContainer's terminate handler detaches what it holds and re-parents it to the grid
+            // (:509-530), so a despawn that deletes the grid alone leaves the dart behind, where one on a staging map
+            // takes it with the map.
+            {
+                var wall = Place(entMan, grid, "WallSolid", 5, 2);
+                recipes.Add(new WorkbenchRecipe(33, "dart in a wall",
+                    "EmbeddableProjectile.EmbeddedIntoUid, EmbeddedContainer.EmbeddedObjects",
+                    new[] { "EmbeddableProjectileComponent", "EmbeddedContainerComponent" },
+                    new List<string> { PathOf("WallSolid", 5, 2) },
+                    () =>
+                    {
+                        var dart = entMan.SpawnEntity("Dart", At(5, 2));
+                        var thrown = entMan.EnsureComponent<ThrownItemComponent>(dart);
+                        entMan.EventBus.RaiseLocalEvent(dart, new ThrowDoHitEvent(dart, wall, thrown), true);
+
+                        var embedded = entMan.GetComponent<EmbeddableProjectileComponent>(dart).EmbeddedIntoUid;
+                        var held = entMan.GetComponentOrNull<EmbeddedContainerComponent>(wall)?.EmbeddedObjects.Count ?? 0;
+                        var body = entMan.GetComponent<Robust.Shared.Physics.Components.PhysicsComponent>(dart).BodyType;
+                        var parent = entMan.GetComponent<TransformComponent>(dart).ParentUid;
+
+                        return new List<string>
+                        {
+                            $"dart embedded into {embedded?.ToString() ?? "nothing"} (the wall is {wall}), wall holds {held}, "
+                            + $"dart body {body}, parented to {(parent == wall ? "the wall" : parent.ToString())}",
+                        };
+                    })
+                {
+                    AfterLoad = loaded =>
+                    {
+                        var notes = new List<string>();
+                        var wrong = new List<string>();
+                        var darts = 0;
+
+                        var query = entMan.EntityQueryEnumerator<EmbeddableProjectileComponent, TransformComponent>();
+                        while (query.MoveNext(out var uid, out var embeddable, out var xform))
+                        {
+                            if (xform.GridUid != loaded)
+                                continue;
+
+                            darts++;
+                            var into = embeddable.EmbeddedIntoUid;
+                            var holder = into is { } target && entMan.TryGetComponent<EmbeddedContainerComponent>(target, out var container)
+                                ? container.EmbeddedObjects.Contains(uid)
+                                : (bool?) null;
+                            var body = entMan.GetComponent<Robust.Shared.Physics.Components.PhysicsComponent>(uid).BodyType;
+
+                            notes.Add($"dart embedded into {into?.ToString() ?? "nothing"}, that entity lists it back {holder?.ToString() ?? "it has no container"}, "
+                                      + $"body {body}, parent {(into is { } parent && xform.ParentUid == parent ? "the entity it is in" : xform.ParentUid.ToString())}");
+                        }
+
+                        if (darts != 1)
+                            wrong.Add($"one dart has to come back, {darts} did");
+
+                        return (notes, wrong);
+                    },
+                });
+            }
+
+            return recipes;
+        }
+
+        /// <summary>Wave 1's recipes: the manifest members no sold hull exercises.</summary>
+        private static List<WorkbenchRecipe> PlaceWave1(TestPair pair, EntityUid grid)
+        {
             var server = pair.Server;
             var entMan = server.EntMan;
             var recipes = new List<WorkbenchRecipe>();
