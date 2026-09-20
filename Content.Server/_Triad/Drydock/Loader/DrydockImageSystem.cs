@@ -138,6 +138,9 @@ public sealed partial class DrydockImageSystem : EntitySystem
         return session.Complete();
     }
 
+    internal void RaiseRestoring(ref GridRestoringEvent ev) =>
+        RaiseLocalEvent(ref ev);
+
     internal void RaiseRestored(EntityUid uid, ref GridRestoredEvent ev) =>
         RaiseLocalEvent(uid, ref ev);
 

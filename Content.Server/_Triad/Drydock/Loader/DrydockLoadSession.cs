@@ -459,8 +459,8 @@ public sealed class DrydockLoadSession
     }
 
     /// <summary>
-    /// The tiles compared against the image's own, the appearance components counted, then <see cref="GridRestoredEvent"/>
-    /// raised and the power seam armed. The result names everything the load changed, missed or refused.
+    /// The tiles compared against the image's own, the appearance components counted, then <see cref="GridRestoringEvent"/>
+    /// and <see cref="GridRestoredEvent"/> raised and the power seam armed. The result names everything the load changed, missed or refused.
     /// </summary>
     public DrydockLoadResult Complete()
     {
@@ -518,9 +518,18 @@ public sealed class DrydockLoadSession
             TilesExtra = restored.Except(stored).Count(),
         };
 
-        // After the last entity has started and the after-start members are set, in ascending stable id, then once for the grid.
+        // After the last entity has started and the after-start members are set, in ascending stable id. Two distinct steps,
+        // so that when this phase is sliced the head event completes whole before the first directed raise starts: a slice
+        // boundary goes between them and between entities inside the second, never inside the first.
+        var inOrder = ids.OrderBy(entry => entry.Value).Select(entry => entry.Key).Where(entMan.EntityExists).ToList();
+
+        // Step 1: the head, once, for a rebuild that has to finish for the whole grid before any entity's own runs.
+        var restoringEvent = new GridRestoringEvent(_gridUid, inOrder);
+        _system.RaiseRestoring(ref restoringEvent);
+
+        // Step 2: the directed raise at each entity, then once for the grid. An entity a handler deleted earlier is skipped.
         var restoredEvent = new GridRestoredEvent(_gridUid);
-        foreach (var (uid, _) in ids.OrderBy(entry => entry.Value))
+        foreach (var uid in inOrder)
         {
             if (entMan.EntityExists(uid))
                 _system.RaiseRestored(uid, ref restoredEvent);
