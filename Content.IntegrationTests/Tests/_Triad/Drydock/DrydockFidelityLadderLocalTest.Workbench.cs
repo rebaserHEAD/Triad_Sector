@@ -261,6 +261,16 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
 
         private static string PathOf(string prototype, int x, int y) => $"{prototype}@{x},{y}";
 
+        /// <summary>
+        /// Whether the manifest carries anything on the components a recipe names, which is what decides whether holding
+        /// the manifest off can change that recipe's result. Asked of the manifest itself rather than written down per
+        /// recipe, so a member moving into or out of the manifest cannot leave a recipe claiming the wrong thing.
+        /// </summary>
+        private static bool CarriesAManifestMember(WorkbenchRecipe recipe) =>
+            recipe.Components
+                .Select(name => name.EndsWith("Component", StringComparison.Ordinal) ? name[..^"Component".Length] : name)
+                .Any(component => DrydockCodecManifestMembers.Members.Any(member => member.Component == component));
+
 
         /// <summary>Every recipe of a wave, each on its own tiles; the wave is the rows of the recipe file.</summary>
         private static List<WorkbenchRecipe> PlaceWorkbenchWave(TestPair pair, EntityUid grid, int wave) =>
@@ -701,6 +711,11 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
         private static void AppendRecipeControl(StringBuilder sb, WorkbenchRecipe recipe, RoundTripResult first, RoundTripResult second)
         {
             sb.AppendLine($"[workbench] recipe {recipe.Number} {recipe.Name}: members {recipe.Members}; setup: {string.Join("; ", recipe.Setup)}");
+
+            // A recipe whose members the manifest does not carry cannot differ between the two passes, so it runs once
+            // and says so rather than costing a run that proves nothing (ruled 2026-09-19).
+            if (!CarriesAManifestMember(recipe))
+                sb.AppendLine($"[workbench]   recipe {recipe.Number}: no manifest member: one pass.");
 
             // How much of each recipe entity, and of what it holds, each snapshot saw: a whole entity missing shows here
             // before any key does.
