@@ -11,6 +11,8 @@ using Content.IntegrationTests.Pair;
 using Content.Server._Mono.ScuttleDevice;
 using Content.Server.Atmos.Components;
 using Content.Server.Atmos.EntitySystems;
+using Content.Server.Disposal.Tube;
+using Content.Server.Disposal.Unit;
 using Content.Server.Kitchen.Components;
 using Content.Server.Kitchen.EntitySystems;
 using Content.Server.Nyanotrasen.Kitchen.Components;
@@ -259,6 +261,25 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             return uid;
         }
 
+        /// <summary>
+        /// A disposal tube on a tile centre, turned to face <paramref name="facing"/>. A straight tube connects its
+        /// facing and the opposite of it, a bend its facing and the quarter turn back from it, and a trunk only its
+        /// facing (DisposalTubeSystem.cs:138-143, :162-165, :226-232). The rotation is read when a holder asks the tube
+        /// where to go next, so turning the tube after the spawn is enough.
+        /// </summary>
+        private static EntityUid PlaceTube(IEntityManager entMan, EntityUid grid, string prototype, int x, int y, Direction facing)
+        {
+            var uid = Place(entMan, grid, prototype, x, y);
+            entMan.System<SharedTransformSystem>().SetLocalRotation(uid, facing.ToAngle());
+            return uid;
+        }
+
+        /// <summary>The grid tile an entity stands on, however deep in a container it is parented.</summary>
+        private static Vector2i TileOf(IEntityManager entMan, EntityUid grid, EntityUid uid) =>
+            entMan.System<SharedMapSystem>().TileIndicesFor(
+                (grid, entMan.GetComponent<MapGridComponent>(grid)),
+                entMan.System<SharedTransformSystem>().GetMapCoordinates(uid));
+
         private static string PathOf(string prototype, int x, int y) => $"{prototype}@{x},{y}";
 
         /// <summary>
@@ -353,13 +374,14 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                 });
             }
 
-            // 2. A cargo chute mid-dispense. Its interaction deletes the trade good at the start and its update spawns the
+            // 11. A cargo chute mid-dispense (the rank in the recipe file; wave 1's recipe 2 is the dead-end cable stub).
+            // Its interaction deletes the trade good at the start and its update spawns the
             // payment only once the timer reaches the dispense time (Content.Server/_Crescent/Dispenser/DispenserSystem.cs:66-73,
             // :106-121), so a store inside that window holds the only record that anything was put in. Dispensing,
             // DispensingItemId and DispenseTimer are plain fields, which is why the manifest carries them.
             {
                 var chute = Place(entMan, grid, "CargoChuteMD", 8, 4);
-                recipes.Add(new WorkbenchRecipe(2, "cargo chute mid-dispense",
+                recipes.Add(new WorkbenchRecipe(11, "cargo chute mid-dispense",
                     "Dispenser.Dispensing, Dispenser.DispensingItemId, Dispenser.DispenseTimer",
                     new[] { "DispenserComponent" },
                     new List<string> { PathOf("CargoChuteMD", 8, 4) },
@@ -407,6 +429,208 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
 
                         if (chutes != 1)
                             wrong.Add($"one chute has to come back, {chutes} did");
+
+                        return (notes, wrong);
+                    },
+                });
+            }
+
+            // 9. A parcel in flight down a disposal run. The flush spawns a holder, puts what the unit held inside it and
+            // pushes it into the trunk (DisposalTubeSystem.cs:420-441); every tube step after that lasts 0.1 s, set by
+            // EnterTube itself (DisposableSystem.cs:200-201). The live window before the store is 90 ticks on its own, so
+            // the eight tiles of pipe the recipe file asks for would be over before anything was measured: this run is a
+            // 57-tube serpentine, 5.7 s of route, which leaves the holder about thirty tubes along at the store and lets
+            // it finish well before the last reading. It cannot be made to last through the second store as well, so trip
+            // 2 stores a parcel already lying on a tile, which the control says rather than leaving it read as a loss.
+            //
+            // None of what the holder is doing is a data field, so the reading is where the parcel ends up: with the
+            // members applied the holder resumes its route and the far unit ejects the parcel at 14,14, and without them
+            // CurrentTube comes back null and the first update drops it where it stood (DisposableSystem.cs:246-249).
+            // BeingDisposed.Holder on the parcel is carried by nothing and comes back invalid; only a mob reads it, for
+            // the air it breathes (BeingDisposedSystem.cs:17-38), and no mob is stored.
+            {
+                const string parcelId = "Wrench";
+                var nearUnit = Place(entMan, grid, "DisposalUnit", 14, 10);
+                PlaceTube(entMan, grid, "DisposalTrunk", 14, 10, Direction.North);
+
+                // Out of the trunk going north, then west, east, west and east again along rows 11 to 14. Each tube
+                // faces so that its connectable pair holds both the direction the holder arrives from and the one it
+                // leaves by; a bend's pair is its facing and the quarter turn back, which is why the corners differ.
+                var secondTube = PlaceTube(entMan, grid, "DisposalBend", 14, 11, Direction.South);
+                for (var x = 13; x >= 2; x--)
+                    PlaceTube(entMan, grid, "DisposalPipe", x, 11, Direction.East);
+                PlaceTube(entMan, grid, "DisposalBend", 1, 11, Direction.North);
+                PlaceTube(entMan, grid, "DisposalBend", 1, 12, Direction.East);
+                for (var x = 2; x <= 13; x++)
+                    PlaceTube(entMan, grid, "DisposalPipe", x, 12, Direction.East);
+                PlaceTube(entMan, grid, "DisposalBend", 14, 12, Direction.West);
+                PlaceTube(entMan, grid, "DisposalBend", 14, 13, Direction.South);
+                for (var x = 13; x >= 2; x--)
+                    PlaceTube(entMan, grid, "DisposalPipe", x, 13, Direction.East);
+                PlaceTube(entMan, grid, "DisposalBend", 1, 13, Direction.North);
+                PlaceTube(entMan, grid, "DisposalBend", 1, 14, Direction.East);
+                for (var x = 2; x <= 13; x++)
+                    PlaceTube(entMan, grid, "DisposalPipe", x, 14, Direction.East);
+                Place(entMan, grid, "DisposalUnit", 14, 14);
+                PlaceTube(entMan, grid, "DisposalTrunk", 14, 14, Direction.West);
+
+                // What the flush and the hand-taken step found, for the after-load reading to hold them to.
+                var setupWrong = new List<string>();
+                var storedTile = "the parcel was never in a tube";
+                var holderAir = "no holder ever existed";
+
+                recipes.Add(new WorkbenchRecipe(9, "parcel in flight down a disposal run",
+                    "DisposalHolder.StartingTime, TimeLeft, PreviousTube, PreviousDirection, CurrentTube, CurrentDirection, IsExitingDisposals, Tags",
+                    new[] { "DisposalHolderComponent", "DisposalUnitComponent" },
+                    new List<string>
+                    {
+                        PathOf("DisposalUnit", 14, 10), PathOf("DisposalTrunk", 14, 10),
+                        PathOf("DisposalUnit", 14, 14), PathOf("DisposalTrunk", 14, 14),
+                    },
+                    () =>
+                    {
+                        // The parcel waits in the unit until the store is close: it goes into the container directly,
+                        // since the unit's own insert arms the automatic flush and would take the route far too early.
+                        var parcel = entMan.SpawnEntity(parcelId, At(14, 10));
+                        var comp = entMan.GetComponent<DisposalUnitComponent>(nearUnit);
+                        var inserted = entMan.System<SharedContainerSystem>().Insert(parcel, comp.Container);
+                        return new List<string>
+                        {
+                            $"{parcelId} {(inserted ? "in" : "NOT in")} the near unit, engaged {comp.Engaged}, "
+                            + $"unit powered {entMan.System<PowerReceiverSystem>().IsPowered(nearUnit)}",
+                        };
+                    })
+                {
+                    BeforeStore = () =>
+                    {
+                        var lines = new List<string>();
+                        var comp = entMan.GetComponent<DisposalUnitComponent>(nearUnit);
+                        var tubes = entMan.System<DisposalTubeSystem>();
+                        var disposable = entMan.System<DisposableSystem>();
+                        var containers = entMan.System<SharedContainerSystem>();
+
+                        if (!entMan.System<DisposalUnitSystem>().TryFlush(nearUnit, comp))
+                        {
+                            setupWrong.Add("the near unit would not flush, so no holder was ever in a tube");
+                            lines.Add("the flush was refused");
+                            return lines;
+                        }
+
+                        var holder = EntityUid.Invalid;
+                        DisposalHolderComponent? state = null;
+                        var holders = entMan.EntityQueryEnumerator<DisposalHolderComponent, TransformComponent>();
+                        while (holders.MoveNext(out var uid, out var found, out var xform))
+                        {
+                            if (xform.GridUid != grid)
+                                continue;
+
+                            holder = uid;
+                            state = found;
+                        }
+
+                        if (state == null)
+                        {
+                            setupWrong.Add("the flush made no holder on the grid");
+                            lines.Add("the flush left no holder");
+                            return lines;
+                        }
+
+                        // The step the update takes, taken by hand so a previous tube is set by the time of the store:
+                        // the tube it is in lets go before the next one takes it, or that insert fails and the holder
+                        // leaves disposals instead of moving on (DisposableSystem.cs:267-278).
+                        if (state.CurrentTube is { } current
+                            && tubes.NextTubeFor(current, state.CurrentDirection) is { } next)
+                        {
+                            containers.Remove(holder, entMan.GetComponent<DisposalTubeComponent>(current).Contents, reparent: false, force: true);
+                            disposable.EnterTube(holder, next, state);
+                        }
+
+                        if (!entMan.EntityExists(holder))
+                        {
+                            setupWrong.Add("the hand-taken step ended the holder's run instead of moving it on");
+                            lines.Add("the holder left disposals on the hand-taken step");
+                            return lines;
+                        }
+
+                        if (state.PreviousTube == null || state.CurrentTube != secondTube)
+                        {
+                            setupWrong.Add($"the hand-taken step had to leave the holder in the bend at 14,11 with a previous tube, and left it in "
+                                           + $"{state.CurrentTube?.ToString() ?? "nothing"} after {state.PreviousTube?.ToString() ?? "nothing"}");
+                        }
+
+                        // Where it stands now, which is NOT where it is stored: the live window is 90 ticks and every
+                        // tube step is 0.1 s, so the store catches it about thirty tubes further on, and no seam reads
+                        // it there. The after-load reading says so rather than passing this tile off as the stored one.
+                        storedTile = TileOf(entMan, grid, holder).ToString();
+                        holderAir = $"{state.Air.TotalMoles:F2} mol at {state.Air.Temperature:F1} K";
+                        lines.Add($"the holder is at {storedTile} at the hand-taken step in tube {state.CurrentTube?.ToString() ?? "nothing"} going {state.CurrentDirection}, "
+                                  + $"after {state.PreviousTube?.ToString() ?? "nothing"} going {state.PreviousDirection}, {state.TimeLeft:F3}s of {state.StartingTime:F3}s left, "
+                                  + $"exiting {state.IsExitingDisposals}, {state.Tags.Count} tag(s), {state.Air.TotalMoles:F2} mol aboard, "
+                                  + $"holding {string.Join(", ", state.Container.ContainedEntities.Select(held => entMan.GetComponent<MetaDataComponent>(held).EntityPrototype?.ID ?? "(no prototype)"))}");
+                        lines.Add($"the route is 57 tubes, so about {57 - 2 - LiveWindowTicks / 3} of it are left at the store, and none of it by the second store");
+                        return lines;
+                    },
+                    AfterLoad = loaded =>
+                    {
+                        var notes = new List<string>();
+                        var wrong = new List<string>(setupWrong.Select(line => $"the setup: {line}"));
+                        var maps = entMan.System<SharedMapSystem>();
+
+                        var parcels = new List<EntityUid>();
+                        var holdersLeft = new List<string>();
+                        var all = entMan.EntityQueryEnumerator<MetaDataComponent, TransformComponent>();
+                        while (all.MoveNext(out var uid, out var meta, out var xform))
+                        {
+                            if (meta.EntityPrototype?.ID == parcelId)
+                                parcels.Add(uid);
+
+                            if (entMan.HasComponent<DisposalHolderComponent>(uid))
+                                holdersLeft.Add($"{uid} on {(xform.GridUid == loaded ? "the loaded grid" : xform.GridUid?.ToString() ?? "no grid")}");
+                        }
+
+                        notes.Add($"the holder was at {storedTile} at the hand-taken step, three seconds of live window before the store, so the tile it was "
+                                  + "stored in is about thirty tubes further along and nothing reads it there; the route's end is the far unit at (14, 14)");
+                        foreach (var parcel in parcels)
+                        {
+                            var parcelXform = entMan.GetComponent<TransformComponent>(parcel);
+                            if (parcelXform.GridUid != loaded)
+                            {
+                                notes.Add($"a {parcelId} came back off the loaded grid, on {parcelXform.GridUid?.ToString() ?? "no grid"}");
+                                continue;
+                            }
+
+                            var tile = TileOf(entMan, loaded, parcel);
+                            var anchored = new List<EntityUid>();
+                            maps.GetAnchoredEntities((loaded, entMan.GetComponent<MapGridComponent>(loaded)), tile, anchored);
+                            var onIt = anchored
+                                .Select(held => entMan.GetComponent<MetaDataComponent>(held).EntityPrototype?.ID ?? "(no prototype)")
+                                .ToList();
+
+                            // What is anchored on the tile is what says whether a player could pick the parcel up: a
+                            // disposal run goes under floors and through walls, and the Surveyor judges the landing.
+                            notes.Add($"the {parcelId} ended on tile {tile}, held by {(entMan.System<SharedContainerSystem>().IsEntityInContainer(parcel) ? "a container" : "nothing")}, "
+                                      + $"anchored on that tile: {(onIt.Count == 0 ? "nothing" : string.Join(", ", onIt))}");
+
+                            // The holder carries the unit's air and merges it into whatever it is standing in when it
+                            // leaves (DisposableSystem.cs:153-157), so the tile it left the parcel on is where a merge
+                            // that happened twice would show. Read as moles, not as the presence of an atmosphere.
+                            var mixture = entMan.System<AtmosphereSystem>().GetTileMixture(parcel);
+                            notes.Add($"the tile the {parcelId} landed on holds {mixture?.TotalMoles.ToString("F2") ?? "no"} mol "
+                                      + $"at {mixture?.Temperature.ToString("F1") ?? "no"} K, against the {holderAir} the holder carried at the hand-taken step");
+                        }
+
+                        notes.Add($"holders still alive after both loads: {(holdersLeft.Count == 0 ? "none" : string.Join("; ", holdersLeft))}");
+                        notes.Add("the second store held a parcel already lying on a tile: the run is 5.7 s and no route survives two trips");
+
+                        if (parcels.Count != 1)
+                            wrong.Add($"one {parcelId} has to come back, {parcels.Count} did");
+                        else if (entMan.GetComponent<TransformComponent>(parcels[0]).GridUid != loaded)
+                            wrong.Add($"the {parcelId} came back off the loaded grid");
+                        else if (TileOf(entMan, loaded, parcels[0]) != new Vector2i(14, 14))
+                            wrong.Add($"the holder had to carry the {parcelId} to the far unit at (14, 14) and left it at {TileOf(entMan, loaded, parcels[0])}");
+
+                        if (holdersLeft.Count > 0)
+                            wrong.Add($"no holder can be left alive once the route has ended, and {holdersLeft.Count} is");
 
                         return (notes, wrong);
                     },
