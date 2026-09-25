@@ -11,6 +11,13 @@ namespace Content.Server._Triad.Drydock;
 public readonly record struct DrydockImageKey(Guid Ship, int Revision);
 
 /// <summary>
+/// What a load has to resolve before it starts, read without the components themselves: every prototype id the image's
+/// entities name and every component the image carries, each once, sorted ordinally. An entity with no prototype names
+/// none, and the <c>~</c> rows are not components.
+/// </summary>
+public sealed record DrydockImagePreflight(IReadOnlyList<string> PrototypeIds, IReadOnlyList<string> ComponentNames);
+
+/// <summary>
 /// Where <see cref="DrydockStore"/> keeps grid images, one per revision. The implementation is picked once, where
 /// <c>ServerDbManager.Init</c> picks the engine, and read as <see cref="IServerDbManager.DrydockImages"/>: rows under
 /// PostgreSQL (<see cref="DrydockPostgresImageStore"/>), memory under SQLite (<see cref="DrydockMemoryImageStore"/>).
@@ -27,8 +34,8 @@ public readonly record struct DrydockImageKey(Guid Ship, int Revision);
 /// <item>A write that names a revision (<see cref="Put"/>, the target of <see cref="Copy"/>) needs that revision row
 /// flushed in the same transaction first, with <c>SaveChangesAsync</c>: the image row refers to it by a foreign key,
 /// and an unflushed row is not there to refer to.</item>
-/// <item>A read (<see cref="Get"/>, <see cref="Revisions"/>, <see cref="Has"/>) joins the transaction when one is
-/// open, and sees what it has written; with none it reads committed state.</item>
+/// <item>A read (<see cref="Get"/>, <see cref="Revisions"/>, <see cref="Has"/>, <see cref="Preflight"/>) joins the
+/// transaction when one is open, and sees what it has written; with none it reads committed state.</item>
 /// <item>Anything a write throws leaves the transaction to be rolled back, not committed: the caller lets it
 /// propagate out of the <c>RunTriadDbCommand</c> lambda, and disposing the transaction without committing rolls it
 /// back.</item>
@@ -70,6 +77,14 @@ public interface IDrydockImageStore
     /// the ship row first, so a prune of the same ship cannot delete the image between this read and the act.
     /// </summary>
     Task<bool> Has(ServerDbContext db, DrydockImageKey key, CancellationToken ct);
+
+    /// <summary>
+    /// The pre-flight of the image filed under <paramref name="key"/>, or null when there is none. A load cannot start on
+    /// part of an image, because the engine allocates every entity before any row is read (<see cref="DrydockImage"/>),
+    /// so a prototype id or component name that no longer resolves has to be found before it begins. Needs no
+    /// transaction; the PostgreSQL store reads no component value.
+    /// </summary>
+    Task<DrydockImagePreflight?> Preflight(ServerDbContext db, DrydockImageKey key, CancellationToken ct);
 
     /// <summary>
     /// Deletes the images of the named revisions, in one statement where the store has statements, with their entities.

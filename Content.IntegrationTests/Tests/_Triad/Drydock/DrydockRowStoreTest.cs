@@ -263,6 +263,47 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             await pair.CleanReturnAsync();
         }
 
+        [TestCase(false, TestName = "ThePreflightNamesEachPrototypeAndComponentOnce(memory, SQLite)")]
+        [TestCase(true, TestName = "ThePreflightNamesEachPrototypeAndComponentOnce(rows, PostgreSQL)", Category = "Postgres")]
+        public async Task ThePreflightNamesEachPrototypeAndComponentOnce(bool postgres)
+        {
+            await using var postgresPair = postgres ? await PostgresTestPair.Start() : null;
+            await using var sqlitePair = postgres ? null : await PoolManager.GetServerClient();
+            var pair = postgresPair?.Pair ?? sqlitePair!;
+            var db = pair.Server.ResolveDependency<IServerDbManager>();
+            var store = pair.Server.ResolveDependency<DrydockStore>();
+            var images = db.DrydockImages;
+
+            var image = await StoreSmallGrid(pair);
+            var (ship, owner) = await NewShip(db, store);
+            await store.FileRevision(Request(ship, owner, image), image, keepBlobs: 0);
+
+            var result = await db.RunTriadDbCommand(async (context, token) => (
+                Filed: await images.Preflight(context, new DrydockImageKey(ship, 1), token),
+                Missing: await images.Preflight(context, new DrydockImageKey(ship, 99), token)), CancellationToken.None);
+
+            // Derived here from the image as filed, not by the store's own code.
+            var prototypes = image.Entities.Where(e => e.Prototype != null).Select(e => e.Prototype!).Distinct().Order(StringComparer.Ordinal).ToList();
+            var components = image.Entities.SelectMany(e => e.Rows.Keys).Where(name => !name.StartsWith('~')).Distinct().Order(StringComparer.Ordinal).ToList();
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(image.Entities.Any(e => e.Rows.Keys.Any(name => name.StartsWith('~'))), Is.True,
+                    "The control: the image carries a ~ row for the pre-flight to leave out.");
+                Assert.That(result.Filed, Is.Not.Null);
+                Assert.That(result.Filed!.PrototypeIds, Is.EqualTo(prototypes), "Every prototype the entities name, once, sorted.");
+                Assert.That(result.Filed.ComponentNames, Is.EqualTo(components), "Every component the image carries, once, sorted.");
+                Assert.That(result.Filed.PrototypeIds, Does.Contain("WallSolid").And.Contain("APCBasic").And.Contain("LockerSteel").And.Contain("Crowbar"),
+                    "What the grid was built from.");
+                Assert.That(result.Filed.PrototypeIds, Does.Not.Contain("MobMoth"), "The walk leaves the mob out, so nothing names it.");
+                Assert.That(result.Filed.ComponentNames, Does.Contain("Transform").And.Contain("EntityStorage"));
+                Assert.That(result.Filed.ComponentNames.Any(name => name.StartsWith('~')), Is.False, "A ~ row is not a component.");
+                Assert.That(result.Missing, Is.Null, "No image, no pre-flight.");
+            });
+
+            await pair.CleanReturnAsync();
+        }
+
         private static async Task<DrydockImage> StoreSmallGrid(TestPair pair)
         {
             var server = pair.Server;

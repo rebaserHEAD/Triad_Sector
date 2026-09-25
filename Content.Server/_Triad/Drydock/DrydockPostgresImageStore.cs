@@ -140,6 +140,41 @@ public sealed class DrydockPostgresImageStore : IDrydockImageStore
     }
 
     /// <summary>
+    /// Three reads on the caller's connection: the image's id, then its entities' distinct prototype ids, then the distinct
+    /// names unnested from <c>component_names</c>. None reads a <c>components</c> value.
+    /// </summary>
+    public async Task<DrydockImagePreflight?> Preflight(ServerDbContext db, DrydockImageKey key, CancellationToken ct)
+    {
+        return await WithConnection<DrydockImagePreflight?>(db, async (connection, transaction) =>
+        {
+            if (await ImageId(connection, transaction, key, ct) is not { } imageId)
+                return null;
+
+            var prototypes = await Names(connection, transaction,
+                "SELECT DISTINCT prototype_id FROM drydock_entity WHERE image_id = @id AND prototype_id IS NOT NULL", imageId, ct);
+            var components = await Names(connection, transaction,
+                "SELECT DISTINCT name FROM drydock_entity, unnest(component_names) AS name WHERE image_id = @id", imageId, ct);
+
+            return new DrydockImagePreflight(prototypes, components);
+        }, ct);
+    }
+
+    /// <summary>One column of text, sorted ordinally here rather than by the database's collation.</summary>
+    private static async Task<List<string>> Names(NpgsqlConnection connection, NpgsqlTransaction? transaction, string sql, long imageId, CancellationToken ct)
+    {
+        await using var command = new NpgsqlCommand(sql, connection, transaction);
+        command.Parameters.AddWithValue("id", imageId);
+
+        var names = new List<string>();
+        await using var reader = await command.ExecuteReaderAsync(ct);
+        while (await reader.ReadAsync(ct))
+            names.Add(reader.GetString(0));
+
+        names.Sort(StringComparer.Ordinal);
+        return names;
+    }
+
+    /// <summary>
     /// One <c>DELETE</c> of the image rows for the named revisions on the caller's transaction; the entity rows go with
     /// them by the foreign key's <c>ON DELETE CASCADE</c>, and the revision rows stay. An empty set issues no statement.
     /// </summary>

@@ -41,6 +41,13 @@ public sealed class DrydockMemoryImageStore : IDrydockImageStore
     public Task<bool> Has(ServerDbContext db, DrydockImageKey key, CancellationToken ct) =>
         Task.FromResult(_images.ContainsKey(key));
 
+    public Task<DrydockImagePreflight?> Preflight(ServerDbContext db, DrydockImageKey key, CancellationToken ct) =>
+        Task.FromResult(_images.TryGetValue(key, out var image) ? PreflightOf(image) : null);
+
+    private static DrydockImagePreflight PreflightOf(DrydockImage image) => new(
+        image.Entities.Select(e => e.Prototype).OfType<string>().Distinct().Order(StringComparer.Ordinal).ToList(),
+        image.Entities.SelectMany(e => e.Rows.Keys).Where(name => !name.StartsWith('~')).Distinct().Order(StringComparer.Ordinal).ToList());
+
     public Task Delete(ServerDbContext db, Guid ship, IReadOnlyCollection<int> revisions, CancellationToken ct)
     {
         foreach (var revision in revisions)
