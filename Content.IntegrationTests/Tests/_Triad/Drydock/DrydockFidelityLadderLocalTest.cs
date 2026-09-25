@@ -234,7 +234,6 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             ["GunComponent.~ShootCoordinates"] = (StateClass.Volatile, "the last shot's aim point"),
             ["AppearanceComponent.~AppearanceData"] = (StateClass.Derived, "the same data the Appearance.* keys compare"),
             ["PowerChargeComponent.~NeedUIUpdate"] = (StateClass.Volatile, "UI refresh flag, cleared only when an open UI updates (PowerChargeSystem.UpdateUI)"),
-            ["PipeNetAir.*"] = (StateClass.Live, "pipe-net gas moves while pumps, vents and mixers run"),
             ["GridAtmosphereComponent.Tiles.moles"] = (StateClass.Live, "deck gas moves while atmos processes active tiles"),
             ["GridAtmosphereComponent.Tiles.temperature"] = (StateClass.Live, "deck gas temperature moves while atmos processes active tiles"),
             ["ThrusterComponent.NextFire"] = (StateClass.Live, "burn tick repeating every FireCooldown, 2 s, advanced one cooldown when due (ThrusterSystem.cs:522-525)"),
@@ -368,6 +367,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             var findings = Report(sb, rung, vesselId, 1, first, EngineMode || CodecMode ? null : RetrieveGrants, gasRooms, doorPath, protoMan, findingKinds)
                            + Report(sb, rung, vesselId, 2, second, EngineMode || CodecMode ? null : RetrieveRestamps, gasRooms, doorPath, protoMan, findingKinds, secondUnexplained, previous: first);
             AppendShapes(sb, rung, vesselId, first, second, secondUnexplained);
+            WriteFindingSummary(rung);
 
             // A codec-mode run over many rungs stops on a rung that brings new kinds of finding faster than they can be
             // read, or one that failed, and the rest report themselves skipped rather than burying the stop under a
@@ -416,11 +416,13 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
         private static HashSet<string>? _seenFindingKinds;
 
         /// <summary>
-        /// The finding kinds earlier rungs had. Seeded once, from the dumps in <c>LADDER_DUMP</c> of the rungs before the
-        /// first one this run takes, so a run resumed partway does not count every kind it meets as new. A dump holds the
-        /// settling and predicted lines too, so the seed can hold a kind that was never a finding; that errs toward not
-        /// stopping on it.
+        /// The finding kinds earlier rungs had. Seeded once, from the <c>[finding]</c> lines in the dumps in
+        /// <c>LADDER_DUMP</c> of the rungs before the first one this run takes, so a run resumed partway does not count
+        /// every kind it meets as new. A dump written before lines were tagged holds its settling and predicted lines
+        /// untagged beside its findings, so from one of those every line is taken; that errs toward not stopping.
         /// </summary>
+        private const string FindingTag = "[finding] ";
+
         private static HashSet<string> SeenFindingKinds(int rung)
         {
             if (_seenFindingKinds != null)
@@ -439,7 +441,9 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
 
                 foreach (var line in System.IO.File.ReadLines(file))
                 {
-                    if (line.Length > 0 && char.IsUpper(line[0]))
+                    if (line.StartsWith(FindingTag, StringComparison.Ordinal))
+                        _seenFindingKinds.Add(StopKindOf(line[FindingTag.Length..]));
+                    else if (line.Length > 0 && char.IsUpper(line[0]))
                         _seenFindingKinds.Add(StopKindOf(line));
                 }
             }
@@ -663,6 +667,53 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             return window != 0 && Math.Sign(after - before) == -window && Math.Abs(after - before) > TimeToleranceSeconds;
         }
 
+        /// <summary>
+        /// A pipe-net gas key that moved further across the round trip than it moved in the live window, the window scaled
+        /// up only when the ship ran longer than it. Pumps and vents move pipe gas by the same rule on either side of the
+        /// store, so a trip that moved it further than the window did is the store's doing, not theirs.
+        /// </summary>
+        private static bool PipeGasOutranItsWindow(string key, RoundTripResult result)
+        {
+            if (PipeGasValue(result.Early, key) is not { } early
+                || PipeGasValue(result.Before, key) is not { } before
+                || PipeGasValue(result.After, key) is not { } after)
+            {
+                return false;
+            }
+
+            var scale = Math.Max(1, (result.ShipSeconds + result.TickSeconds) / (LiveWindowTicks * result.TickSeconds));
+            return Math.Round(Math.Abs(after - before), 9) > Math.Abs(before - early) * scale;
+        }
+
+        /// <summary>
+        /// A pipe-net gas key within one unit of its render across the round trip: 0.01 mol for a gas, 0.1 K for the
+        /// temperature. Moles are single precision, so a net split into shares and merged back can land one rounding step
+        /// from where it started; that is the instrument, and anything past it is the store's.
+        /// </summary>
+        private static bool PipeGasWithinResolution(string key, RoundTripResult result)
+        {
+            if (PipeGasValue(result.Before, key) is not { } before || PipeGasValue(result.After, key) is not { } after)
+                return false;
+
+            var unit = key.EndsWith(".temperature", StringComparison.Ordinal) ? 0.1 : 0.01;
+            return Math.Round(Math.Abs(after - before), 9) <= unit;
+        }
+
+        /// <summary>
+        /// A pipe-net gas key's value as a number, or null for any other key. A gas the render leaves out holds under
+        /// 0.005 mol, so it reads as zero; a missing temperature is a net holding no gas, and has no value.
+        /// </summary>
+        private static double? PipeGasValue(DrydockStateSnapshot snapshot, string key)
+        {
+            if (!key[(key.IndexOf('|') + 1)..].StartsWith("PipeNetAir.", StringComparison.Ordinal))
+                return null;
+
+            if (snapshot.Values.TryGetValue(key, out var value))
+                return Number(value);
+
+            return key.Contains(".moles.", StringComparison.Ordinal) ? 0 : null;
+        }
+
         /// <summary>The raw half of a rendered time (<c>raw|relative</c>), in seconds, or null for anything else.</summary>
         private static double? RawTime(string? render)
         {
@@ -727,15 +778,15 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                                     && Collection(result.After.Values, key[..key.IndexOf('|')]) is { } after
                                     && before.SetEquals(after)),
 
-            // Owed to a rebuild handler that does not exist yet (resources/2026-09-18-rebuild-list.tsv), so each handler's
-            // arrival has lines to delete. The load stays free of the old retrieve sweeps, which are what these replace.
+            // Owed to a rebuild handler that does not exist yet (the design page's "Phase 3 contract: the loader" names each
+            // Hnn), so each handler's arrival has lines to delete. The load stays free of the old retrieve sweeps, which are what these replace.
             new("owed: H12",
                 "OWED to H12, wire layout and timed wire re-arm: the state data is set by each wire's action as it is added "
                 + "(WiresSystem.cs:143, :167, through SetData at :812), the statuses are refilled from the wires by "
                 + "UpdateUserInterface (:528), and both run from map init (:469-488), which the silent map-init stamp never "
                 + "raises. Sorted only where the same entity's wire list also came back empty, for a wire's own state and "
                 + "for a UI state cache whose only unexplained loss is the wires state alike: nothing pushes that state at "
-                + "open, and the H12 handler ends with WiresSystem.UpdateUserInterface (Surveyor's sweep, 2026-09-19).",
+                + "open (PushedAtOpen does not list it), and the H12 handler ends with WiresSystem.UpdateUserInterface.",
                 (_, key, result) => (OwedToH12.Contains(key[(key.IndexOf('|') + 1)..]) || CacheWaitsOn(key, result) == "H12")
                                     && result.After.Values.TryGetValue(key[..key.IndexOf('|')] + "|WiresComponent.~WiresList", out var wires)
                                     && wires.StartsWith("count=0", StringComparison.Ordinal)),
@@ -743,7 +794,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             // What the manifest's fourth moment, after the first power solve, set back before it was cut (ruled 2026-09-19).
             new("re-armed by the power edge",
                 "Accepted: the power edge a load raises re-arms a timer to its full delay or restarts an idle cycle, and nothing "
-                + "is lost (Surveyor's consequence triage, 2026-09-19). An open door's auto-close to a full AutoCloseDelay "
+                + "is lost. An open door's auto-close to a full AutoCloseDelay "
                 + "(AirlockSystem.cs:36-53, SharedAirlockSystem.cs:106-127); a fryer's next fry to a full FryInterval "
                 + "(DeepFryerSystem.cs:481-486); an engaged disposal unit's flush through ManualEngage, which keeps the smaller "
                 + "(SharedDisposalUnitSystem.cs:241-261, :686); a cargo telepad back to idle, its accumulator at its delay, "
@@ -764,8 +815,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                                        && result.After.Values.TryGetValue(key, out var after)
                                        && after == "null"),
 
-            // Sorted by state type rather than by prototype (Surveyor's sweep, ruled 2026-09-19:
-            // resources/2026-09-19-bui-state-cache-sweep.tsv, join row 427).
+            // Sorted by state type rather than by prototype: PushedAtOpen names the states their owners push at open.
             new(CacheFamily,
                 "Accepted: UserInterfaceComponent.States holds the last state the server sent each open interface, it is "
                 + "not saved, and a load has no client with one open. A client opening a BUI calls UpdateState only where "
@@ -785,15 +835,15 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             new("owed: H10",
                 "OWED to H10, the research client's re-link: a research console pushes its console state at open only "
                 + "while its client is linked to a server, and the H10 re-link raises ResearchRegistrationChangedEvent, "
-                + "which refills it (Surveyor's sweep, 2026-09-19). Sorted where the console state is the only one the "
+                + "which refills it (ResearchSystem.Client.cs:79-81). Sorted where the console state is the only one the "
                 + "cache is waiting on.",
                 (line, key, result) => line.StartsWith("CHANGED", StringComparison.Ordinal) && CacheWaitsOn(key, result) == "H10"),
 
             new("owed: H21",
                 "OWED to H21, the network configurator's open push: nothing fills its list state at open, so a "
                 + "configurator in a locker or a toolbox comes back with a blank window until H21 subscribes "
-                + "BoundUIOpenedEvent to UpdateListUiState (spec resources/2026-09-18-handler-specs/"
-                + "H21-network-configurator-open-push.md). Sorted where that state is the only one the cache is waiting on.",
+                + "BoundUIOpenedEvent to UpdateListUiState (the design page, \"Phase 3 contract: the loader\"). Sorted where "
+                + "that state is the only one the cache is waiting on.",
                 (line, key, result) => line.StartsWith("CHANGED", StringComparison.Ordinal) && CacheWaitsOn(key, result) == "H21"),
 
             // Ruled 2026-09-19, deliberately narrow: it may never absorb the state the load gets wrong.
@@ -882,7 +932,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
 
         /// <summary>
         /// The BUI states the owning system pushes at or before the open, so a cache that lost one is full by the time a
-        /// player sees the interface (Surveyor's sweep, resources/2026-09-19-bui-state-cache-sweep.tsv).
+        /// player sees the interface; the cache family's receipt cites each push.
         /// </summary>
         private static readonly HashSet<string> PushedAtOpen = new(StringComparer.Ordinal)
         {
@@ -1853,7 +1903,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             var familyGrew = new Dictionary<KnownFamily, int>();
             var registryGrew = 0;
             var heldBack = new List<(string By, string Line)>();
-            var timeKept = 0;
+            var timeKeptLines = new List<string>();
 
             var diff = DrydockStateSnapshot.Diff(result.Before, result.After);
             var moved = MovedLines(diff);
@@ -1873,7 +1923,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                     && DrydockFidelitySystem.TimeKeepsItsMeaning(result.Before.Values[key], result.After.Values[key], TimeToleranceSeconds)
                     && TimeSentinel(result.Before.Values[key]) == TimeSentinel(result.After.Values[key]))
                 {
-                    timeKept++;
+                    timeKeptLines.Add(line);
                     continue;
                 }
 
@@ -1907,7 +1957,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
 
                 var recovery = RecoveryOf(key, result);
 
-                if (key != null && live.Contains(key) && !MovedAgainstItsWindow(key, result))
+                if (key != null && live.Contains(key) && !MovedAgainstItsWindow(key, result) && !PipeGasOutranItsWindow(key, result))
                     liveLines.Add(line);
                 else if (grants != null && IsGrant(line, grants))
                     grantLines.Add(line);
@@ -1922,6 +1972,8 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                 }
                 else if (RecreatedTransient(line, key, result, protoMan) != null)
                     recreatedLines.Add(line);
+                else if (key != null && PipeGasWithinResolution(key, result))
+                    belowFloorLines.Add(line);
                 else if (key != null && Classify(key, result, recovery, out var belowFloor) is { } _)
                 {
                     if (Compounding(line, key, result, previous))
@@ -1952,17 +2004,29 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             }
 
             foreach (var line in findings)
+            {
                 findingKinds.Add(StopKindOf(line));
+                RecordLargest(line, rung, vesselId, trip, result);
+            }
 
             unexplained?.AddRange(findings.Concat(settlingLines));
 
-            Dump(rung, vesselId, trip, result, findings.Concat(settlingLines).Concat(predictedLines));
+            // Every line, under the bucket that took it, so a line the registry or a family believed can be read back.
+            var buckets = new List<(string Bucket, List<string> Lines)>
+            {
+                ("finding", findings), ("settling", settlingLines), ("settled", settledLines), ("classified", classifiedLines),
+                ("below-floor", belowFloorLines), ("policy", policyLines), ("unsaved", unsavedLines), ("recreated", recreatedLines),
+                ("moved", movedLines), ("live", liveLines), ("grant", grantLines), ("predicted", predictedLines),
+                ("time-kept", timeKeptLines),
+            };
+            buckets.AddRange(familyLines.Select(family => ($"family:{family.Key.Name}", family.Value)));
+            Dump(rung, vesselId, trip, result, buckets.SelectMany(bucket => bucket.Lines.Select(line => (bucket.Bucket, line))));
 
             sb.AppendLine($"[ladder] round trip {trip}: {result.Before.Entities} entities before, {result.After.Entities} after "
                           + $"({result.Before.TieBroken}/{result.After.TieBroken} tie-broken, "
                           + $"{result.Before.Uncapturable}/{result.After.Uncapturable} uncapturable), "
                           + $"{result.Before.Values.Count} keys, {live.Count} live key(s), clock advanced {result.ElapsedSeconds:F1}s, "
-                          + $"ship ran {result.ShipSeconds:F3}s, {timeKept} time change(s) kept their meaning.");
+                          + $"ship ran {result.ShipSeconds:F3}s, {timeKeptLines.Count} time change(s) kept their meaning.");
 
             AppendUncapturable(sb, rung, vesselId, trip, result);
 
@@ -2404,11 +2468,11 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
         }
 
         /// <summary>
-        /// When <c>LADDER_DUMP</c> names a directory, writes every finding and settling line's full
-        /// before, after and late values there, one file per rung and round trip. The console report
-        /// cuts values at 120 characters.
+        /// When <c>LADDER_DUMP</c> names a directory, writes every line of the round trip there under the bucket that took
+        /// it (<c>[finding] CHANGED ...</c>), with its full before, after and late values, one file per rung and round
+        /// trip. The console report cuts values at 120 characters.
         /// </summary>
-        private static void Dump(int rung, string vesselId, int trip, RoundTripResult result, IEnumerable<string> lines)
+        private static void Dump(int rung, string vesselId, int trip, RoundTripResult result, IEnumerable<(string Bucket, string Line)> lines)
         {
             var directory = Environment.GetEnvironmentVariable("LADDER_DUMP");
             if (string.IsNullOrEmpty(directory))
@@ -2416,10 +2480,10 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
 
             System.IO.Directory.CreateDirectory(directory);
             var sb = new StringBuilder();
-            foreach (var line in lines)
+            foreach (var (bucket, line) in lines)
             {
                 var key = KeyOf(line);
-                sb.AppendLine(line);
+                sb.AppendLine($"[{bucket}] {line}");
                 if (key == null)
                     continue;
 
@@ -2430,6 +2494,90 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
 
             System.IO.File.WriteAllText(
                 System.IO.Path.Combine(directory, $"rung{rung:000}_{vesselId}_trip{trip}.txt"), sb.ToString());
+        }
+
+        /// <summary>
+        /// Every finding kind this run has met: how many lines, and the largest by magnitude with where it was, because the
+        /// new-kind stop fires on a kind's first instance and a far larger one on a later rung stops nothing.
+        /// </summary>
+        private static readonly Dictionary<string, (int Count, double Magnitude, string Where, string Line)> LargestByKind = new(StringComparer.Ordinal);
+
+        /// <summary>The first rung this run took, which names its summary file so a resumed run does not overwrite another's.</summary>
+        private static int? _firstRung;
+
+        private static void RecordLargest(string line, int rung, string vesselId, int trip, RoundTripResult result)
+        {
+            var key = KeyOf(line);
+            var kind = SummaryKindOf(line, key);
+            var magnitude = key == null ? 0 : Magnitude(key, result);
+            var where = $"rung {rung} {vesselId} trip {trip}";
+
+            if (!LargestByKind.TryGetValue(kind, out var seen))
+                LargestByKind[kind] = (1, magnitude, where, line);
+            else if (magnitude > seen.Magnitude)
+                LargestByKind[kind] = (seen.Count + 1, magnitude, where, line);
+            else
+                LargestByKind[kind] = (seen.Count + 1, seen.Magnitude, seen.Where, seen.Line);
+        }
+
+        /// <summary>
+        /// A finding's kind for the summary: <see cref="StopKindOf"/>, with a pipe net's facet kept (a gas, or the
+        /// temperature), so moles and kelvin are never compared as one magnitude.
+        /// </summary>
+        private static string SummaryKindOf(string line, string? key)
+        {
+            var kind = StopKindOf(line);
+            if (key == null || !kind.EndsWith("PipeNetAir.*", StringComparison.Ordinal))
+                return kind;
+
+            var moles = key.LastIndexOf(".moles.", StringComparison.Ordinal);
+            return moles >= 0 ? $"{kind} {key[(moles + 1)..]}" : key.EndsWith(".temperature", StringComparison.Ordinal) ? $"{kind} temperature" : kind;
+        }
+
+        /// <summary>How far a line's number moved: the difference across the trip, or the value itself where one side has none. Zero for a value that is not a number.</summary>
+        private static double Magnitude(string key, RoundTripResult result)
+        {
+            var before = PipeGasValue(result.Before, key) ?? Number(result.Before.Values.GetValueOrDefault(key));
+            var after = PipeGasValue(result.After, key) ?? Number(result.After.Values.GetValueOrDefault(key));
+            return (before, after) switch
+            {
+                ({ } b, { } a) => Math.Abs(a - b),
+                ({ } b, null) => Math.Abs(b),
+                (null, { } a) => Math.Abs(a),
+                _ => 0,
+            };
+        }
+
+        private static string FindingSummary()
+        {
+            var sb = new StringBuilder();
+            sb.AppendLine($"[ladder-summary] {LargestByKind.Count} finding kind(s) on the rungs this run took, from rung {_firstRung}, largest first.");
+            foreach (var (kind, entry) in LargestByKind.OrderByDescending(e => e.Value.Magnitude).ThenBy(e => e.Key, StringComparer.Ordinal))
+            {
+                var largest = entry.Magnitude > 0 ? entry.Magnitude.ToString("G6", System.Globalization.CultureInfo.InvariantCulture) : "not a number";
+                sb.AppendLine($"[ladder-summary] kind={kind} count={entry.Count} largest={largest} at {entry.Where}: {OneLine(entry.Line, 300)}");
+            }
+
+            return sb.ToString();
+        }
+
+        /// <summary>Rewrites the summary after every rung when <c>LADDER_DUMP</c> names a directory, so a run that dies keeps it.</summary>
+        private static void WriteFindingSummary(int rung)
+        {
+            _firstRung ??= rung;
+            var directory = Environment.GetEnvironmentVariable("LADDER_DUMP");
+            if (string.IsNullOrEmpty(directory))
+                return;
+
+            System.IO.Directory.CreateDirectory(directory);
+            System.IO.File.WriteAllText(System.IO.Path.Combine(directory, $"summary_from{_firstRung:000}.txt"), FindingSummary());
+        }
+
+        [OneTimeTearDown]
+        public async Task PrintFindingSummary()
+        {
+            if (LargestByKind.Count > 0)
+                await TestContext.Out.WriteLineAsync(FindingSummary());
         }
 
         /// <summary>

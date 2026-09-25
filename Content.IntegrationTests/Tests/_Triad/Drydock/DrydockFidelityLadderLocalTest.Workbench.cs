@@ -15,6 +15,7 @@ using Content.Server.Disposal.Tube;
 using Content.Server.Disposal.Unit;
 using Content.Server.Kitchen.Components;
 using Content.Server.Kitchen.EntitySystems;
+using Content.Server.NodeContainer.Nodes;
 using Content.Server.Nyanotrasen.Kitchen.Components;
 using Content.Server.Power.Components;
 using Content.Server.Power.EntitySystems;
@@ -26,6 +27,7 @@ using Content.Shared.Disposal.Components;
 using Content.Shared.Disposal.Unit;
 using Content.Shared.Kitchen;
 using Content.Shared.Maps;
+using Content.Shared.NodeContainer;
 using Content.Shared.PDA;
 using Content.Server._Crescent.Dispenser;
 using Content.Server._Triad.Drydock.Codec;
@@ -43,7 +45,7 @@ using Robust.Shared.Timing;
 namespace Content.IntegrationTests.Tests._Triad.Drydock
 {
     /// <summary>
-    /// The workbench rung (<c>resources/2026-09-19-manifest-recipes.tsv</c>): a synthetic grid built in code and populated
+    /// The workbench rung (the design page, "Discovery: the fidelity ladder"): a synthetic grid built in code and populated
     /// with the manifest members no sold hull exercises, each put in the state its recipe names, then round-tripped twice
     /// through the grid image exactly as a hull rung is. Codec mode only.
     ///
@@ -303,7 +305,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             };
 
         /// <summary>
-        /// Wave 2, from the Surveyor's re-cut recipe file: what one entity holds another by, where the holding is state no
+        /// Wave 2: what one entity holds another by, where the holding is state no
         /// prototype carries. Built a recipe at a time, each on its own tiles, as wave 1's are.
         /// </summary>
         private static List<WorkbenchRecipe> PlaceWave2(TestPair pair, EntityUid grid)
@@ -607,7 +609,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                                 .ToList();
 
                             // What is anchored on the tile is what says whether a player could pick the parcel up: a
-                            // disposal run goes under floors and through walls, and the Surveyor judges the landing.
+                            // disposal run goes under floors and through walls, so the landing is read, not asserted.
                             notes.Add($"the {parcelId} ended on tile {tile}, held by {(entMan.System<SharedContainerSystem>().IsEntityInContainer(parcel) ? "a container" : "nothing")}, "
                                       + $"anchored on that tile: {(onIt.Count == 0 ? "nothing" : string.Join(", ", onIt))}");
 
@@ -637,8 +639,82 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                 });
             }
 
+            // 40. A charged pipe loop (H23): a pump between two nets, each charged with a mixture of its own at a
+            // temperature of its own. A net's air lives on its node group, which no component holds, so it travels as each
+            // kept node's share (PipeGasCarrySystem), keyed by node name; a gas poured into the wrong net, or a share merged
+            // at the wrong temperature, shows here as a composition, where a total would hide it. The pump is off, and 330 K
+            // is under plasma's burn temperature, so nothing but the store moves the gas.
+            {
+                var upper = Place(entMan, grid, "GasPipeStraight", 12, 3);
+                Place(entMan, grid, "GasPressurePump", 12, 2);
+                var lower = Place(entMan, grid, "GasPipeStraight", 12, 1);
+                var stored = new Dictionary<Vector2i, GasMixture>();
+                GasMixture Air(EntityUid pipe) => ((PipeNode) entMan.GetComponent<NodeContainerComponent>(pipe).Nodes["pipe"]).Air;
+
+                recipes.Add(new WorkbenchRecipe(40, "charged pipe loop", "PipeGas.Shares on the ~carried row",
+                    new[] { "NodeContainerComponent" },
+                    new List<string> { PathOf("GasPipeStraight", 12, 3), PathOf("GasPressurePump", 12, 2), PathOf("GasPipeStraight", 12, 1) },
+                    () =>
+                    {
+                        var upperAir = Air(upper);
+                        upperAir.AdjustMoles(Gas.Oxygen, 30f);
+                        upperAir.AdjustMoles(Gas.Plasma, 10f);
+                        upperAir.Temperature = 330f;
+
+                        var lowerAir = Air(lower);
+                        lowerAir.AdjustMoles(Gas.Nitrogen, 25f);
+                        lowerAir.AdjustMoles(Gas.CarbonDioxide, 5f);
+                        lowerAir.Temperature = 250f;
+
+                        return new List<string> { $"upper net {GasReading(upperAir)}; lower net {GasReading(lowerAir)}; one net each: {!ReferenceEquals(upperAir, lowerAir)}" };
+                    })
+                {
+                    BeforeStore = () =>
+                    {
+                        stored[new Vector2i(12, 3)] = new GasMixture(Air(upper));
+                        stored[new Vector2i(12, 1)] = new GasMixture(Air(lower));
+                        return new List<string> { $"upper net {GasReading(Air(upper))}; lower net {GasReading(Air(lower))}" };
+                    },
+                    AfterLoad = retrieved =>
+                    {
+                        var notes = new List<string>();
+                        var bad = new List<string>();
+                        var maps = entMan.System<SharedMapSystem>();
+                        var gridComp = entMan.GetComponent<MapGridComponent>(retrieved);
+                        foreach (var (tile, before) in stored)
+                        {
+                            var anchored = new List<EntityUid>();
+                            maps.GetAnchoredEntities((retrieved, gridComp), tile, anchored);
+                            var pipe = anchored.FirstOrDefault(uid => entMan.GetComponent<MetaDataComponent>(uid).EntityPrototype?.ID == "GasPipeStraight");
+                            if (!pipe.IsValid())
+                            {
+                                bad.Add($"the pipe at {tile} has to come back");
+                                continue;
+                            }
+
+                            var after = Air(pipe);
+                            notes.Add($"the net at {tile}: stored {GasReading(before)}, now {GasReading(after)}");
+                            foreach (var gas in Enum.GetValues<Gas>())
+                            {
+                                if (Math.Abs(after.GetMoles(gas) - before.GetMoles(gas)) > 0.01f)
+                                    bad.Add($"the net at {tile} has to hold its {gas} again: {before.GetMoles(gas):F2} stored, {after.GetMoles(gas):F2} now");
+                            }
+
+                            if (Math.Abs(after.Temperature - before.Temperature) > 0.1f)
+                                bad.Add($"the net at {tile} has to be at its temperature again: {before.Temperature:F1} K stored, {after.Temperature:F1} K now");
+                        }
+
+                        return (notes, bad);
+                    },
+                });
+            }
+
             return recipes;
         }
+
+        /// <summary>A mixture as its gases at 0.005 mol or more and its temperature, as the snapshot renders a pipe net.</summary>
+        private static string GasReading(GasMixture air) =>
+            string.Join(", ", air.Where(entry => entry.moles >= 0.005f).Select(entry => $"{entry.gas} {entry.moles:F2}")) + $" at {air.Temperature:F1} K";
 
         /// <summary>Wave 1's recipes: the manifest members no sold hull exercises.</summary>
         private static List<WorkbenchRecipe> PlaceWave1(TestPair pair, EntityUid grid)

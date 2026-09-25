@@ -5,6 +5,7 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
 using System.Reflection;
+using Content.Server._Triad.Atmos.EntitySystems;
 using Content.Server.Atmos;
 using Content.Server.Atmos.Components;
 using Content.Server.NodeContainer.NodeGroups;
@@ -231,7 +232,9 @@ public sealed partial class DrydockFidelitySystem
     /// <item><c>path|NodeContainerComponent.node.NAME.group</c>: the group that node belongs to, or null.</item>
     /// <item><c>grid|NodeGroup.LABEL</c>: the group's type, its members on this grid, and its members in total
     /// (a docked pipe can join a group across grids).</item>
-    /// <item><c>grid|PipeNetAir.LABEL.moles</c> and <c>.temperature</c>: a pipe net's gas.</item>
+    /// <item><c>grid|PipeNetAir.LABEL.moles.GAS</c>: each gas a pipe net holds at 0.005 mol or more, to two decimals, so a
+    /// change of composition shows where a total would hide it; and <c>.temperature</c>, only for a net that holds gas by
+    /// <see cref="PipeGasCarrySystem.HoldsGas"/>, the carry's own test.</item>
     /// </list>
     /// </summary>
     private void RenderNetworks(Dictionary<EntityUid, string> pathOf, DrydockStateSnapshot snapshot)
@@ -269,8 +272,15 @@ public sealed partial class DrydockFidelitySystem
             if (group is PipeNet pipeNet)
             {
                 var air = pipeNet.Air;
-                snapshot.Values[$"grid|PipeNetAir.{label}.moles"] = air.TotalMoles.ToString("F2", CultureInfo.InvariantCulture);
-                snapshot.Values[$"grid|PipeNetAir.{label}.temperature"] = air.Temperature.ToString("F1", CultureInfo.InvariantCulture);
+                foreach (var (gas, moles) in air)
+                {
+                    if (moles >= 0.005f)
+                        snapshot.Values[$"grid|PipeNetAir.{label}.moles.{gas}"] = moles.ToString("F2", CultureInfo.InvariantCulture);
+                }
+
+                // An empty net's temperature is no state, and the carry agrees on what empty is.
+                if (PipeGasCarrySystem.HoldsGas(air))
+                    snapshot.Values[$"grid|PipeNetAir.{label}.temperature"] = air.Temperature.ToString("F1", CultureInfo.InvariantCulture);
             }
         }
 

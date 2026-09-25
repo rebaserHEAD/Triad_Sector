@@ -48,6 +48,12 @@ public sealed partial class PipeGasCarrySystem : EntitySystem
         SubscribeLocalEvent<NodeContainerComponent, EntityTerminatingEvent>(OnTerminating);
     }
 
+    /// <summary>
+    /// Whether a net holds any gas. One that does not carries no share, since pouring nothing changes nothing, and the
+    /// fidelity snapshot renders no temperature for it, since a rebuilt empty net starts at its own default.
+    /// </summary>
+    public static bool HoldsGas(GasMixture air) => air.TotalMoles > 0f;
+
     /// <summary>Whether a restored share of <paramref name="uid"/> is still waiting for its node's first rebuild.</summary>
     internal bool Holds(EntityUid uid) => _held.ContainsKey(uid);
 
@@ -87,7 +93,7 @@ public sealed partial class PipeGasCarrySystem : EntitySystem
         foreach (var (net, members) in nets)
         {
             var air = net.Air;
-            if (air.TotalMoles <= 0f)
+            if (!HoldsGas(air))
                 continue;
 
             var keptVolume = 0f;
