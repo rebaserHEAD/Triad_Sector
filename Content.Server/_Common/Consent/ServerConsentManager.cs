@@ -83,6 +83,8 @@ public sealed partial class ServerConsentManager : IServerConsentManager
             consent = await _db.GetPlayerConsentSettingsAsync(session.UserId);
         }
 
+        cancel.ThrowIfCancellationRequested(); // Triad: a player who left during the read has no channel to send to; UserDbDataManager.Load treats this as a cancel
+
         consent.ToPlayerConsentSettings().EnsureValid(_configManager, _prototypeManager);
         _consent[session.UserId] = consent;
 
