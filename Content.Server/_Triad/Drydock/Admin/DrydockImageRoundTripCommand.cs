@@ -14,10 +14,11 @@ using Robust.Shared.Player;
 namespace Content.Server._Triad.Drydock.Admin;
 
 /// <summary>
-/// A dev smoke test of the grid image loop: stores a grid to the in-memory row store, despawns it the store's way, and
-/// loads it back in place. The despawn waits for the store's whole promise: nothing unwritable, the image filed, and
-/// the filed image read back. A refused store leaves the grid where it is. A load that fails after the despawn says
-/// so and leaves the image under its id, and <c>drydock_image_roundtrip load &lt;imageId&gt;</c> loads it again.
+/// A dev smoke test of the grid image loop: stores a grid to the command's in-memory images, despawns it the store's
+/// way, and loads it back in place. The despawn waits for the store's whole promise: nothing unwritable, the image
+/// filed, and the filed image read back. A refused store leaves the grid where it is. A load that fails after the
+/// despawn says so and leaves the image under its id, and <c>drydock_image_roundtrip load &lt;imageId&gt;</c> loads it
+/// again.
 ///
 /// <para>The image carries no minds, so a grid with a player aboard is refused; the mobs aboard that the walk leaves out
 /// are counted before anything happens, because the despawn deletes them. Images live in memory only and are gone at a
@@ -26,7 +27,7 @@ namespace Content.Server._Triad.Drydock.Admin;
 [AdminCommand(AdminFlags.Debug)]
 public sealed class DrydockImageRoundTripCommand : IConsoleCommand
 {
-    private static readonly DrydockMemoryRowStore Images = new();
+    private static readonly DrydockRoundTripImages Images = new();
 
     /// <summary>The map each filed image came from, and the grid last loaded from it, for a retry.</summary>
     private static readonly Dictionary<Guid, (EntityUid Map, EntityUid? Loaded)> Records = new();

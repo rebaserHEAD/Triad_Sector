@@ -21,9 +21,9 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
     /// <summary>
     /// <c>drydock_image_roundtrip</c>, run the way an admin runs it: the command the console host registered, given a
     /// capturing shell, on a small grid (a wall, a powered APC, a locker with a crowbar in it). A run stores the grid to
-    /// the memory row store, despawns it and loads it back in place, so the counts it prints have to match on both sides,
-    /// the new grid has to sit where the old one did, and the old uid has to be gone. A grid with a player aboard has to
-    /// be refused and left alone.
+    /// the command's in-memory images, despawns it and loads it back in place, so the counts it prints have to match on
+    /// both sides, the new grid has to sit where the old one did, and the old uid has to be gone. A grid with a player
+    /// aboard has to be refused and left alone.
     /// </summary>
     [TestFixture]
     [TestOf(typeof(DrydockImageSystem))]
