@@ -722,3 +722,65 @@ public enum DrydockAuditAction
     /// </summary>
     StateSkipped = 36,
 }
+
+/// <summary>
+/// One grid image, the document of one revision, on PostgreSQL only: SQLite has no image tables, and the configuration
+/// lives in <see cref="PostgresServerDbContext"/>. Its entities hang off <see cref="ImageId"/>; deleting it takes them by
+/// cascade and leaves the revision row as history, and deleting the revision takes it the same way.
+/// </summary>
+public sealed class DrydockImageRow
+{
+    public long ImageId { get; set; }
+
+    public Guid ShipGuid { get; set; }
+
+    public int Revision { get; set; }
+
+    public DrydockRevision RevisionRow { get; set; } = default!;
+
+    /// <summary>Which of the image's entity ids is the grid.</summary>
+    public long GridEntityId { get; set; }
+
+    /// <summary>The row encoding version, <c>DrydockFormat.Current</c> at filing.</summary>
+    public int CodecVersion { get; set; }
+
+    public int EntityCount { get; set; }
+
+    public int TileCount { get; set; }
+
+    /// <summary>The tile table as one value, read whole by the load.</summary>
+    public string Tiles { get; set; } = default!;
+
+    /// <summary>What left the image, as counts by kind.</summary>
+    public string LeftOut { get; set; } = default!;
+}
+
+/// <summary>
+/// One entity of a <see cref="DrydockImageRow"/>. Ids are per image and assigned in load order, parents before children,
+/// so ordering by <see cref="EntityId"/> is the load sequence. <see cref="Components"/> holds one key per present
+/// component, and <see cref="ComponentNames"/> is its keys, sorted, so a scan by component name reads no JSON.
+/// </summary>
+public sealed class DrydockEntityRow
+{
+    public long ImageId { get; set; }
+
+    public long EntityId { get; set; }
+
+    /// <summary>Null only for the grid.</summary>
+    public long? ParentId { get; set; }
+
+    public string? PrototypeId { get; set; }
+
+    /// <summary>False for an entity only started, such as a grid made at runtime, which the engine never map-initialises.</summary>
+    public bool MapInitialized { get; set; }
+
+    public string Components { get; set; } = default!;
+
+    public string[] ComponentNames { get; set; } = default!;
+
+    public string? Appearance { get; set; }
+
+    public string? Manifest { get; set; }
+
+    public string? Carried { get; set; }
+}

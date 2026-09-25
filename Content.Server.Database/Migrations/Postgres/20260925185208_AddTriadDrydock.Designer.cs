@@ -16,7 +16,7 @@ using NpgsqlTypes;
 namespace Content.Server.Database.Migrations.Postgres
 {
     [DbContext(typeof(PostgresServerDbContext))]
-    [Migration("20260913213806_AddTriadDrydock")]
+    [Migration("20260925185208_AddTriadDrydock")]
     partial class AddTriadDrydock
     {
         /// <inheritdoc />
@@ -1109,6 +1109,115 @@ namespace Content.Server.Database.Migrations.Postgres
                         .HasName("PK_drydock_blob");
 
                     b.ToTable("drydock_blob", (string)null);
+                });
+
+            modelBuilder.Entity("Content.Server.Database.DrydockEntityRow", b =>
+                {
+                    b.Property<long>("ImageId")
+                        .HasColumnType("bigint")
+                        .HasColumnName("image_id");
+
+                    b.Property<long>("EntityId")
+                        .HasColumnType("bigint")
+                        .HasColumnName("entity_id");
+
+                    b.Property<string>("Appearance")
+                        .HasColumnType("jsonb")
+                        .HasColumnName("appearance");
+
+                    b.Property<string>("Carried")
+                        .HasColumnType("jsonb")
+                        .HasColumnName("carried");
+
+                    b.PrimitiveCollection<string[]>("ComponentNames")
+                        .IsRequired()
+                        .HasColumnType("text[]")
+                        .HasColumnName("component_names");
+
+                    b.Property<string>("Components")
+                        .IsRequired()
+                        .HasColumnType("jsonb")
+                        .HasColumnName("components");
+
+                    b.Property<string>("Manifest")
+                        .HasColumnType("jsonb")
+                        .HasColumnName("manifest");
+
+                    b.Property<bool>("MapInitialized")
+                        .HasColumnType("boolean")
+                        .HasColumnName("map_initialized");
+
+                    b.Property<long?>("ParentId")
+                        .HasColumnType("bigint")
+                        .HasColumnName("parent_id");
+
+                    b.Property<string>("PrototypeId")
+                        .HasColumnType("text")
+                        .HasColumnName("prototype_id");
+
+                    b.HasKey("ImageId", "EntityId")
+                        .HasName("PK_drydock_entity");
+
+                    b.ToTable("drydock_entity", (string)null);
+                });
+
+            modelBuilder.Entity("Content.Server.Database.DrydockImageRow", b =>
+                {
+                    b.Property<long>("ImageId")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint")
+                        .HasColumnName("image_id");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityAlwaysColumn(b.Property<long>("ImageId"));
+
+                    b.Property<int>("CodecVersion")
+                        .HasColumnType("integer")
+                        .HasColumnName("codec_version");
+
+                    b.Property<int>("EntityCount")
+                        .HasColumnType("integer")
+                        .HasColumnName("entity_count");
+
+                    b.Property<long>("GridEntityId")
+                        .HasColumnType("bigint")
+                        .HasColumnName("grid_entity_id");
+
+                    b.Property<string>("LeftOut")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("jsonb")
+                        .HasColumnName("left_out")
+                        .HasDefaultValueSql("'{}'::jsonb");
+
+                    b.Property<int>("Revision")
+                        .HasColumnType("integer")
+                        .HasColumnName("revision");
+
+                    b.Property<Guid>("ShipGuid")
+                        .HasColumnType("uuid")
+                        .HasColumnName("ship_guid");
+
+                    b.Property<int>("TileCount")
+                        .HasColumnType("integer")
+                        .HasColumnName("tile_count");
+
+                    b.Property<string>("Tiles")
+                        .IsRequired()
+                        .HasColumnType("jsonb")
+                        .HasColumnName("tiles");
+
+                    b.HasKey("ImageId")
+                        .HasName("PK_drydock_image");
+
+                    b.HasIndex("ShipGuid", "Revision")
+                        .IsUnique();
+
+                    b.ToTable("drydock_image", null, t =>
+                        {
+                            t.HasCheckConstraint("CK_drydock_image_entity_count", "entity_count >= 1");
+
+                            t.HasCheckConstraint("CK_drydock_image_tile_count", "tile_count >= 0");
+                        });
                 });
 
             modelBuilder.Entity("Content.Server.Database.DrydockRevision", b =>
@@ -2933,6 +3042,28 @@ namespace Content.Server.Database.Migrations.Postgres
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired()
                         .HasConstraintName("FK_drydock_blob_drydock_revision_revision_row_temp_id");
+
+                    b.Navigation("RevisionRow");
+                });
+
+            modelBuilder.Entity("Content.Server.Database.DrydockEntityRow", b =>
+                {
+                    b.HasOne("Content.Server.Database.DrydockImageRow", null)
+                        .WithMany()
+                        .HasForeignKey("ImageId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired()
+                        .HasConstraintName("FK_drydock_entity_drydock_image_image_id");
+                });
+
+            modelBuilder.Entity("Content.Server.Database.DrydockImageRow", b =>
+                {
+                    b.HasOne("Content.Server.Database.DrydockRevision", "RevisionRow")
+                        .WithOne()
+                        .HasForeignKey("Content.Server.Database.DrydockImageRow", "ShipGuid", "Revision")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired()
+                        .HasConstraintName("FK_drydock_image_drydock_revision_revision_row_ship_guid_revis~");
 
                     b.Navigation("RevisionRow");
                 });

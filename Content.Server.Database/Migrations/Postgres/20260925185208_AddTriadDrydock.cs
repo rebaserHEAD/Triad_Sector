@@ -227,6 +227,60 @@ namespace Content.Server.Database.Migrations.Postgres
                         onDelete: ReferentialAction.Cascade);
                 });
 
+            migrationBuilder.CreateTable(
+                name: "drydock_image",
+                columns: table => new
+                {
+                    image_id = table.Column<long>(type: "bigint", nullable: false)
+                        .Annotation("Npgsql:ValueGenerationStrategy", NpgsqlValueGenerationStrategy.IdentityAlwaysColumn),
+                    ship_guid = table.Column<Guid>(type: "uuid", nullable: false),
+                    revision = table.Column<int>(type: "integer", nullable: false),
+                    grid_entity_id = table.Column<long>(type: "bigint", nullable: false),
+                    codec_version = table.Column<int>(type: "integer", nullable: false),
+                    entity_count = table.Column<int>(type: "integer", nullable: false),
+                    tile_count = table.Column<int>(type: "integer", nullable: false),
+                    tiles = table.Column<string>(type: "jsonb", nullable: false),
+                    left_out = table.Column<string>(type: "jsonb", nullable: false, defaultValueSql: "'{}'::jsonb")
+                },
+                constraints: table =>
+                {
+                    table.PrimaryKey("PK_drydock_image", x => x.image_id);
+                    table.CheckConstraint("CK_drydock_image_entity_count", "entity_count >= 1");
+                    table.CheckConstraint("CK_drydock_image_tile_count", "tile_count >= 0");
+                    table.ForeignKey(
+                        name: "FK_drydock_image_drydock_revision_revision_row_ship_guid_revis~",
+                        columns: x => new { x.ship_guid, x.revision },
+                        principalTable: "drydock_revision",
+                        principalColumns: new[] { "ship_guid", "revision" },
+                        onDelete: ReferentialAction.Cascade);
+                });
+
+            migrationBuilder.CreateTable(
+                name: "drydock_entity",
+                columns: table => new
+                {
+                    image_id = table.Column<long>(type: "bigint", nullable: false),
+                    entity_id = table.Column<long>(type: "bigint", nullable: false),
+                    parent_id = table.Column<long>(type: "bigint", nullable: true),
+                    prototype_id = table.Column<string>(type: "text", nullable: true),
+                    map_initialized = table.Column<bool>(type: "boolean", nullable: false),
+                    components = table.Column<string>(type: "jsonb", nullable: false),
+                    component_names = table.Column<string[]>(type: "text[]", nullable: false),
+                    appearance = table.Column<string>(type: "jsonb", nullable: true),
+                    manifest = table.Column<string>(type: "jsonb", nullable: true),
+                    carried = table.Column<string>(type: "jsonb", nullable: true)
+                },
+                constraints: table =>
+                {
+                    table.PrimaryKey("PK_drydock_entity", x => new { x.image_id, x.entity_id });
+                    table.ForeignKey(
+                        name: "FK_drydock_entity_drydock_image_image_id",
+                        column: x => x.image_id,
+                        principalTable: "drydock_image",
+                        principalColumn: "image_id",
+                        onDelete: ReferentialAction.Cascade);
+                });
+
             migrationBuilder.CreateIndex(
                 name: "IX_drydock_audit_actor_user_id",
                 table: "drydock_audit",
@@ -251,6 +305,12 @@ namespace Content.Server.Database.Migrations.Postgres
                 name: "IX_drydock_berth_purchased_round_id",
                 table: "drydock_berth",
                 column: "purchased_round_id");
+
+            migrationBuilder.CreateIndex(
+                name: "IX_drydock_image_ship_guid_revision",
+                table: "drydock_image",
+                columns: new[] { "ship_guid", "revision" },
+                unique: true);
 
             migrationBuilder.CreateIndex(
                 name: "IX_drydock_revision_actor_user_id",
@@ -331,6 +391,16 @@ namespace Content.Server.Database.Migrations.Postgres
             // EF expression covers column storage, so this is hand-written and has to be
             // re-added by hand if this migration is ever regenerated.
             migrationBuilder.Sql("ALTER TABLE drydock_blob ALTER COLUMN blob SET STORAGE EXTERNAL;");
+
+            // Triad: an entity's components are whole-component JSON, often past the TOAST threshold, so they are
+            // compressed with lz4, which needs a server built with it. drydock_entity takes a steady insert and
+            // delete, so it and its TOAST table vacuum on a fixed share and threshold rather than the defaults; the
+            // numbers are starting values, not measured. Both are hand-written and have to be re-added by hand if
+            // this migration is ever regenerated.
+            migrationBuilder.Sql("ALTER TABLE drydock_entity ALTER COLUMN components SET COMPRESSION lz4;");
+            migrationBuilder.Sql(
+                "ALTER TABLE drydock_entity SET (autovacuum_vacuum_scale_factor = 0.02, autovacuum_vacuum_threshold = 5000, "
+                + "toast.autovacuum_vacuum_scale_factor = 0.02, toast.autovacuum_vacuum_threshold = 5000);");
         }
 
         /// <inheritdoc />
@@ -343,10 +413,16 @@ namespace Content.Server.Database.Migrations.Postgres
                 name: "drydock_blob");
 
             migrationBuilder.DropTable(
+                name: "drydock_entity");
+
+            migrationBuilder.DropTable(
                 name: "drydock_transfer");
 
             migrationBuilder.DropTable(
                 name: "triad_shipyard_consumed_ships");
+
+            migrationBuilder.DropTable(
+                name: "drydock_image");
 
             migrationBuilder.DropTable(
                 name: "drydock_revision");

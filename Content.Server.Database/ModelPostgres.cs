@@ -93,6 +93,45 @@ namespace Content.Server.Database
                 .IncludeProperties(l => new { l.UnitPrice, l.Quantity });
             // End Triad
 
+            // Triad: the drydock's grid images, PostgreSQL only; SQLite keeps images in memory. No index beyond the two
+            // keys and the one unique (ship_guid, revision) the foreign key to the revision makes. Column compression
+            // and the per-table autovacuum parameters are migration SQL, because no EF expression covers them.
+            modelBuilder.Entity<DrydockImageRow>(image =>
+            {
+                image.ToTable("drydock_image", t =>
+                {
+                    t.HasCheckConstraint("CK_drydock_image_entity_count", "entity_count >= 1");
+                    t.HasCheckConstraint("CK_drydock_image_tile_count", "tile_count >= 0");
+                });
+
+                image.HasKey(i => i.ImageId);
+                image.Property(i => i.ImageId).UseIdentityAlwaysColumn();
+                image.Property(i => i.Tiles).HasColumnType("jsonb");
+                image.Property(i => i.LeftOut).HasColumnType("jsonb").HasDefaultValueSql("'{}'::jsonb");
+
+                image.HasOne(i => i.RevisionRow)
+                    .WithOne()
+                    .HasForeignKey<DrydockImageRow>(i => new { i.ShipGuid, i.Revision })
+                    .OnDelete(DeleteBehavior.Cascade);
+            });
+
+            modelBuilder.Entity<DrydockEntityRow>(entity =>
+            {
+                entity.ToTable("drydock_entity");
+                entity.HasKey(e => new { e.ImageId, e.EntityId });
+
+                entity.HasOne<DrydockImageRow>()
+                    .WithMany()
+                    .HasForeignKey(e => e.ImageId)
+                    .OnDelete(DeleteBehavior.Cascade);
+
+                entity.Property(e => e.Components).HasColumnType("jsonb");
+                entity.Property(e => e.Appearance).HasColumnType("jsonb");
+                entity.Property(e => e.Manifest).HasColumnType("jsonb");
+                entity.Property(e => e.Carried).HasColumnType("jsonb");
+            });
+            // End Triad
+
             foreach(var entity in modelBuilder.Model.GetEntityTypes())
             {
                 foreach(var property in entity.GetProperties())

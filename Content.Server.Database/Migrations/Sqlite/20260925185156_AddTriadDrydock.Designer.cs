@@ -11,7 +11,7 @@ using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 namespace Content.Server.Database.Migrations.Sqlite
 {
     [DbContext(typeof(SqliteServerDbContext))]
-    [Migration("20260913213741_AddTriadDrydock")]
+    [Migration("20260925185156_AddTriadDrydock")]
     partial class AddTriadDrydock
     {
         /// <inheritdoc />
