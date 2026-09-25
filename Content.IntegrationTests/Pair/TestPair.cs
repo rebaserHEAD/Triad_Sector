@@ -122,6 +122,10 @@ public sealed partial class TestPair : RobustIntegrationTest.TestPair
             entSysMan.LoadExtraSystemType<DeviceNetworkTestSystem>();
             entSysMan.LoadExtraSystemType<TestDestructibleListenerSystem>();
         };
+
+        // Triad: a PostgreSQL pair's server runs on its own scratch database (_Triad/PostgresPair/TestPair.Postgres.cs)
+        ApplyTriadPostgres(opts);
+        // End Triad
         return opts;
     }
 }

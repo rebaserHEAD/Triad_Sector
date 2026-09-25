@@ -1,7 +1,9 @@
 ﻿namespace Content.IntegrationTests;
 
 /// <inheritdoc/>
-public sealed class PoolSettings : PairSettings
+// Triad: partial, for the PostgreSQL pair's setting in _Triad/PostgresPair/PoolSettings.Postgres.cs
+// public sealed class PoolSettings : PairSettings
+public sealed partial class PoolSettings : PairSettings
 {
     public override bool Connected
     {
