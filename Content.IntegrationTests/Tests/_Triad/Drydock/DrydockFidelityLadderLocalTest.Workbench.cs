@@ -714,11 +714,11 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                         containers.Insert(entMan.SpawnEntity("FoodMeat", At(9, 5)), comp.Storage);
                         entMan.System<MicrowaveSystem>().Wzhzhzh(microwave, comp, null);
                         var active = entMan.GetComponentOrNull<ActiveMicrowaveComponent>(microwave);
-                        return new List<string> { $"cooking {active != null}, {WorkbenchLongTimer.TotalSeconds}s set, malfunction time {active?.MalfunctionTime.ToString() ?? "none"}" };
+                        return new List<string> { $"cooking {active != null}, {WorkbenchLongTimer.TotalSeconds}s set, malfunction time {active?.MalfunctionTime?.ToString() ?? "none"}" };
                     })
                 {
-                    // The zero-time control: its malfunction time is zero, meaning none, and a zero rebased into a deadline
-                    // already past made the microwave explode on its first tick after a load.
+                    // The no-deadline control: a cook with nothing metal in it has no malfunction time, and a deadline that
+                    // appears across the store, the load or the thaw is already past and makes the microwave explode.
                     AfterLoad = retrieved =>
                     {
                         var notes = new List<string>();
@@ -732,9 +732,9 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
 
                             found++;
                             var active = entMan.GetComponentOrNull<ActiveMicrowaveComponent>(uid);
-                            notes.Add($"microwave there, broken {comp.Broken}, cooking {active != null}, malfunction time {active?.MalfunctionTime.ToString() ?? "none"}");
-                            if (comp.Broken || active is { } cooking && cooking.MalfunctionTime != TimeSpan.Zero)
-                                bad.Add("the microwave has to come back whole, its malfunction time still zero");
+                            notes.Add($"microwave there, broken {comp.Broken}, cooking {active != null}, malfunction time {active?.MalfunctionTime?.ToString() ?? "none"}");
+                            if (comp.Broken || active is { } cooking && cooking.MalfunctionTime != null)
+                                bad.Add("the microwave has to come back whole, with no malfunction time");
                         }
 
                         if (found == 0)
