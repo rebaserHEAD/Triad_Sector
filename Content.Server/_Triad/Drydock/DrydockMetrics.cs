@@ -32,15 +32,4 @@ public static class DrydockMetrics
     public static readonly Counter ValidationMismatches = Metrics.CreateCounter(
         "drydock_validation_mismatches",
         "Stores refused because the written document did not round-trip.");
-
-    /// <summary>Re-bake outcomes, by result.</summary>
-    public static readonly Counter Rebakes = Metrics.CreateCounter(
-        "drydock_rebakes",
-        "Re-bake attempts on stored ships, by result.",
-        new CounterConfiguration { LabelNames = new[] { "result" } });
-
-    /// <summary>Stored ships whose current document no re-bake tier can heal, as of the last sweep.</summary>
-    public static readonly Gauge UnresolvableShips = Metrics.CreateGauge(
-        "drydock_unresolvable_ships",
-        "Stored ships whose current document references content no mapping resolves, at the last sweep.");
 }

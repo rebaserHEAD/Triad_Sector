@@ -7,10 +7,9 @@ public static class DrydockFormat
 {
     /// <summary>
     /// Written to <c>drydock_format_ver</c> on every revision, covering the sidecar encoding and the
-    /// manifest shape together. Bump it when either changes in a way an older reader would misread,
-    /// and add a step to <see cref="DrydockDocumentRebake.FormatSteps"/> that migrates the old version
-    /// forward, so the re-bake sweep carries stored ships across. No step exists yet, so a version 1
-    /// revision is read as it stands, per the note below.
+    /// manifest shape together. Bump it when either changes in a way an older reader would misread.
+    /// Nothing carries a stored document forward between versions, so a version 1 revision is read
+    /// as it stands, per the note below.
     /// </summary>
     /// <remarks>
     /// Version 2: absolute-time fields gained <c>TimeOffsetSerializer</c> and are written as an
@@ -23,9 +22,7 @@ public static class DrydockFormat
 
     /// <summary>
     /// The oldest <see cref="Current"/> value a retrieve will still read. Raising this abandons
-    /// every revision below it, so it moves only after every such revision has been re-baked. The
-    /// sweep re-bakes only a document its transform changes, so that needs a format step for the
-    /// version being abandoned first.
+    /// every revision below it, since nothing carries a stored document forward to a newer version.
     /// </summary>
     public const int MinimumSupported = 1;
 }

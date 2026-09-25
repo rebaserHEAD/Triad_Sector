@@ -90,7 +90,7 @@ public sealed partial class MapMigrationSystem : EntitySystem
 
     private void OnBeforeReadEvent(BeforeEntityReadEvent ev)
     {
-        // Triad: removed [the drydock drift detector and re-bake must apply this exact rule, so the loader and the drydock both build DrydockMigrationTable]
+        // Triad: removed [the drydock drift detector must apply this exact rule, so the loader and the drydock both build DrydockMigrationTable]
         // if (!TryReadFiles(out var mappings))
         //     return;
         //

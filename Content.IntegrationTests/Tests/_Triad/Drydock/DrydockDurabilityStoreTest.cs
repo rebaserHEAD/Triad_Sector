@@ -14,9 +14,8 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
 {
     /// <summary>
     /// The durability layer's store half against a real database: what a pin protects from pruning,
-    /// the two-document floor under keep-N, and a re-bake that becomes current only while the ship is
-    /// still stored on the revision it was derived from. Every ship and player is freshly minted, so
-    /// assertions are on this test's own ids and never on table-wide counts.
+    /// the two-document floor under keep-N, and what a promote carries. Every ship and player is
+    /// freshly minted, so assertions are on this test's own ids and never on table-wide counts.
     /// </summary>
     [TestFixture]
     public sealed class DrydockDurabilityStoreTest
@@ -179,143 +178,8 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
         }
 
         /// <summary>
-        /// A re-bake files a system revision derived from the ship's current one and becomes current,
-        /// with no actor, no round, the source's appraisal and the display cache untouched. When
-        /// anything else became current first, it files nothing at all.
-        /// </summary>
-        [Test]
-        public async Task ARebakeBecomesCurrentOnlyWhileTheShipIsStillOnItsSource()
-        {
-            await using var pair = await PoolManager.GetServerClient();
-            var store = pair.Server.ResolveDependency<DrydockStore>();
-            var db = pair.Server.ResolveDependency<IServerDbManager>();
-
-            var owner = Guid.NewGuid();
-            await DrydockTestHelpers.InsertPlayer(db, owner);
-            await store.AddBerth(owner, ShipSizeClass.Cutter, DrydockBerthKind.Granted, 0, null, null);
-
-            var ship = Guid.NewGuid();
-            var filed = await store.FileRevision(Request(ship, owner, "Kestrel"), Doc(1), keepBlobs: 2);
-            Assert.That(filed.Outcome, Is.EqualTo(DrydockBerthResult.Success));
-
-            var rebaked = Encoding.UTF8.GetBytes("re-baked document");
-            var result = await store.FileRebakeRevision(Rebake(ship, sourceRevision: 1), rebaked, keepBlobs: 2);
-            Assert.Multiple(() =>
-            {
-                Assert.That(result.Outcome, Is.EqualTo(DrydockRebakeResult.Success));
-                Assert.That(result.Revision, Is.EqualTo(2));
-            });
-
-            var current = await store.LoadCurrent(ship);
-            Assert.That(current, Is.Not.Null);
-            Assert.Multiple(() =>
-            {
-                Assert.That(current!.Ship.CurrentRevision, Is.EqualTo(2), "The pointer advanced to the re-bake.");
-                Assert.That(current.Ship.State, Is.EqualTo(DrydockShipState.Stored));
-                Assert.That(current.Ship.BerthId, Is.EqualTo(filed.BerthId), "A re-bake never touches the berth.");
-                Assert.That(current.Ship.ShipName, Is.EqualTo("Kestrel"));
-                Assert.That(current.Blob, Is.EqualTo(rebaked));
-                Assert.That(current.Revision.Kind, Is.EqualTo(DrydockRevisionKind.SystemRebake));
-                Assert.That(current.Revision.DerivedFromRevision, Is.EqualTo(1));
-                Assert.That(current.Revision.RebakeVersion, Is.EqualTo(1));
-                Assert.That(current.Revision.ActorUserId, Is.Null);
-                Assert.That(current.Revision.CreatedRoundId, Is.Null);
-                Assert.That(current.Revision.AppraisedValue, Is.EqualTo(24000), "Copied from the source: a stored hull has nothing left to appraise.");
-                Assert.That(current.Revision.ProtoFingerprint, Is.EqualTo(new byte[] { 11, 12 }));
-                Assert.That(current.Revision.CapturedKeyHash, Is.EqualTo(new byte[] { 13, 14 }));
-                Assert.That(current.Revision.Checksum, Is.EqualTo(new byte[] { 15, 16 }));
-                Assert.That(current.Revision.SizeBytes, Is.EqualTo(17));
-                Assert.That(current.Revision.EngineFormatVer, Is.EqualTo(8));
-                Assert.That(current.Revision.Manifest, Is.EqualTo("{\"v\":1,\"e\":[\"rebaked\"]}"));
-            });
-
-            var rebakeRow = (await store.GetAudit(ship))[^1];
-            Assert.Multiple(() =>
-            {
-                Assert.That(rebakeRow.Action, Is.EqualTo(DrydockAuditAction.Rebake));
-                Assert.That(rebakeRow.ActorUserId, Is.Null);
-                Assert.That(rebakeRow.Revision, Is.EqualTo(2));
-                Assert.That(rebakeRow.SubjectUserId, Is.EqualTo(owner));
-                Assert.That(rebakeRow.Reason, Does.Contain("revision 1"), "The timeline names what it was derived from.");
-            });
-
-            // A player store lands between the worker's read of revision 2 and its write.
-            var stored = await store.FileRevision(Request(ship, owner, "Kestrel"), Doc(3), keepBlobs: 2);
-            Assert.That(stored.Revision, Is.EqualTo(3));
-
-            var stale = await store.FileRebakeRevision(Rebake(ship, sourceRevision: 2), rebaked, keepBlobs: 2);
-            Assert.That(stale.Outcome, Is.EqualTo(DrydockRebakeResult.StaleSource));
-
-            var (revisions, blobs) = await RevisionShape(db, ship);
-            var afterStale = await store.LoadCurrent(ship);
-            var rebakeRows = (await store.GetAudit(ship)).Count(a => a.Action == DrydockAuditAction.Rebake);
-            Assert.Multiple(() =>
-            {
-                Assert.That(revisions, Is.EqualTo(new[] { 1, 2, 3 }), "A stale re-bake files no revision.");
-                Assert.That(blobs, Is.EqualTo(new[] { 2, 3 }), "Nor a document, nor a prune.");
-                Assert.That(afterStale!.Blob, Is.EqualTo(Doc(3)), "The player's store is still what a retrieve reads.");
-                Assert.That(rebakeRows, Is.EqualTo(1), "Nor a timeline row.");
-            });
-
-            // Control: derived from the revision that is actually current, the same call files.
-            var fresh = await store.FileRebakeRevision(Rebake(ship, sourceRevision: 3), rebaked, keepBlobs: 2);
-            Assert.Multiple(() =>
-            {
-                Assert.That(fresh.Outcome, Is.EqualTo(DrydockRebakeResult.Success));
-                Assert.That(fresh.Revision, Is.EqualTo(4));
-            });
-
-            Assert.That((await store.FileRebakeRevision(Rebake(ship, sourceRevision: 99), rebaked, keepBlobs: 2)).Outcome,
-                Is.EqualTo(DrydockRebakeResult.NotFound));
-            Assert.That((await store.FileRebakeRevision(Rebake(Guid.NewGuid(), sourceRevision: 1), rebaked, keepBlobs: 2)).Outcome,
-                Is.EqualTo(DrydockRebakeResult.NotFound));
-
-            await pair.CleanReturnAsync();
-        }
-
-        /// <summary>
-        /// A ship that is out in the world is not re-baked, even from its current revision. Released
-        /// back to storage, the same call files: the control that state was the only thing refusing.
-        /// </summary>
-        [Test]
-        public async Task ARebakeRefusesAShipThatIsCheckedOut()
-        {
-            await using var pair = await PoolManager.GetServerClient();
-            var store = pair.Server.ResolveDependency<DrydockStore>();
-            var db = pair.Server.ResolveDependency<IServerDbManager>();
-
-            var owner = Guid.NewGuid();
-            await DrydockTestHelpers.InsertPlayer(db, owner);
-            await store.AddBerth(owner, ShipSizeClass.Cutter, DrydockBerthKind.Granted, 0, null, null);
-
-            var ship = Guid.NewGuid();
-            await store.FileRevision(Request(ship, owner, "Kestrel"), Doc(1), keepBlobs: 2);
-            Assert.That(await store.TrySetState(ship, DrydockShipState.Stored, DrydockShipState.CheckedOut, DrydockAuditAction.Retrieve, owner, null, null), Is.True);
-
-            var rebaked = Encoding.UTF8.GetBytes("re-baked document");
-            var refused = await store.FileRebakeRevision(Rebake(ship, sourceRevision: 1), rebaked, keepBlobs: 2);
-            Assert.That(refused.Outcome, Is.EqualTo(DrydockRebakeResult.WrongState));
-
-            var (revisions, blobs) = await RevisionShape(db, ship);
-            var header = await store.GetShipHeader(ship);
-            Assert.Multiple(() =>
-            {
-                Assert.That(revisions, Is.EqualTo(new[] { 1 }), "Refused means nothing filed.");
-                Assert.That(blobs, Is.EqualTo(new[] { 1 }));
-                Assert.That(header!.CurrentRevision, Is.EqualTo(1));
-                Assert.That(header.State, Is.EqualTo(DrydockShipState.CheckedOut), "And the state untouched.");
-            });
-
-            Assert.That(await store.TrySetState(ship, DrydockShipState.CheckedOut, DrydockShipState.Stored, DrydockAuditAction.ClaimReleased, null, null, "test"), Is.True);
-            Assert.That((await store.FileRebakeRevision(Rebake(ship, sourceRevision: 1), rebaked, keepBlobs: 2)).Outcome,
-                Is.EqualTo(DrydockRebakeResult.Success), "Control: stored again, the same re-bake files.");
-
-            await pair.CleanReturnAsync();
-        }
-
-        /// <summary>
-        /// The ordinary filing path refuses a re-bake outright, so the unconditional pointer read it
-        /// does cannot be used to file one by mistake.
+        /// The filing path refuses the <see cref="DrydockRevisionKind.SystemRebake"/> kind outright, so
+        /// the unconditional pointer read it does cannot file a revision of that kind by mistake.
         /// </summary>
         [Test]
         public async Task TheOrdinaryFilingPathRefusesARebake()
@@ -393,19 +257,6 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             SizeBytes = 23,
             AppraisedValue = appraisal,
             Manifest = "{\"v\":1,\"e\":[]}",
-        };
-
-        private static DrydockRebakeRequest Rebake(Guid shipId, int sourceRevision) => new()
-        {
-            ShipGuid = shipId,
-            SourceRevision = sourceRevision,
-            RebakeVersion = 1,
-            EngineFormatVer = 8,
-            ProtoFingerprint = new byte[] { 11, 12 },
-            CapturedKeyHash = new byte[] { 13, 14 },
-            Checksum = new byte[] { 15, 16 },
-            SizeBytes = 17,
-            Manifest = "{\"v\":1,\"e\":[\"rebaked\"]}",
         };
 
         private static async Task<int[]> BlobRevisions(IServerDbManager db, Guid shipId)

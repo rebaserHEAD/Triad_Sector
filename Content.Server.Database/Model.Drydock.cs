@@ -367,8 +367,7 @@ public enum DrydockShipState
 
     /// <summary>
     /// Scrapped by its owner for credits, and the berth is freed. Terminal, and pruning only runs
-    /// inside a store, a promote or a re-bake (which refuses anything not stored), so a terminal
-    /// ship's remaining blobs are frozen rather than
+    /// inside a store or a promote, so a terminal ship's remaining blobs are frozen rather than
     /// decaying: an admin can undo a sale made in anger for as long as the row exists.
     /// </summary>
     Sold = 4,
@@ -435,8 +434,8 @@ public sealed class DrydockRevision
     public Player? Actor { get; set; }
 
     /// <summary>
-    /// Nullable because a re-bake is filed without a round: the ladder is designed to run between
-    /// rounds, when there is no round to point at.
+    /// Null when no round was running at filing, which is every <see cref="DrydockRevisionKind.SystemRebake"/>
+    /// row.
     /// </summary>
     public int? CreatedRoundId { get; set; }
 
@@ -444,16 +443,13 @@ public sealed class DrydockRevision
 
     public DateTime CreatedAt { get; set; }
 
-    /// <summary>The engine's map document format version, so a re-bake knows what it is holding.</summary>
+    /// <summary>The engine's map document format version the stored document was written in.</summary>
     public int EngineFormatVer { get; set; }
 
-    /// <summary>Our own sidecar and manifest encoding version, for a re-bake to migrate the same way.</summary>
+    /// <summary>Our own sidecar and manifest encoding version at filing, <c>DrydockFormat.Current</c>.</summary>
     public int DrydockFormatVer { get; set; }
 
-    /// <summary>
-    /// Hash over the set of prototype ids the blob references. One of the two drift classes, and
-    /// the one the re-bake sweep heals (<c>DrydockSystem.RunRebakeSweep</c>).
-    /// </summary>
+    /// <summary>Hash over the set of prototype ids the blob references. One of the two drift classes.</summary>
     public byte[] ProtoFingerprint { get; set; } = Array.Empty<byte>();
 
     /// <summary>
@@ -473,8 +469,9 @@ public sealed class DrydockRevision
 
     /// <summary>
     /// What the shipyard appraised the hull at when this revision was filed, captured while the
-    /// grid was still live because a stored ship has nothing left to appraise. A re-bake and a
-    /// promote copy their source revision's, since neither has a live grid either. Null when nothing
+    /// grid was still live because a stored ship has nothing left to appraise. A promote copies its
+    /// source revision's, since it has no live grid either, and a SystemRebake row carries its
+    /// source's. Null when nothing
     /// appraised it, and on rows filed before the column existed; a sale quotes from the current
     /// revision.
     /// </summary>
@@ -703,8 +700,8 @@ public enum DrydockAuditAction
     RevisionPinned = 33,
 
     /// <summary>
-    /// A pin was cleared, typically once the document has been re-baked or judged unrecoverable. The
-    /// next store, promote or re-bake prunes the document if keep-N and the floor no longer cover it.
+    /// A pin was cleared, typically once the document has been judged unrecoverable. The next store
+    /// or promote prunes the document if keep-N and the floor no longer cover it.
     /// </summary>
     RevisionUnpinned = 34,
 

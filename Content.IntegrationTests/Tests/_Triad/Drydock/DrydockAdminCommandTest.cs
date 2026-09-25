@@ -32,10 +32,10 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                 Assert.That(clientConsole.AvailableCommands.ContainsKey("drydockadmin"), Is.True,
                     "The client learned the command from the server, so the button has a target.");
 
-                // Control: drydockrebake is a Toolshed command with the same admin flag. It exists, and
-                // the classic registry does not hold it, so the first assertion tells the two kinds apart.
-                Assert.That(toolshed.DefaultEnvironment.TryGetCommand("drydockrebake", out _), Is.True);
-                Assert.That(serverConsole.AvailableCommands.ContainsKey("drydockrebake"), Is.False);
+                // Control: comp is an engine Toolshed command. It exists, and the classic registry does
+                // not hold it, so the first assertion tells the two kinds apart.
+                Assert.That(toolshed.DefaultEnvironment.TryGetCommand("comp", out _), Is.True);
+                Assert.That(serverConsole.AvailableCommands.ContainsKey("comp"), Is.False);
 
                 // Control: a name nothing registers is absent on both sides.
                 Assert.That(serverConsole.AvailableCommands.ContainsKey("drydocknotacommand"), Is.False);

@@ -253,10 +253,10 @@ public sealed partial class DrydockStore
     /// key on (ship_guid, revision) makes the second transaction fail loudly rather than overwrite.
     /// Failing loudly is the point: the caller still holds a live grid and can refuse.</para>
     ///
-    /// <para>Not the way to file a re-bake, and refuses one by throwing: this path reads the pointer
-    /// off a tracked row and refreshes the display cache from the request, where a re-bake has to
-    /// advance the pointer only if the ship is still stored and still on the revision it was derived
-    /// from. That is <see cref="FileRebakeRevision"/>.</para>
+    /// <para>Refuses a <see cref="DrydockRevisionKind.SystemRebake"/> by throwing: that kind names a
+    /// revision derived from an earlier one, and this path reads the pointer off a tracked row and
+    /// refreshes the display cache from the request, which such a revision has no business doing.
+    /// Nothing files that kind now; it stays for the rows that carry it.</para>
     /// </summary>
     /// <param name="keepBlobs">
     /// How many revisions keep their document, never fewer than two once two exist, plus any that
@@ -284,7 +284,7 @@ public sealed partial class DrydockStore
     private Task<DrydockFileResult> FileRevision(DrydockRevisionRequest request, byte[]? blob, DrydockImage? image, int keepBlobs, CancellationToken ct)
     {
         if (request.Kind == DrydockRevisionKind.SystemRebake)
-            throw new ArgumentException($"A re-bake is filed through {nameof(FileRebakeRevision)}, which checks the ship is still on its source revision.", nameof(request));
+            throw new ArgumentException($"{nameof(DrydockRevisionKind.SystemRebake)} is not a kind this path files.", nameof(request));
 
         var images = _db.DrydockImages;
         return _db.RunTriadDbCommand(async (db, token) =>
@@ -778,8 +778,8 @@ public sealed partial class DrydockStore
         ship.UpdatedAt = now;
 
         // A player store or an import needs somewhere to put the hull. Refusing here rolls the whole
-        // transaction back: nothing is filed for a ship with nowhere to go. (A re-bake never reaches
-        // this method; FileRevision refuses the kind before it opens a transaction.)
+        // transaction back: nothing is filed for a ship with nowhere to go. (A SystemRebake never
+        // reaches this method; FileRevision refuses the kind before it opens a transaction.)
         //
         // An impound is the third case: it has somewhere to go that is not a berth, so it vacates
         // instead of seating. LastBerthId keeps where the hull came from, which is what a release
@@ -2436,8 +2436,8 @@ public sealed partial class DrydockStore
     }
 
     /// <summary>
-    /// Clears a pin, handing the document back to ordinary retention: the next store, promote or
-    /// re-bake prunes it if keep-N and the floor no longer cover it. Works on a revision whose document
+    /// Clears a pin, handing the document back to ordinary retention: the next store or promote
+    /// prunes it if keep-N and the floor no longer cover it. Works on a revision whose document
     /// is already gone, so a stale flag can always be cleared. One conditional update plus a
     /// <see cref="DrydockAuditAction.RevisionUnpinned"/> row, in one transaction.
     /// </summary>
@@ -2540,156 +2540,6 @@ public sealed partial class DrydockStore
                 .Distinct()
                 .OrderByDescending(r => r)
                 .ToList();
-        }, ct);
-    }
-
-    /// <summary>
-    /// Files a system re-bake: a new <see cref="DrydockRevisionKind.SystemRebake"/> revision derived
-    /// from <see cref="DrydockRebakeRequest.SourceRevision"/>, carrying the re-baked document, with a
-    /// null actor and a null round, and the source's appraisal copied forward since a stored hull has
-    /// nothing left to appraise. It becomes current only if the ship is still
-    /// <see cref="DrydockShipState.Stored"/> and still on the source revision.
-    ///
-    /// <para>That condition is one <c>ExecuteUpdate</c> that also advances the pointer, so a player
-    /// store, a promote or a retrieve's claim landing between the worker's read and this write cannot
-    /// be overwritten by a document derived from what the ship used to be. When it matches nothing the
-    /// transaction is rolled back before the revision or its blob is added, and the outcome says
-    /// which condition failed. The revision row, the blob, the prune around it and a
-    /// <see cref="DrydockAuditAction.Rebake"/> row naming the source share the transaction.</para>
-    ///
-    /// <para>Not <see cref="FileRevision"/> with a different kind. That path reads the pointer off a
-    /// tracked row and relies on the primary key to fail a race, which would let a re-bake land on a
-    /// ship that moved underneath it as long as the numbers did not collide; it refreshes the display
-    /// cache from the request, which a re-bake has no business setting; and it seats berths and carries
-    /// impound terms that mean nothing here. The shared parts are the audit writer and the prune.</para>
-    /// </summary>
-    /// <param name="keepBlobs">As for <see cref="FileRevision"/>; see <see cref="PruneBlobs"/>.</param>
-    public Task<DrydockRebakeFileResult> FileRebakeRevision(DrydockRebakeRequest request, byte[] blob, int keepBlobs, CancellationToken ct = default)
-    {
-        return _db.RunTriadDbCommand(async (db, token) =>
-        {
-            await using var tx = await db.Database.BeginTransactionAsync(token);
-
-            var shipGuid = request.ShipGuid;
-            var sourceRevision = request.SourceRevision;
-
-            var source = await db.DrydockRevision.AsNoTracking()
-                .Where(r => r.ShipGuid == shipGuid && r.Revision == sourceRevision)
-                .Select(r => new { r.AppraisedValue })
-                .SingleOrDefaultAsync(token);
-
-            if (source == null)
-                return new DrydockRebakeFileResult(DrydockRebakeResult.NotFound, 0);
-
-            var now = DateTime.UtcNow;
-            var next = sourceRevision + 1;
-
-            var moved = await db.DrydockShip
-                .Where(s => s.ShipGuid == shipGuid
-                    && s.State == DrydockShipState.Stored
-                    && s.CurrentRevision == sourceRevision)
-                .ExecuteUpdateAsync(set => set
-                    .SetProperty(s => s.CurrentRevision, next)
-                    .SetProperty(s => s.UpdatedAt, now), token);
-
-            if (moved == 0)
-            {
-                // Classification only. The transaction is disposed uncommitted, so nothing lands.
-                var state = await db.DrydockShip.AsNoTracking()
-                    .Where(s => s.ShipGuid == shipGuid)
-                    .Select(s => (DrydockShipState?) s.State)
-                    .SingleOrDefaultAsync(token);
-
-                var outcome = state switch
-                {
-                    null => DrydockRebakeResult.NotFound,
-                    not DrydockShipState.Stored => DrydockRebakeResult.WrongState,
-                    _ => DrydockRebakeResult.StaleSource,
-                };
-
-                return new DrydockRebakeFileResult(outcome, 0);
-            }
-
-            // Read after the update, so the snapshot is the row this transaction now holds.
-            var ship = await db.DrydockShip.AsNoTracking()
-                .Where(s => s.ShipGuid == shipGuid)
-                .Select(s => new { s.ShipName, s.BerthId, s.OwnerUserId })
-                .SingleAsync(token);
-
-            db.DrydockRevision.Add(new DrydockRevision
-            {
-                ShipGuid = shipGuid,
-                Revision = next,
-                Kind = DrydockRevisionKind.SystemRebake,
-                DerivedFromRevision = sourceRevision,
-                RebakeVersion = request.RebakeVersion,
-                ActorUserId = null,
-                CreatedRoundId = null,
-                CreatedAt = now,
-                EngineFormatVer = request.EngineFormatVer,
-                DrydockFormatVer = request.DrydockFormatVer,
-                ProtoFingerprint = request.ProtoFingerprint,
-                CapturedKeyHash = request.CapturedKeyHash,
-                Checksum = request.Checksum,
-                SizeBytes = request.SizeBytes,
-                AppraisedValue = source.AppraisedValue,
-                Manifest = request.Manifest,
-            });
-
-            db.DrydockBlob.Add(new DrydockBlob
-            {
-                ShipGuid = shipGuid,
-                Revision = next,
-                Blob = blob,
-            });
-
-            await PruneBlobs(db, shipGuid, next, keepBlobs, token);
-
-            AddAudit(db, DrydockAuditAction.Rebake, now,
-                shipGuid: shipGuid,
-                berthId: ship.BerthId,
-                shipName: ship.ShipName,
-                subjectUserId: ship.OwnerUserId,
-                revision: next,
-                reason: $"re-baked revision {sourceRevision} at ladder version {request.RebakeVersion}");
-
-            await db.SaveChangesAsync(token);
-            await tx.CommitAsync(token);
-            return new DrydockRebakeFileResult(DrydockRebakeResult.Success, next);
-        }, ct);
-    }
-
-    /// <summary>
-    /// One page of the ships a re-bake sweep may look at: every <see cref="DrydockShipState.Stored"/>
-    /// hull with its current revision's number and drydock format, and no document bytes. Keyset paged
-    /// on the ship id rather than offset paged, so a ship that leaves storage or gets re-baked while the
-    /// sweep is between pages neither shifts a later ship out of the walk nor brings an earlier one
-    /// back into it.
-    ///
-    /// <para>Checked out, impounded, in escrow and terminal hulls are not listed, and the filing refuses
-    /// them anyway. The order is the provider's own ordering of the id column, which is all a cursor
-    /// needs: it only has to agree with itself.</para>
-    /// </summary>
-    /// <param name="after">The last ship id of the previous page, or null for the first.</param>
-    /// <param name="pageSize">How many rows at most.</param>
-    public Task<List<DrydockRebakeCandidate>> GetRebakeCandidates(Guid? after, int pageSize, CancellationToken ct = default)
-    {
-        return _db.RunTriadDbCommand(async (db, token) =>
-        {
-            var ships = db.DrydockShip.AsNoTracking().Where(s => s.State == DrydockShipState.Stored);
-            if (after is { } cursor)
-                ships = ships.Where(s => s.ShipGuid.CompareTo(cursor) > 0);
-
-            var rows = await ships
-                .Join(db.DrydockRevision.AsNoTracking(),
-                    s => new { s.ShipGuid, Revision = s.CurrentRevision },
-                    r => new { r.ShipGuid, r.Revision },
-                    (s, r) => new { s.ShipGuid, s.ShipName, s.CurrentRevision, r.DrydockFormatVer })
-                .OrderBy(c => c.ShipGuid)
-                .Take(pageSize)
-                .ToListAsync(token);
-
-            return rows.Select(c => new DrydockRebakeCandidate(c.ShipGuid, c.ShipName, c.CurrentRevision, c.DrydockFormatVer)).ToList();
         }, ct);
     }
 
@@ -2851,9 +2701,8 @@ public sealed class DrydockRevisionRequest
     public bool MarkStored { get; init; }
 
     /// <summary>
-    /// A player store or an import. <see cref="DrydockRevisionKind.SystemRebake"/> is refused: a
-    /// re-bake goes through <see cref="DrydockRebakeRequest"/>, which is why this request carries no
-    /// provenance fields.
+    /// A player store or an import. <see cref="DrydockRevisionKind.SystemRebake"/> is refused, which
+    /// is why this request carries no provenance fields.
     /// </summary>
     public required DrydockRevisionKind Kind { get; init; }
 
@@ -2897,47 +2746,6 @@ public sealed class DrydockRevisionRequest
     /// </summary>
     public int Evicted { get; init; }
 }
-
-/// <summary>
-/// Everything <see cref="DrydockStore.FileRebakeRevision"/> needs from the re-bake worker: the
-/// revision the new document was derived from and the new document's own columns. What a re-bake
-/// does not know (who, which round, what the hull appraised at, which berth) is not asked for: the
-/// actor and round are null by definition and the appraisal is copied from the source revision.
-/// </summary>
-public sealed class DrydockRebakeRequest
-{
-    public required Guid ShipGuid { get; init; }
-
-    /// <summary>
-    /// The revision the document was re-baked from. The filing advances the pointer only while the
-    /// ship's current revision is still this one.
-    /// </summary>
-    public required int SourceRevision { get; init; }
-
-    /// <summary>Which generation of the re-bake ladder produced the document.</summary>
-    public required int RebakeVersion { get; init; }
-
-    public required int EngineFormatVer { get; init; }
-
-    public int DrydockFormatVer { get; init; } = DrydockFormat.Current;
-
-    public required byte[] ProtoFingerprint { get; init; }
-
-    public required byte[] CapturedKeyHash { get; init; }
-
-    /// <summary>Over the uncompressed re-baked document, the same as a store's.</summary>
-    public required byte[] Checksum { get; init; }
-
-    public required int SizeBytes { get; init; }
-
-    public required string Manifest { get; init; }
-}
-
-/// <summary>
-/// A stored ship as the re-bake sweep first sees it, from <see cref="DrydockStore.GetRebakeCandidates"/>:
-/// enough to log and to find the document, and nothing that costs a blob read.
-/// </summary>
-public sealed record DrydockRebakeCandidate(Guid ShipGuid, string ShipName, int CurrentRevision, int DrydockFormatVer);
 
 /// <summary>What a retrieve reads: the hull row, the revision it is about to rebuild, and the document.</summary>
 public sealed record DrydockLoad(DrydockShip Ship, DrydockRevision Revision, byte[] Blob);

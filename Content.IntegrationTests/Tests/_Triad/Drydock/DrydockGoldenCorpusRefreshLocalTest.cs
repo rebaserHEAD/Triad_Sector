@@ -37,7 +37,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
     /// <para>Explicit, so no normal run and no CI filter reaches it: a fixture regenerated on every run
     /// tests today's code against today's code, and the corpus exists to test last season's ships
     /// against today's. Run it when the corpus is meant to move (a new recipe, a new hull, or a
-    /// re-bake after a format bump that the ladder has already carried stored ships across), then
+    /// format bump), then
     /// review the diff it prints and the sidecar diff in git before committing.</para>
     ///
     /// <para>Each hull is loaded from its vessel's shuttle file, given what a purchase gives it, put

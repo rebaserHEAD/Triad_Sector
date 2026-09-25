@@ -452,8 +452,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                     report.Restore.Add("the captured-key hash moved: the fidelity capture wrote a different key set");
 
                 // Both format versions are the code's own constants at store time, so a newer build moving
-                // them is the bump working, not the fixture failing. Read, printed, and left to the
-                // re-bake ladder.
+                // them is the bump working, not the fixture failing. Read and printed, never failed.
                 if (current.Revision.EngineFormatVer != fixture.Revision.EngineFormatVer)
                     report.Notes.Add($"engine map format {fixture.Revision.EngineFormatVer} -> {current.Revision.EngineFormatVer}");
 

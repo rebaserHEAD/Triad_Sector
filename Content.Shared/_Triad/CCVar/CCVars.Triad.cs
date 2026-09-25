@@ -50,17 +50,16 @@ public sealed class TriadCCVars
     // Triad: drydock
     /// <summary>
     /// Master switch for the drydock. Off means the console offers neither store nor retrieve, and
-    /// the round-end warning, the round-end impound sweep, transfer-offer expiry and the re-bake sweep
-    /// do not run. Stored ships are untouched either way.
+    /// the round-end warning, the round-end impound sweep and transfer-offer expiry do not run.
+    /// Stored ships are untouched either way.
     /// </summary>
     public static readonly CVarDef<bool> DrydockEnabled =
         CVarDef.Create("triad.drydock.enabled", false, CVar.SERVERONLY);
 
     /// <summary>
     /// Retrieve is allowed and store is refused, impounds included. The round-end warning and
-    /// impound sweep do not run either, transfer offers past their deadline are not expired until it
-    /// is lifted, and the re-bake sweep files nothing: it does not start, and one already running
-    /// stops before its next ship. This is the switch to
+    /// impound sweep do not run either, and transfer offers past their deadline are not expired until
+    /// it is lifted. This is the switch to
     /// reach for when a build is suspected of writing bad revisions: the deploy pipeline is a daily
     /// cron with no rollback path, so refusing loudly for a day beats filing a day of bad blobs
     /// while still letting people fly the ships they already own.
@@ -233,28 +232,6 @@ public sealed class TriadCCVars
     /// </summary>
     public static readonly CVarDef<int> DrydockImpoundRestartCeilingSeconds =
         CVarDef.Create("triad.drydock.impound_restart_ceiling_seconds", 180, CVar.SERVERONLY);
-
-    /// <summary>
-    /// Whether the tier 1 re-bake sweep runs: every stored ship's current document is read, the
-    /// migration mappings are baked into it, and a changed one is filed as a new system revision
-    /// with the old one kept. On by default because <see cref="DrydockEnabled"/> already gates it
-    /// and <see cref="DrydockReadOnly"/> pauses it; this is the switch for the sweep alone.
-    ///
-    /// <para>The sweep is scheduled once per server run, a minute after startup, and only if this
-    /// and the drydock switches allow it at startup; the <c>drydockrebake</c> admin command starts
-    /// one on demand. Turning this off stops a running sweep before its next ship.</para>
-    /// </summary>
-    public static readonly CVarDef<bool> DrydockRebakeEnabled =
-        CVarDef.Create("triad.drydock.rebake_enabled", true, CVar.SERVERONLY);
-
-    /// <summary>
-    /// The re-bake sweep's pace, in ships per minute. Each ship's decompress, transform and compress
-    /// runs on a worker thread; this bounds how often the sweep reads a document and writes a
-    /// revision, so a large fleet drains over minutes instead of hammering the database at boot.
-    /// Zero or less runs nothing, which is the safe direction to misconfigure.
-    /// </summary>
-    public static readonly CVarDef<int> DrydockRebakeShipsPerMinute =
-        CVarDef.Create("triad.drydock.rebake_ships_per_minute", 30, CVar.SERVERONLY);
     // End Triad
     // Triad: market data
     // The queue knobs mirror the admin log ones, which solve the same problem at production volume

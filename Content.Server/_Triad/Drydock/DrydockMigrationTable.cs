@@ -14,14 +14,14 @@ namespace Content.Server._Triad.Drydock;
 
 /// <summary>
 /// The entity prototype renames and deletions the loader applies to every document it reads, as an
-/// immutable value. The drift detector and the tier 1 re-bake take one of these as a parameter
-/// instead of reading the migration files themselves, so tests can hand them a synthetic table.
+/// immutable value. The drift detector takes one of these as a parameter instead of reading the
+/// migration files itself, so tests can hand it a synthetic table.
 /// </summary>
 /// <remarks>
 /// <para>This is the table <see cref="MapMigrationSystem"/> hands the loader on each
 /// <c>BeforeEntityReadEvent</c> (it calls <see cref="Load"/>), and only that. <c>HolidaySystem</c> also adds renames to the same
 /// event while a holiday runs (holiday-themed replacements, <c>TryAdd</c>); those are left out on
-/// purpose, because a re-bake that applied them would make a seasonal swap permanent.</para>
+/// purpose, so nothing that reads this table takes a seasonal swap for a permanent rename.</para>
 /// </remarks>
 public sealed class DrydockMigrationTable
 {
