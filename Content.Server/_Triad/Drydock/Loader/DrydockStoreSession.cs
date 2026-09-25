@@ -26,7 +26,7 @@ public sealed class DrydockStoreSession
     private readonly List<DrydockImageEntity> _entities = new();
     private readonly List<DrydockUnwritableMember> _unwritable = new();
     private readonly List<DrydockUnwritableCarried> _unwritableCarried = new();
-    private readonly DrydockStoreToken _token = new();
+    private readonly DrydockStoreToken _token;
     private readonly Dictionary<string, int> _stripped = new(StringComparer.Ordinal);
     private readonly Dictionary<string, int> _appearanceSkipped = new(StringComparer.Ordinal);
     private int _bytes;
@@ -39,6 +39,7 @@ public sealed class DrydockStoreSession
         _grid = grid;
         _probe = probe;
         _walk = system.Walk(grid);
+        _token = new DrydockStoreToken(_walk);
 
         var ids = _walk.Ids;
         _codec = new DrydockCodec(

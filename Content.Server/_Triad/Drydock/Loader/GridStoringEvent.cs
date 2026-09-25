@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using Robust.Shared.GameObjects;
 
 namespace Content.Server._Triad.Drydock.Loader;
@@ -28,10 +29,23 @@ public readonly record struct GridStoringEvent(EntityUid Grid, DrydockStoreToken
     public void Carry<T>(string key, T value) where T : notnull => Sink.Add(key, typeof(T), value);
 }
 
-/// <summary>One store's identity, held by its session and handed to every <see cref="GridStoringEvent"/> it raises.</summary>
+/// <summary>
+/// One store's identity, held by its session and handed to every <see cref="GridStoringEvent"/> it raises, with a view of
+/// what that store keeps. The view is the store's own walk, not a copy and not a second walk, so an owner's snapshot and
+/// the store agree on what "kept" means even when the store is sliced.
+/// </summary>
 public sealed class DrydockStoreToken
 {
-    internal DrydockStoreToken()
+    private readonly DrydockWalk _walk;
+
+    internal DrydockStoreToken(DrydockWalk walk)
     {
+        _walk = walk;
     }
+
+    /// <summary>Every entity the store keeps, in walk order.</summary>
+    public IReadOnlyList<EntityUid> Kept => _walk.Aboard;
+
+    /// <summary>Whether the store keeps <paramref name="uid"/>.</summary>
+    public bool Keeps(EntityUid uid) => _walk.Ids.ContainsKey(uid);
 }
