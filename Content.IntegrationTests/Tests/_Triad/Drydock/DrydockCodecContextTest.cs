@@ -100,8 +100,8 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
 
         /// <summary>
         /// A link to an entity the image does not hold. It is severed, as any reference off the image
-        /// is: stored as invalid and read back as <see cref="NetEntity.Invalid"/>, never as a network
-        /// id standing for nothing.
+        /// is: stored as invalid and read back as null, the member being a <c>NetEntity?</c>
+        /// (<see cref="DrydockCodecFieldPass"/>), never as a network id standing for nothing.
         /// </summary>
         [Test]
         public async Task ALinkOffTheImageIsSevered()
@@ -135,7 +135,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             Assert.Multiple(() =>
             {
                 Assert.That(stored, Is.EqualTo(DrydockCodecContext.InvalidReference));
-                Assert.That(restored, Is.EqualTo(NetEntity.Invalid));
+                Assert.That(restored, Is.Null);
             });
 
             await pair.CleanReturnAsync();
