@@ -555,7 +555,9 @@ namespace Content.Server.Kitchen.EntitySystems
         /// </remarks>
         private void RollMalfunction(Entity<ActiveMicrowaveComponent, MicrowaveComponent> ent)
         {
-            if (ent.Comp1.MalfunctionTime == TimeSpan.Zero)
+            // Triad: null is no malfunction due (ActiveMicrowaveComponent.MalfunctionTime).
+            // if (ent.Comp1.MalfunctionTime == TimeSpan.Zero)
+            if (ent.Comp1.MalfunctionTime == null)
                 return;
 
             if (ent.Comp1.MalfunctionTime > _gameTiming.CurTime)

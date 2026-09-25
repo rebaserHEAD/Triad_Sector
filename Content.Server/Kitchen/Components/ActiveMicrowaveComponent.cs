@@ -18,7 +18,11 @@ public sealed partial class ActiveMicrowaveComponent : Component
     [ViewVariables(VVAccess.ReadWrite)]
     [DataField(customTypeSerializer: typeof(TimeOffsetSerializer))]
     [AutoPausedField]
-    public TimeSpan MalfunctionTime = TimeSpan.Zero;
+    // Triad: null is no malfunction due. The generated unpause handler shifts only a value that is set, so an unpause
+    // cannot make one; a zero is shifted by the pause residency like any deadline and then reads as overdue in
+    // MicrowaveSystem.RollMalfunction.
+    // public TimeSpan MalfunctionTime = TimeSpan.Zero;
+    public TimeSpan? MalfunctionTime;
 
     [ViewVariables]
     public (FoodRecipePrototype?, int) PortionedRecipe;
