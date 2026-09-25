@@ -530,6 +530,20 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             CodecNotes.Add($"[ladder] codec round trip {trip}: cable receivers: {manifest.Repaired} re-paired with the stored provider, "
                            + $"{manifest.AlreadyPaired} already on it, {manifest.StoredUnpaired} stored unpaired and still so; refused: {Top(manifest.Refused)}.");
             CodecNotes.Add($"[ladder] codec round trip {trip}: seam members by prototype: {Top(manifest.SeamByPrototype)}.");
+            var unwritableCarried = stored.UnwritableCarried
+                .GroupBy(u => $"{u.Key} on {u.Prototype ?? "(no prototype)"}", StringComparer.Ordinal)
+                .ToDictionary(g => g.Key, g => g.Count(), StringComparer.Ordinal);
+            CodecNotes.Add($"[ladder] codec round trip {trip}: {image.Entities.Count(e => e.Rows.ContainsKey(DrydockImageSystem.CarriedRow))} entit(y/ies) carried values; "
+                           + $"not written at the store: {Top(unwritableCarried)}.");
+
+            // A carried value is lost whatever the manifest holds off, so it fails the run once its report has printed.
+            var carriedLost = stored.UnwritableCarried
+                .GroupBy(u => u.ToString(), StringComparer.Ordinal)
+                .Select(g => $"codec round trip {trip}: carried value not written at the store: {g.Key} x{g.Count()}")
+                .ToList();
+            LoopFailures.AddRange(carriedLost);
+            CodecNotes.AddRange(carriedLost.Select(line => $"[ladder] CARRIED FAILURE {line}"));
+
             if (ManifestOff.Count > 0)
                 CodecNotes.Add($"[ladder] codec round trip {trip}: manifest held off by LADDER_MANIFEST_OFF ({string.Join(",", ManifestOff)}): {Top(manifest.OffByKey)}.");
 

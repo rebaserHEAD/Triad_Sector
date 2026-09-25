@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using Robust.Shared.GameObjects;
 using Robust.Shared.Prototypes;
 using Robust.Shared.Serialization.Manager;
+using Robust.Shared.Serialization.Markdown;
 using Robust.Shared.Serialization.Markdown.Mapping;
 using Robust.Shared.Timing;
 
@@ -114,4 +115,15 @@ public sealed partial class DrydockCodec
     /// <inheritdoc cref="Read(System.Type,Robust.Shared.Serialization.Markdown.Mapping.MappingDataNode)"/>
     public T Read<T>(MappingDataNode mapping) where T : IComponent =>
         (T) Read(typeof(T), mapping);
+
+    /// <summary>
+    /// A bare value, not a component, written under <see cref="Context"/>. No field pass runs, so a value whose type
+    /// holds a time or an entity reference is the caller's to refuse before it gets here.
+    /// </summary>
+    public DataNode WriteValue(Type type, object value) =>
+        _serialization.WriteValue(type, value, alwaysWrite: true, context: Context);
+
+    /// <summary>A bare value written by <see cref="WriteValue"/>, read back under <see cref="Context"/>.</summary>
+    public object? ReadValue(Type type, DataNode node) =>
+        _serialization.Read(type, node, context: Context, notNullableOverride: true);
 }

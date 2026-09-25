@@ -103,11 +103,13 @@ public sealed class DrydockImageRoundTripCommand : IConsoleCommand
         }
 
         var storeTime = watch.Elapsed;
-        if (stored.Unwritable.Count > 0)
+        if (!stored.Whole)
         {
-            shell.WriteError($"Refused: {stored.Unwritable.Count} manifest member(s) could not be written, so the image would lose them. The grid is untouched.");
+            shell.WriteError($"Refused: {stored.Unwritable.Count} manifest member(s) and {stored.UnwritableCarried.Count} carried value(s) could not be written, so the image would lose them. The grid is untouched.");
             foreach (var member in stored.Unwritable)
                 shell.WriteError($"  {member.Prototype ?? "(no prototype)"} {member.Entity} {member.Member.Key}: {member.Exception}: {member.Message}");
+            foreach (var value in stored.UnwritableCarried)
+                shell.WriteError($"  {value.Prototype ?? "(no prototype)"} {value.Entity} {value.Key}: {value.Exception}: {value.Message}");
 
             return;
         }

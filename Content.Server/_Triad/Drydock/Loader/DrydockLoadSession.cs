@@ -189,8 +189,9 @@ public sealed class DrydockLoadSession
             foreach (var (name, row) in entityRows)
             {
                 // The grid's own grid component came in through the skeleton with its chunks; a copy of the row,
-                // which has none, would empty it. The appearance and manifest rows are not components and go in after them.
-                if ((uid == _gridUid && name == "MapGrid") || name == DrydockImageSystem.AppearanceRow || name == DrydockCodec.ManifestRow)
+                // which has none, would empty it. A row named with a leading ~ is not a component: the appearance and
+                // manifest rows go in after the components, and the carried row is read at Complete.
+                if ((uid == _gridUid && name == "MapGrid") || name.StartsWith('~'))
                     continue;
 
                 var registration = factory.GetRegistration(name);
@@ -460,7 +461,8 @@ public sealed class DrydockLoadSession
 
     /// <summary>
     /// The tiles compared against the image's own, the appearance components counted, then <see cref="GridRestoringEvent"/>
-    /// and <see cref="GridRestoredEvent"/> raised and the power seam armed. The result names everything the load changed, missed or refused.
+    /// and <see cref="GridRestoredEvent"/> raised with the image's carried values (<see cref="DrydockCarried"/>, closed
+    /// when they return) and the power seam armed. The result names everything the load changed, missed or refused.
     /// </summary>
     public DrydockLoadResult Complete()
     {
@@ -523,19 +525,39 @@ public sealed class DrydockLoadSession
         // boundary goes between them and between entities inside the second, never inside the first.
         var inOrder = ids.OrderBy(entry => entry.Value).Select(entry => entry.Key).Where(entMan.EntityExists).ToList();
 
-        // Step 1: the head, once, for a rebuild that has to finish for the whole grid before any entity's own runs.
-        var restoringEvent = new GridRestoringEvent(_gridUid, inOrder);
-        _system.RaiseRestoring(ref restoringEvent);
-
-        // Step 2: the directed raise at each entity, then once for the grid. An entity a handler deleted earlier is skipped.
-        var restoredEvent = new GridRestoredEvent(_gridUid);
-        foreach (var uid in inOrder)
+        // The carried values, for these raises only: closed after them, so a handler that keeps the lookup fails loudly.
+        var carriedRows = new Dictionary<EntityUid, (string?, MappingDataNode)>();
+        foreach (var entity in _image.Entities)
         {
-            if (entMan.EntityExists(uid))
-                _system.RaiseRestored(uid, ref restoredEvent);
+            if (_rows[entity.Id].TryGetValue(DrydockImageSystem.CarriedRow, out var carriedRow))
+                carriedRows[deserializer.UidMap[(int) entity.Id]] = (entity.Prototype, carriedRow);
         }
 
-        _system.RaiseRestored(ref restoredEvent);
+        var carried = new DrydockCarried(_codec!, carriedRows);
+        try
+        {
+            // Step 1: the head, once, for a rebuild that has to finish for the whole grid before any entity's own runs.
+            var restoringEvent = new GridRestoringEvent(_gridUid, inOrder, carried);
+            _system.RaiseRestoring(ref restoringEvent);
+
+            // Step 2: the directed raise at each entity, then once for the grid. An entity a handler deleted earlier is skipped.
+            foreach (var uid in inOrder)
+            {
+                if (!entMan.EntityExists(uid))
+                    continue;
+
+                var directed = new GridRestoredEvent(_gridUid, uid, carried);
+                _system.RaiseRestored(uid, ref directed);
+            }
+
+            var restoredEvent = new GridRestoredEvent(_gridUid);
+            _system.RaiseRestored(ref restoredEvent);
+        }
+        finally
+        {
+            carried.Close();
+        }
+
         _system.ArmPowerEdge(result);
 
         _phase = 4;

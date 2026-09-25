@@ -25,6 +25,8 @@ public sealed class DrydockStoreSession
     private readonly DrydockCodec _codec;
     private readonly List<DrydockImageEntity> _entities = new();
     private readonly List<DrydockUnwritableMember> _unwritable = new();
+    private readonly List<DrydockUnwritableCarried> _unwritableCarried = new();
+    private readonly DrydockStoreToken _token = new();
     private readonly Dictionary<string, int> _stripped = new(StringComparer.Ordinal);
     private readonly Dictionary<string, int> _appearanceSkipped = new(StringComparer.Ordinal);
     private int _bytes;
@@ -108,6 +110,20 @@ public sealed class DrydockStoreSession
 
         _probe?.After(uid, DrydockCodec.ManifestRow);
 
+        // State no component member holds, carried by the system that owns it.
+        _probe?.Before(uid, DrydockImageSystem.CarriedRow);
+        var sink = new DrydockCarrySink(_codec, (uid, meta), _unwritableCarried);
+        var storing = new GridStoringEvent(_grid, _token, sink);
+        _system.RaiseStoring(uid, ref storing);
+        if (sink.ToRow() is { } carriedRow)
+        {
+            var text = Text(carriedRow);
+            rows[DrydockImageSystem.CarriedRow] = text;
+            _bytes += text.Length;
+        }
+
+        _probe?.After(uid, DrydockImageSystem.CarriedRow);
+
         _entities.Add(new DrydockImageEntity(
             _walk.Ids[uid],
             meta.EntityPrototype?.ID,
@@ -146,6 +162,6 @@ public sealed class DrydockStoreSession
             throw new InvalidOperationException($"Drydock store: {_entities.Count} of {_walk.Aboard.Count} entities written.");
 
         var image = new DrydockImage(_walk.Ids[_grid], _entities, _tiles, _walk.Unsaved, _bytes + _tiles.Length);
-        return new DrydockImageStoreResult(image, _unwritable, _stripped, _appearanceSkipped, _writes);
+        return new DrydockImageStoreResult(image, _unwritable, _unwritableCarried, _stripped, _appearanceSkipped, _writes);
     }
 }

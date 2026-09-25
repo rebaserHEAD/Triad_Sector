@@ -7,8 +7,9 @@ namespace Content.Server._Triad.Drydock.Loader;
 
 /// <summary>
 /// Called around each row the store writes, so a caller can measure a write without the store timing anything itself.
-/// <paramref name="row"/> is a component's registered name, <see cref="DrydockImageSystem.AppearanceRow"/> or
-/// <see cref="DrydockCodec.ManifestRow"/>. Optional: a null probe costs the store a null check.
+/// <paramref name="row"/> is a component's registered name, <see cref="DrydockImageSystem.AppearanceRow"/>,
+/// <see cref="DrydockCodec.ManifestRow"/> or <see cref="DrydockImageSystem.CarriedRow"/>, which is timed whether or not
+/// anything was carried. Optional: a null probe costs the store a null check.
 /// </summary>
 public interface IDrydockStoreProbe
 {
@@ -17,17 +18,35 @@ public interface IDrydockStoreProbe
     void After(EntityUid uid, string row);
 }
 
-/// <summary>What a store leaves besides the image: the manifest members no serializer could write, and what was counted apart.</summary>
-/// <param name="Unwritable">Manifest members that could not be written. Each one is a member the image lost, and the store is to be refused for it.</param>
+/// <summary>
+/// A value a <see cref="GridStoringEvent"/> subscriber carried that the store could not write, because the carry guard
+/// or the serializer refused it: the entity, its prototype, the key, and why.
+/// </summary>
+public sealed record DrydockUnwritableCarried(EntityUid Entity, string? Prototype, string Key, string Exception, string Message)
+{
+    public override string ToString() => $"{Key} on {Prototype ?? "(no prototype)"} {Entity}: {Exception}: {Message}";
+}
+
+/// <summary>What a store leaves besides the image: what no serializer could write, and what was counted apart.</summary>
+/// <param name="Unwritable">Manifest members that could not be written. Each one is a member the image lost.</param>
+/// <param name="UnwritableCarried">Carried values that could not be written. Each one is a value the image lost.</param>
 /// <param name="Stripped">Components the manifest strips (a round, a crew member, a live link), by name.</param>
 /// <param name="AppearanceSkipped">Appearance values with no serializer, by type name.</param>
 /// <param name="Writes">Component rows written.</param>
 public sealed record DrydockImageStoreResult(
     DrydockImage Image,
     IReadOnlyList<DrydockUnwritableMember> Unwritable,
+    IReadOnlyList<DrydockUnwritableCarried> UnwritableCarried,
     IReadOnlyDictionary<string, int> Stripped,
     IReadOnlyDictionary<string, int> AppearanceSkipped,
-    int Writes);
+    int Writes)
+{
+    /// <summary>
+    /// True only when the image lost nothing it was asked to hold: no manifest member and no carried value unwritable.
+    /// Every caller refuses a store where this is false.
+    /// </summary>
+    public bool Whole => Unwritable.Count == 0 && UnwritableCarried.Count == 0;
+}
 
 /// <summary>What the caller may change about a load.</summary>
 public sealed class DrydockLoadOptions

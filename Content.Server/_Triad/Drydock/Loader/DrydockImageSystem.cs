@@ -38,6 +38,9 @@ public sealed partial class DrydockImageSystem : EntitySystem
     /// <summary>The appearance row's name. The live appearance dictionary is not a data field, so its entries travel in a row of their own.</summary>
     public const string AppearanceRow = "~appearance";
 
+    /// <summary>The carried row's name: values <see cref="GridStoringEvent"/> subscribers carried, keyed by their own keys.</summary>
+    public const string CarriedRow = "~carried";
+
     [Dependency] internal ISerializationManager Serialization = default!;
     [Dependency] internal IGameTiming Timing = default!;
     [Dependency] internal IComponentFactory ComponentFactory = default!;
@@ -170,6 +173,9 @@ public sealed partial class DrydockImageSystem : EntitySystem
         session.Start();
         return session.Complete();
     }
+
+    internal void RaiseStoring(EntityUid uid, ref GridStoringEvent ev) =>
+        RaiseLocalEvent(uid, ref ev);
 
     internal void RaiseRestoring(ref GridRestoringEvent ev) =>
         RaiseLocalEvent(ref ev);
