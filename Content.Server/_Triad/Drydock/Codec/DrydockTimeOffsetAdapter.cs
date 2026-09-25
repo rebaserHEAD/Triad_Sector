@@ -1,6 +1,5 @@
 using System;
 using System.Globalization;
-using Robust.Shared.GameObjects;
 using Robust.Shared.Serialization.Markdown.Value;
 
 namespace Content.Server._Triad.Drydock.Codec;
@@ -20,9 +19,10 @@ namespace Content.Server._Triad.Drydock.Codec;
 /// (<c>RobustToolbox/Robust.Shared/Serialization/TypeSerializers/Implementations/Custom/TimeOffsetSerializer.cs:32-35</c>,
 /// <c>:65-72</c>). The codec's rows are not either of those documents, so under
 /// <see cref="DrydockCodecContext"/> the engine stores a literal zero and reads back
-/// <see cref="TimeSpan.Zero"/>. Everything else the engine does is kept, including the map-init
-/// gate, because that gate is about what a value means rather than about who is reading it: before
-/// map-init a time field still holds setup data, not a deadline.</para>
+/// <see cref="TimeSpan.Zero"/>. The engine's map-init gate goes too: it writes zero for an entity
+/// below MapInitialized because in a map file that is setup data, but every entity the drydock stores
+/// is live whatever its stage, and every hull built in the round has one below it, its grid
+/// (SharedMapSystem.Grid.cs:64-65), whose time fields are deadlines like any other.</para>
 ///
 /// <para>The two halves are deliberately not mirrors, and that asymmetry is the engine's.
 /// <see cref="Write"/> has a pause branch and <see cref="Read"/> does not, so an entity stored while
@@ -47,15 +47,14 @@ public static class DrydockTimeOffsetAdapter
     public const string MinToken = "~min";
 
     /// <summary>
-    /// What a live field stores. A sentinel stores its token. Otherwise a map-initialized entity stores its deadline's
-    /// distance from the moment it paused, or from the clock if it is running; anything earlier in its life stores a
-    /// literal zero, matching the engine.
+    /// What a live field stores. A sentinel stores its token. Otherwise the deadline's distance from the moment its
+    /// entity paused, or from the clock if it is running, at any life stage.
     /// </summary>
     /// <param name="pauseTime">
     /// <c>MetaDataComponent.PauseTime</c>: the clock reading at which the entity paused, or null
     /// while it runs.
     /// </param>
-    public static ValueDataNode Write(TimeSpan value, EntityLifeStage lifeStage, TimeSpan curTime, TimeSpan? pauseTime)
+    public static ValueDataNode Write(TimeSpan value, TimeSpan curTime, TimeSpan? pauseTime)
     {
         if (value == TimeSpan.Zero)
             return new ValueDataNode(ZeroToken);
@@ -65,9 +64,6 @@ public static class DrydockTimeOffsetAdapter
 
         if (value == TimeSpan.MinValue)
             return new ValueDataNode(MinToken);
-
-        if (lifeStage < EntityLifeStage.MapInitialized)
-            return new ValueDataNode("0");
 
         var offset = value - (pauseTime ?? curTime);
         return new ValueDataNode(offset.TotalSeconds.ToString(CultureInfo.InvariantCulture));

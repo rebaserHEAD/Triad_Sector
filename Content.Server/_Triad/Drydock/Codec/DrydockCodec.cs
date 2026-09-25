@@ -86,9 +86,9 @@ public sealed partial class DrydockCodec
     /// The component as it will be stored.
     /// </summary>
     /// <param name="entity">
-    /// The component's owner and its metadata. Both are the pass's, not the writer's: the life stage
-    /// and the pause state decide what a deadline stores as, and whether the owner is a grid decides
-    /// whether its fixtures are content or a derivation.
+    /// The component's owner and its metadata. Both are the pass's, not the writer's: the pause state
+    /// decides what a deadline stores as, and whether the owner is a grid decides whether its fixtures
+    /// are content or a derivation.
     /// </param>
     public MappingDataNode Write(Entity<MetaDataComponent> entity, IComponent component)
     {

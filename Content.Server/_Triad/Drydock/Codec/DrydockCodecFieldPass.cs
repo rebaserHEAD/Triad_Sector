@@ -102,7 +102,7 @@ public sealed class DrydockCodecFieldPass
     /// be written as.
     /// </summary>
     public ValueDataNode WriteTime(Entity<MetaDataComponent> entity, TimeSpan value) =>
-        DrydockTimeOffsetAdapter.Write(value, entity.Comp.EntityLifeStage, _timing.CurTime, PauseTimeOf(entity));
+        DrydockTimeOffsetAdapter.Write(value, _timing.CurTime, PauseTimeOf(entity));
 
     /// <summary>The read half of <see cref="WriteTime"/>, against the clock at load.</summary>
     public TimeSpan ReadTime(ValueDataNode node) => DrydockTimeOffsetAdapter.Read(node, _timing.CurTime);
@@ -124,7 +124,7 @@ public sealed class DrydockCodecFieldPass
         if (entries.Length == 0 && computedFields.Length == 0)
             return;
 
-        var walk = new WalkState(entity.Comp.EntityLifeStage, _timing.CurTime, PauseTimeOf(entity));
+        var walk = new WalkState(_timing.CurTime, PauseTimeOf(entity));
 
         foreach (var entry in entries)
         {
@@ -175,7 +175,7 @@ public sealed class DrydockCodecFieldPass
             {
                 case FieldCase.TimeOffset:
                     if (GetValue(computed.Backing, component) is TimeSpan deadline)
-                        mapping[computed.BackingKey] = DrydockTimeOffsetAdapter.Write(deadline, walk.LifeStage, walk.CurTime, walk.PauseTime);
+                        mapping[computed.BackingKey] = DrydockTimeOffsetAdapter.Write(deadline, walk.CurTime, walk.PauseTime);
                     break;
 
                 default:
@@ -243,7 +243,7 @@ public sealed class DrydockCodecFieldPass
         if (entry.Get(owner) is not TimeSpan deadline)
             return;
 
-        into[entry.Key] = DrydockTimeOffsetAdapter.Write(deadline, walk.LifeStage, walk.CurTime, walk.PauseTime);
+        into[entry.Key] = DrydockTimeOffsetAdapter.Write(deadline, walk.CurTime, walk.PauseTime);
     }
 
     /// <summary>
@@ -1318,9 +1318,8 @@ public sealed class DrydockCodecFieldPass
     /// The state one component's write shares with everything under it: the owning entity's pause
     /// state, which a deadline at any depth is measured against, and the path the walk is on.
     /// </summary>
-    private sealed class WalkState(EntityLifeStage lifeStage, TimeSpan curTime, TimeSpan? pauseTime)
+    private sealed class WalkState(TimeSpan curTime, TimeSpan? pauseTime)
     {
-        public readonly EntityLifeStage LifeStage = lifeStage;
         public readonly TimeSpan CurTime = curTime;
         public readonly TimeSpan? PauseTime = pauseTime;
         /// <summary>The definitions on the walk's current path, which is what a loop returns to.</summary>

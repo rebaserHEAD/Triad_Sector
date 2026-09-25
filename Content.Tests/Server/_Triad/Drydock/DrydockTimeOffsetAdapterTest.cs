@@ -2,7 +2,6 @@
 using System;
 using Content.Server._Triad.Drydock.Codec;
 using NUnit.Framework;
-using Robust.Shared.GameObjects;
 using Robust.Shared.Serialization.Markdown.Value;
 
 namespace Content.Tests.Server._Triad.Drydock;
@@ -20,7 +19,7 @@ public sealed class DrydockTimeOffsetAdapterTest
     private static readonly TimeSpan LoadClock = TimeSpan.FromSeconds(17.25);
 
     private static TimeSpan RoundTrip(TimeSpan value, TimeSpan? pause = null) =>
-        DrydockTimeOffsetAdapter.Read(DrydockTimeOffsetAdapter.Write(value, EntityLifeStage.MapInitialized, StoreClock, pause), LoadClock);
+        DrydockTimeOffsetAdapter.Read(DrydockTimeOffsetAdapter.Write(value, StoreClock, pause), LoadClock);
 
     [Test]
     public void EachSentinelComesBackExactlyAcrossTwoClocks()
@@ -40,7 +39,7 @@ public sealed class DrydockTimeOffsetAdapterTest
     {
         var deadline = StoreClock + TimeSpan.FromSeconds(30);
         var justPast = StoreClock - TimeSpan.FromSeconds(2);
-        var written = DrydockTimeOffsetAdapter.Write(deadline, EntityLifeStage.MapInitialized, StoreClock, null);
+        var written = DrydockTimeOffsetAdapter.Write(deadline, StoreClock, null);
 
         Assert.Multiple(() =>
         {
