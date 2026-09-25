@@ -330,7 +330,8 @@ public sealed partial class DrydockSystem : EntitySystem
 
             // A mind must never be serialized, and a living mob does not round-trip cleanly. A
             // store refuses, which is the safe direction to be stricter in; an impound moves them
-            // off and passes the same gate, for the same reason it purges rather than refuses.
+            // off and passes the same gate, for the same reason it purges rather than refuses. A
+            // creature or body the store would leave out is moved off on either path.
             if (GateOrganics(ctx, gridUid, mobQuery, xformQuery))
                 return new DrydockStoreOutcome(DrydockStoreResult.OrganicsAboard, null);
 
@@ -491,6 +492,15 @@ public sealed partial class DrydockSystem : EntitySystem
             // is exempt, so grid children are unaffected.
             var saveOptions = new SerializationOptions { MissingEntityBehaviour = MissingEntityBehaviour.Ignore };
             MarkPhase(DrydockPhase.Prepare);
+
+            // The backstop to the eviction at the gates: a creature or body the store would leave out,
+            // and so the despawn would delete, refuses the store instead.
+            if (MobsLeftOut(gridUid, null) is { Count: > 0 } leftBehind)
+            {
+                Log.Warning($"Drydock: store of {shipId} refused, {leftBehind.Count} creature(s) or bod(y/ies) aboard would be left out: "
+                            + string.Join(", ", leftBehind.Select(uid => MetaData(uid).EntityPrototype?.ID ?? "(no prototype)")));
+                return new DrydockStoreOutcome(DrydockStoreResult.CreatureAboard, null);
+            }
 
             // Two ways to write the document. With DrydockSlicedSerialize on, SerializeGridSliced
             // drives the engine's public per-entity serializer one entity at a time against the
@@ -1407,8 +1417,10 @@ public sealed partial class DrydockSystem : EntitySystem
     /// <summary>
     /// The organics gate, run three times across the freeze pipeline because occupancy can change
     /// between database awaits. Every store first lifts any ghost off the hull; an impound then evicts
-    /// and folds the count into <see cref="DrydockStoreContext.Evicted"/>; either path then refuses if
-    /// anyone board-able is still found. Each call site's own comment says why that particular point
+    /// minds and folds the count into <see cref="DrydockStoreContext.Evicted"/>; either path then
+    /// refuses if anyone board-able is still found. Past that, every creature or body the store would
+    /// leave out is moved off (<see cref="EvictMobsLeftOut"/>), on a store and an impound alike, and an
+    /// impound folds that count in too. Each call site's own comment says why that particular point
     /// still needs asking.
     /// </summary>
     private bool GateOrganics(
@@ -1424,7 +1436,15 @@ public sealed partial class DrydockSystem : EntitySystem
         if (ctx.Impound != null)
             ctx.Evicted += EvictOrganicsAboard(ctx);
 
-        return _shipyard.FoundOrganics(gridUid, mobQuery, xformQuery) is not null;
+        // Before the eviction, so a player aboard refuses the store rather than being moved by it.
+        if (_shipyard.FoundOrganics(gridUid, mobQuery, xformQuery) is not null)
+            return true;
+
+        var moved = EvictMobsLeftOut(ctx);
+        if (ctx.Impound != null)
+            ctx.Evicted += moved;
+
+        return false;
     }
 
     /// <summary>

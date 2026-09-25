@@ -71,6 +71,7 @@ drydock-error-store-voucher-ship = {$verb} failed: a ship bought on a voucher ca
 drydock-error-store-not-docked = {$verb} failed: dock the ship at this station first.
 drydock-error-store-serialize-failed = {$verb} failed: the ship could not be saved.
 drydock-error-store-organics-aboard = {$verb} failed: someone alive is still aboard.
+drydock-error-store-creature-aboard = {$verb} failed: a creature or body aboard could not be moved off.
 drydock-error-store-hazard-aboard = {$verb} failed: an armed nuke, an active countdown or a singularity is aboard.
 drydock-error-store-validation-failed = {$verb} failed: the saved copy did not match the ship. It has been logged.
 drydock-error-store-disabled = {$verb} failed: the drydock is not accepting ships right now.

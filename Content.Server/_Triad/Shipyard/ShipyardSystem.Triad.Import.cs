@@ -322,6 +322,7 @@ public sealed partial class ShipyardSystem
                 DrydockStoreResult.BerthTooSmall => "no berth fit this hull",
                 DrydockStoreResult.BerthOccupied => "that berth is occupied",
                 DrydockStoreResult.OrganicsAboard => "a crew member was aboard",
+                DrydockStoreResult.CreatureAboard => "a creature or body was aboard",
                 DrydockStoreResult.HazardAboard => "a hazard was aboard",
                 DrydockStoreResult.Disabled => "drydock storage is off",
                 DrydockStoreResult.InProgress => "that ship was already mid-operation",

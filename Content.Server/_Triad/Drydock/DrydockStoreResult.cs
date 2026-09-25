@@ -67,4 +67,10 @@ public enum DrydockStoreResult : byte
     /// watchdog. The unwind ran, so the ship is back where it was, and nothing was filed.
     /// </summary>
     Cancelled,
+
+    /// <summary>
+    /// A creature or body aboard would be left out of the store, which only keeps map-savable entities, and the
+    /// eviction at the organics gates did not move it off. Refused rather than deleted with the hull.
+    /// </summary>
+    CreatureAboard,
 }

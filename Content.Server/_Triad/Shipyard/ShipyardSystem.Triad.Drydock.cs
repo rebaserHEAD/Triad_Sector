@@ -2215,6 +2215,7 @@ public sealed partial class ShipyardSystem
             DrydockStoreResult.InProgress => "drydock-error-store-in-progress",
             DrydockStoreResult.BerthOccupied => "drydock-error-berth-occupied",
             DrydockStoreResult.Cancelled => "drydock-error-interrupted",
+            DrydockStoreResult.CreatureAboard => "drydock-error-store-creature-aboard",
             DrydockStoreResult.Success => throw new ArgumentOutOfRangeException(nameof(result), result, "A successful store has no error line."),
             _ => throw new ArgumentOutOfRangeException(nameof(result), result, null),
         };
