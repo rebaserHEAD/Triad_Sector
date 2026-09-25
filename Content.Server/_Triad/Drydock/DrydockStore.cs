@@ -5,6 +5,7 @@ using System.Linq.Expressions;
 using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
+using Content.Server._Triad.Drydock.Loader;
 using Content.Server.Database;
 using Content.Shared._Triad.ShipSize;
 using Microsoft.EntityFrameworkCore;
@@ -150,6 +151,38 @@ public sealed partial class DrydockStore
     }
 
     /// <summary>
+    /// <see cref="PruneBlobs"/>' rule over grid images: keep-N counting <paramref name="keptRevision"/>, never fewer than
+    /// <see cref="MinimumKeptBlobs"/>, and a pinned revision's image never deleted. The rule lives here because the pins
+    /// are revision rows; the image store is handed only the revisions to delete, as one set. Takes the ship row first,
+    /// the same order a pin takes it in, so a pin and a prune of the same ship serialize.
+    /// </summary>
+    private static async Task PruneImages(ServerDbContext db, IDrydockImageStore images, Guid shipGuid, int keptRevision, int keepBlobs, CancellationToken token)
+    {
+        if (keepBlobs <= 0)
+            return;
+
+        await LockShipRow(db, shipGuid, token);
+
+        var keep = Math.Max(keepBlobs, MinimumKeptBlobs);
+        var below = (await images.Revisions(db, shipGuid, token)).Where(r => r < keptRevision).OrderByDescending(r => r).ToList();
+
+        // The oldest image that stays is the (keep - 1)th newest below the one just filed; fewer than that and the floor
+        // refuses to prune at all.
+        if (below.Count < keep - 1)
+            return;
+
+        var edge = below[keep - 2];
+        var pinned = await db.DrydockRevision.AsNoTracking()
+            .Where(r => r.ShipGuid == shipGuid && r.Pinned)
+            .Select(r => r.Revision)
+            .ToListAsync(token);
+
+        var doomed = below.Where(r => r < edge).Except(pinned).ToList();
+        if (doomed.Count > 0)
+            await images.Delete(db, shipGuid, doomed, token);
+    }
+
+    /// <summary>
     /// Takes the ship row's write lock for the rest of the transaction without changing anything, by
     /// assigning a column to itself. The ordering point between a prune and a pin of the same ship;
     /// SQLite serializes writers anyway, so this matters on Postgres. Every caller reaches it before
@@ -233,9 +266,27 @@ public sealed partial class DrydockStore
     /// <returns>The outcome, the revision number filed, and the berth the ship now sits in.</returns>
     public Task<DrydockFileResult> FileRevision(DrydockRevisionRequest request, byte[] blob, int keepBlobs, CancellationToken ct = default)
     {
+        return FileRevision(request, blob, null, keepBlobs, ct);
+    }
+
+    /// <summary>
+    /// Files a new revision whose document is a grid image, in the same one transaction as the
+    /// document path above. The revision row is flushed first and the image then goes to
+    /// <see cref="IServerDbManager.DrydockImages"/> on the same transaction, so an image the store
+    /// refuses rolls the whole filing back and a retried attempt re-files it. Retention is
+    /// <see cref="PruneImages"/>.
+    /// </summary>
+    public Task<DrydockFileResult> FileRevision(DrydockRevisionRequest request, DrydockImage image, int keepBlobs, CancellationToken ct = default)
+    {
+        return FileRevision(request, null, image, keepBlobs, ct);
+    }
+
+    private Task<DrydockFileResult> FileRevision(DrydockRevisionRequest request, byte[]? blob, DrydockImage? image, int keepBlobs, CancellationToken ct)
+    {
         if (request.Kind == DrydockRevisionKind.SystemRebake)
             throw new ArgumentException($"A re-bake is filed through {nameof(FileRebakeRevision)}, which checks the ship is still on its source revision.", nameof(request));
 
+        var images = _db.DrydockImages;
         return _db.RunTriadDbCommand(async (db, token) =>
         {
             // A store that picks a berth can lose it to another store committing in the same
@@ -250,7 +301,7 @@ public sealed partial class DrydockStore
                 int? picked = null;
                 try
                 {
-                    return await FileRevisionOnce(db, request, blob, keepBlobs, excluded, id => picked = id, token);
+                    return await FileRevisionOnce(db, images, request, blob, image, keepBlobs, excluded, id => picked = id, token);
                 }
                 catch (DbUpdateException e) when (picked is { } lost && IsBerthUniqueViolation(e))
                 {
@@ -680,15 +731,21 @@ public sealed partial class DrydockStore
         }, ct);
     }
 
+    /// <summary>One filing attempt. Exactly one of <paramref name="blob"/> and <paramref name="image"/> is the document.</summary>
     private static async Task<DrydockFileResult> FileRevisionOnce(
         ServerDbContext db,
+        IDrydockImageStore images,
         DrydockRevisionRequest request,
-        byte[] blob,
+        byte[]? blob,
+        DrydockImage? image,
         int keepBlobs,
         HashSet<int> excludedBerths,
         Action<int> berthPicked,
         CancellationToken token)
     {
+        if ((blob == null) == (image == null))
+            throw new ArgumentException("A revision is filed with exactly one document: a blob or an image.");
+
         await using var tx = await db.Database.BeginTransactionAsync(token);
 
         var now = DateTime.UtcNow;
@@ -769,12 +826,15 @@ public sealed partial class DrydockStore
             Manifest = request.Manifest,
         });
 
-        db.DrydockBlob.Add(new DrydockBlob
+        if (blob != null)
         {
-            ShipGuid = request.ShipGuid,
-            Revision = revision,
-            Blob = blob,
-        });
+            db.DrydockBlob.Add(new DrydockBlob
+            {
+                ShipGuid = request.ShipGuid,
+                Revision = revision,
+                Blob = blob,
+            });
+        }
 
         ship.CurrentRevision = revision;
 
@@ -789,9 +849,21 @@ public sealed partial class DrydockStore
             ship.CheckedOutRoundId = null;
         }
 
-        // Prune blobs, never revisions. The revision we just filed is the one a retrieve reads, so
-        // it survives whatever keepBlobs says; PruneBlobs carries the floor and the pin exclusion.
-        await PruneBlobs(db, request.ShipGuid, revision, keepBlobs, token);
+        if (image != null)
+        {
+            // The image refers to its revision row, so that row is written in this transaction before the image,
+            // and the ship row is taken before either, the one lock order (LockShipRow).
+            await LockShipRow(db, request.ShipGuid, token);
+            await db.SaveChangesAsync(token);
+            await images.Put(db, new DrydockImageKey(request.ShipGuid, revision), image, token);
+        }
+
+        // Prune documents, never revisions. The revision we just filed is the one a retrieve reads,
+        // so it survives whatever keepBlobs says; each prune carries the floor and the pin exclusion.
+        if (blob != null)
+            await PruneBlobs(db, request.ShipGuid, revision, keepBlobs, token);
+        else
+            await PruneImages(db, images, request.ShipGuid, revision, keepBlobs, token);
 
         // An impound's row says which berth was vacated, who took the hull and from whom, and what
         // it cost; a store's says where the hull was seated and who put it there.
@@ -1007,6 +1079,42 @@ public sealed partial class DrydockStore
                 b => new { b.ShipGuid, b.Revision },
                 (sr, b) => new DrydockLoad(sr.Ship, sr.Revision, b.Blob))
             .SingleOrDefaultAsync(token);
+    }
+
+    /// <summary>The ship, its current revision and that revision's grid image; null as <see cref="LoadImageJoined"/> says.</summary>
+    public Task<DrydockImageLoad?> LoadCurrentImage(Guid shipGuid, CancellationToken ct = default)
+    {
+        var images = _db.DrydockImages;
+        return _db.RunTriadDbCommand((db, token) => LoadImageJoined(db, images, shipGuid, null, token), ct);
+    }
+
+    /// <summary>One specific revision and its grid image, for the retrieve's fallback walk.</summary>
+    public Task<DrydockImageLoad?> LoadRevisionImage(Guid shipGuid, int revision, CancellationToken ct = default)
+    {
+        var images = _db.DrydockImages;
+        return _db.RunTriadDbCommand((db, token) => LoadImageJoined(db, images, shipGuid, revision, token), ct);
+    }
+
+    /// <summary>
+    /// The image read: the ship and the revision in one query, as <see cref="LoadJoined"/> reads them, then the image
+    /// from the store. Null exactly where <see cref="LoadJoined"/>'s inner joins drop out: no ship, no revision row at
+    /// that number, or no image left for it.
+    /// </summary>
+    private static async Task<DrydockImageLoad?> LoadImageJoined(ServerDbContext db, IDrydockImageStore images, Guid shipGuid, int? revision, CancellationToken token)
+    {
+        var header = await db.DrydockShip.AsNoTracking()
+            .Where(s => s.ShipGuid == shipGuid)
+            .Join(db.DrydockRevision.AsNoTracking(),
+                s => new { s.ShipGuid, Revision = revision ?? s.CurrentRevision },
+                r => new { r.ShipGuid, r.Revision },
+                (s, r) => new { Ship = s, Revision = r })
+            .SingleOrDefaultAsync(token);
+
+        if (header == null)
+            return null;
+
+        var image = await images.Get(db, new DrydockImageKey(shipGuid, header.Revision.Revision), token);
+        return image == null ? null : new DrydockImageLoad(header.Ship, header.Revision, image);
     }
 
     /// <summary>
@@ -2126,6 +2234,7 @@ public sealed partial class DrydockStore
     /// </summary>
     public Task<DrydockShipDetail?> GetShipDetail(Guid shipGuid, CancellationToken ct = default)
     {
+        var images = _db.DrydockImages;
         return _db.RunTriadDbCommand<DrydockShipDetail?>(async (db, token) =>
         {
             var ship = await db.DrydockShip.AsNoTracking()
@@ -2152,6 +2261,9 @@ public sealed partial class DrydockStore
                 .Where(b => b.ShipGuid == shipGuid)
                 .Select(b => b.Revision)
                 .ToListAsync(token);
+
+            // A revision's document is a blob or a grid image; the panel marks either.
+            withBlob.AddRange(await images.Revisions(db, shipGuid, token));
 
             var timeline = await db.DrydockAudit.AsNoTracking()
                 .Where(a => a.ShipGuid == shipGuid)
@@ -2194,7 +2306,7 @@ public sealed partial class DrydockStore
     /// Admin: promotes an older revision to current by filing it again as a new one, kind
     /// AdminRestore, derived from the original. History stays append-only; the promoted document
     /// is copied, never moved, along with the source's appraisal, and the usual pruning
-    /// (<see cref="PruneBlobs"/>) runs around the new revision.
+    /// (<see cref="PruneBlobs"/>, or <see cref="PruneImages"/> for a grid image) runs around the new revision.
     /// </summary>
     public Task<(DrydockBerthResult Outcome, int Revision)> TryPromoteRevision(
         Guid shipGuid,
@@ -2205,6 +2317,7 @@ public sealed partial class DrydockStore
         int keepBlobs,
         CancellationToken ct = default)
     {
+        var images = _db.DrydockImages;
         return _db.RunTriadDbCommand<(DrydockBerthResult, int)>(async (db, token) =>
         {
             await using var tx = await db.Database.BeginTransactionAsync(token);
@@ -2223,8 +2336,11 @@ public sealed partial class DrydockStore
             var blob = await db.DrydockBlob.AsNoTracking()
                 .SingleOrDefaultAsync(b => b.ShipGuid == shipGuid && b.Revision == revision, token);
 
+            var sourceImage = new DrydockImageKey(shipGuid, revision);
+            var hasImage = blob == null && await images.Has(db, sourceImage, token);
+
             // History without a document cannot be promoted; that is what pruning took.
-            if (blob == null)
+            if (blob == null && !hasImage)
                 return (DrydockBerthResult.NotFound, 0);
 
             var now = DateTime.UtcNow;
@@ -2252,17 +2368,31 @@ public sealed partial class DrydockStore
                 Manifest = source.Manifest,
             });
 
-            db.DrydockBlob.Add(new DrydockBlob
+            if (blob != null)
             {
-                ShipGuid = shipGuid,
-                Revision = next,
-                Blob = blob.Blob,
-            });
+                db.DrydockBlob.Add(new DrydockBlob
+                {
+                    ShipGuid = shipGuid,
+                    Revision = next,
+                    Blob = blob.Blob,
+                });
+            }
 
             ship.CurrentRevision = next;
             ship.UpdatedAt = now;
 
-            await PruneBlobs(db, shipGuid, next, keepBlobs, token);
+            if (blob != null)
+            {
+                await PruneBlobs(db, shipGuid, next, keepBlobs, token);
+            }
+            else
+            {
+                // As a filing does it: the ship row, then the revision row the copy refers to, then the copy.
+                await LockShipRow(db, shipGuid, token);
+                await db.SaveChangesAsync(token);
+                await images.Copy(db, sourceImage, new DrydockImageKey(shipGuid, next), token);
+                await PruneImages(db, images, shipGuid, next, keepBlobs, token);
+            }
 
             AddAudit(db, DrydockAuditAction.RevisionPromoted, now,
                 shipGuid: shipGuid,
@@ -2333,6 +2463,7 @@ public sealed partial class DrydockStore
         string? reason,
         CancellationToken ct)
     {
+        var images = _db.DrydockImages;
         return _db.RunTriadDbCommand(async (db, token) =>
         {
             await using var tx = await db.Database.BeginTransactionAsync(token);
@@ -2349,8 +2480,13 @@ public sealed partial class DrydockStore
             var query = db.DrydockRevision
                 .Where(r => r.ShipGuid == shipGuid && r.Revision == revision && r.Pinned != pinned);
 
+            // A grid image is read before the update rather than inside it, which holds only because a prune takes the
+            // same ship row first and so cannot delete the image between the read and the update.
             if (pinned)
-                query = query.Where(r => db.DrydockBlob.Any(b => b.ShipGuid == r.ShipGuid && b.Revision == r.Revision));
+            {
+                var hasImage = await images.Has(db, new DrydockImageKey(shipGuid, revision), token);
+                query = query.Where(r => hasImage || db.DrydockBlob.Any(b => b.ShipGuid == r.ShipGuid && b.Revision == r.Revision));
+            }
 
             var moved = await query.ExecuteUpdateAsync(set => set.SetProperty(r => r.Pinned, pinned), token);
 
@@ -2384,18 +2520,27 @@ public sealed partial class DrydockStore
 
     /// <summary>
     /// The revisions of a ship that still hold a document, newest first, whether retention or a pin
-    /// kept them. Revision numbers only, read off the blob table's primary key without touching the
-    /// document bytes. This is the honest lower bound for a retrieve's fallback walk: counting down
+    /// kept them. Revision numbers only, read off the blob table's primary key and the image store's
+    /// revisions without touching a document. This is the honest lower bound for a retrieve's fallback walk: counting down
     /// <c>keepBlobs</c> from the current revision misses pinned documents below the window, and walks
     /// revisions whose documents are already gone. Empty for an unknown ship.
     /// </summary>
     public Task<List<int>> ListRetrievableRevisions(Guid shipGuid, CancellationToken ct = default)
     {
-        return _db.RunTriadDbCommand(async (db, token) => await db.DrydockBlob.AsNoTracking()
-            .Where(b => b.ShipGuid == shipGuid)
-            .OrderByDescending(b => b.Revision)
-            .Select(b => b.Revision)
-            .ToListAsync(token), ct);
+        var images = _db.DrydockImages;
+        return _db.RunTriadDbCommand(async (db, token) =>
+        {
+            var blobs = await db.DrydockBlob.AsNoTracking()
+                .Where(b => b.ShipGuid == shipGuid)
+                .Select(b => b.Revision)
+                .ToListAsync(token);
+
+            // A revision's document is a blob or a grid image.
+            return blobs.Concat(await images.Revisions(db, shipGuid, token))
+                .Distinct()
+                .OrderByDescending(r => r)
+                .ToList();
+        }, ct);
     }
 
     /// <summary>
@@ -2724,9 +2869,11 @@ public sealed class DrydockRevisionRequest
 
     public required byte[] ProtoFingerprint { get; init; }
 
-    public required byte[] CapturedKeyHash { get; init; }
+    /// <summary>The document path's hash of its captured keys. Empty for a grid image, which has none.</summary>
+    public byte[] CapturedKeyHash { get; init; } = Array.Empty<byte>();
 
-    public required byte[] Checksum { get; init; }
+    /// <summary>The document path's hash of its uncompressed document. Empty for a grid image, which has no document bytes.</summary>
+    public byte[] Checksum { get; init; } = Array.Empty<byte>();
 
     public required int SizeBytes { get; init; }
 
@@ -2794,6 +2941,9 @@ public sealed record DrydockRebakeCandidate(Guid ShipGuid, string ShipName, int 
 
 /// <summary>What a retrieve reads: the hull row, the revision it is about to rebuild, and the document.</summary>
 public sealed record DrydockLoad(DrydockShip Ship, DrydockRevision Revision, byte[] Blob);
+
+/// <summary>What a retrieve reads when the document is a grid image: the hull row, the revision, and the image.</summary>
+public sealed record DrydockImageLoad(DrydockShip Ship, DrydockRevision Revision, DrydockImage Image);
 
 /// <summary>
 /// The <c>State</c> / <c>StateChangedAt</c> / <c>UpdatedAt</c> triple almost every state move in

@@ -26,6 +26,7 @@ using LogLevel = Robust.Shared.Log.LogLevel;
 using MSLogLevel = Microsoft.Extensions.Logging.LogLevel;
 using Content.Shared._Mono.Company;
 using Content.Server._Mono.Company; // Mono
+using Content.Server._Triad.Drydock; // Triad
 
 namespace Content.Server.Database
 {
@@ -376,6 +377,12 @@ namespace Content.Server.Database
 
         /// <inheritdoc cref="RunTriadDbCommand{T}"/>
         Task RunTriadDbCommand(Func<ServerDbContext, CancellationToken, Task> fn, CancellationToken ct);
+
+        /// <summary>
+        ///     Where the drydock keeps grid images for this engine: PostgreSQL rows, or memory under SQLite. Its members
+        ///     take the context <see cref="RunTriadDbCommand{T}"/> hands out.
+        /// </summary>
+        IDrydockImageStore DrydockImages { get; }
         #endregion
         // End Triad
     }
@@ -454,10 +461,16 @@ namespace Content.Server.Database
                 case "sqlite":
                     SetupSqlite(out var contextFunc, out var inMemory);
                     _db = new ServerDbSqlite(contextFunc, inMemory, _cfg, _synchronous, opsLog);
+                    // Triad: the drydock's images have no SQLite tables
+                    DrydockImages = new DrydockMemoryImageStore();
+                    // End Triad
                     break;
                 case "postgres":
                     var (pgOptions, conString) = CreatePostgresOptions();
                     _db = new ServerDbPostgres(pgOptions, conString, _cfg, opsLog, notifyLog);
+                    // Triad: the drydock's images as rows
+                    DrydockImages = new DrydockPostgresImageStore();
+                    // End Triad
                     break;
                 default:
                     throw new InvalidDataException($"Unknown database engine {engine}.");
@@ -1169,6 +1182,8 @@ namespace Content.Server.Database
             DbWriteOpsMetric.Inc();
             return RunDbCommand(() => _db.RunWithContextAsync(fn, ct));
         }
+
+        public IDrydockImageStore DrydockImages { get; private set; } = default!;
         // End Triad
 
         // Wrapper functions to run DB commands from the thread pool.
