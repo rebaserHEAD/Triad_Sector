@@ -256,6 +256,12 @@ public static class TriadPostgres
     /// Points a pair's server at its database: the engine and all five connection cvars, set here and checked, because the
     /// defaults name a database <c>ss14</c> as <c>postgres</c> (<c>CCVars.Database.cs:41-54</c>). Throws only on a code fault:
     /// every environmental step ran in <see cref="CreatePairDatabase"/>.
+    ///
+    /// <para>It also turns <c>database.sync</c> off, which the pool turns on for every pair (<c>PoolManager.Cvars.cs:14</c>):
+    /// synchronous mode throws on any database task that has not completed when it returns
+    /// (<c>ServerDbManager.RunDbCommandCoreSync</c>), which only SQLite's in-process calls meet, and Npgsql's network I/O
+    /// never does. A PostgreSQL pair's database calls run on the thread pool, as a live server's do, and a test awaits
+    /// them.</para>
     /// </summary>
     public static void ApplyServerCvars(RobustIntegrationTest.ServerIntegrationOptions options, string database)
     {
@@ -273,9 +279,11 @@ public static class TriadPostgres
         cvars[CCVars.DatabasePgDatabase.Name] = database;
         cvars[CCVars.DatabasePgUsername.Name] = Role;
         cvars[CCVars.DatabasePgPassword.Name] = password;
+        cvars[CCVars.DatabaseSynchronous.Name] = "false";
 
         if (cvars[CCVars.DatabasePgHost.Name] != Host
             || cvars[CCVars.DatabasePgUsername.Name] != Role
+            || cvars[CCVars.DatabaseSynchronous.Name] != "false"
             || !NamePattern.IsMatch(cvars[CCVars.DatabasePgDatabase.Name]))
         {
             throw new InvalidOperationException("The pair's database cvars do not hold the guard's values.");
