@@ -63,14 +63,14 @@ public enum DrydockMemberKind
     Fill,
 }
 
-/// <param name="Row">The census join's row id (resources/2026-09-17-census-join.tsv, column f33).</param>
+/// <param name="Row">The member's number, which names it in a failure (<c>DrydockCodecManifestMembersTest</c>).</param>
 /// <param name="Component">The component's registration name.</param>
 /// <param name="Member">The field or property on the component or one of its base types.</param>
 /// <param name="OnlyWith">A component the entity must also carry for the member to travel: a fried item's name is the
 /// member, and every entity has a name.</param>
 /// <param name="EntryKey">For an <see cref="DrydockMemberKind.Entry"/>, the dictionary key.</param>
 /// <param name="EntryType">For an <see cref="DrydockMemberKind.Entry"/>, the type of the value under the key.</param>
-/// <param name="OwedWith">The rebuild handler (resources/2026-09-18-rebuild-list.tsv) the member waits for. An owed member
+/// <param name="OwedWith">The rebuild handler the member waits for, by its id (such as <c>H12</c>). An owed member
 /// is listed so the build-time test keeps guarding it, and is not written until the handler exists.</param>
 /// <param name="SkipWhen">A bool member of the same component; while it is true the member is not written, so the loaded
 /// entity keeps its default. A scuttle device that disarms on a map change comes back disarmed by never being armed.</param>

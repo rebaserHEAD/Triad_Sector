@@ -8,9 +8,9 @@ namespace Content.Server._Triad.Construction;
 /// Computes a restored machine's part-derived ratings. Twenty-four systems derive a rating from a machine's parts when
 /// <c>RefreshPartsEvent</c> is raised, and it is raised only by map init (<c>ConstructionSystem.OnMachineMapInit</c>, after it
 /// stocks the machine) and by the part exchanger, so a restore leaves each derived member at its initializer: a biomass
-/// reclaimer yields nothing, a gyroscope draws nothing, a seed extractor gives no seeds. The subscribers were read one by one
-/// (<c>resources/2026-09-19-h11/refreshparts-subscribers.md</c>): each computes from its base and the parts, so a second run
-/// changes nothing.
+/// reclaimer yields nothing, a gyroscope draws nothing, a seed extractor gives no seeds. Each subscriber to
+/// <c>RefreshPartsEvent</c> computes from its base and the parts rather than from its current value, so a second run changes
+/// nothing (<c>DrydockMachinePartsRestoreTest.ASecondRestoreRaiseChangesNothingAddsNoComponentAndAGoneEntityIsTolerated</c>).
 ///
 /// <para>Runs on the directed <see cref="GridRestoredEvent"/>, after every entity has started: after the item-slot passes (a
 /// dispenser adds storage slots from its part count and is idempotent against slots the seam restored), after the manifest's

@@ -21,14 +21,13 @@ namespace Content.Server._Triad.Drydock.Loader;
 /// <summary>
 /// One load, in phases, in order: <see cref="CreateEntities"/>, <see cref="ApplyRows"/>, <see cref="Start"/>,
 /// <see cref="Complete"/>. The engine's own deserializer allocates, adds each prototype's components and starts; the
-/// image's rows are applied between its component pass and its startup. The engine's steps are numbered as in
-/// <c>resources/2026-09-18-engine-loader-ordering.md</c>.
+/// image's rows are applied between its component pass and its startup.
 /// <list type="number">
 /// <item>A skeleton document: every stored entity under its prototype, with its stable id as the yaml uid and its
 /// recorded <c>mapInit</c> and <c>paused</c>, and the grid's own grid component carrying the tile table's chunks.
 /// Nothing else, because every other component comes from the image's rows.</item>
 /// <item><c>TryProcessData</c> and <c>CreateEntities</c> (<c>EntityDeserializer.cs:153</c>, <c>:183</c>): the
-/// engine allocates everyone and adds each prototype's components (steps 4 and 6b), and reads the tiles with its
+/// engine allocates everyone and adds each prototype's components, and reads the tiles with its
 /// own chunk reader, tile-change and collision work suppressed. (<see cref="CreateEntities"/>.)</item>
 /// <item>The rows, through <see cref="DrydockCodec"/> under its own context, whose references resolve through the
 /// engine's <c>UidMap</c> (<c>:93</c>). A component the entity already has, which the prototype put there, is
