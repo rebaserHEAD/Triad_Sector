@@ -159,7 +159,7 @@ public sealed partial class WiresCarrySystem : EntitySystem
         if (resolved.Count == 0)
             return;
 
-        if (Paused(ent))
+        if (false)
             _held[ent.Owner] = resolved;
         else
             Rearm(ent, resolved);
