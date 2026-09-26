@@ -87,7 +87,6 @@ public sealed partial class DrydockFidelitySystem
         "JointComponent",
         "MapGridComponent",
         "ContainerManagerComponent",
-        nameof(DrydockPipeGasComponent),
         nameof(DrydockInProgressComponent),
         nameof(DrydockIdentityComponent),
     };

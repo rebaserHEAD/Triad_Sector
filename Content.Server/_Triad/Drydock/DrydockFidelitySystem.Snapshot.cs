@@ -42,7 +42,6 @@ public sealed partial class DrydockFidelitySystem
         nameof(MapGridComponent),           // chunk storage, compared by the engine's own tests
         nameof(ContainerManagerComponent),  // membership is entity references, and every contained
                                             // entity is visited in its own right by the walk
-        nameof(DrydockPipeGasComponent),
         nameof(DrydockInProgressComponent),
         nameof(DrydockIdentityComponent),
     };
