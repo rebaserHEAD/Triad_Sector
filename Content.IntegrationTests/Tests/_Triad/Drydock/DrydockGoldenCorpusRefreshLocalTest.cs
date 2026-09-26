@@ -44,8 +44,9 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
     /// through its named recipes, and stored through the real pipeline. What gets written is what the
     /// store filed, read back from the database: the image as the image store holds it
     /// (<see cref="GoldenCorpus.WriteImage"/>), and the revision row's columns in the sidecar. Every new
-    /// fixture is then put through the gate's own verification before the run is allowed to pass, so a
-    /// refresh cannot commit a corpus the gate would reject.</para>
+    /// fixture is then put through the gate's own verification, once the source hull has left the world,
+    /// before the run is allowed to pass, so a refresh cannot commit a corpus the gate would reject; and
+    /// no reborn device may come back at another address than its image carries.</para>
     ///
     /// <para>The fixtures are written to <c>GoldenCorpus/</c> in the repository, or, when <c>LADDER_DUMP</c> is set,
     /// to <c>golden-corpus/</c> under it, which is how a run on a hosted runner hands them back: dispatch the test
@@ -106,6 +107,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             var map = await pair.CreateTestMap();
 
             var reports = new List<GoldenReport>();
+            var addressChanges = new List<string>();
 
             foreach (var (name, vesselId, recipes) in Plan)
             {
@@ -198,6 +200,13 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                 await File.WriteAllTextAsync(Path.Combine(directory, name + ".json"),
                     JsonSerializer.Serialize(fixture, GoldenCorpus.Json) + "\n");
 
+                // The source hull's devices hold every address the image carries until the store's queued delete
+                // (DrydockSystem.cs:534) is processed, and a reborn device keeps its stored address only when nothing on
+                // its network holds it (DeviceNet.cs:54-58), so the retrieve below waits for that delete.
+                await pair.RunTicksSync(1);
+                await server.WaitAssertion(() => Assert.That(entMan.EntityExists(grid), Is.False,
+                    $"{name}: the stored hull is still in the world a tick after its store."));
+
                 // The gate's own verification, on the fixture just written. The fidelity oracle rides
                 // along for the record: field-level drift is not what the gate asserts, and printing it
                 // here is how an exemption gets read before anyone writes one.
@@ -206,9 +215,15 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                     reborn => after = fidelity.SnapshotGrid(reborn));
                 reports.Add(report);
 
-                var drift = DrydockStateSnapshot.Diff(before, after)
-                    .Where(DrydockRoundTripExpectations.IsUnexpected)
-                    .ToList();
+                var diff = DrydockStateSnapshot.Diff(before, after);
+                var drift = diff.Where(DrydockRoundTripExpectations.IsUnexpected).ToList();
+                addressChanges.AddRange(diff.Where(d => MemberOf(d) == AddressMember).Select(d => $"{name}: {d}"));
+
+                var byMember = drift
+                    .GroupBy(MemberOf)
+                    .OrderByDescending(g => g.Count())
+                    .ThenBy(g => g.Key, StringComparer.Ordinal)
+                    .Select(g => $"{g.Key} x{g.Count()}");
 
                 await TestContext.Out.WriteLineAsync(
                     $"[golden-refresh] {name}: {vesselId}, recipes {string.Join(", ", recipes)}; image {filed.Image.Entities.Count} entities, "
@@ -216,6 +231,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                 await TestContext.Out.WriteLineAsync($"[golden-refresh] {report}");
                 await TestContext.Out.WriteLineAsync(
                     $"[golden-refresh] {name}: fidelity oracle, {drift.Count} unexpected field difference(s) across the round trip"
+                    + (drift.Count == 0 ? "" : $"; by member: {string.Join(", ", byMember)}; the first {Math.Min(drift.Count, 40)}:")
                     + string.Concat(drift.Take(40).Select(d => Environment.NewLine + "    " + d)));
             }
 
@@ -237,6 +253,9 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
 
             Assert.That(reports.Where(r => !r.Passed).Select(r => r.ToString()), Is.Empty,
                 "A refreshed fixture fails the gate's own verification, so committing it would commit a red gate.");
+
+            Assert.That(addressChanges, Is.Empty,
+                "A reborn device keeps the address its image carries once the source hull has left the network.");
 
             Assert.That(Plan.Length, Is.EqualTo(GoldenCorpus.CommittedFixtures),
                 "The gate's committed-count control has to move with the plan.");
@@ -368,6 +387,22 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                     probe.Value = AmmoCount(entMan, uid);
                     break;
             }
+        }
+
+        private const string AddressMember = "DeviceNetworkComponent.Address";
+
+        /// <summary>
+        /// The <c>Component.member</c> a <see cref="DrydockStateSnapshot.Diff"/> line names, the key after its path's pipe, or
+        /// <c>&lt;entity:Proto&gt;</c> for a line about a whole entity.
+        /// </summary>
+        private static string MemberOf(string line)
+        {
+            var key = line[(line.IndexOf('|') + 1)..];
+            if (key.StartsWith("<entity:", StringComparison.Ordinal))
+                return key[..(key.IndexOf('>') + 1)];
+
+            var end = key.IndexOfAny(new[] { ':', ' ' });
+            return end < 0 ? key : key[..end];
         }
 
         private static int AmmoCount(IEntityManager entMan, EntityUid gun)
