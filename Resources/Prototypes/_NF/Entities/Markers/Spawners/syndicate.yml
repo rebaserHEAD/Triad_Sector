@@ -89,7 +89,8 @@
       rarePrototypes:
         - Telecrystal25 # Triad
         - ClothingBackpackDuffelSyndicateHardsuitBundle
-        - ClothingBackpackDuffelClothingOuterHardsuitAshenBundle
+        # - ClothingBackpackDuffelClothingOuterHardsuitAshenBundle # Triad: the bundle's Triad id, which the migration table renames this one to
+        - ClothingBackpackDuffelOuterHardsuitTacticoolBundle # Triad
         - ClothingBackpackDuffelSyndicateMedicHardsuitBundle
         - PinpointerSyndicatePOI
         - PinpointerSyndicatePOI

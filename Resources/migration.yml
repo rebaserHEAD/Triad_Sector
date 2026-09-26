@@ -266,7 +266,7 @@ ImprovisedExplosiveEmpty: FireBombEmpty
 ImprovisedExplosiveFuel: FireBombFuel
 
 # 2024-03-16
-ClothingHeadHatHairflower: FoodPoppy
+# ClothingHeadHatHairflower: FoodPoppy # Triad: the hat is live here (the Hairflower loadout), and the rename turns one aboard a stored ship into a poppy
 
 # 2024-03-21
 # RPED: null # Frontier
@@ -395,12 +395,12 @@ LogicGate: LogicGateOr
 # MaterialReclaimerMachineCircuitboard: null # Frontier
 
 # 2024-08-11
-FoodTacoBeef: FoodTacoShell
-FoodTacoChicken: FoodTacoShell
-FoodTacoFish: FoodTacoShell
-FoodTacoBeefSupreme: FoodTacoShell
-FoodTacoChickenSupreme: FoodTacoShell
-FoodTacoRat: FoodTacoShell
+# FoodTacoBeef: FoodTacoShell # Triad: the tacos are live here (microwave recipes cook them), and the rename turns a finished one aboard a stored ship back into its shell
+# FoodTacoChicken: FoodTacoShell # Triad: as FoodTacoBeef
+# FoodTacoFish: FoodTacoShell # Triad: as FoodTacoBeef
+# FoodTacoBeefSupreme: FoodTacoShell # Triad: as FoodTacoBeef
+# FoodTacoChickenSupreme: FoodTacoShell # Triad: as FoodTacoBeef
+# FoodTacoRat: FoodTacoShell # Triad: as FoodTacoBeef
 
 FoodMeatHumanKebab: FoodKebabSkewer
 FoodMeatLizardtailKebab: FoodKebabSkewer

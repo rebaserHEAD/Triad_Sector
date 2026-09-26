@@ -1631,7 +1631,8 @@
   name: uplink-hardsuit-syndie-black-name
   description: uplink-hardsuit-syndie-black-desc
   icon: { sprite: _Mono/Clothing/OuterClothing/Hardsuits/syndicate.rsi, state: icon }
-  productEntity: ClothingBackpackDuffelClothingOuterHardsuitAshenBundle
+  # productEntity: ClothingBackpackDuffelClothingOuterHardsuitAshenBundle # Triad: the bundle's Triad id, which the migration table renames this one to
+  productEntity: ClothingBackpackDuffelOuterHardsuitTacticoolBundle # Triad
   discountCategory: veryRareDiscounts
   discountDownTo:
     Telecrystal: 30 # Mono

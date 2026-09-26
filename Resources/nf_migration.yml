@@ -23,10 +23,10 @@ APCBasicEmpImmune: APCBasic
 Ashtray: NFAshtray
 
 # 2024-05-25
-BoxSurvival: BoxSurvivalMonoOxygenExtended
-BoxSurvivalEngineering: BoxSurvivalMonoOxygenExtended
-BoxSurvivalMedical: BoxSurvivalMonoOxygenExtended
-BoxHug: BoxSurvivalMonoOxygenExtended
+# BoxSurvival: BoxSurvivalMonoOxygenExtended # Triad: the survival boxes are live here (loadouts, fills, starting gear), and the rename swaps one aboard a stored ship for another box
+# BoxSurvivalEngineering: BoxSurvivalMonoOxygenExtended # Triad: as BoxSurvival
+# BoxSurvivalMedical: BoxSurvivalMonoOxygenExtended # Triad: as BoxSurvival
+# BoxHug: BoxSurvivalMonoOxygenExtended # Triad: as BoxSurvival
 
 # 2024-07-19
 ComputerTabletopComputerIFFPOI: ComputerTabletopIFFPOI

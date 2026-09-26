@@ -119,7 +119,7 @@
         - id: ClothingBackpackDuffelSyndicateMedicHardsuitBundle
         - id: ClothingBackpackDuffelSyndicateStealthHardsuitBundle
           weight: 0.5
-        - id: ClothingBackpackDuffelClothingOuterHardsuitAshenBundle
+        - id: ClothingBackpackDuffelOuterHardsuitTacticoolBundle
         - id: ClothingBackpackDuffelSyndicateEVABundle
           weight: 0.5
 
@@ -311,7 +311,7 @@
         weight: 0.25
       - id: ClothingBackpackDuffelSyndicateHardsuitBundle
         weight: 0.25
-      - id: ClothingBackpackDuffelClothingOuterHardsuitAshenBundle
+      - id: ClothingBackpackDuffelOuterHardsuitTacticoolBundle
         weight: 0.25
       - id: ClothingBackpackDuffelSyndicateEliteHardsuitBundle
         weight: 0.25
