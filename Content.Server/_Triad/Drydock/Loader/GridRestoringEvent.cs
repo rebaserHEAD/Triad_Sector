@@ -10,7 +10,8 @@ namespace Content.Server._Triad.Drydock.Loader;
 /// grid before any entity's own rebuild runs, such as joining every device to its network, rides this event; a per-entity
 /// rebuild rides the directed one.
 ///
-/// <para><paramref name="Entities"/> is every restored entity that exists, in ascending stable id. A handler on this event
+/// <para><paramref name="Entities"/> is every restored entity that exists, in ascending order of its id in the image
+/// (<see cref="DrydockImageEntity.Id"/>, the <c>entity_id</c> column). A handler on this event
 /// carries the restore contract: it does not add a component to a restored entity (the entity is at MapInitialized, so the
 /// added component alone would get <c>MapInitEvent</c>), and it does not rely on another handler's effects unless the
 /// rebuild list orders them.</para>

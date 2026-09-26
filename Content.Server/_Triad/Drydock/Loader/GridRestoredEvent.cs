@@ -4,7 +4,8 @@ using Robust.Shared.GameObjects;
 namespace Content.Server._Triad.Drydock.Loader;
 
 /// <summary>
-/// Raised once a loaded image has fully started: directed at each restored entity in ascending stable id order after the
+/// Raised once a loaded image has fully started: directed at each restored entity in ascending order of its id in the
+/// image (<see cref="DrydockImageEntity.Id"/>, the <c>entity_id</c> column) after the
 /// last entity has started and the manifest's after-start members are set and after <see cref="GridRestoringEvent"/> has
 /// completed, then once more as a broadcast for work that is per grid. A handler rebuilds what the image does not carry, and may read any other restored entity, because every one
 /// has started.
