@@ -212,11 +212,6 @@ public sealed partial class DrydockStore
     /// ship row and incremented, so a race produces the same number twice, and the composite primary
     /// key on (ship_guid, revision) makes the second transaction fail loudly rather than overwrite.
     /// Failing loudly is the point: the caller still holds a live grid and can refuse.</para>
-    ///
-    /// <para>Refuses a <see cref="DrydockRevisionKind.SystemRebake"/> by throwing: that kind names a
-    /// revision derived from an earlier one, and this path reads the pointer off a tracked row and
-    /// refreshes the display cache from the request, which such a revision has no business doing.
-    /// Nothing files that kind now; it stays for the rows that carry it.</para>
     /// </summary>
     /// <param name="keepBlobs">
     /// How many revisions keep their image, never fewer than two once two exist, plus any that
@@ -226,9 +221,6 @@ public sealed partial class DrydockStore
     /// <returns>The outcome, the revision number filed, and the berth the ship now sits in.</returns>
     public Task<DrydockFileResult> FileRevision(DrydockRevisionRequest request, DrydockImage image, int keepBlobs, CancellationToken ct = default)
     {
-        if (request.Kind == DrydockRevisionKind.SystemRebake)
-            throw new ArgumentException($"{nameof(DrydockRevisionKind.SystemRebake)} is not a kind this path files.", nameof(request));
-
         var images = _db.DrydockImages;
         return _db.RunTriadDbCommand(async (db, token) =>
         {
@@ -717,8 +709,7 @@ public sealed partial class DrydockStore
         ship.UpdatedAt = now;
 
         // A player store or an import needs somewhere to put the hull. Refusing here rolls the whole
-        // transaction back: nothing is filed for a ship with nowhere to go. (A SystemRebake never
-        // reaches this method; FileRevision refuses the kind before it opens a transaction.)
+        // transaction back: nothing is filed for a ship with nowhere to go.
         //
         // An impound is the third case: it has somewhere to go that is not a berth, so it vacates
         // instead of seating. LastBerthId keeps where the hull came from, which is what a release
@@ -1575,13 +1566,6 @@ public sealed partial class DrydockStore
         }, ct);
     }
 
-    /// <summary>The standing offer on one ship, or null when it has none.</summary>
-    public Task<DrydockTransfer?> GetPendingOfferForShip(Guid shipGuid, CancellationToken ct = default)
-    {
-        return _db.RunTriadDbCommand(async (db, token) => await db.DrydockTransfer.AsNoTracking()
-            .SingleOrDefaultAsync(t => t.ShipGuid == shipGuid && t.Resolution == DrydockTransferResolution.Pending, token), ct);
-    }
-
     /// <summary>The standing offers on a set of ships, keyed by ship: the clock on the admin panel's rows.</summary>
     public Task<Dictionary<Guid, DrydockTransfer>> GetPendingOffersForShips(IEnumerable<Guid> shipGuids, CancellationToken ct = default)
     {
@@ -2231,7 +2215,6 @@ public sealed partial class DrydockStore
                 Revision = next,
                 Kind = DrydockRevisionKind.AdminRestore,
                 DerivedFromRevision = revision,
-                RebakeVersion = source.RebakeVersion,
                 ActorUserId = actorUserId,
                 CreatedRoundId = roundId,
                 CreatedAt = now,
@@ -2550,8 +2533,8 @@ public sealed class DrydockRevisionRequest
     public bool MarkStored { get; init; }
 
     /// <summary>
-    /// A player store or an import. <see cref="DrydockRevisionKind.SystemRebake"/> is refused, which
-    /// is why this request carries no provenance fields.
+    /// A player store or an import. A revision derived from another is filed by the promote, never
+    /// here, which is why this request carries no provenance fields.
     /// </summary>
     public required DrydockRevisionKind Kind { get; init; }
 

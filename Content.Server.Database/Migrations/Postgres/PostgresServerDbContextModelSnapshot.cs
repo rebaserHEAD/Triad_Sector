@@ -1252,10 +1252,6 @@ namespace Content.Server.Database.Migrations.Postgres
                         .HasColumnType("bytea")
                         .HasColumnName("proto_fingerprint");
 
-                    b.Property<int>("RebakeVersion")
-                        .HasColumnType("integer")
-                        .HasColumnName("rebake_version");
-
                     b.Property<int>("SizeBytes")
                         .HasColumnType("integer")
                         .HasColumnName("size_bytes");

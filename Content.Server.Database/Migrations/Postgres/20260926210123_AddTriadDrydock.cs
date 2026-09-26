@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using Microsoft.EntityFrameworkCore.Migrations;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 
@@ -146,7 +146,6 @@ namespace Content.Server.Database.Migrations.Postgres
                     revision = table.Column<int>(type: "integer", nullable: false),
                     kind = table.Column<int>(type: "integer", nullable: false),
                     derived_from_revision = table.Column<int>(type: "integer", nullable: true),
-                    rebake_version = table.Column<int>(type: "integer", nullable: false),
                     pinned = table.Column<bool>(type: "boolean", nullable: false),
                     actor_user_id = table.Column<Guid>(type: "uuid", nullable: true),
                     created_round_id = table.Column<int>(type: "integer", nullable: true),

@@ -11,7 +11,7 @@ using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 namespace Content.Server.Database.Migrations.Sqlite
 {
     [DbContext(typeof(SqliteServerDbContext))]
-    [Migration("20260926063345_AddTriadDrydock")]
+    [Migration("20260926210109_AddTriadDrydock")]
     partial class AddTriadDrydock
     {
         /// <inheritdoc />
@@ -1084,10 +1084,6 @@ namespace Content.Server.Database.Migrations.Sqlite
                         .IsRequired()
                         .HasColumnType("BLOB")
                         .HasColumnName("proto_fingerprint");
-
-                    b.Property<int>("RebakeVersion")
-                        .HasColumnType("INTEGER")
-                        .HasColumnName("rebake_version");
 
                     b.Property<int>("SizeBytes")
                         .HasColumnType("INTEGER")

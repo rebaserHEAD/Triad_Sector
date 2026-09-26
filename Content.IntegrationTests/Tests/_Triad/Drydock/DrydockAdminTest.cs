@@ -239,11 +239,11 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                 adminOverride: true, reason: "recipient reported for scamming");
             Assert.That(resolved, Is.Not.Null);
 
-            var standing = await store.GetPendingOfferForShip(ship);
+            var standing = await store.GetPendingOffersForShips(new[] { ship });
             var after = (await store.GetShipHeader(ship))!;
             Assert.Multiple(() =>
             {
-                Assert.That(standing, Is.Null, "The offer is gone, so the recipient's alert is too.");
+                Assert.That(standing, Does.Not.ContainKey(ship), "The offer is gone, so the recipient's alert is too.");
                 Assert.That(after.State, Is.EqualTo(DrydockShipState.Stored), "Escrow releases back to the owner's own berth.");
                 Assert.That(after.BerthId, Is.Not.Null, "A ship in escrow keeps its berth, so there is one to come back to.");
             });

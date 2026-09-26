@@ -47,7 +47,7 @@ internal static class ModelDrydock
             .HasForeignKey(r => r.ShipGuid)
             .OnDelete(DeleteBehavior.Cascade);
 
-        // Null on system re-bakes, and set null rather than cascade if the player row ever goes:
+        // Null for the system, and set null rather than cascade if the player row ever goes:
         // losing who stored a revision must never take the revision with it.
         modelBuilder.Entity<DrydockRevision>()
             .HasOne(r => r.Actor)
@@ -396,16 +396,9 @@ public sealed class DrydockRevision
     public DrydockRevisionKind Kind { get; set; }
 
     /// <summary>
-    /// Which revision a re-bake or an admin promote was derived from. Null for a player store and an
-    /// import.
+    /// Which revision an admin promote was derived from. Null for a player store and an import.
     /// </summary>
     public int? DerivedFromRevision { get; set; }
-
-    /// <summary>
-    /// Which generation of the re-bake ladder produced this. Zero for a player store; a promote
-    /// carries its source's.
-    /// </summary>
-    public int RebakeVersion { get; set; }
 
     /// <summary>
     /// Excluded from image pruning while set: keep-N and the two-image floor both step around a pinned
@@ -424,10 +417,7 @@ public sealed class DrydockRevision
 
     public Player? Actor { get; set; }
 
-    /// <summary>
-    /// Null when no round was running at filing, which is every <see cref="DrydockRevisionKind.SystemRebake"/>
-    /// row.
-    /// </summary>
+    /// <summary>Null when no round was running at filing.</summary>
     public int? CreatedRoundId { get; set; }
 
     public Round? CreatedRound { get; set; }
@@ -449,10 +439,8 @@ public sealed class DrydockRevision
     /// <summary>
     /// What the shipyard appraised the hull at when this revision was filed, captured while the
     /// grid was still live because a stored ship has nothing left to appraise. A promote copies its
-    /// source revision's, since it has no live grid either, and a SystemRebake row carries its
-    /// source's. Null when nothing
-    /// appraised it, and on rows filed before the column existed; a sale quotes from the current
-    /// revision.
+    /// source revision's, since it has no live grid either. Null when nothing appraised it; a sale
+    /// quotes from the current revision.
     /// </summary>
     public int? AppraisedValue { get; set; }
 
@@ -471,9 +459,6 @@ public enum DrydockRevisionKind
 {
     /// <summary>A player put their ship away.</summary>
     PlayerStore = 0,
-
-    /// <summary>The re-bake ladder rewrote an older revision to current content.</summary>
-    SystemRebake = 1,
 
     /// <summary>
     /// Read out of a legacy ship save file by the import bridge. Present from day one because enum
@@ -542,12 +527,6 @@ public enum DrydockAuditAction
 
     Transfer = 3,
     Delete = 4,
-
-    /// <summary>
-    /// A system re-bake was filed as the ship's new current revision. The actor is null, the
-    /// revision is the one filed, and the reason names the revision it was derived from.
-    /// </summary>
-    Rebake = 5,
 
     /// <summary>
     /// Took the hull into the impound lot. The actor is the admin, or null for the round-end sweep;
@@ -669,14 +648,6 @@ public enum DrydockAuditAction
     /// of window.
     /// </summary>
     DriftRefused = 35,
-
-    /// <summary>
-    /// Written by the retrieve wrapper once the ship is presented (<c>DrydockSystem.WriteSkippedState</c>):
-    /// the hull came back with captured-state or appearance keys skipped, because nothing on the live
-    /// entity answers to them any more. One row per sidecar; the reason opens with <c>captured:</c>
-    /// or <c>appearance:</c> and lists up to twenty keys with why each was skipped.
-    /// </summary>
-    StateSkipped = 36,
 }
 
 /// <summary>

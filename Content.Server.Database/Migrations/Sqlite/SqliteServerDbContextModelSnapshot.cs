@@ -1082,10 +1082,6 @@ namespace Content.Server.Database.Migrations.Sqlite
                         .HasColumnType("BLOB")
                         .HasColumnName("proto_fingerprint");
 
-                    b.Property<int>("RebakeVersion")
-                        .HasColumnType("INTEGER")
-                        .HasColumnName("rebake_version");
-
                     b.Property<int>("SizeBytes")
                         .HasColumnType("INTEGER")
                         .HasColumnName("size_bytes");

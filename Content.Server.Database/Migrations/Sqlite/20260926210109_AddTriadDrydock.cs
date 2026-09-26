@@ -145,7 +145,6 @@ namespace Content.Server.Database.Migrations.Sqlite
                     revision = table.Column<int>(type: "INTEGER", nullable: false),
                     kind = table.Column<int>(type: "INTEGER", nullable: false),
                     derived_from_revision = table.Column<int>(type: "INTEGER", nullable: true),
-                    rebake_version = table.Column<int>(type: "INTEGER", nullable: false),
                     pinned = table.Column<bool>(type: "INTEGER", nullable: false),
                     actor_user_id = table.Column<Guid>(type: "TEXT", nullable: true),
                     created_round_id = table.Column<int>(type: "INTEGER", nullable: true),

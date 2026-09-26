@@ -178,33 +178,6 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
         }
 
         /// <summary>
-        /// The filing path refuses the <see cref="DrydockRevisionKind.SystemRebake"/> kind outright, so
-        /// the unconditional pointer read it does cannot file a revision of that kind by mistake.
-        /// </summary>
-        [Test]
-        public async Task TheOrdinaryFilingPathRefusesARebake()
-        {
-            await using var pair = await PoolManager.GetServerClient();
-            var store = pair.Server.ResolveDependency<DrydockStore>();
-
-            var request = new DrydockRevisionRequest
-            {
-                ShipGuid = Guid.NewGuid(),
-                OwnerUserId = Guid.NewGuid(),
-                ShipName = "Kestrel",
-                Kind = DrydockRevisionKind.SystemRebake,
-                EngineFormatVer = 7,
-                ProtoFingerprint = new byte[] { 1 },
-                SizeBytes = 1,
-                Manifest = "{}",
-            };
-
-            Assert.ThrowsAsync<ArgumentException>(async () => await store.FileRevision(request, Image(1), keepBlobs: 2));
-
-            await pair.CleanReturnAsync();
-        }
-
-        /// <summary>
         /// A promote files a copy with no live grid behind it, so the copy has to carry the source's
         /// appraisal or a sale or impound of the promoted ship quotes nothing.
         /// </summary>

@@ -16,7 +16,7 @@ using NpgsqlTypes;
 namespace Content.Server.Database.Migrations.Postgres
 {
     [DbContext(typeof(PostgresServerDbContext))]
-    [Migration("20260926063501_AddTriadDrydock")]
+    [Migration("20260926210123_AddTriadDrydock")]
     partial class AddTriadDrydock
     {
         /// <inheritdoc />
@@ -1254,10 +1254,6 @@ namespace Content.Server.Database.Migrations.Postgres
                         .IsRequired()
                         .HasColumnType("bytea")
                         .HasColumnName("proto_fingerprint");
-
-                    b.Property<int>("RebakeVersion")
-                        .HasColumnType("integer")
-                        .HasColumnName("rebake_version");
 
                     b.Property<int>("SizeBytes")
                         .HasColumnType("integer")
