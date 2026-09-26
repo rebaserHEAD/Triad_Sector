@@ -787,6 +787,65 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                 });
             }
 
+            // 42. A pulsed airlock (H12-timers): its log and timing wires pulsed just before the first store, so each timer is
+            // mid-run at both stores. A timer is not a data field; the carry takes the seconds it has left and runs it again
+            // from the load (WiresCarrySystem). The store's gap does not count against it, since the ship is stored then, so
+            // after both round trips each timer is still running with its effect in place, unless a power edge after a load
+            // cancelled it, which is the question this recipe answers.
+            {
+                var airlock = Place(entMan, grid, "Airlock", 5, 6);
+                var wiresSystem = entMan.System<WiresSystem>();
+                var pulsed = new[] { ("LogWireAction", 0), ("DoorTimingWireAction", 0) };
+                var keys = new List<object>();
+
+                recipes.Add(new WorkbenchRecipe(42, "pulsed airlock", "Wires.Timers on the ~carried row, and Airlock.AutoCloseDelayModifier",
+                    new[] { "WiresComponent", "AirlockComponent" },
+                    new List<string> { PathOf("Airlock", 5, 6) },
+                    () => new List<string> { "pulsed just before the first store, so its timers are mid-run at both stores" })
+                {
+                    BeforeStore = () =>
+                    {
+                        var wires = entMan.GetComponent<WiresComponent>(airlock);
+                        foreach (var (action, rank) in pulsed)
+                        {
+                            var wire = NamedWires(wires).Single(n => n.Name == $"{action}#{rank}").Wire;
+                            wire.Action!.Pulse(EntityUid.Invalid, wire);
+                        }
+
+                        keys.AddRange(wiresSystem.RunningTimers(airlock).Select(t => t.Key));
+                        return new List<string> { $"timers running: {string.Join(", ", wiresSystem.RunningTimers(airlock).Select(t => $"{t.Key} {t.TimeLeft:F1}s"))}" };
+                    },
+                    AfterLoad = retrieved =>
+                    {
+                        var notes = new List<string>();
+                        var bad = new List<string>();
+                        var anchored = new List<EntityUid>();
+                        entMan.System<SharedMapSystem>().GetAnchoredEntities((retrieved, entMan.GetComponent<MapGridComponent>(retrieved)), new Vector2i(5, 6), anchored);
+                        var door = anchored.FirstOrDefault(e => entMan.GetComponent<MetaDataComponent>(e).EntityPrototype?.ID == "Airlock");
+                        if (!door.IsValid())
+                            return (notes, new List<string> { "the airlock at (5, 6) has to come back" });
+
+                        var running = wiresSystem.RunningTimers(door).ToList();
+                        notes.Add($"timers running: {(running.Count == 0 ? "none" : string.Join(", ", running.Select(t => $"{t.Key} {t.TimeLeft:F1}s")))}");
+                        foreach (var key in keys)
+                        {
+                            if (!running.Any(t => Equals(t.Key, key) && t.TimeLeft > 0))
+                                bad.Add($"the airlock's {key} timer has to be running still");
+                        }
+
+                        var reader = entMan.GetComponent<Content.Shared.Access.Components.AccessReaderComponent>(door);
+                        var modifier = entMan.GetComponent<Content.Shared.Doors.Components.AirlockComponent>(door).AutoCloseDelayModifier;
+                        notes.Add($"logging disabled {reader.LoggingDisabled}, auto-close modifier {modifier}");
+                        if (!reader.LoggingDisabled)
+                            bad.Add("the log pulse's effect has to be in place until its timer ends");
+                        if (Math.Abs(modifier - 0.5f) > 1e-4f)
+                            bad.Add($"the timing pulse's modifier has to be 0.5 until its timer ends, and is {modifier}");
+
+                        return (notes, bad);
+                    },
+                });
+            }
+
             return recipes;
         }
 
