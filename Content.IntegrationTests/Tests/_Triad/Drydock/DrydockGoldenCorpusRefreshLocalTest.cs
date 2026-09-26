@@ -45,8 +45,10 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
     /// store filed, read back from the database: the image as the image store holds it
     /// (<see cref="GoldenCorpus.WriteImage"/>), and the revision row's columns in the sidecar. Every new
     /// fixture is then put through the gate's own verification, once the source hull has left the world,
-    /// before the run is allowed to pass, so a refresh cannot commit a corpus the gate would reject; and
-    /// no reborn device may come back at another address than its image carries.</para>
+    /// before the run is allowed to pass, so a refresh cannot commit a corpus the gate would reject; no
+    /// reborn device may come back at another address than its image carries; and every difference the
+    /// fidelity oracle finds on a reborn hull has to be classified in
+    /// <see cref="DrydockRoundTripExpectations"/>.</para>
     ///
     /// <para>The fixtures are written to <c>GoldenCorpus/</c> in the repository, or, when <c>LADDER_DUMP</c> is set,
     /// to <c>golden-corpus/</c> under it, which is how a run on a hosted runner hands them back: dispatch the test
@@ -108,6 +110,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
 
             var reports = new List<GoldenReport>();
             var addressChanges = new List<string>();
+            var unexpected = new List<string>();
 
             foreach (var (name, vesselId, recipes) in Plan)
             {
@@ -207,9 +210,9 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                 await server.WaitAssertion(() => Assert.That(entMan.EntityExists(grid), Is.False,
                     $"{name}: the stored hull is still in the world a tick after its store."));
 
-                // The gate's own verification, on the fixture just written. The fidelity oracle rides
-                // along for the record: field-level drift is not what the gate asserts, and printing it
-                // here is how an exemption gets read before anyone writes one.
+                // The gate's own verification, on the fixture just written, with the fidelity oracle
+                // alongside: every difference it finds has to be classified in DrydockRoundTripExpectations,
+                // and the print below is how an exemption gets read before anyone writes one.
                 DrydockStateSnapshot after = default!;
                 var report = await GoldenCorpus.Verify(pair, fixture, owner, station,
                     reborn => after = fidelity.SnapshotGrid(reborn));
@@ -217,6 +220,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
 
                 var diff = DrydockStateSnapshot.Diff(before, after);
                 var drift = diff.Where(DrydockRoundTripExpectations.IsUnexpected).ToList();
+                unexpected.AddRange(drift.Select(d => $"{name}: {d}"));
                 addressChanges.AddRange(diff.Where(d => MemberOf(d) == AddressMember).Select(d => $"{name}: {d}"));
 
                 var byMember = drift
@@ -256,6 +260,11 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
 
             Assert.That(addressChanges, Is.Empty,
                 "A reborn device keeps the address its image carries once the source hull has left the network.");
+
+            // The whole list in the message, since the constraint's own display stops after a few.
+            Assert.That(unexpected, Is.Empty,
+                $"{unexpected.Count} difference(s) across the round trip that DrydockRoundTripExpectations does not classify:"
+                + string.Concat(unexpected.Select(line => Environment.NewLine + "    " + line)));
 
             Assert.That(Plan.Length, Is.EqualTo(GoldenCorpus.CommittedFixtures),
                 "The gate's committed-count control has to move with the plan.");

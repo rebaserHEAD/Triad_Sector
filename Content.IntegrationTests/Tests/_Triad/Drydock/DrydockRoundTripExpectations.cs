@@ -27,6 +27,12 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             // Station membership is stripped at store and a fresh station is built at retrieve.
             "StationMemberComponent.",
 
+            // Named after that fresh station at its post-init, where the entity's UseStationName is set: a warp point's
+            // location (StationRenameWarpsSystems.cs:17, :20-23, :47-48) and a fax's name (StationRenameFaxesSystem.cs:15,
+            // :18-21, :56). The ship's holopad is renamed the same way, in ByDesignOn.
+            "WarpPointComponent.Location",
+            "FaxMachineComponent.FaxName",
+
             // The repair baseline is derived state, regenerated on arrival by design.
             "ShipRepair",
 
@@ -85,6 +91,20 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             "PowerNetworkBatteryComponent.SupplyRampPosition",
             "SpreaderGridComponent.UpdateAccumulator",
 
+            // A morgue's beep timer, added to every frame (MorgueSystem.cs:104, :111); a running generator's part-burnt
+            // unit of fuel (GeneratorSystem.cs:164); and a despawn timer counting down (SharedTimedDespawnSystem.cs:35).
+            "MorgueComponent.AccumulatedFrameTime",
+            "SolidFuelGeneratorAdapterComponent.FractionalMaterial",
+            "TimedDespawnComponent.Lifetime",
+
+            // A solution container's appearance holds whichever of its solutions changed last
+            // (SharedSolutionContainerSystem.Relays.cs:87-92, SharedSolutionContainerSystem.cs:258-269), and the client
+            // draws only the solution its visuals name (SolutionContainerVisualsSystem.cs:37-40). Which one it holds is
+            // the order the solutions last changed in, which a sink's drain changes on its own.
+            "Appearance.SolutionContainerVisuals.Color",
+            "Appearance.SolutionContainerVisuals.FillFraction",
+            "Appearance.SolutionContainerVisuals.SolutionName",
+
             // The powernet rebuild, which is the largest single source of difference in the fleet
             // sweep and is a property of the two snapshots rather than of the round trip. A hull
             // loaded from its map file starts at whatever charge the mapper left in it; a retrieved
@@ -126,11 +146,51 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             "Appearance.ApcVisuals.",
             "Appearance.ComputerVisuals.Powered",
             "Appearance.SmesVisuals.",
+
+            // Each set off while its device reads unpowered: a vent (GasVentPumpSystem.cs:328-331), a scrubber
+            // (GasVentScrubberSystem.cs:234-237), a pressure pump (SharedGasPressurePumpSystem.cs:80-81), a charger's
+            // light, seeded from its status at startup (ChargerSystem.cs:45-48, :252-254), and a disposal unit's light
+            // (SharedDisposalUnitSystem.cs:364-367), whose appearance enum is DisposalUnitComponent.Visuals.
+            "Appearance.VentPumpVisuals.State",
+            "Appearance.ScrubberVisuals.State",
+            "Appearance.PumpVisuals.Enabled",
+            "Appearance.CellVisual.Light",
+            "Appearance.Visuals.Light",
+        };
+
+        /// <summary>
+        /// <see cref="ByDesign"/> for a family of prototypes only, where the member alone would hide the same member on
+        /// every other entity: a label changing on a crate is a finding. Keyed by the start of the prototype id and the
+        /// <c>Component.member</c>.
+        /// </summary>
+        private static readonly (string Prototype, string Member)[] ByDesignOn =
+        {
+            // A ship's holopad (Holopad.useStationName) takes the fresh station's name as its label and base name at the
+            // station's post-init (StationRenameHolopadsSystem.cs:25-51).
+            ("NFHolopadShip", "LabelComponent.CurrentLabel"),
+            ("NFHolopadShip", "NameModifierComponent.BaseName"),
         };
 
         public static bool IsUnexpected(string diffLine)
         {
-            return !ByDesign.Any(diffLine.Contains) && !WithTheClock.Any(diffLine.Contains);
+            return !ByDesign.Any(diffLine.Contains)
+                   && !WithTheClock.Any(diffLine.Contains)
+                   && !ByDesignOn.Any(entry => IsOn(diffLine, entry.Prototype, entry.Member));
+        }
+
+        /// <summary>
+        /// Whether a <see cref="Content.Server._Triad.Drydock.DrydockStateSnapshot.Diff"/> line, <c>KIND path|key ...</c>,
+        /// is about <paramref name="member"/> on an entity whose prototype id starts with <paramref name="prototype"/>: the
+        /// path's last segment is <c>Prototype@x,y</c> for a grid child and <c>Prototype</c> below one.
+        /// </summary>
+        private static bool IsOn(string diffLine, string prototype, string member)
+        {
+            var pipe = diffLine.IndexOf('|');
+            if (pipe < 0 || string.CompareOrdinal(diffLine, pipe + 1, member, 0, member.Length) != 0)
+                return false;
+
+            var segment = diffLine.LastIndexOfAny(new[] { '/', ' ' }, pipe) + 1;
+            return string.CompareOrdinal(diffLine, segment, prototype, 0, prototype.Length) == 0;
         }
     }
 }
