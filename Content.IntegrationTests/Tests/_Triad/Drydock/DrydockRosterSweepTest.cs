@@ -9,12 +9,15 @@ using System.Threading.Tasks;
 using Content.IntegrationTests.Pair;
 using Content.Server._NF.Shipyard.Systems;
 using Content.Server._Triad.Drydock;
+using Content.Server.Atmos.Components;
+using Content.Server.Atmos.EntitySystems;
 using Content.Server.Database;
 using Content.Server.Station.Components;
 using Content.Server.Station.Systems;
 using Content.Shared._NF.Shipyard.Prototypes;
 using Content.Shared._Triad.CCVar;
 using Content.Shared._Triad.ShipSize;
+using Content.Shared.Atmos;
 using Robust.Shared.Configuration;
 using Robust.Shared.EntitySerialization.Systems;
 using Robust.Shared.GameObjects;
@@ -103,6 +106,12 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                 station = entMan.Spawn();
                 entMan.AddComponent<StationDataComponent>(station);
                 stationSys.AddGridToStation(station, map.Grid.Owner);
+
+                // A sector map carries a space atmosphere; a test map does not, and a closed firelock on a hull on this
+                // map asks the map for the air past its grid's tiles (AtmosphereSystem.API.cs:130) and logs an error
+                // when it is missing.
+                if (!entMan.HasComponent<MapAtmosphereComponent>(map.MapUid))
+                    server.System<AtmosphereSystem>().SetMapAtmosphere(map.MapUid, space: true, new GasMixture());
             });
 
             // This is the fixture the janitor actually caught: an unprotected run lost the station's
@@ -222,12 +231,9 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                     }
 
                     // The same settling time the loaded ship got before its snapshot. A power net
-                    // rebuilds over several ticks and its devices toggle while it does, so comparing
-                    // three ticks of settling against ten reports the simulation settling rather than
-                    // the round trip losing anything: the first fleet-wide run spent thousands of
-                    // lines saying so. Equalised on this side rather than by ticking the loaded ship
-                    // longer, because the extra ticks gave the firelock update seven more chances per
-                    // vessel to ask a torn-down map for its atmosphere, which is a known flake here.
+                    // rebuilds over several ticks and its devices toggle while it does, so unequal
+                    // settling reports the simulation settling rather than the round trip losing
+                    // anything.
                     await pair.RunTicksSync(3);
 
                     DrydockStateSnapshot afterState = default!;
