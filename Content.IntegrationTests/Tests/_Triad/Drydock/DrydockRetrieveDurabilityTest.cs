@@ -1,6 +1,7 @@
 #nullable enable
 
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using System.Numerics;
 using System.Threading;
@@ -101,6 +102,84 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
         }
 
         /// <summary>
+        /// A current image carrying twelve components nothing registers, beside a prototype that no longer exists, is
+        /// refused before the load with every one of them named, and the ship stays stored. The control is the same image
+        /// before the doctoring, whose pre-flight carries none of those names.
+        /// </summary>
+        [Test]
+        public async Task ACurrentImageCarryingUnregisteredComponentsIsRefusedNamingEveryOne()
+        {
+            await using var pair = await PoolManager.GetServerClient();
+            var server = pair.Server;
+            var entMan = server.EntMan;
+
+            var db = server.ResolveDependency<IServerDbManager>();
+            var store = server.ResolveDependency<DrydockStore>();
+            var drydock = server.System<DrydockSystem>();
+
+            var owner = Guid.NewGuid();
+            await DrydockTestHelpers.InsertPlayer(db, owner);
+            await store.AddBerth(owner, ShipSizeClass.SuperCapital, DrydockBerthKind.Granted, 0, null, null);
+
+            var (station, shipGrid, _) = await DrydockRoundTripTest.BuildShipAndStation(pair);
+            await server.WaitPost(() => entMan.SpawnEntity(ItemProtoId, new EntityCoordinates(shipGrid, new Vector2(0.5f, 0.5f))));
+            await pair.RunTicksSync(2);
+
+            var (result, shipId) = await DrydockTestHelpers.RunOnServer(pair, () => drydock.TryStoreShip(shipGrid, owner, null));
+            Assert.That(result, Is.EqualTo(DrydockStoreResult.Success));
+            await pair.RunTicksSync(5);
+
+            var ship = shipId!.Value;
+            var revision = (await store.GetShipHeader(ship))!.CurrentRevision;
+            var components = Enumerable.Range(0, 12).Select(i => $"DrydockTestNoSuchComponent{i:D2}").ToList();
+
+            var clean = await store.PreflightImage(ship, revision);
+            Assert.That(clean!.ComponentNames.Intersect(components), Is.Empty, "Control: the stored image carries none of the names the doctoring adds.");
+
+            var original = await ReadImage(db, ship, revision);
+            var doctored = Rename(original, ItemProtoId, PhantomProtoId);
+            doctored = doctored with
+            {
+                Entities = doctored.Entities
+                    .Select(entity => entity.Id != doctored.GridId
+                        ? entity
+                        : entity with { Rows = entity.Rows.Concat(components.Select(name => KeyValuePair.Create(name, "{}"))).ToDictionary() })
+                    .ToList(),
+            };
+            await WriteImage(db, ship, revision, doctored);
+
+            var stagingBefore = 0;
+            await server.WaitPost(() => stagingBefore = DrydockRoundTripTest.CountStagingMaps(entMan));
+
+            var refused = await DrydockTestHelpers.Quietly(pair, () => DrydockTestHelpers.RunOnServer(pair, () => drydock.TryRetrieveShip(ship, owner, station, null)));
+
+            var header = await store.GetShipHeader(ship);
+            var audit = await store.GetAudit(ship);
+            var driftRows = audit.Where(a => a.Action == DrydockAuditAction.DriftRefused).ToList();
+            var liveCopies = 0;
+            var stagingAfter = 0;
+            await server.WaitPost(() =>
+            {
+                liveCopies = CountLiveCopies(entMan, ship);
+                stagingAfter = DrydockRoundTripTest.CountStagingMaps(entMan);
+            });
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(refused.Result, Is.EqualTo(DrydockRetrieveResult.ContentDrift));
+                Assert.That(liveCopies, Is.Zero, "Refused before the load: no grid carries this hull.");
+                Assert.That(stagingAfter, Is.EqualTo(stagingBefore), "Nor was a staging map made and left behind.");
+                Assert.That(header!.State, Is.EqualTo(DrydockShipState.Stored), "The ship stays stored.");
+                Assert.That(driftRows, Has.Count.EqualTo(1));
+                Assert.That(driftRows.Single().Reason, Does.Contain(PhantomProtoId), "The row names the prototype.");
+                foreach (var name in components)
+                    Assert.That(driftRows.Single().Reason, Does.Contain(name), $"The row names {name}.");
+            });
+
+            await pair.CleanReturnAsync();
+        }
+
+        /// <summary>
         /// A current image that passes the drift gate and still will not load falls back to the
         /// revision before it, and is pinned so the stores that follow cannot prune the newer state.
         /// </summary>
@@ -121,7 +200,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             var (station, shipGrid, _) = await DrydockRoundTripTest.BuildShipAndStation(pair);
             var (current, older, ship) = await StoreTwice(pair, drydock, store, shipGrid, owner, station);
 
-            await WriteImage(db, ship, current, Unloadable(await ReadImage(db, ship, current)));
+            await WriteImage(db, ship, current, DrydockRoundTripTest.Unloadable(await ReadImage(db, ship, current)));
 
             var fallbacksBefore = DrydockMetrics.RetrieveFallbacks.Value;
             var retrieved = await DrydockTestHelpers.Quietly(pair, () => DrydockTestHelpers.RunOnServer(pair, () => drydock.TryRetrieveShip(ship, owner, station, null)));
@@ -177,7 +256,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             var olderImage = await ReadImage(db, ship, older);
             Assert.That(olderImage.Entities.Any(e => e.Prototype == ItemProtoId), Is.True, "Control: the older image carries the item.");
             await WriteImage(db, ship, older, Rename(olderImage, ItemProtoId, PhantomProtoId));
-            await WriteImage(db, ship, current, Unloadable(await ReadImage(db, ship, current)));
+            await WriteImage(db, ship, current, DrydockRoundTripTest.Unloadable(await ReadImage(db, ship, current)));
 
             var refused = await DrydockTestHelpers.Quietly(pair, () => DrydockTestHelpers.RunOnServer(pair, () => drydock.TryRetrieveShip(ship, owner, station, null)));
 
@@ -257,19 +336,6 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             return image with
             {
                 Entities = image.Entities.Select(e => e.Prototype == from ? e with { Prototype = to } : e).ToList(),
-            };
-        }
-
-        /// <summary>The image with a row on its grid entity naming a component no registration has, which the load refuses.</summary>
-        private static DrydockImage Unloadable(DrydockImage image)
-        {
-            return image with
-            {
-                Entities = image.Entities
-                    .Select(entity => entity.Id != image.GridId
-                        ? entity
-                        : entity with { Rows = new System.Collections.Generic.Dictionary<string, string>(entity.Rows) { ["DrydockTestNoSuchComponent"] = "{}" } })
-                    .ToList(),
             };
         }
 

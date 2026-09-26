@@ -14,13 +14,15 @@ public readonly record struct DrydockFormatWindow(int Minimum, int Maximum)
 public readonly record struct DrydockRename(string From, string To);
 
 /// <summary>
-/// What <see cref="DrydockDrift.Detect"/> found about one stored document. Each list is ordinal
+/// What <see cref="DrydockDrift.Detect"/> found about one stored image. Each list is ordinal
 /// sorted and free of duplicates.
 /// </summary>
+/// <param name="MissingComponents">Component names the document carries that no registration has now.</param>
 public sealed record DrydockDriftVerdict(
     IReadOnlyList<string> Unresolved,
     IReadOnlyList<DrydockRename> Renamed,
     IReadOnlyList<string> Deleted,
+    IReadOnlyList<string> MissingComponents,
     int EngineFormatVer,
     DrydockFormatWindow EngineWindow,
     int DrydockFormatVer,
@@ -30,25 +32,27 @@ public sealed record DrydockDriftVerdict(
 
     public bool DrydockFormatOutOfWindow => !DrydockWindow.Contains(DrydockFormatVer);
 
-    /// <summary>Nothing moved: no id the migration mappings touch, and both formats readable.</summary>
+    /// <summary>Nothing moved: no id the migration mappings touch, every component registered, and both formats readable.</summary>
     public bool IsClean =>
         Unresolved.Count == 0
         && Renamed.Count == 0
         && Deleted.Count == 0
+        && MissingComponents.Count == 0
         && !EngineFormatOutOfWindow
         && !DrydockFormatOutOfWindow;
 
     /// <summary>
-    /// The load would fail or misread: an id that resolves to nothing after the mappings, or a format
-    /// outside its reader's window. Renames and deletions alone are not a refusal, since the loader
-    /// heals both on its own.
+    /// The load would fail or misread: an id that resolves to nothing after the mappings, a component
+    /// no registration has (the load resolves every row through the factory, <c>DrydockLoadSession.ApplyRows</c>),
+    /// or a format outside its reader's window. Renames and deletions alone are not a refusal, since the
+    /// loader heals both on its own.
     /// </summary>
-    public bool IsRefusal => Unresolved.Count > 0 || EngineFormatOutOfWindow || DrydockFormatOutOfWindow;
+    public bool IsRefusal => Unresolved.Count > 0 || MissingComponents.Count > 0 || EngineFormatOutOfWindow || DrydockFormatOutOfWindow;
 }
 
 /// <summary>
-/// Drift detection for stored ship documents. Pure: every input is a parameter, so a test can hand it
-/// any id set, mapping table, prototype registry and format window without causing real drift.
+/// Drift detection for stored ship images. Pure: every input is a parameter, so a test can hand it
+/// any id set, component set, mapping table, registry and format window without causing real drift.
 /// </summary>
 public static class DrydockDrift
 {
@@ -66,12 +70,16 @@ public static class DrydockDrift
         new(DrydockFormat.MinimumSupported, DrydockFormat.Current);
 
     /// <summary>
-    /// Classifies a document's prototype ids against the migration mappings and a prototype registry,
-    /// and its two format versions against their windows.
+    /// Classifies an image's prototype ids against the migration mappings and a prototype registry,
+    /// its component names against the component registry, and its two format versions against their
+    /// windows.
     /// </summary>
-    /// <param name="ids">The document's group ids, as <c>DrydockSystem.ReadDriftIds</c> returns them.</param>
+    /// <param name="ids">The image's prototype ids (<see cref="DrydockImagePreflight.PrototypeIds"/>).</param>
     /// <param name="table">The migration mappings the loader will apply.</param>
     /// <param name="isKnownPrototype">Whether an id names an entity prototype that exists now.</param>
+    /// <param name="components">The image's component names (<see cref="DrydockImagePreflight.ComponentNames"/>). A
+    /// name starting <c>~</c> is a reserved row the load reads itself, not a component, and is skipped as the load skips it.</param>
+    /// <param name="isKnownComponent">Whether a name has a component registration now.</param>
     /// <remarks>
     /// Mirrors <c>EntityDeserializer</c>, which reads the mappings twice and not quite the same way
     /// both times. <c>ValidatePrototypes</c>, the pass that can fail the whole load, renames first and
@@ -85,6 +93,8 @@ public static class DrydockDrift
         IEnumerable<string> ids,
         DrydockMigrationTable table,
         Func<string, bool> isKnownPrototype,
+        IEnumerable<string> components,
+        Func<string, bool> isKnownComponent,
         int engineFormatVer,
         DrydockFormatWindow engineWindow,
         int drydockFormatVer,
@@ -93,6 +103,13 @@ public static class DrydockDrift
         var unresolved = new SortedSet<string>(StringComparer.Ordinal);
         var renamed = new SortedDictionary<string, string>(StringComparer.Ordinal);
         var deleted = new SortedSet<string>(StringComparer.Ordinal);
+        var missingComponents = new SortedSet<string>(StringComparer.Ordinal);
+
+        foreach (var name in components)
+        {
+            if (!name.StartsWith('~') && !isKnownComponent(name))
+                missingComponents.Add(name);
+        }
 
         foreach (var id in ids)
         {
@@ -125,6 +142,7 @@ public static class DrydockDrift
             new List<string>(unresolved),
             renames,
             new List<string>(deleted),
+            new List<string>(missingComponents),
             engineFormatVer,
             engineWindow,
             drydockFormatVer,

@@ -6,6 +6,7 @@ using System.Linq;
 using System.Net;
 using System.Numerics;
 using System.Text;
+using System.Text.Json.Nodes;
 using System.Threading;
 using System.Threading.Tasks;
 using Content.IntegrationTests.Pair;
@@ -423,11 +424,15 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
         }
 
         /// <summary>
-        /// Ship guns fire only while registered with a gunnery server, and the server only links
-        /// its grid, its guns and its console on a power edge. A retrieved ship arrives with the
-        /// receivers unpowered and the net comes up a tick later, so the edge should fire; players
-        /// reported the guns dead after a retrieve all the same. This spells out every
-        /// link before the store as the control and demands the same links on what comes back.
+        /// Ship guns fire only while registered with a gunnery server, and none of the links is in
+        /// the image: the server's grid, guns and consoles are view-only fields
+        /// (FireControlServerComponent.cs:9-16). A retrieved ship gets them back when its net comes
+        /// up and the server connects on its power edge (FireControlSystem.OnPowerChanged),
+        /// registering every anchored gun on the grid and, through the marked edit in
+        /// FireControlSystem.RefreshControllables, every powered console whose own edge fired before
+        /// the server existed. The rig brings the console and the turret up before the server to make
+        /// that order certain. Every link before the store is the control; after the retrieve, with
+        /// nothing touched, the same links and a shot through the server.
         /// </summary>
         [Test]
         public async Task AGunneryServerComesBackWithItsGunsRegistered()
@@ -1049,15 +1054,24 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             }, CancellationToken.None);
         }
 
-        /// <summary>The image with a row on its grid entity naming a component no registration has, which the load refuses.</summary>
-        private static DrydockImage Unloadable(DrydockImage image)
+        /// <summary>
+        /// The image with its grid's chunk size unreadable. Every prototype and component it names still resolves, so the
+        /// drift gate passes it, and the engine's own read of the grid component refuses it inside the load.
+        /// </summary>
+        internal static DrydockImage Unloadable(DrydockImage image)
         {
             return image with
             {
                 Entities = image.Entities
-                    .Select(entity => entity.Id != image.GridId
-                        ? entity
-                        : entity with { Rows = new Dictionary<string, string>(entity.Rows) { ["DrydockTestNoSuchComponent"] = "{}" } })
+                    .Select(entity =>
+                    {
+                        if (entity.Id != image.GridId)
+                            return entity;
+
+                        var grid = JsonNode.Parse(entity.Rows["MapGrid"])!.AsObject();
+                        grid["chunkSize"] = "not a number";
+                        return entity with { Rows = new Dictionary<string, string>(entity.Rows) { ["MapGrid"] = grid.ToJsonString() } };
+                    })
                     .ToList(),
             };
         }

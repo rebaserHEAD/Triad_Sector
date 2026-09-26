@@ -327,10 +327,16 @@ public sealed partial class DrydockSystem
 
                 timer.Mark("fetch");
 
-                // The drift gate, over the image's distinct prototype ids and before the load, so an
-                // image naming content that no longer exists is refused with that reason instead of
-                // failing somewhere inside the loader.
-                var verdict = DetectDrift(ImagePrototypes(stored.Image), ImageEngineFormat, stored.Revision.DrydockFormatVer);
+                // The drift gate, over the store's pre-flight of the image and before the load: every
+                // prototype id and component name the image carries has to resolve now, because the
+                // engine allocates every entity before any row is read and a load cannot start on part
+                // of an image (IDrydockImageStore.Preflight). A refusal names every one that does not.
+                var preflight = await slice.Await(_store.PreflightImage(ctx.ShipId, revision));
+                GuardRetrieveResume(ctx);
+                if (preflight == null)
+                    continue;
+
+                var verdict = DetectDrift(preflight, ImageEngineFormat, stored.Revision.DrydockFormatVer);
                 timer.Mark("drift");
 
                 if (verdict.IsRefusal)
@@ -660,9 +666,6 @@ public sealed partial class DrydockSystem
             throw new DrydockAbortedException($"the loaded grid for {ctx.ShipId} was deleted");
     }
 
-    /// <summary>How many unresolved ids a drift refusal names before it summarises the rest.</summary>
-    private const int DriftReasonIdCap = 10;
-
     /// <summary>
     /// Refuses the whole retrieve for content drift: one <see cref="DrydockAuditAction.DriftRefused"/>
     /// row naming the revision and what would not resolve, and the counter. The claim is released by
@@ -688,15 +691,19 @@ public sealed partial class DrydockSystem
     }
 
     /// <summary>
-    /// The ids that no longer resolve, capped, then whichever format sits outside its reader's window.
-    /// Renames and deletions are left out: the loader heals both.
+    /// Every prototype id that no longer resolves and every component name nothing registers, then
+    /// whichever format sits outside its reader's window. Renames and deletions are left out: the loader
+    /// heals both.
     /// </summary>
     internal static string DescribeDriftRefusal(DrydockDriftVerdict verdict)
     {
         var parts = new List<string>();
 
         if (verdict.Unresolved.Count > 0)
-            parts.Add("unresolved " + CapList(verdict.Unresolved, DriftReasonIdCap));
+            parts.Add("unresolved prototypes " + string.Join(", ", verdict.Unresolved));
+
+        if (verdict.MissingComponents.Count > 0)
+            parts.Add("unregistered components " + string.Join(", ", verdict.MissingComponents));
 
         if (verdict.EngineFormatOutOfWindow)
             parts.Add($"engine format {verdict.EngineFormatVer} outside {verdict.EngineWindow.Minimum}-{verdict.EngineWindow.Maximum}");
@@ -728,13 +735,6 @@ public sealed partial class DrydockSystem
         }
 
         GuardRetrieveResume(ctx);
-    }
-
-    /// <summary>The first <paramref name="cap"/> entries joined, then "and N more".</summary>
-    private static string CapList(IReadOnlyList<string> items, int cap, string separator = ", ")
-    {
-        var shown = string.Join(separator, items.Take(cap));
-        return items.Count > cap ? $"{shown}{separator}and {items.Count - cap} more" : shown;
     }
 
     /// <summary>

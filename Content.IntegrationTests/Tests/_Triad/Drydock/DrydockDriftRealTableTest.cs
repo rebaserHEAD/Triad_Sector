@@ -82,7 +82,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                 + Group(known, 2) + Group(rename.Key, 3) + Group(deleted, 4) + Group(phantom, 5);
 
             var (ids, format) = DrydockSystem.ReadDriftIds(yaml);
-            var verdict = DrydockDrift.Detect(ids, table, Known, format, DrydockDrift.EngineWindow,
+            var verdict = DrydockDrift.Detect(ids, table, Known, Array.Empty<string>(), _ => true, format, DrydockDrift.EngineWindow,
                 DrydockFormat.Current, DrydockDrift.DrydockWindow);
 
             Assert.Multiple(() =>

@@ -5,8 +5,8 @@ namespace Content.Server._Triad.Drydock;
 
 /// <summary>
 /// The production inputs to <see cref="DrydockDrift.Detect"/>: the migration mappings this server
-/// ships and the prototypes it has loaded. Kept apart from the detector so the detector stays a pure
-/// function a test can hand anything.
+/// ships, the prototypes it has loaded and the components it has registered. Kept apart from the
+/// detector so the detector stays a pure function a test can hand anything.
 /// </summary>
 public sealed partial class DrydockSystem
 {
@@ -22,16 +22,18 @@ public sealed partial class DrydockSystem
     internal DrydockMigrationTable MigrationTable => _migrationTable ??= DrydockMigrationTable.Load(_resources);
 
     /// <summary>
-    /// Classifies one stored revision's prototype ids against the mappings and the prototypes loaded
-    /// now, with its two format versions against the windows a retrieve reads.
+    /// Classifies one stored revision's pre-flight against the mappings, the prototypes loaded now and
+    /// the components registered now, with its two format versions against the windows a retrieve reads.
     /// </summary>
     /// <param name="drydockFormatVer">The revision's <c>drydock_format_ver</c> column.</param>
-    internal DrydockDriftVerdict DetectDrift(SortedSet<string> ids, int engineFormatVer, int drydockFormatVer)
+    internal DrydockDriftVerdict DetectDrift(DrydockImagePreflight preflight, int engineFormatVer, int drydockFormatVer)
     {
         return DrydockDrift.Detect(
-            ids,
+            preflight.PrototypeIds,
             MigrationTable,
             id => _protoMan.HasIndex<EntityPrototype>(id),
+            preflight.ComponentNames,
+            name => Factory.TryGetRegistration(name, out _),
             engineFormatVer,
             DrydockDrift.EngineWindow,
             drydockFormatVer,

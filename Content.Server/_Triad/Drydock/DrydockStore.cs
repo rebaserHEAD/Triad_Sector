@@ -978,6 +978,13 @@ public sealed partial class DrydockStore
         return _db.RunTriadDbCommand((db, token) => LoadImageJoined(db, images, shipGuid, revision, token), ct);
     }
 
+    /// <summary>The pre-flight of one revision's image (<see cref="IDrydockImageStore.Preflight"/>), or null when it has none.</summary>
+    public Task<DrydockImagePreflight?> PreflightImage(Guid shipGuid, int revision, CancellationToken ct = default)
+    {
+        var images = _db.DrydockImages;
+        return _db.RunTriadDbCommand((db, token) => images.Preflight(db, new DrydockImageKey(shipGuid, revision), token), ct);
+    }
+
     /// <summary>
     /// The read behind both image loads: the ship and the revision numbered <paramref name="revision"/>, or the ship's
     /// current one when that is null, in one query, then the image from the store. Null where any of the three is

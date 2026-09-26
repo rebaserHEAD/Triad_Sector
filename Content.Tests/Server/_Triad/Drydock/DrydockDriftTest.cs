@@ -37,7 +37,13 @@ public sealed class DrydockDriftTest
         params string[] ids)
     {
         var registry = known.ToHashSet();
-        return DrydockDrift.Detect(ids, table, registry.Contains, 7, Engine, 2, Ours);
+        return DrydockDrift.Detect(ids, table, registry.Contains, Array.Empty<string>(), _ => true, 7, Engine, 2, Ours);
+    }
+
+    private static DrydockDriftVerdict DetectComponents(IEnumerable<string> registered, params string[] components)
+    {
+        var registry = registered.ToHashSet();
+        return DrydockDrift.Detect(Array.Empty<string>(), DrydockMigrationTable.Empty, _ => true, components, registry.Contains, 7, Engine, 2, Ours);
     }
 
     [Test]
@@ -176,13 +182,41 @@ public sealed class DrydockDriftTest
         Assert.That(verdict.IsClean, Is.True);
     }
 
+    [Test]
+    public void AComponentNoRegistrationHasIsARefusalNamedOnce()
+    {
+        var verdict = DetectComponents(new[] { "Physics" }, "Physics", "Gone", "Absent", "Gone");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(verdict.MissingComponents, Is.EqualTo(new[] { "Absent", "Gone" }), "Each once, ordinal.");
+            Assert.That(verdict.Unresolved, Is.Empty);
+            Assert.That(verdict.IsRefusal, Is.True);
+            Assert.That(verdict.IsClean, Is.False);
+        });
+    }
+
+    [Test]
+    public void RegisteredComponentsAndReservedRowsAreClean()
+    {
+        // The control: the same registry, only names it has, plus the reserved rows the load reads itself.
+        var verdict = DetectComponents(new[] { "Physics" }, "Physics", "~appearance", "~manifest", "~carried");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(verdict.MissingComponents, Is.Empty);
+            Assert.That(verdict.IsRefusal, Is.False);
+            Assert.That(verdict.IsClean, Is.True);
+        });
+    }
+
     [TestCase(2, true)]
     [TestCase(3, false)]
     [TestCase(7, false)]
     [TestCase(8, true)]
     public void TheEngineFormatWindowIsInclusiveAtBothEdges(int format, bool outside)
     {
-        var verdict = DrydockDrift.Detect(Array.Empty<string>(), DrydockMigrationTable.Empty, _ => true, format, Engine, 2, Ours);
+        var verdict = DrydockDrift.Detect(Array.Empty<string>(), DrydockMigrationTable.Empty, _ => true, Array.Empty<string>(), _ => true, format, Engine, 2, Ours);
 
         Assert.Multiple(() =>
         {
@@ -198,7 +232,7 @@ public sealed class DrydockDriftTest
     [TestCase(3, true)]
     public void TheDrydockFormatWindowIsInclusiveAtBothEdges(int format, bool outside)
     {
-        var verdict = DrydockDrift.Detect(Array.Empty<string>(), DrydockMigrationTable.Empty, _ => true, 7, Engine, format, Ours);
+        var verdict = DrydockDrift.Detect(Array.Empty<string>(), DrydockMigrationTable.Empty, _ => true, Array.Empty<string>(), _ => true, 7, Engine, format, Ours);
 
         Assert.Multiple(() =>
         {
@@ -228,7 +262,7 @@ public sealed class DrydockDriftTest
         const string yaml = "meta:\n  format: 7\nentities:\n- proto: \"\"\n  entities:\n  - uid: 1\n- proto: Old\n  entities:\n  - uid: 2\n- proto: Phantom\n  entities:\n  - uid: 3\n";
         var (ids, format) = DrydockSystem.ReadDriftIds(yaml);
 
-        var verdict = DrydockDrift.Detect(ids, Table("Old: New\n"), new HashSet<string> { "New" }.Contains, format, Engine, 2, Ours);
+        var verdict = DrydockDrift.Detect(ids, Table("Old: New\n"), new HashSet<string> { "New" }.Contains, Array.Empty<string>(), _ => true, format, Engine, 2, Ours);
 
         Assert.Multiple(() =>
         {
