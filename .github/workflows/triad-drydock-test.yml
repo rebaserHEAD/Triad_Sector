@@ -1,0 +1,149 @@
+name: Triad Drydock Tests
+
+# Triad: run on demand from any seat (gh workflow run), never on a PR or a push. A PostgreSQL 17
+# service backs the PostgreSQL test pair, which finds its role and password the way it does on a
+# workstation: a triad_test role with CREATEDB and a ~/.pgpass line (TriadPgPass.Locate).
+run-name: "drydock ${{ inputs.project }}: ${{ inputs.filter }}"
+
+on:
+  workflow_dispatch:
+    inputs:
+      filter:
+        description: "dotnet test --filter expression"
+        type: string
+        default: "FullyQualifiedName~_Triad.Drydock"
+      project:
+        description: "Test project to build and run"
+        type: choice
+        options: [ Content.IntegrationTests, Content.Tests ]
+        default: Content.IntegrationTests
+      dump:
+        description: "Set LADDER_DUMP to a workspace directory and upload it"
+        type: boolean
+        default: false
+      mode:
+        description: "LADDER_MODE"
+        type: choice
+        options: [ codec, engine ]
+        default: codec
+      control:
+        description: "LADDER_CONTROL, set only when not empty"
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 330
+
+    services:
+      postgres:
+        image: postgres:17
+        # Trust only until "Prepare PostgreSQL" switches every host login to scram-sha-256, so no
+        # password is written in this file and the pgpass proof below cannot pass on trust.
+        env:
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+
+    env:
+      PROJECT: ${{ inputs.project }}
+      FILTER: ${{ inputs.filter }}
+      LADDER_MODE: ${{ inputs.mode }}
+      # The service is always here, so a PostgreSQL case that cannot reach it fails rather than skipping.
+      TRIAD_TEST_PG_REQUIRED: "1"
+
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v7
+      with:
+        submodules: recursive
+
+    - name: Setup .NET
+      uses: actions/setup-dotnet@v5
+      with:
+        global-json-file: global.json
+
+    - name: Cache NuGet packages
+      uses: actions/cache@v6
+      with:
+        path: ~/.nuget/packages
+        key: ${{ runner.os }}-nuget-${{ hashFiles('**/*.csproj', '**/Directory.Packages.props') }}
+        restore-keys: ${{ runner.os }}-nuget-
+
+    - name: Prepare PostgreSQL
+      env:
+        PG_CONTAINER: ${{ job.services.postgres.id }}
+      run: |
+        set -euo pipefail
+        unset PGPASSWORD
+        PW=$(openssl rand -hex 32)
+        echo "::add-mask::$PW"
+
+        psql -h localhost -U postgres -d postgres -v ON_ERROR_STOP=1 -v pw="$PW" <<'SQL'
+        CREATE ROLE triad_test LOGIN CREATEDB NOSUPERUSER NOCREATEROLE PASSWORD :'pw';
+        SQL
+
+        umask 077
+        printf 'localhost:5432:*:triad_test:%s\n' "$PW" > ~/.pgpass
+        chmod 600 ~/.pgpass
+
+        docker exec "$PG_CONTAINER" sh -c 'sed -i -E "/^host/ s/trust\$/scram-sha-256/" "$PGDATA/pg_hba.conf"'
+        docker exec -u postgres "$PG_CONTAINER" psql -U postgres -tAc 'SELECT pg_reload_conf()'
+
+        psql "host=localhost port=5432 dbname=postgres user=triad_test" -w -tAc 'SELECT current_user'
+        if PGPASSFILE=/dev/null psql "host=localhost port=5432 dbname=postgres user=triad_test" -w -tAc 'SELECT 1' >/dev/null 2>&1; then
+          echo "::error::triad_test logged in without the pgpass file, so the login above proved nothing."
+          exit 1
+        fi
+
+    - name: Ladder settings
+      env:
+        DUMP: ${{ inputs.dump }}
+        CONTROL: ${{ inputs.control }}
+      run: |
+        if [ "$DUMP" = "true" ]; then
+          mkdir -p "$GITHUB_WORKSPACE/ladder-dump"
+          echo "LADDER_DUMP=$GITHUB_WORKSPACE/ladder-dump" >> "$GITHUB_ENV"
+        fi
+        if [ -n "$CONTROL" ]; then
+          echo "LADDER_CONTROL=$CONTROL" >> "$GITHUB_ENV"
+        fi
+
+    # Debug, as the local pool runs: DebugTools asserts stay on.
+    - name: Build
+      run: dotnet build "$PROJECT/$PROJECT.csproj" --configuration Debug
+
+    - name: Test
+      env:
+        DOTNET_gcServer: 1
+      run: >-
+        dotnet test "$PROJECT/$PROJECT.csproj" --no-build --configuration Debug
+        --filter "$FILTER"
+        --logger "trx;LogFileName=$PROJECT.trx"
+        --logger "console;verbosity=normal"
+        --results-directory test-results
+
+    - name: Upload test results
+      if: always()
+      uses: actions/upload-artifact@v7
+      with:
+        name: test-results
+        path: test-results
+        if-no-files-found: warn
+
+    - name: Upload ladder dump
+      if: always() && inputs.dump
+      uses: actions/upload-artifact@v7
+      with:
+        name: ladder-dump
+        path: ladder-dump
+        if-no-files-found: warn
