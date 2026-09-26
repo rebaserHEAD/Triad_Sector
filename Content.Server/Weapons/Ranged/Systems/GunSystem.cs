@@ -64,7 +64,6 @@ public sealed partial class GunSystem : SharedGunSystem
         _damageableQuery = GetEntityQuery<DamageableComponent>(); // Mono
     }
 
-
     private void OnBallisticPrice(EntityUid uid, BallisticAmmoProviderComponent component, ref PriceCalculationEvent args)
     {
         if (string.IsNullOrEmpty(component.Proto) || component.UnspawnedCount == 0 || component.InfiniteUnspawned) // Mono

@@ -84,7 +84,6 @@ drydock-error-store-in-progress = {$verb} failed: that ship is already being sto
 drydock-error-retrieve-ship-out = {$verb} failed: another of your ships is already underway.
 drydock-error-retrieve-disabled = {$verb} failed: the drydock is off.
 drydock-error-retrieve-no-dock-grid = {$verb} failed: this station has no grid to dock the ship at.
-drydock-error-retrieve-no-staging-map = {$verb} failed: no staging map was available to load the ship onto.
 drydock-error-retrieve-not-found = {$verb} failed: that ship's record or saved copy is missing.
 drydock-error-retrieve-already-out = {$verb} failed: that ship is already out.
 drydock-error-retrieve-impounded = {$verb} failed: that ship is in the impound lot.

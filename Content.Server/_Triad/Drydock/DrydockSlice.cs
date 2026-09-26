@@ -17,13 +17,12 @@ namespace Content.Server._Triad.Drydock;
 public enum DrydockPhase : byte
 {
     // store
-    Gate, Freeze, Purge, Appraise, Sidecars, Strip, Capture, Prepare,
-    Serialize, Validate, Hash, Drift, Manifest, Compress, Commit, Despawn,
+    Gate, Freeze, Purge, Appraise, Prepare, Serialize, Manifest, Commit, Despawn,
     // retrieve
-    Fetch, Load, Fidelity, Sweeps, Damage, Station, Dock, Release,
+    Fetch, Load, Sweeps, Station, Dock, Release,
     // both
     Unwind,
-    // retrieve, between Fidelity and Sweeps; declared last so no earlier value moves
+    // the legacy import's map-init transaction (DrydockFidelitySystem.RefireMapInitSliced)
     MapInit,
 }
 
@@ -101,9 +100,8 @@ public static class DrydockPhases
     public static IReadOnlyList<DrydockPhase> Retrieve => RetrievePhases;
 
     /// <summary>
-    /// The <see cref="DrydockPhaseTimer"/> mark string: the lowercase invariant of the enum name.
-    /// Freeze, Purge, Strip and Unwind are new marks that did not exist before the slicing change,
-    /// so the flat <c>phase=Nms</c> line Loki pattern-matches gains four keys.
+    /// The <see cref="DrydockPhaseTimer"/> mark string: the lowercase invariant of the enum name, and the
+    /// key of each <c>phase=Nms</c> pair on the flat timing line Loki pattern-matches.
     /// </summary>
     public static string Mark(DrydockPhase phase)
     {
@@ -424,7 +422,7 @@ public sealed record DrydockRetrieveOutcome(DrydockRetrieve Retrieve);
 /// Per-store mutable state. Constructed by <c>TryStoreShip</c>, handed to the job, filled by
 /// <c>RunStorePipeline</c>, read by the unwind and by the wrapper's finally after a cancellation.
 /// The image write reads the live hull without changing it, so the unwind's only state here is where
-/// the ship was and whether it was undocked and frozen.
+/// the ship was and whether it was undocked.
 /// </summary>
 public sealed class DrydockStoreContext
 {
@@ -461,7 +459,6 @@ public sealed class DrydockStoreContext
     public string? ReturnDockTag;
 
     public bool Committed;
-    public bool Frozen;
     public bool Undocked;
 
     /// <summary>
@@ -569,9 +566,6 @@ public sealed class DrydockRetrieveContext
 
     /// <summary>True once the ship is docked; the wrapper then also owns vacating the berth.</summary>
     public bool Presented;
-
-    /// <summary>The revision that loaded.</summary>
-    public int? LoadedRevision;
 
     public readonly DrydockPhaseTimer Timer = new();
 }

@@ -6,10 +6,11 @@ namespace Content.Shared._Triad.Drydock;
 
 /// <summary>
 /// Raises <c>MapInitEvent</c> on an entity that is already map-initialized, and says while it is
-/// doing so. The drydock's retrieve re-raises map init on a restored ship so every system's runtime
-/// setup runs again; a handler whose one-shot work would duplicate what the ship already holds, or
-/// log an error for it, checks <see cref="Refiring"/> and skips that work. Every other map init
-/// (a purchase, a map load, a spawn) sees <see cref="Refiring"/> false and runs unchanged.
+/// doing so. The drydock's legacy import re-raises map init on a hull loaded from a legacy document
+/// (<c>DrydockFidelitySystem.RefireMapInitSliced</c>) so every system's runtime setup runs; a handler
+/// whose one-shot work would duplicate what the ship already holds, or log an error for it, checks
+/// <see cref="Refiring"/> and skips that work. Every other map init (a purchase, a map load, a spawn,
+/// a retrieve, which re-raises nothing) sees <see cref="Refiring"/> false and runs unchanged.
 /// </summary>
 public sealed class MapInitRefireSystem : EntitySystem
 {

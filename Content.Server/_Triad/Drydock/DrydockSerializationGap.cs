@@ -33,7 +33,8 @@ public static class DrydockSerializationGap
 
     /// <summary>
     /// The types the engine has no serializer for that a stored ship still carries, through the
-    /// codec's own serializers (<c>DrydockCapturedSerializers</c>).
+    /// codec's own serializers (<see cref="Codec.DrydockLatheRecipeBatchSerializer"/>,
+    /// <see cref="Codec.DrydockMarketDataSerializer"/>).
     ///
     /// An entry is a content decision, and the reasoning belongs on the Drydock State Fidelity
     /// Design wiki page. The audit asserts against

@@ -6,9 +6,9 @@ namespace Content.Server._Triad.Drydock;
 public static class DrydockFormat
 {
     /// <summary>
-    /// Written to <c>drydock_format_ver</c> on every revision, covering the sidecar encoding and the
+    /// Written to <c>drydock_format_ver</c> on every revision, covering the image's rows and the
     /// manifest shape together. Bump it when either changes in a way an older reader would misread.
-    /// Nothing carries a stored document forward between versions, so a version 1 revision is read
+    /// Nothing carries a stored revision forward between versions, so a version 1 revision is read
     /// as it stands, per the note below.
     /// </summary>
     /// <remarks>

@@ -15,7 +15,10 @@ public enum DrydockStoreResult : byte
     /// <summary>Serialized, filed, and the grid despawned.</summary>
     Success,
 
-    /// <summary>The engine map serializer could not write the grid.</summary>
+    /// <summary>
+    /// The image could not be written whole: a manifest member or carried value the codec could not
+    /// write, or the grid gone before or while it was written.
+    /// </summary>
     SerializeFailed,
 
     /// <summary>A living, sapient occupant is aboard, by player session or live mind.</summary>

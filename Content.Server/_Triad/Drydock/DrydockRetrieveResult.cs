@@ -16,16 +16,6 @@ public enum DrydockRetrieveResult : byte
     /// <summary>The requesting console is not on a station with a grid to dock at.</summary>
     NoStation,
 
-    /// <summary>
-    /// No longer produced. A retrieve used to borrow the shipyard's shared staging map and had to
-    /// ask for it to be built first; it now loads onto a private paused map of its own, made by the
-    /// loader as part of the load, so there is nothing left that can fail this way.
-    ///
-    /// <para>Nothing returns or reads it. Kept because the enum numbers implicitly, and removing it
-    /// would silently re-map every value after it.</para>
-    /// </summary>
-    NoStagingMap,
-
     /// <summary>No record carries this id, or its current revision is gone.</summary>
     NotFound,
 
@@ -47,7 +37,7 @@ public enum DrydockRetrieveResult : byte
     /// <summary>The row read as stored, then the claim lost to another retrieve of the same ship.</summary>
     NotStored,
 
-    /// <summary>Every kept revision failed to decompress, verify, or load. An admin can look at the timeline.</summary>
+    /// <summary>Every kept revision's image failed to load. An admin can look at the timeline.</summary>
     NoReadableRevision,
 
     /// <summary>The station's grid died while the ship was being loaded. The claim was released.</summary>
@@ -62,8 +52,7 @@ public enum DrydockRetrieveResult : byte
 
     /// <summary>
     /// The hull was written off: it could not have brought itself home, so nothing was filed for it
-    /// to come back as. Appended rather than grouped with the other refusals for the reason
-    /// <see cref="NoStagingMap"/> gives.
+    /// to come back as.
     /// </summary>
     Destroyed,
 
@@ -71,11 +60,11 @@ public enum DrydockRetrieveResult : byte
     Abandoned,
 
     /// <summary>
-    /// The current document references content that no longer resolves after the migration mappings,
-    /// or a format outside its reader's window; or the ladder ran out having refused an older document
-    /// for the same reason. Never answered by falling back, since an older document is older state
-    /// naming the same content. A <c>DriftRefused</c> row names what would not resolve. Appended for
-    /// the reason <see cref="NoStagingMap"/> gives.
+    /// The current image names a prototype that no longer resolves after the migration mappings or a
+    /// component nothing registers, or carries a format outside its reader's window; or the ladder ran
+    /// out having refused an older image for the same reason. Never answered by falling back, since an
+    /// older image is older state naming the same content. A <c>DriftRefused</c> row names every one
+    /// that would not resolve.
     /// </summary>
     ContentDrift,
 }

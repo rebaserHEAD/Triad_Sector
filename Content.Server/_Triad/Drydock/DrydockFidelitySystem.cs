@@ -21,7 +21,6 @@ namespace Content.Server._Triad.Drydock;
 public sealed partial class DrydockFidelitySystem : EntitySystem
 {
     [Dependency] private ISerializationManager _serialization = default!;
-    [Dependency] private SharedAppearanceSystem _appearance = default!;
 
     /// <summary>
     /// The snapshot render's context (<see cref="DrydockEntityRefProbe"/>): it writes every

@@ -1,5 +1,4 @@
 using System;
-using System.IO;
 using System.Linq;
 using System.Security.Cryptography;
 using System.Text;
@@ -45,9 +44,6 @@ using Robust.Shared.Serialization.Manager;
 using Robust.Shared.Serialization.Markdown;
 using Robust.Shared.Serialization.Markdown.Mapping;
 using Robust.Shared.Utility;
-using YamlDotNet.Core;
-using YamlDotNet.Core.Events;
-using YamlDotNet.RepresentationModel;
 
 namespace Content.Server._Triad.Drydock;
 
@@ -66,8 +62,6 @@ namespace Content.Server._Triad.Drydock;
 public sealed partial class DrydockSystem : EntitySystem
 {
     [Dependency] private IConfigurationManager _cfg = default!;
-    [Dependency] private IDependencyCollection _dependency = default!;
-    [Dependency] private ISerializationManager _serialization = default!;
     [Dependency] private DrydockStore _store = default!;
     [Dependency] private DrydockFidelitySystem _fidelity = default!;
     [Dependency] private ShipSizeSystem _shipSize = default!;
@@ -367,7 +361,6 @@ public sealed partial class DrydockSystem : EntitySystem
             // actually freezes the tree, and the walk inside the freeze drives the bar and back-stops.
             ctx.StagingMap = CreateStagingMap(jobId, DrydockStagingKind.Store, shipId, mapInit: true);
             await FreezeOntoStagingMap(gridUid, ctx.StagingMap.Value, slice);
-            ctx.Frozen = true;
             GuardStoreResume(ctx);
 
             // Backstop to the gate above, so a future reorder cannot reopen the window silently.
@@ -941,73 +934,14 @@ public sealed partial class DrydockSystem : EntitySystem
     }
 
     /// <summary>
-    /// A YAML document's format version, and a hash over the sorted set of prototype ids it
-    /// references: the drift key a document revision was filed with.
-    /// </summary>
-    /// <remarks>
-    /// <para>Streams the document rather than loading it into a node tree. The two facts wanted here
-    /// live in the top-level <c>meta</c> mapping and in the <c>proto</c> key of each entry of the
-    /// top-level <c>entities</c> sequence, and entities are grouped by prototype, so those keys number
-    /// in the hundreds while the tree under them holds every instance, component and field on the
-    /// ship. Building that tree to read the headers cost 237 ms of a 2.1 s store on a large hull,
-    /// measured across 112 stores 2026-09-09, which was more than a tenth of the whole pipeline.</para>
-    /// <para>The output is contractually identical to the node-tree read it replaces, because the
-    /// fingerprint is persisted on every revision and compared across stores: a different value here
-    /// would read as content drift on ships that had not changed.
-    /// <c>DrydockDriftMetadataTest</c> holds that equality down against a tree-reading oracle.</para>
-    /// </remarks>
-    internal static (byte[] Fingerprint, int FormatVersion) ReadDriftMetadata(string yaml)
-    {
-        var (ids, formatVer) = ReadDriftIds(yaml);
-        return (DriftFingerprint(ids), formatVer);
-    }
-
-    /// <summary>
-    /// The fingerprint's input without the hash: the ordinal-sorted set of non-empty <c>proto</c>
-    /// ids and the <c>meta.format</c> value, 0 where either is absent.
-    /// </summary>
-    internal static (SortedSet<string> Ids, int FormatVersion) ReadDriftIds(string yaml)
-    {
-        var formatVer = 0;
-        var protos = new SortedSet<string>(StringComparer.Ordinal);
-
-        var parser = new Parser(new StringReader(yaml));
-        parser.Consume<StreamStart>();
-        parser.Consume<DocumentStart>();
-
-        if (!parser.TryConsume<MappingStart>(out _))
-            return (protos, formatVer);
-
-        while (!parser.TryConsume<MappingEnd>(out _))
-        {
-            var key = parser.Consume<Scalar>().Value;
-
-            switch (key)
-            {
-                case "meta":
-                    formatVer = ReadFormat(parser);
-                    break;
-                case "entities":
-                    ReadProtoGroups(parser, protos);
-                    break;
-                default:
-                    parser.SkipThisAndNestedEvents();
-                    break;
-            }
-        }
-
-        return (protos, formatVer);
-    }
-
-    /// <summary>
-    /// The engine map format the loader builds its skeleton document in (<c>DrydockLoadSession.cs:140</c>),
-    /// recorded as an image revision's engine format and read by the drift gate's window.
+    /// The engine map format the loader builds its skeleton document in (the <c>meta.format</c> written in
+    /// <c>DrydockLoadSession.CreateEntities</c>), recorded as an image revision's engine format and read by the
+    /// drift gate's window.
     /// </summary>
     internal const int ImageEngineFormat = 7;
 
     /// <summary>
-    /// The drift key's input for an image: its distinct non-empty prototype ids, ordinal-sorted, the
-    /// same shape <see cref="ReadDriftIds"/> gives for a document.
+    /// The drift key's input for an image: its distinct non-empty prototype ids, ordinal-sorted.
     /// </summary>
     internal static SortedSet<string> ImagePrototypes(DrydockImage image)
     {
@@ -1023,70 +957,8 @@ public sealed partial class DrydockSystem : EntitySystem
 
     /// <summary>
     /// SHA-256 over the ids joined with '\n'. The set must be ordinal-sorted, as
-    /// <see cref="ReadDriftIds"/> returns it: the value is persisted and compared across stores.
+    /// <see cref="ImagePrototypes"/> returns it: the value is persisted and compared across stores.
     /// </summary>
     internal static byte[] DriftFingerprint(SortedSet<string> ids) =>
         SHA256.HashData(Encoding.UTF8.GetBytes(string.Join('\n', ids)));
-
-    /// <summary>Reads <c>format</c> out of the meta mapping, skipping everything else in it.</summary>
-    private static int ReadFormat(IParser parser)
-    {
-        if (!parser.TryConsume<MappingStart>(out _))
-        {
-            // Not a mapping, so there is no format to find. The value still has to be consumed or
-            // the caller reads this node's contents as its own keys.
-            parser.SkipThisAndNestedEvents();
-            return 0;
-        }
-
-        var formatVer = 0;
-
-        while (!parser.TryConsume<MappingEnd>(out _))
-        {
-            if (parser.Consume<Scalar>().Value == "format" && parser.TryConsume<Scalar>(out var value))
-                int.TryParse(value.Value, out formatVer);
-            else
-                parser.SkipThisAndNestedEvents();
-        }
-
-        return formatVer;
-    }
-
-    /// <summary>
-    /// Collects the <c>proto</c> of each prototype group, skipping the instance list under it, which
-    /// is where the document's bulk lives.
-    /// </summary>
-    private static void ReadProtoGroups(IParser parser, SortedSet<string> protos)
-    {
-        if (!parser.TryConsume<SequenceStart>(out _))
-        {
-            parser.SkipThisAndNestedEvents();
-            return;
-        }
-
-        while (!parser.TryConsume<SequenceEnd>(out _))
-        {
-            // A non-mapping entry is skipped rather than refused, matching the node-tree read, which
-            // filtered the sequence to mappings.
-            if (!parser.TryConsume<MappingStart>(out _))
-            {
-                parser.SkipThisAndNestedEvents();
-                continue;
-            }
-
-            while (!parser.TryConsume<MappingEnd>(out _))
-            {
-                if (parser.Consume<Scalar>().Value == "proto"
-                    && parser.TryConsume<Scalar>(out var proto))
-                {
-                    if (proto.Value.Length > 0)
-                        protos.Add(proto.Value);
-                }
-                else
-                {
-                    parser.SkipThisAndNestedEvents();
-                }
-            }
-        }
-    }
 }

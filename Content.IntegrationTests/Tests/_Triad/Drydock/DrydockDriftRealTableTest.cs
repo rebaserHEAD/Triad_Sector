@@ -2,35 +2,25 @@
 
 using System;
 using System.Collections.Generic;
-using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
 using Content.Server._Triad.Drydock;
-using Content.Shared._NF.Shipyard.Prototypes;
 using Robust.Shared.ContentPack;
-using Robust.Shared.EntitySerialization;
-using Robust.Shared.EntitySerialization.Systems;
 using Robust.Shared.GameObjects;
-using Robust.Shared.Map;
 using Robust.Shared.Map.Events;
 using Robust.Shared.Prototypes;
-using Robust.Shared.Serialization.Markdown;
-using Robust.Shared.Serialization.Markdown.Mapping;
 
 namespace Content.IntegrationTests.Tests._Triad.Drydock
 {
     /// <summary>
-    /// The drift detector against what only a running server has: the real migration files, the real
-    /// prototype registry, the engine's own documents, and the loader that reads them. The drift
-    /// matrix itself lives in <c>Content.Tests</c> on synthetic inputs.
+    /// The drift detector against what only a running server has: the real migration files, the
+    /// table the engine's loader is handed, and the real prototype registry. The drift matrix itself
+    /// lives in <c>Content.Tests</c> on synthetic inputs.
     /// </summary>
     [TestFixture]
     [TestOf(typeof(DrydockDrift))]
     public sealed class DrydockDriftRealTableTest
     {
-        private static string Group(string proto, int uid) =>
-            $"- proto: {proto}\n  entities:\n  - uid: {uid}\n    components:\n    - type: Transform\n      pos: 0.5,0.5\n      parent: 1\n";
-
         [Test]
         public async Task TheRealMappingFilesBuildTheLoadersTableAndDetectOnIt()
         {
@@ -77,13 +67,9 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                 .First();
             const string phantom = "DrydockDriftTestPhantomPrototype";
 
-            var yaml = "meta:\n  format: 7\n  category: Grid\nentities:\n"
-                + "- proto: \"\"\n  entities:\n  - uid: 1\n    components:\n    - type: Transform\n      parent: invalid\n"
-                + Group(known, 2) + Group(rename.Key, 3) + Group(deleted, 4) + Group(phantom, 5);
-
-            var (ids, format) = DrydockSystem.ReadDriftIds(yaml);
-            var verdict = DrydockDrift.Detect(ids, table, Known, Array.Empty<string>(), _ => true, format, DrydockDrift.EngineWindow,
-                DrydockFormat.Current, DrydockDrift.DrydockWindow);
+            var ids = new[] { known, rename.Key, deleted, phantom };
+            var verdict = DrydockDrift.Detect(ids, table, Known, Array.Empty<string>(), _ => true, DrydockSystem.ImageEngineFormat,
+                DrydockDrift.EngineWindow, DrydockFormat.Current, DrydockDrift.DrydockWindow);
 
             Assert.Multiple(() =>
             {
@@ -107,60 +93,6 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             Assert.That(chains, Is.Empty,
                 "A migration rename points at an id that is itself renamed; one hop per load leaves those ships on a renamed id.");
 
-            await pair.CleanReturnAsync();
-        }
-
-        [Test]
-        public async Task RealShipsReEmitByteForByte()
-        {
-            await using var pair = await PoolManager.GetServerClient();
-            var server = pair.Server;
-
-            var protoMan = server.ResolveDependency<IPrototypeManager>();
-            var mapLoader = server.System<MapLoaderSystem>();
-            var map = await pair.CreateTestMap();
-
-            var vessels = protoMan.EnumeratePrototypes<VesselPrototype>()
-                .Where(v => !v.Abstract)
-                .OrderBy(v => v.Price)
-                .Where((_, i) => i % 15 == 0)
-                .Take(3)
-                .ToList();
-
-            var compared = 0;
-
-            foreach (var vessel in vessels)
-            {
-                string? yaml = null;
-
-                await server.WaitPost(() =>
-                {
-                    if (!mapLoader.TryLoadGrid(map.MapId, vessel.ShuttlePath, out var grid))
-                        return;
-
-                    using var writer = new StringWriter();
-                    var options = new SerializationOptions { MissingEntityBehaviour = MissingEntityBehaviour.Ignore };
-                    if (mapLoader.TrySaveGrid(grid!.Value.Owner, writer, options))
-                        yaml = writer.ToString();
-
-                    server.EntMan.DeleteEntity(grid!.Value.Owner);
-                });
-
-                await pair.RunTicksSync(2);
-
-                if (yaml == null)
-                    continue;
-
-                using var reader = new StringReader(yaml);
-                var root = (MappingDataNode) DataNodeParser.ParseYamlStream(reader).Single().Root;
-
-                Assert.That(DrydockSystem.EmitDocument(root), Is.EqualTo(yaml),
-                    $"{vessel.ID}: the engine's emitter does not reproduce its own document.");
-
-                compared++;
-            }
-
-            Assert.That(compared, Is.GreaterThan(0), "The control: no vessel loaded and saved, so nothing was compared.");
             await pair.CleanReturnAsync();
         }
     }

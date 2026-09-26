@@ -8,38 +8,25 @@ using Content.Server._NF.Station.Components;
 using Content.Server._Triad.Drydock.Loader;
 using Content.Server.Chemistry.Components;
 using Content.Server.Database;
-using Content.Server.DeviceNetwork.Systems;
 using Content.Server.Gravity;
 using Content.Server.Lathe.Components;
-using Content.Server.NPC;
-using Content.Server.NPC.HTN;
-using Content.Server.NPC.Systems;
 using Content.Server.Maps;
 using Content.Server.Power.EntitySystems;
-using Content.Server.Power.Generator;
 using Content.Server.Research.Systems;
 using Content.Server.Station;
 using Content.Server.Station.Components;
 using Content.Server.Shuttles.Components;
 using Content.Server.Shuttles.Systems;
-using Content.Shared._Mono.ShipRepair;
 using Content.Shared._Mono.Ships.Components;
 using Content.Shared._NF.Shipyard.Components;
 using Content.Shared._NF.Shipyard.Prototypes;
 using Content.Shared._Triad.CCVar;
-using Content.Shared.Cabinet;
 using Content.Shared.Chemistry;
-using Content.Shared.Containers.ItemSlots;
-using Content.Shared.Damage;
-using Content.Shared.DeviceNetwork.Components;
 using Content.Shared.FixedPoint;
 using Content.Shared.Lathe;
 using Content.Shared.Mind.Components;
-using Content.Shared.Nutrition.EntitySystems;
-using Content.Shared.Power.Generator;
 using Content.Shared.Research.Components;
 using Content.Shared.Shuttles.Components;
-using Content.Shared.SmartFridge;
 using Content.Shared.Station.Components;
 using Content.Shared.Xenoarchaeology.Equipment;
 using Content.Shared.Xenoarchaeology.Equipment.Components;
@@ -71,22 +58,12 @@ namespace Content.Server._Triad.Drydock;
 public sealed partial class DrydockSystem
 {
     [Dependency] private ShuttleSystem _shuttle = default!;
-    [Dependency] private DamageableSystem _damageable = default!;
-    [Dependency] private SharedShipRepairSystem _shipRepair = default!;
     [Dependency] private IPlayerManager _player = default!;
     [Dependency] private IGameTiming _timing = default!;
     [Dependency] private IPrototypeManager _protoMan = default!;
-    [Dependency] private NPCSystem _npc = default!;
-    [Dependency] private DeviceNetworkSystem _deviceNetwork = default!;
     [Dependency] private ResearchSystem _research = default!;
     [Dependency] private ShuttleConsoleLockSystem _consoleLock = default!;
-    [Dependency] private GeneratorSystem _generator = default!;
-    [Dependency] private SharedSmartFridgeSystem _smartFridge = default!;
     [Dependency] private SharedArtifactAnalyzerSystem _artifactAnalyzer = default!;
-    [Dependency] private ItemSlotsSystem _itemSlots = default!;
-    [Dependency] private OpenableSystem _openable = default!;
-    [Dependency] private ItemCabinetSystem _itemCabinet = default!;
-    [Dependency] private SharedAppearanceSystem _appearance = default!;
 
     /// <summary>
     /// Retrieves a stored ship and presents it at <paramref name="stationUid"/>.
@@ -382,8 +359,6 @@ public sealed partial class DrydockSystem
                     await PinSteppedPast(ctx, slice, revision, "it loaded with no shuttle component");
                     continue;
                 }
-
-                ctx.LoadedRevision = revision;
 
                 try
                 {

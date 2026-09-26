@@ -2222,8 +2222,7 @@ public sealed partial class ShipyardSystem
     }
 
     /// <summary>
-    /// The locale key naming why a retrieve refused. Every refusal value has its own line, including
-    /// <see cref="DrydockRetrieveResult.NoStagingMap"/>, which nothing produces any more; asking for
+    /// The locale key naming why a retrieve refused. Every refusal value has its own line; asking for
     /// <see cref="DrydockRetrieveResult.Success"/> is a caller bug and throws.
     /// </summary>
     internal static string DrydockRetrieveErrorKey(DrydockRetrieveResult result)
@@ -2232,7 +2231,6 @@ public sealed partial class ShipyardSystem
         {
             DrydockRetrieveResult.Disabled => "drydock-error-retrieve-disabled",
             DrydockRetrieveResult.NoStation => "drydock-error-retrieve-no-dock-grid",
-            DrydockRetrieveResult.NoStagingMap => "drydock-error-retrieve-no-staging-map",
             DrydockRetrieveResult.NotFound => "drydock-error-retrieve-not-found",
             DrydockRetrieveResult.NotOwned => "drydock-error-not-owner",
             DrydockRetrieveResult.AlreadyOut => "drydock-error-retrieve-already-out",

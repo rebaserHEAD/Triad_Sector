@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using Content.Server._Triad.Drydock;
+using Content.Server._Triad.Drydock.Loader;
 using NUnit.Framework;
 using Robust.Shared.EntitySerialization;
 using Robust.Shared.Serialization.Markdown;
@@ -257,12 +258,20 @@ public sealed class DrydockDriftTest
     }
 
     [Test]
-    public void DetectReadsTheIdsTheStreamingReaderReturns()
+    public void DetectReadsTheIdsAnImageCarries()
     {
-        const string yaml = "meta:\n  format: 7\nentities:\n- proto: \"\"\n  entities:\n  - uid: 1\n- proto: Old\n  entities:\n  - uid: 2\n- proto: Phantom\n  entities:\n  - uid: 3\n";
-        var (ids, format) = DrydockSystem.ReadDriftIds(yaml);
+        var rows = new Dictionary<string, string>();
+        var image = new DrydockImage(1, new[]
+        {
+            new DrydockImageEntity(1, null, true, rows),
+            new DrydockImageEntity(2, "Old", true, rows),
+            new DrydockImageEntity(3, "Phantom", true, rows),
+            new DrydockImageEntity(4, "Old", true, rows),
+        }, "{}", 0, 0);
+        var ids = DrydockSystem.ImagePrototypes(image);
 
-        var verdict = DrydockDrift.Detect(ids, Table("Old: New\n"), new HashSet<string> { "New" }.Contains, Array.Empty<string>(), _ => true, format, Engine, 2, Ours);
+        var verdict = DrydockDrift.Detect(ids, Table("Old: New\n"), new HashSet<string> { "New" }.Contains, Array.Empty<string>(), _ => true,
+            DrydockSystem.ImageEngineFormat, Engine, 2, Ours);
 
         Assert.Multiple(() =>
         {

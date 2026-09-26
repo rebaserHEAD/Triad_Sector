@@ -10,11 +10,8 @@ public enum DrydockStagingKind : byte
     /// <summary>A store's freeze map. Carries the ship between the freeze and the despawn.</summary>
     Store,
 
-    /// <summary>A retrieve's load map, created by the map loader and tagged afterwards.</summary>
+    /// <summary>A retrieve's load map, paused, which the image loads onto and the dock takes the ship off.</summary>
     Retrieve,
-
-    /// <summary>The round-trip validation scratch map. Pre-init, so it never ticks.</summary>
-    Validation,
 
     /// <summary>
     /// An unwind that could not put the ship back. The sweep must not scrap this: it still carries a
