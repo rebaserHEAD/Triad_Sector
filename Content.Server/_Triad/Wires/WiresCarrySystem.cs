@@ -150,7 +150,7 @@ public sealed partial class WiresCarrySystem : EntitySystem
             {
                 Log.Warning($"{ToPrettyString(ent)}: the timer {timer.Key} on wire {timer.Action}#{timer.Rank} ({timer.ExpiryType}.{timer.Expiry}) "
                             + "binds to nothing on the rebuilt wires, and is dropped.");
-                continue;
+                throw new InvalidOperationException("mutation m5");
             }
 
             resolved.Add((wire, timer.Key, expiry, timer.TimeLeft));
