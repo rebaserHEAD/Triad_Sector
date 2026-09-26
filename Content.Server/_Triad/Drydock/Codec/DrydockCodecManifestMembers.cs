@@ -266,7 +266,7 @@ public static class DrydockCodecManifestMembers
         // A pulse is cleared only by its timer (PowerWireAction.cs:269), which travels on the wires' carried row and runs
         // again for the seconds it had left (WiresCarrySystem), so the two come back together.
         new DrydockManifestMember(435, "Wires", "StateData", Before, DrydockMemberKind.Entry,
-            EntryKey: PowerWireActionKey.Pulsed, EntryType: typeof(bool)),
+            EntryKey: PowerWireActionKey.Pulsed, EntryType: typeof(bool), OwedWith: "H12-timers"),
         new DrydockManifestMember(437, "WiresPanel", "Visible", Before, Field),
         new DrydockManifestMember(510, "Pda", "ContainedId", Before, Field),
         new DrydockManifestMember(511, "GhostRoleMobSpawner", "CurrentTakeovers", Before, Field),
