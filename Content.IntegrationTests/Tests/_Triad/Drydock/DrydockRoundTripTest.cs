@@ -718,11 +718,18 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
 
             var before = 0;
             var attempted = false;
+            var recharging = false;
             await server.WaitPost(() =>
             {
                 before = entMan.Count<ShipWeaponProjectileComponent>();
                 var turretUid = ChildrenWith<FireControllableComponent>(entMan, grid).Single();
                 var mapUid = entMan.GetComponent<TransformComponent>(grid).MapUid!.Value;
+                // The self-recharger adds its rate once a second (BatterySystem.Update, a 1 s accumulator): 125 on this
+                // turret against a shot's 50, so a step landing in the tick measured below reads as no shot at all. It
+                // stays off for the shot and goes back as it was after.
+                var recharger = entMan.GetComponent<BatterySelfRechargerComponent>(turretUid);
+                recharging = recharger.AutoRecharge;
+                recharger.AutoRecharge = false;
                 // Aim outward from the hull's corner, in whatever direction the ship happens to
                 // face: the line-of-sight check refuses a shot through the ship's own machines,
                 // and a retrieved ship comes back at the angle proximity placement chose.
@@ -764,6 +771,11 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                     Assert.That(ammo.Shots, Is.LessThan(800), $"The ammo provider gave up a shot (shots {ammo.Shots}, charge {battery.CurrentCharge}).");
                     Assert.That(entMan.Count<ShipWeaponProjectileComponent>() - before, Is.GreaterThan(0), "One tick after the shot a projectile exists.");
                 });
+            });
+            await server.WaitPost(() =>
+            {
+                var turretUid = ChildrenWith<FireControllableComponent>(entMan, grid).Single();
+                entMan.GetComponent<BatterySelfRechargerComponent>(turretUid).AutoRecharge = recharging;
             });
             await pair.RunTicksSync(4);
 
