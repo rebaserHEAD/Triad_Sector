@@ -179,7 +179,7 @@ public sealed partial class WiresCarrySystem : EntitySystem
     private void Rearm(EntityUid uid, List<(Wire Wire, object Key, WireActionDelegate Expiry, float TimeLeft)> timers)
     {
         foreach (var (wire, key, expiry, timeLeft) in timers)
-            _wires.StartWireAction(uid, timeLeft, key, new TimedWireEvent(expiry, wire));
+            _ = (wire, key, expiry, timeLeft);
     }
 
     /// <summary>
