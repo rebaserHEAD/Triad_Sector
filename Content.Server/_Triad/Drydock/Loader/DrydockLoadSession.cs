@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text.Json.Nodes;
+using System.Threading.Tasks;
 using Content.Server._Mono.ScuttleDevice;
 using Content.Server._Triad.Drydock.Codec;
 using Content.Server.Power.Components;
@@ -19,9 +20,12 @@ using Robust.Shared.Serialization.Markdown.Value;
 namespace Content.Server._Triad.Drydock.Loader;
 
 /// <summary>
-/// One load, in phases, in order: <see cref="CreateEntities"/>, <see cref="ApplyRows"/>, <see cref="Start"/>,
-/// <see cref="Complete"/>, and <see cref="Abandon"/> when any of them throws. The engine's own deserializer allocates, adds each prototype's components and starts; the
-/// image's rows are applied between its component pass and its startup.
+/// One load, in phases, in order: <see cref="CreateEntities"/>, <see cref="ApplyRows"/>, <see cref="StartEngine"/>,
+/// <see cref="AfterStart"/>, <see cref="Complete(IDrydockSlice)"/>, and <see cref="Abandon"/> when any of them throws.
+/// <see cref="Start"/> and <see cref="Complete()"/> run the last three without suspending. The engine's own deserializer
+/// allocates, adds each prototype's components and starts; the image's rows are applied between its component pass and
+/// its startup. Everything up to the engine's startup runs inside one tick; the rest may suspend between items, on
+/// started entities paused on their map.
 /// <list type="number">
 /// <item>A skeleton document: every stored entity under its prototype, with its id in the image as the yaml uid, its
 /// recorded <c>mapInit</c>, the target map's pause state as <c>paused</c>, and the grid's own grid component carrying
@@ -49,7 +53,8 @@ namespace Content.Server._Triad.Drydock.Loader;
 /// startup per entity, then the map-init stamp with no event (<c>:1019-1036</c>) and the pause stamp. The reset marks
 /// each restored networked component of an entity with a prototype as the prototype's own, which leaves it out of the
 /// next state, so every restored networked component is then dirtied: the first state after a load is full, and a
-/// later delta is legal because the creation tick stays clear. (<see cref="Start"/>.)</item>
+/// later delta is legal because the creation tick stays clear. (<see cref="StartEngine"/>, the dirtying in
+/// <see cref="AfterStart"/>, before the dock that is the first moment anyone can see the ship.)</item>
 /// </list>
 ///
 /// <para>The seam between each entity's init and its startup (<c>EntityInitialized</c>) carries the item slots held
@@ -97,6 +102,8 @@ public sealed class DrydockLoadSession
     private int _copiedAtSeam;
     private int _copiedAfterStartup;
     private int _addedWhole;
+    private int _appearances;
+    private int _appearanceStillDirty;
 
     internal DrydockLoadSession(DrydockImageSystem system, DrydockImage image, EntityUid mapUid, DrydockLoadOptions options)
     {
@@ -314,12 +321,25 @@ public sealed class DrydockLoadSession
     }
 
     /// <summary>
-    /// Phase 5: the engine's startup, with the silent map-init stamp, and the seam between each entity's init and its
-    /// startup (EntityManager.cs:1060, before StartEntity at EntityDeserializer.cs:977-982), where the held-back slots
-    /// go in: into the slot an init handler re-added, or added whole where nothing re-added it. Then the manifest's
-    /// after-start members, once every entity has started.
+    /// Phase 5 whole: <see cref="StartEngine"/>, then <see cref="AfterStart"/> without suspending, for a caller that loads
+    /// inside one tick.
     /// </summary>
     public void Start()
+    {
+        StartEngine();
+
+        // A sync slice never suspends, so the task has completed when it returns.
+        AfterStart(new DrydockSyncSlice(DrydockPhases.Retrieve)).GetAwaiter().GetResult();
+    }
+
+    /// <summary>
+    /// Phase 5, the engine's half: its startup, with the silent map-init stamp, and the seam between each entity's init
+    /// and its startup (EntityManager.cs:1060, before StartEntity at EntityDeserializer.cs:977-982), where the held-back
+    /// slots go in: into the slot an init handler re-added, or added whole where nothing re-added it. Whole, because the
+    /// engine never ticks between allocating a tree and starting it: until <c>StartEntities</c> stamps the pause
+    /// (EntityDeserializer.cs:1038-1065) every allocated entity is live to every system's update, uninitialised.
+    /// </summary>
+    public void StartEngine()
     {
         Expect(2);
         var entMan = _system.Entities;
@@ -406,14 +426,52 @@ public sealed class DrydockLoadSession
 
         _heldBack.Clear();
 
-        // The manifest's after-start members, once every entity has started: a receiver's provider, set back through
-        // the cable system, because startup paired it with whichever provider was nearest and connectable then; and a
-        // pinpointer's target, through the pinpointer system.
+        // SetData dirties; the engine's ResetNetTicks runs after it inside startup. What is still marked modified in
+        // the load's tick is what PVS sends again, a network cost rather than a correctness one.
+        var now = _system.Timing.CurTick;
+        foreach (var uid in deserializer.Entities.Keys)
+        {
+            if (!entMan.TryGetComponent<AppearanceComponent>(uid, out var appearance))
+                continue;
+
+            _appearances++;
+            if (appearance.LastModifiedTick >= now)
+                _appearanceStillDirty++;
+        }
+
+        _phase = 3;
+    }
+
+    /// <summary>
+    /// Phase 5, the load's half, one item per step against the tick budget: every entity has started and sits paused on
+    /// the paused map it loaded onto, the state a store's write reads under, so a tick between two items acts on
+    /// nothing. The manifest's after-start members: a receiver's provider, set back through the cable system, because
+    /// startup paired it with whichever provider was nearest and connectable then; a pinpointer's target, through the
+    /// pinpointer system; a scuttle device's armed map. Then every restored networked component dirtied, after the
+    /// members, since a member set as a field is dirtied here.
+    /// </summary>
+    public async Task AfterStart(IDrydockSlice slice)
+    {
+        Expect(3);
+        var entMan = _system.Entities;
         var cables = _system.Cables;
         var pinpointers = _system.Pinpointers;
+
         // A dropped entity is gone by now, with nothing missing that it could be counted against.
-        foreach (var held in _manifest.Held.Where(h => h.Member.Moment == DrydockApplyMoment.AfterStart && !_dropped.Contains(h.Uid)))
+        var afterStart = _manifest.Held
+            .Where(h => h.Member.Moment == DrydockApplyMoment.AfterStart && !_dropped.Contains(h.Uid))
+            .ToList();
+        var restored = _ids!.Keys.ToList();
+
+        await slice.Begin(DrydockPhase.Restore, afterStart.Count + restored.Count);
+        GuardAlive();
+
+        for (var i = 0; i < afterStart.Count; i++)
         {
+            await slice.Step(i);
+            GuardAlive();
+            var held = afterStart[i];
+
             // A pinpointer's target through SetTarget, which sets the target's name with it and, when active, the direction.
             if (held.Member is { Component: "Pinpointer", Member: nameof(PinpointerComponent.Target) })
             {
@@ -488,10 +546,14 @@ public sealed class DrydockLoadSession
             }
         }
 
-        // The rows are not the prototype, so every restored networked component goes out in full on this tick, whatever
-        // the startup reset marked it as (see the class summary).
-        foreach (var uid in _ids!.Keys)
+        // The rows are not the prototype, so every restored networked component goes out in full, whatever the startup
+        // reset marked it as (see the class summary). Before the dock, which is the first moment anyone can see it.
+        for (var i = 0; i < restored.Count; i++)
         {
+            await slice.Step(afterStart.Count + i);
+            GuardAlive();
+
+            var uid = restored[i];
             if (!entMan.TryGetComponent<MetaDataComponent>(uid, out var meta))
                 continue;
 
@@ -499,17 +561,39 @@ public sealed class DrydockLoadSession
                 entMan.Dirty(uid, component, meta);
         }
 
-        _phase = 3;
+        _phase = 4;
     }
 
     /// <summary>
-    /// The tiles compared against the image's own, the appearance components counted, then <see cref="GridRestoringEvent"/>
-    /// and <see cref="GridRestoredEvent"/> raised with the image's carried values (<see cref="DrydockCarried"/>, closed
-    /// when they return) and the power seam armed. The result names everything the load changed, missed or refused.
+    /// Throws when the world moved under a load parked between two steps: the grid or the map it loaded onto deleted,
+    /// which only an admin or a round's end does to a private paused map.
     /// </summary>
+    private void GuardAlive()
+    {
+        var entMan = _system.Entities;
+        if (!entMan.EntityExists(_mapUid) || entMan.GetComponent<MetaDataComponent>(_mapUid).EntityLifeStage >= EntityLifeStage.Terminating)
+            throw new DrydockAbortedException($"the map {_mapUid} a load was restoring onto was deleted");
+
+        if (!entMan.EntityExists(_gridUid) || entMan.GetComponent<MetaDataComponent>(_gridUid).EntityLifeStage >= EntityLifeStage.Terminating)
+            throw new DrydockAbortedException($"the grid {_gridUid} a load was restoring was deleted");
+    }
+
+    /// <summary><see cref="Complete(IDrydockSlice)"/> without suspending, for a caller that loads inside one tick.</summary>
     public DrydockLoadResult Complete()
     {
-        Expect(3);
+        // A sync slice never suspends, so the task has completed when it returns.
+        return Complete(new DrydockSyncSlice(DrydockPhases.Retrieve)).GetAwaiter().GetResult();
+    }
+
+    /// <summary>
+    /// The tiles compared against the image's own, then <see cref="GridRestoringEvent"/> and <see cref="GridRestoredEvent"/>
+    /// raised with the image's carried values (<see cref="DrydockCarried"/>, closed when they return) and the power seam
+    /// armed. The directed raises go one entity per step against the tick budget, on started entities paused on their
+    /// map. The result names everything the load changed, missed or refused.
+    /// </summary>
+    public async Task<DrydockLoadResult> Complete(IDrydockSlice slice)
+    {
+        Expect(4);
         var entMan = _system.Entities;
         var deserializer = _deserializer!;
         var ids = _ids!;
@@ -520,21 +604,6 @@ public sealed class DrydockLoadSession
             .GetAllTiles(_gridUid, entMan.GetComponent<MapGridComponent>(_gridUid))
             .Select(tile => (tile.GridIndices, tile.Tile))
             .ToHashSet();
-
-        // SetData dirties; the engine's ResetNetTicks runs after it inside startup. What is still marked modified in
-        // this tick after the load is what PVS sends again, a network cost rather than a correctness one.
-        var now = _system.Timing.CurTick;
-        var appearances = 0;
-        var stillDirty = 0;
-        foreach (var uid in deserializer.Entities.Keys)
-        {
-            if (!entMan.TryGetComponent<AppearanceComponent>(uid, out var appearance))
-                continue;
-
-            appearances++;
-            if (appearance.LastModifiedTick >= now)
-                stillDirty++;
-        }
 
         var result = new DrydockLoadResult
         {
@@ -552,8 +621,8 @@ public sealed class DrydockLoadSession
             AddedWhole = _addedWhole,
             AppearanceApplied = _appearanceApplied,
             AppearanceRefused = _appearanceRefused,
-            AppearanceComponents = appearances,
-            AppearanceStillDirty = stillDirty,
+            AppearanceComponents = _appearances,
+            AppearanceStillDirty = _appearanceStillDirty,
             UnresolvedPrototypes = _codec!.Unresolved.ToList(),
             Severed = _codec.Severed.ToList(),
             Sentinels = _sentinels.Where(sentinel => !_dropped.Contains(sentinel.Entity)).ToList(),
@@ -583,6 +652,9 @@ public sealed class DrydockLoadSession
                 carriedRows[uid] = (entity.Prototype, carriedRow);
         }
 
+        await slice.Begin(DrydockPhase.Restore, inOrder.Count);
+        GuardAlive();
+
         var carried = new DrydockCarried(_codec!, carriedRows);
         try
         {
@@ -591,8 +663,12 @@ public sealed class DrydockLoadSession
             _system.RaiseRestoring(ref restoringEvent);
 
             // Step 2: the directed raise at each entity, then once for the grid. An entity a handler deleted earlier is skipped.
-            foreach (var uid in inOrder)
+            for (var i = 0; i < inOrder.Count; i++)
             {
+                await slice.Step(i);
+                GuardAlive();
+
+                var uid = inOrder[i];
                 if (!entMan.EntityExists(uid))
                     continue;
 
@@ -610,7 +686,7 @@ public sealed class DrydockLoadSession
 
         _system.ArmPowerEdge(result);
 
-        _phase = 4;
+        _phase = 5;
         return result;
     }
 

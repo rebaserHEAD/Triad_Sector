@@ -333,14 +333,13 @@ public sealed partial class DrydockSystem
                 await slice.Begin(DrydockPhase.Load, 0);
                 GuardRetrieveResume(ctx);
 
-                if (LoadOntoStagingMap(ctx, slice, revision, stored.Image) is not { } loaded)
+                if (await LoadOntoStagingMap(ctx, slice, revision, stored.Image) is not { } loaded)
                 {
                     await PinSteppedPast(ctx, slice, revision, "its image would not load");
                     continue;
                 }
 
                 var grid = ctx.Grid!.Value;
-                timer.Mark("load");
 
                 // The whole tree, containers included, counted once. It pays for itself twice:
                 // without a count the timings below cannot be compared between a shuttle and a
@@ -539,10 +538,13 @@ public sealed partial class DrydockSystem
     }
 
     /// <summary>
-    /// Loads one revision's image onto a private, paused map of its own, in one tick: the loader's four
-    /// phases, with the strip rule and the research reset between its start and its completion, so the
-    /// restore events it raises last see the population that stays. Null when the image would not
-    /// load, with whatever the load made scrapped.
+    /// Loads one revision's image onto a private, paused map of its own. The allocation, the rows and the engine's
+    /// startup run inside one tick, since nothing may tick between allocating a tree and starting it
+    /// (<see cref="DrydockLoadSession.StartEngine"/>); the timing line marks them create, rows and start. The rest runs
+    /// against the tick budget on started, paused entities: the after-start members and the re-dirty
+    /// (<see cref="DrydockPhase.Restore"/>), the strip rule and the research reset, then the restore events, so they see
+    /// the population that stays, marked complete. Null when the image would not load, with whatever the load made
+    /// scrapped; a load the world moved under mid-restore abandons and rethrows the abort.
     ///
     /// <para>The map is created paused while it is still empty, so the engine's recursive pause walks
     /// one entity instead of a whole hull (<see cref="CreateStagingMap"/>).</para>
@@ -553,29 +555,38 @@ public sealed partial class DrydockSystem
     /// a tick they shared. Residency is measured in seconds now, which is precisely the case that
     /// spacing could not have covered, and a private map has nothing to overlap with.</para>
     /// </summary>
-    private DrydockLoadResult? LoadOntoStagingMap(DrydockRetrieveContext ctx, IDrydockSlice slice, int revision, DrydockImage image)
+    private async Task<DrydockLoadResult?> LoadOntoStagingMap(DrydockRetrieveContext ctx, IDrydockSlice slice, int revision, DrydockImage image)
     {
+        var timer = ctx.Timer;
         ctx.StagingMap = CreateStagingMap(JobIdOf(slice), DrydockStagingKind.Retrieve, ctx.ShipId, mapInit: true);
         var session = _image.BeginLoad(image, ctx.StagingMap.Value, new DrydockLoadOptions { Migrations = MigrationTable });
         try
         {
             session.CreateEntities();
             ctx.Grid = session.Grid;
+            timer.Mark("create");
             session.ApplyRows();
-            session.Start();
+            timer.Mark("rows");
+            session.StartEngine();
+            timer.Mark("start");
 
-            // A sync slice never suspends, so both sweeps finish inside this call.
-            var sync = new DrydockSyncSlice(DrydockPhases.Retrieve);
-            StripSliced(session.Grid, sync).GetAwaiter().GetResult();
-            ResetResearchSliced(session.Grid, sync).GetAwaiter().GetResult();
+            await session.AfterStart(slice);
+            await StripSliced(session.Grid, slice);
+            await ResetResearchSliced(session.Grid, slice);
 
-            var result = session.Complete();
+            var result = await session.Complete(slice);
+            timer.Mark("complete");
             Log.Info($"Drydock: {ctx.ShipId} revision {revision} loaded {result.Ids.Count} entities; "
                      + $"severed {result.Severed.Count}, manifest missing {result.Manifest.Missing.Values.Sum()} and refused {result.Manifest.Refused.Values.Sum()}, "
                      + $"appearance refused {result.AppearanceRefused.Values.Sum()}, unresolved prototypes {result.UnresolvedPrototypes.Count}, "
                      + $"dropped batches {result.DroppedBatches.Count}, "
                      + $"dropped roots [{string.Join(", ", result.DroppedRoots.Select(r => $"{r.Prototype} ({r.Subtree})"))}].");
             return result;
+        }
+        catch (DrydockAbortedException)
+        {
+            session.Abandon();
+            throw;
         }
         catch (Exception e) when (e is not OperationCanceledException)
         {
@@ -685,7 +696,7 @@ public sealed partial class DrydockSystem
     }
 
     /// <summary>
-    /// Pins a checksum-valid revision the ladder stepped past, so ordinary stores after this retrieve
+    /// Pins a revision with an image that the ladder stepped past, so ordinary stores after this retrieve
     /// cannot prune a newer state than the one it hands out. A pin that does not land is logged and
     /// never refuses the retrieve; a cancellation still travels.
     /// </summary>

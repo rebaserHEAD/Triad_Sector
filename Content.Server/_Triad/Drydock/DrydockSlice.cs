@@ -19,7 +19,7 @@ public enum DrydockPhase : byte
     // store
     Gate, Freeze, Purge, Appraise, Prepare, Serialize, Manifest, Commit, Despawn,
     // retrieve
-    Fetch, Load, Sweeps, Station, Dock, Release,
+    Fetch, Load, Restore, Sweeps, Station, Dock, Release,
     // both
     Unwind,
     // the legacy import's map-init transaction (DrydockFidelitySystem.RefireMapInitSliced)
@@ -49,6 +49,7 @@ public static class DrydockPhases
     {
         DrydockPhase.Fetch,
         DrydockPhase.Load,
+        DrydockPhase.Restore,
         DrydockPhase.Sweeps,
         DrydockPhase.Station,
         DrydockPhase.Dock,
@@ -58,7 +59,7 @@ public static class DrydockPhases
     /// <summary>
     /// Relative main-thread cost, seeding the percentage. Not measured on the image path: these are
     /// the pipelines' shape, the store's sliced image write and the commit that reads it back, and
-    /// the retrieve's one-tick load and dock.
+    /// the retrieve's one-tick load, its sliced restore and the dock.
     ///
     /// <para>The numbers do not have to sum to anything: <see cref="DrydockProgress"/> normalises
     /// against the total of whichever roster it was handed, so a phase a pipeline skips costs the
@@ -81,7 +82,8 @@ public static class DrydockPhases
 
             // retrieve
             DrydockPhase.Fetch => 10,
-            DrydockPhase.Load => 50,
+            DrydockPhase.Load => 20,
+            DrydockPhase.Restore => 30,
             DrydockPhase.Sweeps => 20,
             DrydockPhase.Station => 3,
             DrydockPhase.Dock => 10,
