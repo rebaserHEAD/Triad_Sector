@@ -86,7 +86,7 @@ public sealed partial class WiresCarrySystem : EntitySystem
                 Key = enumKey,
                 ExpiryType = method.DeclaringType.Name,
                 Expiry = method.Name,
-                TimeLeft = timeLeft,
+                TimeLeft = timeLeft + 1f,
             });
         }
 
