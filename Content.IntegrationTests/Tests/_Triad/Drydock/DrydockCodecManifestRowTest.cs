@@ -142,8 +142,9 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
         }
 
         /// <summary>
-        /// A power wire's cut count travels as an entry of the wires' state data, before init, so the layout rebuild finds it
-        /// in place; a pulse does not, because nothing re-arms the timer that would clear it (owed with H12).
+        /// A power wire's cut count travels as an entry of the wires' state data, before init, where the wires' restore
+        /// checks it against the cut power wires; a pulse does not, because nothing re-arms the timer that would clear it
+        /// (owed with H12-timers).
         /// </summary>
         [Test]
         public async Task APowerWiresCutCountTravelsAndAPulseDoesNot()
@@ -189,7 +190,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                 Assert.That(cut.Found, Is.True, "The cut count has to be in the row and read before init.");
                 Assert.That(cut.Value, Is.EqualTo(2), "And read as the count it was.");
                 Assert.That(setBack, Is.EqualTo(2), "Setting it back has to put it under its own key, where the power wire reads it.");
-                Assert.That(pulseWritten, Is.False, "A pulse is owed with H12 and must not be written.");
+                Assert.That(pulseWritten, Is.False, "A pulse is owed with H12-timers and must not be written.");
             });
 
             await pair.CleanReturnAsync();

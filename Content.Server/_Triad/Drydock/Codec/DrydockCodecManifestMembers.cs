@@ -259,14 +259,14 @@ public static class DrydockCodecManifestMembers
         new DrydockManifestMember(432, "Wieldable", "OldInhandPrefix", Before, Field),
         new DrydockManifestMember(433, "Wires", "SerialNumber", Before, Field),
         new DrydockManifestMember(433, "Wires", "WireSeed", Before, Field),
-        // Before init, so H12's layout rebuild finds the count in place: the power wire seeds it only when it is absent
-        // (PowerWireAction.cs:180-182).
+        // Before init, so the wires' restore reads it before the layout rebuild seeds a missing one (PowerWireAction.cs:180-182)
+        // and checks it against the cut power wires, which set it (WiresCarrySystem).
         new DrydockManifestMember(435, "Wires", "StateData", Before, DrydockMemberKind.Entry,
             EntryKey: PowerWireActionKey.CutWires, EntryType: typeof(int)),
         // A pulse is cleared only by its timer (PowerWireAction.cs:269), which no store keeps, so a carried pulse would
-        // hold the wire for ever; it travels once H12 re-arms the timer.
+        // hold the wire for ever; it travels once the timed wires are re-armed.
         new DrydockManifestMember(435, "Wires", "StateData", Before, DrydockMemberKind.Entry,
-            EntryKey: PowerWireActionKey.Pulsed, EntryType: typeof(bool), OwedWith: "H12"),
+            EntryKey: PowerWireActionKey.Pulsed, EntryType: typeof(bool), OwedWith: "H12-timers"),
         new DrydockManifestMember(437, "WiresPanel", "Visible", Before, Field),
         new DrydockManifestMember(510, "Pda", "ContainedId", Before, Field),
         new DrydockManifestMember(511, "GhostRoleMobSpawner", "CurrentTakeovers", Before, Field),
@@ -303,7 +303,7 @@ public static class DrydockCodecManifestMembers
         new DrydockNotCarried(507, "ScuttleDevice", "NukeSongLength", MusicState, SortsAsNotCarried: true),
         new DrydockNotCarried(507, "ScuttleDevice", "PlayedNukeSong", MusicState, SortsAsNotCarried: true),
         new DrydockNotCarried(435, "Wires", "StateData",
-            "boxed values, most of them live CancellationTokenSources; PowerWireActionKey.CutWires travels as an entry of its own, and .Pulsed is owed with H12"));
+            "boxed values, most of them live CancellationTokenSources; PowerWireActionKey.CutWires travels as an entry of its own, and .Pulsed is owed with H12-timers"));
 
     /// <summary>
     /// Components the store strips, by registration name, with the reason: each is either tied to the round's station or

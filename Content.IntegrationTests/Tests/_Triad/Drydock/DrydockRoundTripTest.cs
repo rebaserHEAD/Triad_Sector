@@ -89,8 +89,8 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
     /// <para>The airlock is not decoration. Its wire layout is the sharpest available probe of the
     /// map-init boundary: <c>WiresComponent.WiresList</c> is not a data field and the only thing
     /// that ever builds it is the map-init handler, which never fires again for a restored entity.
-    /// Without the Revive step every panel on a retrieved ship opens empty, and nothing else about
-    /// the ship looks wrong.</para>
+    /// Without the wires' restore handler (<c>WiresCarrySystem</c>) every panel on a retrieved ship
+    /// opens empty, and nothing else about the ship looks wrong.</para>
     /// </summary>
     [TestFixture]
     [TestOf(typeof(DrydockSystem))]
@@ -159,7 +159,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
 
             var wiresBefore = await ReadWireCount(pair, airlock);
             Assert.That(wiresBefore, Is.GreaterThan(0),
-                "A live airlock must have a populated wire layout, or this test cannot prove Revive rebuilt one.");
+                "A live airlock must have a populated wire layout, or this test cannot prove the restore rebuilt one.");
 
             var (result, shipId) = await DrydockTestHelpers.RunOnServer(pair, () => drydock.TryStoreShip(shipGrid, owner, null));
 
@@ -197,7 +197,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
 
             var wiresAfter = await ReadWireCount(pair, retrievedAirlock!.Value);
             Assert.That(wiresAfter, Is.EqualTo(wiresBefore),
-                "WiresList is not a data field, so this passes only because Revive rebuilt the layout by hand.");
+                "WiresList is not a data field, so this passes only because the wires' restore handler builds the list, once.");
 
             await pair.CleanReturnAsync();
         }
@@ -1623,8 +1623,9 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
         /// <summary>
         /// Three things only map init ever sets up, in one round trip: a smart fridge's stock index,
         /// a robotic arm's declared hand, and the marker that stops the roundstart variation passes
-        /// re-littering a ship on every retrieve. Each is a Revive step, and each one missing is a
-        /// machine that looks fine and does nothing.
+        /// re-littering a ship on every retrieve. Each has its own restore step (the arm's hand is the
+        /// hands carry's, <c>HandsCarrySystem</c>), and each one missing is a machine that looks fine
+        /// and does nothing.
         /// </summary>
         [Test]
         public async Task MapInitDerivedMachineStateComesBack()
@@ -1688,7 +1689,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
 
                     Assert.That(retrievedArm, Is.Not.Null, "The arm came back with the ship.");
                     Assert.That(entMan.GetComponent<HandsComponent>(retrievedArm!.Value).Hands, Is.Not.Empty,
-                        "Hands are not data fields and hand-fill only runs on map init; without the Revive step the arm has nothing to hold a tool with.");
+                        "Hands are not data fields and hand-fill only runs on map init; without the hands carry the arm has nothing to hold a tool with.");
 
                     Assert.That(entMan.HasComponent<StationVariationHasRunComponent>(grid), Is.True,
                         "The variation marker has to ride the grid, or the recreated station is varied again on every retrieve.");

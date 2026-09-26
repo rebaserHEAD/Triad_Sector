@@ -806,18 +806,15 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                                     && Collection(result.After.Values, key[..key.IndexOf('|')]) is { } after
                                     && before.SetEquals(after)),
 
-            // Owed to a rebuild handler that does not exist yet (the design page's "Phase 3 contract: the loader" names each
-            // Hnn), so each handler's arrival has lines to delete. The load stays free of the old retrieve sweeps, which are what these replace.
-            new("owed: H12",
-                "OWED to H12, wire layout and timed wire re-arm: the state data is set by each wire's action as it is added "
-                + "(WiresSystem.cs:143, :167, through SetData at :812), the statuses are refilled from the wires by "
-                + "UpdateUserInterface (:528), and both run from map init (:469-488), which the silent map-init stamp never "
-                + "raises. Sorted only where the same entity's wire list also came back empty, for a wire's own state and "
-                + "for a UI state cache whose only unexplained loss is the wires state alike: nothing pushes that state at "
-                + "open (PushedAtOpen does not list it), and the H12 handler ends with WiresSystem.UpdateUserInterface.",
-                (_, key, result) => (OwedToH12.Contains(key[(key.IndexOf('|') + 1)..]) || CacheWaitsOn(key, result) == "H12")
-                                    && result.After.Values.TryGetValue(key[..key.IndexOf('|')] + "|WiresComponent.~WiresList", out var wires)
-                                    && wires.StartsWith("count=0", StringComparison.Ordinal)),
+            // Ruled 2026-09-26: a restore is a build, and an entity that shuffles its wires at every build is rebuilt in another order.
+            new(ReshuffledFamily,
+                "Accepted: an entity with alwaysRandomize draws a new wire order at every build (WiresComponent.cs:47-52, "
+                + "WiresSystem.cs:148-172), and the restore builds its list (WiresCarrySystem), so it comes back with other "
+                + "ids, colours and letters, and the power wire's MainWire, the id of the first power wire in the list "
+                + "(PowerWireAction.cs:185-188), follows. The carry names each cut wire by its place in the layout prototype, "
+                + "so the same wires come back cut. Sorted only where the list holds the same wires by original position, each "
+                + "cut or not as before, and, for the state data, where nothing but MainWire moved beside such a list.",
+                (line, key, result) => line.StartsWith("CHANGED", StringComparison.Ordinal) && Reshuffled(key, result)),
 
             // What the manifest's fourth moment, after the first power solve, set back before it was cut (ruled 2026-09-19).
             new("re-armed by the power edge",
@@ -858,8 +855,8 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                 + "finding, because no single family explains it.",
                 (line, key, result) => line.StartsWith("CHANGED", StringComparison.Ordinal) && CacheWaitsOn(key, result) == string.Empty),
 
-            // The three the sweep found nothing pushing at open. Each sorts where its handler is the only one the cache
-            // is waiting on; H21 is a new handler, the network configurator's own open push.
+            // States nothing pushes at open, each owed to a handler not yet built. Each sorts where its handler is the only
+            // one the cache is waiting on; H21 is a new handler, the network configurator's own open push.
             new("owed: H10",
                 "OWED to H10, the research client's re-link: a research console pushes its console state at open only "
                 + "while its client is linked to a server, and the H10 re-link raises ResearchRegistrationChangedEvent, "
@@ -977,7 +974,6 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
         private static readonly Dictionary<string, string> OwedStates = new(StringComparer.Ordinal)
         {
             ["ResearchConsoleBoundInterfaceState"] = "H10",
-            ["WiresBoundUserInterfaceState"] = "H12",
             ["NetworkConfiguratorUserInterfaceState"] = "H21",
         };
 
@@ -1078,45 +1074,42 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
         /// <summary>
         /// The UI cache families' control, with no server: a cache sorts by the state types it lost, into the family where
         /// every one of them is pushed at open, into the family of the one handler it waits on where there is exactly one,
-        /// and nowhere at all where it waits on two or where a state is one nobody has read yet. The wire list's own
-        /// condition is not asked of a cache line, which the handler's push cures whatever the list did.
+        /// and nowhere at all where it waits on two, where a state is one nobody has read yet, or where it lost the wires
+        /// state, which the wires' restore pushes (WiresCarrySystem).
         /// </summary>
         [Test]
         public void OnlyAUiCacheWhoseLostStatesAreExplainedSorts()
         {
-            const string path = "AirAlarm@-1,3";
-            const string key = $"{path}|UserInterfaceComponent.~States";
+            const string key = "AirAlarm@-1,3|UserInterfaceComponent.~States";
             const string alarm = "count=1 [Key=<AirAlarmUIState>]";
             const string alarmAndWires = "count=2 [Key=<AirAlarmUIState>, Key=<WiresBoundUserInterfaceState>]";
-            const string console = "count=2 [Key=<ResearchConsoleBoundInterfaceState>, Key=<WiresBoundUserInterfaceState>]";
+            const string console = "count=1 [Key=<ResearchConsoleBoundInterfaceState>]";
             const string configurator = "count=1 [List=<NetworkConfiguratorUserInterfaceState>]";
+            const string consoleAndConfigurator = "count=2 [Key=<ResearchConsoleBoundInterfaceState>, List=<NetworkConfiguratorUserInterfaceState>]";
             const string nothing = "count=0 []";
 
-            string? Sorted(string before, string after, string wires)
+            string? Sorted(string before, string after)
             {
                 var result = new RoundTripResult(new DrydockStateSnapshot(), new DrydockStateSnapshot(), new DrydockStateSnapshot(),
                     new DrydockStateSnapshot(), EntityUid.Invalid, 0, 0, 0, null);
                 result.Before.Values[key] = before;
                 result.After.Values[key] = after;
-                result.After.Values[$"{path}|WiresComponent.~WiresList"] = wires;
                 return FamilyFor($"CHANGED  {key}: {before} -> {after}", key, result, null).Family?.Name;
             }
 
             Assert.Multiple(() =>
             {
-                Assert.That(Sorted(alarm, nothing, nothing), Is.EqualTo("BUI state cache, pushed at open by the owning system"),
+                Assert.That(Sorted(alarm, nothing), Is.EqualTo(CacheFamily),
                     "A cache that lost only states the owning system pushes at open has to sort into the family.");
-                Assert.That(Sorted(alarmAndWires, alarm, nothing), Is.EqualTo("owed: H12"),
-                    "One waiting on the wires state alone is H12's.");
-                Assert.That(Sorted(alarmAndWires, nothing, nothing), Is.EqualTo("owed: H12"),
-                    "So is one that lost a pushed state beside it, since only the wires state is waiting.");
-                Assert.That(Sorted(configurator, nothing, nothing), Is.EqualTo("owed: H21"),
+                Assert.That(Sorted(console, nothing), Is.EqualTo("owed: H10"),
+                    "One waiting on the console state alone is H10's.");
+                Assert.That(Sorted(configurator, nothing), Is.EqualTo("owed: H21"),
                     "A configurator's list state is H21's until that handler pushes it.");
-                Assert.That(Sorted(console, nothing, nothing), Is.Null,
-                    "A cache waiting on two handlers, H10 for the console state and H12 for the wires, is explained by neither.");
-                Assert.That(Sorted(alarmAndWires, nothing, "count=2 [- a, - b]"), Is.Null,
-                    "With the wires themselves back, H12's list condition fails and the line stays a finding, for now.");
-                Assert.That(Sorted("count=1 [Key=<FireControlConsoleBoundInterfaceState>]", nothing, nothing), Is.Null,
+                Assert.That(Sorted(consoleAndConfigurator, nothing), Is.Null,
+                    "A cache waiting on two handlers, H10 for the console state and H21 for the list, is explained by neither.");
+                Assert.That(Sorted(alarmAndWires, alarm), Is.Null,
+                    "The wires' restore pushes the wires state, so a cache that lost it is a finding.");
+                Assert.That(Sorted("count=1 [Key=<FireControlConsoleBoundInterfaceState>]", nothing), Is.Null,
                     "A state nobody has read yet keeps the line a finding.");
             });
         }
@@ -1130,9 +1123,8 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
         [Test]
         public void OnlyTheCacheIsExemptFromTheEndsSmallerArm()
         {
-            const string path = "AirAlarm@-1,3";
-            const string cache = $"{path}|UserInterfaceComponent.~States";
-            const string statuses = $"{path}|WiresComponent.~Statuses";
+            const string cache = "AirAlarm@-1,3|UserInterfaceComponent.~States";
+            const string song = "ScuttleDeviceWyvern@8,8|ScuttleDeviceComponent.~SelectedNukeSong";
 
             RoundTripResult Trip(string key, string before, string after)
             {
@@ -1140,7 +1132,6 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                 var loaded = new DrydockStateSnapshot();
                 stored.Values[key] = before;
                 loaded.Values[key] = after;
-                loaded.Values[$"{path}|WiresComponent.~WiresList"] = "count=0 []";
                 return new RoundTripResult(new DrydockStateSnapshot(), stored, loaded, loaded, EntityUid.Invalid, 0, 0, 0, null);
             }
 
@@ -1148,7 +1139,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                 FamilyFor($"CHANGED  {key}: before -> after", key, second, first);
 
             var cacheFamily = KnownFamilies.Single(family => family.Name == CacheFamily);
-            var h12 = KnownFamilies.Single(family => family.Name == "owed: H12");
+            var notCarried = KnownFamilies.Single(family => family.Name == "not carried: ScuttleDevice.SelectedNukeSong");
 
             var drains = Sorted(cache,
                 Trip(cache, "count=2 [Key=<AirAlarmUIState>, InteractionWindow=<HolopadBoundInterfaceState>]", "count=1 [Key=<AirAlarmUIState>]"),
@@ -1158,15 +1149,15 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                 Trip(cache, "count=0 []", "count=1 [Key=<AirAlarmUIState>]"),
                 Trip(cache, "count=1 [Key=<AirAlarmUIState>]", "count=2 [Key=<AirAlarmUIState>, InteractionWindow=<HolopadBoundInterfaceState>]"));
 
-            var wires = Sorted(statuses,
-                Trip(statuses, "- a\n- b\n- c", "- a\n- b"),
-                Trip(statuses, "- a\n- b", "- a"));
+            var shrinks = Sorted(song,
+                Trip(song, "- a\n- b\n- c", "- a\n- b"),
+                Trip(song, "- a\n- b", "- a"));
 
             Assert.Multiple(() =>
             {
                 Assert.That(drains, Is.EqualTo((cacheFamily, false)), "A cache that ends smaller each store stays with its family.");
                 Assert.That(grows, Is.EqualTo((cacheFamily, true)), "One that grows on both trips is held back, as every family's line is.");
-                Assert.That(wires, Is.EqualTo((h12, true)), "And a line that is not a cache is still held back by the arm the cache is exempt from.");
+                Assert.That(shrinks, Is.EqualTo((notCarried, true)), "And a line that is not a cache is still held back by the arm the cache is exempt from.");
             });
         }
 
@@ -1217,15 +1208,14 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
         }
 
         /// <summary>
-        /// The no-growth guard's control, with no server: a wire panel's statuses sort into the H12 family on round trip 1,
-        /// where there is nothing to compound against, and on round trip 2 when they repeat the same change, but not when
-        /// they grow again.
+        /// The no-growth guard's control, with no server: a line a not-carried family sorts is the family's on round trip 1,
+        /// where there is nothing to compound against, and on round trip 2 when it repeats the same change, but not when it
+        /// grows again.
         /// </summary>
         [Test]
         public void AFamilyNeverAbsorbsALineThatCompounds()
         {
-            const string path = "AirlockGlass@1,1";
-            const string key = path + "|WiresComponent.~Statuses";
+            const string key = "ScuttleDeviceWyvern@8,8|ScuttleDeviceComponent.~SelectedNukeSong";
             const string line = "CHANGED  " + key + ": before -> after";
 
             RoundTripResult Trip(string before, string after)
@@ -1234,20 +1224,66 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                 var loaded = new DrydockStateSnapshot();
                 stored.Values[key] = before;
                 loaded.Values[key] = after;
-                loaded.Values[path + "|WiresComponent.~WiresList"] = "count=0 []";
                 return new RoundTripResult(new DrydockStateSnapshot(), stored, loaded, new DrydockStateSnapshot(), EntityUid.Invalid, 0, 0, 0, null);
             }
 
             var first = Trip("- a", "- a\n- b");
             var repeats = Trip("- a", "- a\n- b");
             var grows = Trip("- a\n- b", "- a\n- b\n- c");
-            var h12 = KnownFamilies.Single(family => family.Name == "owed: H12");
+            var family = KnownFamilies.Single(f => f.Name == "not carried: ScuttleDevice.SelectedNukeSong");
 
             Assert.Multiple(() =>
             {
-                Assert.That(FamilyFor(line, key, first, null), Is.EqualTo((h12, false)), "The control: on round trip 1 the family takes the line.");
-                Assert.That(FamilyFor(line, key, repeats, first), Is.EqualTo((h12, false)), "A line repeating round trip 1's change is the family's.");
-                Assert.That(FamilyFor(line, key, grows, first), Is.EqualTo((h12, true)), "A line growing again on round trip 2 must be held back from the family.");
+                Assert.That(FamilyFor(line, key, first, null), Is.EqualTo((family, false)), "The control: on round trip 1 the family takes the line.");
+                Assert.That(FamilyFor(line, key, repeats, first), Is.EqualTo((family, false)), "A line repeating round trip 1's change is the family's.");
+                Assert.That(FamilyFor(line, key, grows, first), Is.EqualTo((family, true)), "A line growing again on round trip 2 must be held back from the family.");
+            });
+        }
+
+        /// <summary>
+        /// The reshuffle family's control, with no server: a wire list that comes back as the same wires by original position
+        /// and cut state in another order sorts, and so does its state data where only MainWire moved; a wire that came back
+        /// uncut, state data where another entry moved, and state data beside a list that did not move stay findings.
+        /// </summary>
+        [Test]
+        public void OnlyTheSameWiresInAnotherOrderSort()
+        {
+            const string path = "SurveillanceCameraWall@2,2";
+            const string list = path + "|" + WiresListMember;
+            const string state = path + "|WiresComponent.~StateData";
+
+            static string Wire(int id, int position, bool cut) =>
+                $"<Wire>{{Color=Red, Id={id}, IsCut={(cut ? "True" : "False")}, Letter=α, OriginalPosition={position}, Owner={path}}}";
+
+            var before = $"count=3 [{Wire(0, 0, false)}, {Wire(1, 1, true)}, {Wire(2, 4, false)}]";
+            var shuffled = $"count=3 [{Wire(0, 4, false)}, {Wire(1, 0, false)}, {Wire(2, 1, true)}]";
+            var lostCut = $"count=3 [{Wire(0, 4, false)}, {Wire(1, 0, false)}, {Wire(2, 1, false)}]";
+            const string mainAt0 = "count=3 [CutWires=0, MainWire=0, WireCount=2]";
+            const string mainAt1 = "count=3 [CutWires=0, MainWire=1, WireCount=2]";
+            const string cutMoved = "count=3 [CutWires=1, MainWire=1, WireCount=2]";
+
+            string? Sorted(string key, string listBefore, string listAfter, string? stateBefore = null, string? stateAfter = null)
+            {
+                var result = new RoundTripResult(new DrydockStateSnapshot(), new DrydockStateSnapshot(), new DrydockStateSnapshot(),
+                    new DrydockStateSnapshot(), EntityUid.Invalid, 0, 0, 0, null);
+                result.Before.Values[list] = listBefore;
+                result.After.Values[list] = listAfter;
+                if (stateBefore != null && stateAfter != null)
+                {
+                    result.Before.Values[state] = stateBefore;
+                    result.After.Values[state] = stateAfter;
+                }
+
+                return FamilyFor($"CHANGED  {key}: before -> after", key, result, null).Family?.Name;
+            }
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(Sorted(list, before, shuffled), Is.EqualTo(ReshuffledFamily), "The same wires, each cut or not as before, in another order sort.");
+                Assert.That(Sorted(list, before, lostCut), Is.Null, "A wire that came back uncut is a finding.");
+                Assert.That(Sorted(state, before, shuffled, mainAt0, mainAt1), Is.EqualTo(ReshuffledFamily), "State data where only MainWire moved beside such a list sorts.");
+                Assert.That(Sorted(state, before, shuffled, mainAt0, cutMoved), Is.Null, "State data where the cut count moved is a finding.");
+                Assert.That(Sorted(state, before, before, mainAt0, mainAt1), Is.Null, "MainWire moving beside a list that did not move is a finding.");
             });
         }
 
@@ -1371,12 +1407,53 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             return set;
         }
 
-        /// <summary>What H12's layout rebuild fills besides the wire list, which the census predicts on its own (join row 434).</summary>
-        private static readonly HashSet<string> OwedToH12 = new(StringComparer.Ordinal)
+        /// <summary>The family for a wire list rebuilt in another order, by name.</summary>
+        private const string ReshuffledFamily = "wire list rebuilt in another order";
+
+        private const string WiresListMember = "WiresComponent.~WiresList";
+
+        /// <summary>
+        /// Whether a wire line is the same wires in another order: the entity's list holds the same wires by original
+        /// position, each cut or not as before, in another order; and, for its state data, nothing but MainWire moved.
+        /// </summary>
+        private static bool Reshuffled(string key, RoundTripResult result)
         {
-            "WiresComponent.~StateData",
-            "WiresComponent.~Statuses",
-        };
+            var member = SnapshotMember(key);
+            if (member != WiresListMember && member != "WiresComponent.~StateData")
+                return false;
+
+            var list = key[..key.IndexOf('|')] + "|" + WiresListMember;
+            if (!result.Before.Values.TryGetValue(list, out var listBefore)
+                || !result.After.Values.TryGetValue(list, out var listAfter)
+                || listBefore == listAfter
+                || WiresByPosition(listBefore) is not { Count: > 0 } wiresBefore
+                || !wiresBefore.SequenceEqual(WiresByPosition(listAfter)))
+            {
+                return false;
+            }
+
+            if (member == WiresListMember)
+                return true;
+
+            return result.Before.Values.TryGetValue(key, out var before)
+                   && result.After.Values.TryGetValue(key, out var after)
+                   && Entries(before) is { } entriesBefore
+                   && Entries(after) is { } entriesAfter
+                   && entriesBefore.Where(e => !e.StartsWith("MainWire=", StringComparison.Ordinal))
+                       .ToHashSet(StringComparer.Ordinal)
+                       .SetEquals(entriesAfter.Where(e => !e.StartsWith("MainWire=", StringComparison.Ordinal)));
+        }
+
+        /// <summary>
+        /// A wire list render's wires as <c>position:cut</c>, in original position order, from each wire's rendered fields
+        /// (<c>&lt;Wire&gt;{..., IsCut=..., ..., OriginalPosition=..., ...}</c>).
+        /// </summary>
+        private static List<string> WiresByPosition(string render) =>
+            System.Text.RegularExpressions.Regex.Matches(render, @"IsCut=(\w+)[^}]*?OriginalPosition=(\d+)")
+                .Select(m => (Position: int.Parse(m.Groups[2].Value), Cut: m.Groups[1].Value))
+                .OrderBy(wire => wire.Position)
+                .Select(wire => $"{wire.Position}:{wire.Cut}")
+                .ToList();
 
         /// <summary>What <c>OnTradeCrateInit</c> rewrites (CargoSystem.TradeCrates.cs:58-80), as deep-snapshot members.</summary>
         private static readonly HashSet<string> TradeCrateMembers = new(StringComparer.Ordinal)

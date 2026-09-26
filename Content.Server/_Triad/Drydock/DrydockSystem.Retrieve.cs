@@ -22,12 +22,10 @@ using Content.Server.Station;
 using Content.Server.Station.Components;
 using Content.Server.Shuttles.Components;
 using Content.Server.Shuttles.Systems;
-using Content.Server.Wires;
 using Content.Shared._Mono.ShipRepair;
 using Content.Shared._Mono.Ships.Components;
 using Content.Shared._NF.Shipyard.Components;
 using Content.Shared._NF.Shipyard.Prototypes;
-using Content.Shared._Shitmed.Autodoc.Components;
 using Content.Shared._Triad.CCVar;
 using Content.Shared.Cabinet;
 using Content.Shared.Chemistry;
@@ -35,8 +33,6 @@ using Content.Shared.Containers.ItemSlots;
 using Content.Shared.Damage;
 using Content.Shared.DeviceNetwork.Components;
 using Content.Shared.FixedPoint;
-using Content.Shared.Hands.Components;
-using Content.Shared.Hands.EntitySystems;
 using Content.Shared.Lathe;
 using Content.Shared.Mind.Components;
 using Content.Shared.Nutrition.EntitySystems;
@@ -81,14 +77,12 @@ public sealed partial class DrydockSystem
     [Dependency] private IGameTiming _timing = default!;
     [Dependency] private IPrototypeManager _protoMan = default!;
     [Dependency] private NPCSystem _npc = default!;
-    [Dependency] private WiresSystem _wires = default!;
     [Dependency] private DeviceNetworkSystem _deviceNetwork = default!;
     [Dependency] private ResearchSystem _research = default!;
     [Dependency] private ShuttleConsoleLockSystem _consoleLock = default!;
     [Dependency] private GeneratorSystem _generator = default!;
     [Dependency] private SharedSmartFridgeSystem _smartFridge = default!;
     [Dependency] private SharedArtifactAnalyzerSystem _artifactAnalyzer = default!;
-    [Dependency] private SharedHandsSystem _hands = default!;
     [Dependency] private ItemSlotsSystem _itemSlots = default!;
     [Dependency] private OpenableSystem _openable = default!;
     [Dependency] private ItemCabinetSystem _itemCabinet = default!;
@@ -813,22 +807,20 @@ public sealed partial class DrydockSystem
     /// What the console's retrieve does to a loaded ship after the load and before the dock, a few
     /// milliseconds of main-thread time at a time.
     ///
-    /// <para>Five sweeps are stopgaps for restore handlers the image does not have yet, and run on
-    /// the console's retrieve only: the wire layout (H12), the research clients (H10), the console
-    /// locks' grid id, the artifact analyzers' back-link (H06) and the hands of hands-fill machines
-    /// (H20). Each goes with its handler. The strip rule and the research reset are not here: they
-    /// run inside the load, between its start and its completion (<see cref="LoadOntoStagingMap"/>).</para>
+    /// <para>Three sweeps are stopgaps for restore handlers the image does not have yet, and run on
+    /// the console's retrieve only: the research clients (H10), the console locks' grid id and the
+    /// artifact analyzers' back-link (H06). Each goes with its handler. The strip rule and the
+    /// research reset are not here: they run inside the load, between its start and its completion
+    /// (<see cref="LoadOntoStagingMap"/>).</para>
     ///
     /// <para>The research clients register after the reset, so a lathe syncing from its server copies
     /// the empty database.</para>
     /// </summary>
     private async Task ReviveSliced(EntityUid grid, DrydockShip record, IDrydockSlice slice, DrydockPhaseTimer timer)
     {
-        await ReviveWiresSliced(grid, slice);
         await ReviveResearchClientsSliced(grid, slice);
         await ReviveConsoleLocksSliced(grid, slice);
         await ReviveArtifactAnalyzersSliced(grid, slice);
-        await ReviveFilledHandsSliced(grid, slice);
 
         timer.Mark("sweeps");
 
@@ -912,20 +904,6 @@ public sealed partial class DrydockSystem
     }
 
     /// <summary>
-    /// A wired machine's actual wire list is not a data field, so it does not persist, and the only
-    /// thing that ever built it was map init. Without this every panel on a restored ship opens
-    /// empty: nothing to cut, nothing to pulse, on every airlock and every APC aboard.
-    /// </summary>
-    private Task ReviveWiresSliced(EntityUid grid, IDrydockSlice slice)
-    {
-        return SweepOnGrid<WiresComponent>(grid, slice, DrydockPhase.Sweeps, (uid, wires) =>
-        {
-            if (!string.IsNullOrEmpty(wires.LayoutId))
-                _wires.SetOrCreateWireLayout(uid, wires);
-        });
-    }
-
-    /// <summary>
     /// Research points and unlocked technology stay with the round, not the ship: the legacy ship
     /// save stripped them from the file, and live still does. The drydock stores the full image,
     /// so the reset happens here instead, which also covers every ship already filed with research in
@@ -997,28 +975,6 @@ public sealed partial class DrydockSystem
     {
         return SweepOnGrid<ArtifactAnalyzerComponent>(grid, slice, DrydockPhase.Sweeps,
             (uid, analyzer) => _artifactAnalyzer.RelinkConsole((uid, analyzer)));
-    }
-
-    /// <summary>
-    /// A machine's hands are not data fields; the hand-fill component declares them and map init
-    /// creates them, so a retrieved robotic arm has no hand to hold its tool in. Re-creates every
-    /// declared hand that is missing. Fill items are NOT spawned again: what was in the hand
-    /// persisted as a container child and is picked back up, and an empty hand was emptied on
-    /// purpose.
-    /// </summary>
-    private Task ReviveFilledHandsSliced(EntityUid grid, IDrydockSlice slice)
-    {
-        return SweepOnGrid<HandsFillComponent>(grid, slice, DrydockPhase.Sweeps, (uid, fill) =>
-        {
-            if (!TryComp<HandsComponent>(uid, out var hands))
-                return;
-
-            foreach (var name in fill.Hands.Keys)
-            {
-                if (!_hands.TryGetHand(uid, name, out _, hands))
-                    _hands.AddHand(uid, name, HandLocation.Middle, hands);
-            }
-        });
     }
 
     /// <summary>
