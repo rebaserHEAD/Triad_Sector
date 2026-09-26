@@ -812,8 +812,9 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                 + "WiresSystem.cs:148-172), and the restore builds its list (WiresCarrySystem), so it comes back with other "
                 + "ids, colours and letters, and the power wire's MainWire, the id of the first power wire in the list "
                 + "(PowerWireAction.cs:185-188), follows. The carry names each cut wire by its place in the layout prototype, "
-                + "so the same wires come back cut. Sorted only where the list holds the same wires by original position, each "
-                + "cut or not as before, and, for the state data, where nothing but MainWire moved beside such a list.",
+                + "so the same wires come back cut; the wire list renders as its wires' type names, so the workbench's recipe 41 "
+                + "reads them. Sorted only on an entity that draws a new order at every build, where nothing in its state data "
+                + "moved but MainWire.",
                 (line, key, result) => line.StartsWith("CHANGED", StringComparison.Ordinal) && Reshuffled(key, result)),
 
             // What the manifest's fourth moment, after the first power solve, set back before it was cut (ruled 2026-09-19).
@@ -1241,49 +1242,35 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
         }
 
         /// <summary>
-        /// The reshuffle family's control, with no server: a wire list that comes back as the same wires by original position
-        /// and cut state in another order sorts, and so does its state data where only MainWire moved; a wire that came back
-        /// uncut, state data where another entry moved, and state data beside a list that did not move stay findings.
+        /// The reshuffle family's control, with no server, on the renders rung 111 printed for a camera: state data where only
+        /// MainWire moved sorts on an entity that draws a new wire order at every build; the same move on one that does not,
+        /// and a move of the cut count on one that does, stay findings.
         /// </summary>
         [Test]
-        public void OnlyTheSameWiresInAnotherOrderSort()
+        public void OnlyAReshuffledEntitysMainWireSorts()
         {
-            const string path = "SurveillanceCameraWall@2,2";
-            const string list = path + "|" + WiresListMember;
+            const string path = "SurveillanceCameraGeneral@-1,13";
             const string state = path + "|WiresComponent.~StateData";
+            const string mainAt2 = "count=3 [CutWires=0, MainWire=2, WireCount=1]";
+            const string mainAt3 = "count=3 [CutWires=0, MainWire=3, WireCount=1]";
+            const string cutMoved = "count=3 [CutWires=1, MainWire=3, WireCount=1]";
 
-            static string Wire(int id, int position, bool cut) =>
-                $"<Wire>{{Color=Red, Id={id}, IsCut={(cut ? "True" : "False")}, Letter=α, OriginalPosition={position}, Owner={path}}}";
-
-            var before = $"count=3 [{Wire(0, 0, false)}, {Wire(1, 1, true)}, {Wire(2, 4, false)}]";
-            var shuffled = $"count=3 [{Wire(0, 4, false)}, {Wire(1, 0, false)}, {Wire(2, 1, true)}]";
-            var lostCut = $"count=3 [{Wire(0, 4, false)}, {Wire(1, 0, false)}, {Wire(2, 1, false)}]";
-            const string mainAt0 = "count=3 [CutWires=0, MainWire=0, WireCount=2]";
-            const string mainAt1 = "count=3 [CutWires=0, MainWire=1, WireCount=2]";
-            const string cutMoved = "count=3 [CutWires=1, MainWire=1, WireCount=2]";
-
-            string? Sorted(string key, string listBefore, string listAfter, string? stateBefore = null, string? stateAfter = null)
+            string? Sorted(string alwaysRandomize, string before, string after)
             {
                 var result = new RoundTripResult(new DrydockStateSnapshot(), new DrydockStateSnapshot(), new DrydockStateSnapshot(),
                     new DrydockStateSnapshot(), EntityUid.Invalid, 0, 0, 0, null);
-                result.Before.Values[list] = listBefore;
-                result.After.Values[list] = listAfter;
-                if (stateBefore != null && stateAfter != null)
-                {
-                    result.Before.Values[state] = stateBefore;
-                    result.After.Values[state] = stateAfter;
-                }
-
-                return FamilyFor($"CHANGED  {key}: before -> after", key, result, null).Family?.Name;
+                result.Before.Values[path + "|WiresComponent.AlwaysRandomize"] = alwaysRandomize;
+                result.After.Values[path + "|WiresComponent.AlwaysRandomize"] = alwaysRandomize;
+                result.Before.Values[state] = before;
+                result.After.Values[state] = after;
+                return FamilyFor($"CHANGED  {state}: {before} -> {after}", state, result, null).Family?.Name;
             }
 
             Assert.Multiple(() =>
             {
-                Assert.That(Sorted(list, before, shuffled), Is.EqualTo(ReshuffledFamily), "The same wires, each cut or not as before, in another order sort.");
-                Assert.That(Sorted(list, before, lostCut), Is.Null, "A wire that came back uncut is a finding.");
-                Assert.That(Sorted(state, before, shuffled, mainAt0, mainAt1), Is.EqualTo(ReshuffledFamily), "State data where only MainWire moved beside such a list sorts.");
-                Assert.That(Sorted(state, before, shuffled, mainAt0, cutMoved), Is.Null, "State data where the cut count moved is a finding.");
-                Assert.That(Sorted(state, before, before, mainAt0, mainAt1), Is.Null, "MainWire moving beside a list that did not move is a finding.");
+                Assert.That(Sorted("True", mainAt2, mainAt3), Is.EqualTo(ReshuffledFamily), "MainWire moving on an entity reshuffled at every build sorts.");
+                Assert.That(Sorted("False", mainAt2, mainAt3), Is.Null, "On an entity with a layout of the round, MainWire moving is a finding.");
+                Assert.That(Sorted("True", mainAt2, cutMoved), Is.Null, "The cut count moving is a finding on any entity.");
             });
         }
 
@@ -1410,30 +1397,20 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
         /// <summary>The family for a wire list rebuilt in another order, by name.</summary>
         private const string ReshuffledFamily = "wire list rebuilt in another order";
 
-        private const string WiresListMember = "WiresComponent.~WiresList";
-
         /// <summary>
-        /// Whether a wire line is the same wires in another order: the entity's list holds the same wires by original
-        /// position, each cut or not as before, in another order; and, for its state data, nothing but MainWire moved.
+        /// Whether a wire line is an entity rebuilt in another order: its wires draw a new order at every build
+        /// (<c>WiresComponent.AlwaysRandomize</c>, a data field the snapshot carries), and nothing in its state data moved
+        /// but MainWire. The wire list renders as its wires' type names (<c>count=N [&lt;Wire&gt;, ...]</c>), so neither its
+        /// order nor its cut wires show in a snapshot.
         /// </summary>
         private static bool Reshuffled(string key, RoundTripResult result)
         {
-            var member = SnapshotMember(key);
-            if (member != WiresListMember && member != "WiresComponent.~StateData")
+            if (SnapshotMember(key) != "WiresComponent.~StateData")
                 return false;
 
-            var list = key[..key.IndexOf('|')] + "|" + WiresListMember;
-            if (!result.Before.Values.TryGetValue(list, out var listBefore)
-                || !result.After.Values.TryGetValue(list, out var listAfter)
-                || listBefore == listAfter
-                || WiresByPosition(listBefore) is not { Count: > 0 } wiresBefore
-                || !wiresBefore.SequenceEqual(WiresByPosition(listAfter)))
-            {
+            var randomize = key[..key.IndexOf('|')] + "|WiresComponent.AlwaysRandomize";
+            if (result.Before.Values.GetValueOrDefault(randomize) != "True" || result.After.Values.GetValueOrDefault(randomize) != "True")
                 return false;
-            }
-
-            if (member == WiresListMember)
-                return true;
 
             return result.Before.Values.TryGetValue(key, out var before)
                    && result.After.Values.TryGetValue(key, out var after)
@@ -1443,17 +1420,6 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                        .ToHashSet(StringComparer.Ordinal)
                        .SetEquals(entriesAfter.Where(e => !e.StartsWith("MainWire=", StringComparison.Ordinal)));
         }
-
-        /// <summary>
-        /// A wire list render's wires as <c>position:cut</c>, in original position order, from each wire's rendered fields
-        /// (<c>&lt;Wire&gt;{..., IsCut=..., ..., OriginalPosition=..., ...}</c>).
-        /// </summary>
-        private static List<string> WiresByPosition(string render) =>
-            System.Text.RegularExpressions.Regex.Matches(render, @"IsCut=(\w+)[^}]*?OriginalPosition=(\d+)")
-                .Select(m => (Position: int.Parse(m.Groups[2].Value), Cut: m.Groups[1].Value))
-                .OrderBy(wire => wire.Position)
-                .Select(wire => $"{wire.Position}:{wire.Cut}")
-                .ToList();
 
         /// <summary>What <c>OnTradeCrateInit</c> rewrites (CargoSystem.TradeCrates.cs:58-80), as deep-snapshot members.</summary>
         private static readonly HashSet<string> TradeCrateMembers = new(StringComparer.Ordinal)

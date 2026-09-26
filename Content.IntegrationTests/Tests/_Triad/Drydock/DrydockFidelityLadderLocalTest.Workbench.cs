@@ -19,6 +19,7 @@ using Content.Server.NodeContainer.Nodes;
 using Content.Server.Nyanotrasen.Kitchen.Components;
 using Content.Server.Power.Components;
 using Content.Server.Power.EntitySystems;
+using Content.Server.Wires;
 using Content.Shared._FarHorizons.Power.Generation.FissionGenerator;
 using Content.Shared.Atmos;
 using Content.Shared.Chemistry.EntitySystems;
@@ -29,6 +30,8 @@ using Content.Shared.Kitchen;
 using Content.Shared.Maps;
 using Content.Shared.NodeContainer;
 using Content.Shared.PDA;
+using Content.Shared.Power;
+using Content.Shared.Wires;
 using Content.Server._Crescent.Dispenser;
 using Content.Server._Triad.Drydock.Codec;
 using Content.Shared._Crescent.Dispenser;
@@ -710,8 +713,107 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                 });
             }
 
+            // 41. A hacked airlock and a camera (H12): the airlock's second power wire and its bolt wire cut, and on a camera,
+            // which draws a new wire order at every build, its vision wire and a dummy. The wire list is not a data field and
+            // only map init builds it; the restore builds it and marks the carried wires cut by their place in the layout
+            // prototype (WiresCarrySystem), so the camera's come back cut in whatever order its rebuild drew.
+            {
+                var airlock = Place(entMan, grid, "Airlock", 7, 6);
+                var camera = Place(entMan, grid, "SurveillanceCameraGeneral", 9, 6);
+                var wiresSystem = entMan.System<WiresSystem>();
+                var ui = entMan.System<SharedUserInterfaceSystem>();
+                var targets = new[] { ("Airlock", new Vector2i(7, 6)), ("SurveillanceCameraGeneral", new Vector2i(9, 6)) };
+                var stored = new Dictionary<string, string[]>();
+
+                recipes.Add(new WorkbenchRecipe(41, "hacked airlock and camera", "Wires.Cut on the ~carried row",
+                    new[] { "WiresComponent" },
+                    new List<string> { PathOf("Airlock", 7, 6), PathOf("SurveillanceCameraGeneral", 9, 6) },
+                    () =>
+                    {
+                        var airlockWires = entMan.GetComponent<WiresComponent>(airlock);
+                        CutWireNamed(airlockWires, "PowerWireAction", 1);
+                        CutWireNamed(airlockWires, "DoorBoltWireAction", 0);
+                        wiresSystem.SetData(airlock, PowerWireActionKey.CutWires, 1, airlockWires);
+
+                        var cameraWires = entMan.GetComponent<WiresComponent>(camera);
+                        CutWireNamed(cameraWires, "AiVisionWireAction", 0);
+                        CutWireNamed(cameraWires, string.Empty, 1);
+                        return new List<string>
+                        {
+                            $"airlock cut {string.Join(", ", CutWireNames(airlockWires))} of {airlockWires.WiresList.Count}; "
+                            + $"camera cut {string.Join(", ", CutWireNames(cameraWires))} of {cameraWires.WiresList.Count}",
+                        };
+                    })
+                {
+                    BeforeStore = () =>
+                    {
+                        stored["Airlock"] = CutWireNames(entMan.GetComponent<WiresComponent>(airlock));
+                        stored["SurveillanceCameraGeneral"] = CutWireNames(entMan.GetComponent<WiresComponent>(camera));
+                        return new List<string> { $"airlock cut {string.Join(", ", stored["Airlock"])}; camera cut {string.Join(", ", stored["SurveillanceCameraGeneral"])}" };
+                    },
+                    AfterLoad = retrieved =>
+                    {
+                        var notes = new List<string>();
+                        var bad = new List<string>();
+                        var maps = entMan.System<SharedMapSystem>();
+                        var gridComp = entMan.GetComponent<MapGridComponent>(retrieved);
+                        foreach (var (prototype, tile) in targets)
+                        {
+                            var anchored = new List<EntityUid>();
+                            maps.GetAnchoredEntities((retrieved, gridComp), tile, anchored);
+                            var uid = anchored.FirstOrDefault(e => entMan.GetComponent<MetaDataComponent>(e).EntityPrototype?.ID == prototype);
+                            if (!uid.IsValid())
+                            {
+                                bad.Add($"the {prototype} at {tile} has to come back");
+                                continue;
+                            }
+
+                            var wires = entMan.GetComponent<WiresComponent>(uid);
+                            var cut = CutWireNames(wires);
+                            var shown = ui.TryGetUiState<WiresBoundUserInterfaceState>(uid, WiresUiKey.Key, out var state)
+                                ? state!.WiresList.Count(w => w.IsCut)
+                                : -1;
+                            notes.Add($"{prototype}: {wires.WiresList.Count} wires, cut {string.Join(", ", cut)}, panel state shows {shown} cut");
+                            if (!cut.SequenceEqual(stored[prototype]))
+                                bad.Add($"the {prototype} has to have the same wires cut: {string.Join(", ", stored[prototype])} stored, {string.Join(", ", cut)} now");
+                            if (shown != cut.Length)
+                                bad.Add($"the {prototype}'s panel state has to show its {cut.Length} cut wires, and shows {shown}");
+                            if (prototype == "Airlock" && (!wiresSystem.TryGetData<int?>(uid, PowerWireActionKey.CutWires, out var count) || count != 1))
+                                bad.Add("the airlock's cut power wire count has to be 1");
+                        }
+
+                        return (notes, bad);
+                    },
+                });
+            }
+
             return recipes;
         }
+
+        /// <summary>
+        /// Each wire's name as the wires' carry gives it: its action's type name, empty for none, and its rank among the
+        /// wires of that name in original position order, written <c>Action#rank</c>, in that order.
+        /// </summary>
+        private static List<(string Name, Wire Wire)> NamedWires(WiresComponent wires)
+        {
+            var ranks = new Dictionary<string, int>();
+            var named = new List<(string, Wire)>();
+            foreach (var wire in wires.WiresList.OrderBy(w => w.OriginalPosition))
+            {
+                var action = wire.Action?.GetType().Name ?? string.Empty;
+                var rank = ranks.GetValueOrDefault(action);
+                ranks[action] = rank + 1;
+                named.Add(($"{action}#{rank}", wire));
+            }
+
+            return named;
+        }
+
+        private static void CutWireNamed(WiresComponent wires, string action, int rank) =>
+            NamedWires(wires).Single(n => n.Name == $"{action}#{rank}").Wire.IsCut = true;
+
+        private static string[] CutWireNames(WiresComponent wires) =>
+            NamedWires(wires).Where(n => n.Wire.IsCut).Select(n => n.Name).ToArray();
 
         /// <summary>A mixture as its gases at 0.005 mol or more and its temperature, as the snapshot renders a pipe net.</summary>
         private static string GasReading(GasMixture air) =>
