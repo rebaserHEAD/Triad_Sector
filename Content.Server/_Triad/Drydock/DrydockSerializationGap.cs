@@ -6,9 +6,9 @@ using Content.Shared.Lathe;
 namespace Content.Server._Triad.Drydock;
 
 /// <summary>
-/// The two facts about serializability that the drydock depends on, in one place because both are
-/// asserted by a test and relied on by the store path, and a copy of either that drifts from the
-/// other is a silent data-loss bug rather than a failing build.
+/// The two facts about serializability the drydock's tests share, in one place so every test asks
+/// the same code: whether an exception means the engine has no serializer for a type, and which such
+/// types the codec carries with serializers of its own.
 /// </summary>
 public static class DrydockSerializationGap
 {
@@ -18,9 +18,8 @@ public static class DrydockSerializationGap
     ///
     /// Two doors: the generated data-definition path throws <see cref="InvalidOperationException"/>,
     /// <c>WriteNoSerializer</c>'s fallback throws <see cref="ArgumentException"/>. Deliberately
-    /// narrow - anything unmatched is treated as a bad sample and the type assumed writable. When
-    /// this moved once before, the audit reported zero gaps instead of failing, which is why the
-    /// runtime probe and the audit must ask the same code.
+    /// narrow: anything unmatched is treated as a bad sample and the type assumed writable. The
+    /// audit and the codec tests ask this one method, so they cannot disagree about what a gap is.
     /// </summary>
     public static bool IsNoCoverage(Exception e)
     {
@@ -33,11 +32,11 @@ public static class DrydockSerializationGap
     }
 
     /// <summary>
-    /// The capture manifest: the types that fail the probe and are still worth preserving by hand.
-    /// Everything else that fails is stripped, and comes back at its default.
+    /// The types the engine has no serializer for that a stored ship still carries, through the
+    /// codec's own serializers (<c>DrydockCapturedSerializers</c>).
     ///
-    /// The only fork-specific knob in the fidelity layer; an entry is a content decision, and the
-    /// reasoning belongs on the Drydock State Fidelity Design wiki page. The audit asserts against
+    /// An entry is a content decision, and the reasoning belongs on the Drydock State Fidelity
+    /// Design wiki page. The audit asserts against
     /// this set, so a type that starts serializing natively fails the build rather than quietly
     /// becoming redundant hand-written work.
     /// </summary>

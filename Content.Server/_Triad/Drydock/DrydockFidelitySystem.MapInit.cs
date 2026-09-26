@@ -76,7 +76,7 @@ public sealed partial class DrydockFidelitySystem
     /// <summary>
     /// Components the transaction never touches: what the loader owns (parents, coordinates,
     /// physics, fixtures, joints, chunks, containers, all rebuilt by design) and the drydock's own
-    /// sidecars. Container membership is covered anyway, since an entity spawned into a container
+    /// components. Container membership is covered anyway, since an entity spawned into a container
     /// is an entity that appeared.
     /// </summary>
     private static readonly HashSet<string> MapInitUntouched = new()
@@ -87,7 +87,6 @@ public sealed partial class DrydockFidelitySystem
         "JointComponent",
         "MapGridComponent",
         "ContainerManagerComponent",
-        nameof(DrydockCapturedStateComponent),
         nameof(DrydockPipeGasComponent),
         nameof(DrydockInProgressComponent),
         nameof(DrydockIdentityComponent),
@@ -113,15 +112,15 @@ public sealed partial class DrydockFidelitySystem
         "DeviceNetworkComponent.TransmitFrequency",
     };
 
-    /// <summary>The last transaction's report, for tests. Overwritten per retrieve.</summary>
+    /// <summary>The last transaction's report, for tests. Overwritten per run.</summary>
     public DrydockMapInitReport? LastMapInitReport;
 
     /// <summary>
     /// Every persisted field of a component type: every data field the serializer writes, so
     /// custom-serialized fields are in (their live value is compared and reverted as its plain
     /// type, which for the offset-serialized times is the absolute time) and read-only ones are out
-    /// (never written, so never persisted, so map init's to rebuild). Distinct from the capture
-    /// walk's <see cref="DataFields"/>, whose rule is the probe's.
+    /// (never written, so never persisted, so map init's to rebuild). Distinct from
+    /// <see cref="DataFields"/>, which leaves custom-serialized fields out.
     /// </summary>
     private static readonly ConcurrentDictionary<Type, (MemberInfo Member, Type Type)[]> PersistedFieldCache = new();
 

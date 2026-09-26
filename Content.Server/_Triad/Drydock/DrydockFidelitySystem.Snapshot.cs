@@ -42,7 +42,6 @@ public sealed partial class DrydockFidelitySystem
         nameof(MapGridComponent),           // chunk storage, compared by the engine's own tests
         nameof(ContainerManagerComponent),  // membership is entity references, and every contained
                                             // entity is visited in its own right by the walk
-        nameof(DrydockCapturedStateComponent),
         nameof(DrydockPipeGasComponent),
         nameof(DrydockInProgressComponent),
         nameof(DrydockIdentityComponent),
@@ -188,15 +187,12 @@ public sealed partial class DrydockFidelitySystem
     /// Renders one value the way the map serializer would write it, which is the only rendering the
     /// comparison should care about: what the serializer writes is what has to survive.
     ///
-    /// <para>Through the probe context on purpose, not the reflective capture the carriers use. That
-    /// capture decomposes an object graph field by field with no cycle detection, which is safe on
-    /// the handful of manifest types it was built for and is not safe here, where it meets every
-    /// field on the ship. The container graph is the proof: entity references lead back to their
-    /// container and the writer recursed until the test host died. The probe's stub writer cuts
-    /// exactly those edges.</para>
+    /// <para>Through the probe context (<see cref="DrydockEntityRefProbe"/>), whose stub writer turns
+    /// every entity reference into a constant, so a render cannot follow a reference back through the
+    /// container graph.</para>
     ///
-    /// <para>A value the serializer refuses is counted rather than chased. It is state the ship's
-    /// document could not have carried either way.</para>
+    /// <para>A value the serializer refuses is counted rather than chased. It is state no stored
+    /// ship could have carried either way.</para>
     /// </summary>
     private string? RenderValue(object value)
     {

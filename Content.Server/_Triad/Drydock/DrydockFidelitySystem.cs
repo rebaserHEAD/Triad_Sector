@@ -1,17 +1,11 @@
 using System;
-using System.Collections;
 using System.Collections.Concurrent;
-using System.IO;
 using System.Linq;
 using System.Reflection;
-using System.Security.Cryptography;
-using System.Text;
-using System.Threading.Tasks;
 using Robust.Shared.GameStates;
 using Robust.Shared.Serialization.Manager;
 using Robust.Shared.Serialization.Manager.Attributes;
 using Robust.Shared.Serialization.Markdown;
-using Robust.Shared.Serialization.Markdown.Mapping;
 using Robust.Shared.Serialization.Markdown.Value;
 using Robust.Shared.Serialization.TypeSerializers.Interfaces;
 using Robust.Shared.Timing;
@@ -19,16 +13,10 @@ using Robust.Shared.Timing;
 namespace Content.Server._Triad.Drydock;
 
 /// <summary>
-/// The fidelity layer. The engine serializer owns a ship's structure; this owns the state it cannot
-/// write. At store it walks the grid and, for every populated <c>[DataField]</c> the serializer
-/// refuses, either captures the value into a <see cref="DrydockCapturedStateComponent"/> sidecar or
-/// strips it, and either way clears the live field so the grid can be written. At retrieve it
-/// re-applies what it captured over the reborn entities.
-///
-/// <para>It touches no content, and the only fork-specific knob is
-/// <see cref="DrydockSerializationGap.CapturedTypes"/>. The default for anything the serializer
-/// cannot write is to strip it, which is the safe direction: a stripped field comes back at its
-/// default, where a forgotten entity would come back not at all.</para>
+/// The drydock's fidelity instruments: the grid walks the store's and the retrieve's sweeps share
+/// (<see cref="GridTreeList"/>), the snapshots that compare a hull's state across a round trip (the
+/// Snapshot and DeepSnapshot partials), and the legacy import's map-init transaction (the MapInit
+/// partial).
 /// </summary>
 public sealed partial class DrydockFidelitySystem : EntitySystem
 {
@@ -36,197 +24,17 @@ public sealed partial class DrydockFidelitySystem : EntitySystem
     [Dependency] private SharedAppearanceSystem _appearance = default!;
 
     /// <summary>
-    /// The two keys the appearance sidecar wraps each value in. Both are part of a persisted
-    /// format, like <c>DrydockReflectiveCapture</c>'s type tag: renaming either invalidates the
-    /// appearance of every revision written before the change, so they move only behind a
-    /// <see cref="DrydockFormat"/> bump.
-    /// </summary>
-    private const string AppearanceValueType = "t";
-
-    /// <inheritdoc cref="AppearanceValueType"/>
-    private const string AppearanceValue = "v";
-
-    private DrydockReflectiveCapture _capture = default!;
-
-    /// <summary>
-    /// The probe's context, which gives the base serialization manager the extra capability the
-    /// map serializer has over it: writing <see cref="EntityUid"/> and <see cref="NetEntity"/>
-    /// references. Without it every field that reaches an entity reference (transform parents,
-    /// container graphs, action lists, deed uids, artifact node graphs) reads as unserializable to
-    /// the probe, which is a false negative, since the map serializer round-trips all of them
-    /// through exactly this kind of context. Probing with it leaves those alone and flags only
-    /// genuine gaps.
+    /// The snapshot render's context (<see cref="DrydockEntityRefProbe"/>): it writes every
+    /// <see cref="EntityUid"/> and <see cref="NetEntity"/> as a stub, so a render succeeds on what the
+    /// map serializer writes and never follows a reference.
     /// </summary>
     private DrydockEntityRefProbe _probe = default!;
-
-    /// <summary>
-    /// Cached per type, since serializability is structural. A failure is cached unconditionally,
-    /// because a type with no serializer never acquires one at runtime. A success is cached only
-    /// when it was proven against a non-empty value: an empty collection writes fine even when its
-    /// element type cannot, and caching that would poison every later probe of the same type.
-    /// </summary>
-    private readonly Dictionary<Type, bool> _serializable = new();
-
-    /// <inheritdoc cref="_serializable"/>
-    /// <remarks>
-    /// The empty half, kept apart on purpose. Membership means "writes when empty", which is all an
-    /// empty sample can establish; it never satisfies a probe of a populated value of the same type.
-    /// </remarks>
-    private readonly HashSet<Type> _emptyWritable = new();
-
-    /// <summary>
-    /// Component types whose every [DataField] member type is already proven serializable in
-    /// <see cref="_serializable"/>, so the capture walk skips them without reflecting over their
-    /// fields; filled as the walk learns, process-lifetime like the caches it derives from.
-    /// </summary>
-    private readonly HashSet<Type> _nothingToCapture = new();
 
     public override void Initialize()
     {
         base.Initialize();
-        _capture = new DrydockReflectiveCapture(_serialization);
         _probe = new DrydockEntityRefProbe(_serialization);
         _refWriter = new DrydockEntityRefWriter(_serialization);
-    }
-
-    /// <summary>
-    /// Store step, called before the grid is serialized: capture or strip every unserializable
-    /// populated field across the grid so the serializer can write it.
-    ///
-    /// <para>This mutates live components, and unlike the copying sidecars it must clear the live
-    /// field, because the field choking the serializer is the entire reason it is here. So the
-    /// ledger holds the original in-memory values of both buckets, and the caller's abort path hands
-    /// it to <see cref="RestoreSnapshot"/> to put them straight back with no serialization round trip
-    /// in the way.</para>
-    ///
-    /// <para>The ledger belongs to the caller, not to this walk: it is passed in rather than created
-    /// here, since clearing happens per field, per entity, and the walk can now be abandoned
-    /// half-way, so a ledger that only became visible on return would leave a ship blanked with no
-    /// record of what was taken off it. Anything that throws between here and the commit leaves a
-    /// live ship with blanked fields unless the caller restores from that ledger.</para>
-    /// </summary>
-    /// <remarks>
-    /// The tick-budgeted form. Every snapshot entry is appended before the field it records is
-    /// cleared, so an abort part-way through still restores every field already blanked, and the
-    /// caller has assigned <paramref name="capture"/> to its own context before calling.
-    ///
-    /// <para>The tree is materialised first. The lazy walk reads each entity's transform after it has
-    /// yielded the previous one, which is fine inside one tick and is not fine across fifty, and each
-    /// entity is re-checked as it is consumed.</para>
-    /// </remarks>
-    public async Task CaptureAndStripSliced(EntityUid grid, DrydockFidelityCapture capture, IDrydockSlice slice)
-    {
-        var tree = GridTreeList(grid);
-        await slice.Begin(DrydockPhase.Capture, tree.Count);
-
-        for (var i = 0; i < tree.Count; i++)
-        {
-            var uid = tree[i];
-            if (!TerminatingOrDeleted(uid))
-                CaptureAndStripEntity(uid, capture);
-
-            await slice.Step(i);
-        }
-    }
-
-    /// <summary>One entity's worth of the capture walk. Never yields, so a component's field set is
-    /// always taken whole.</summary>
-    private void CaptureAndStripEntity(EntityUid uid, DrydockFidelityCapture capture)
-    {
-        DrydockCapturedStateComponent? sidecar = null;
-
-        foreach (var comp in AllComps(uid).ToList())
-        {
-            if (comp is DrydockCapturedStateComponent)
-                continue;
-
-            var compType = comp.GetType();
-            // Every member type already proven; nothing here can need capturing.
-            if (_nothingToCapture.Contains(compType))
-                continue;
-
-            var fields = DataFields(compType);
-            foreach (var member in fields)
-            {
-                var value = GetMember(comp, member);
-                if (value == null)
-                    continue;
-
-                var memberType = MemberType(member);
-                if (IsSerializable(memberType, value))
-                    continue;
-
-                if (IsCaptureType(memberType) && _capture.TryCapture(value) is { } node)
-                {
-                    if (sidecar == null)
-                    {
-                        // On the ledger before the component goes on, so an abort between the two
-                        // still knows to take it back off.
-                        capture.Sidecarred.Add(uid);
-                        sidecar = EnsureComp<DrydockCapturedStateComponent>(uid);
-                    }
-
-                    var key = $"{compType.Name}|{member.Name}";
-                    sidecar.Fields[key] = EncodeNode(node);
-                    capture.CapturedKeys.Add(key);
-                }
-                else
-                {
-                    capture.Stripped++;
-                }
-
-                // Snapshot the live value before clearing, so an aborted store puts it back
-                // exactly. Captured or stripped, both were cleared and both restore.
-                capture.Snapshot.Add((uid, comp, member, value));
-
-                ClearMember(comp, member, memberType);
-                DirtyIfNetworked(uid, comp);
-            }
-
-            if (fields.Length == 0 || fields.All(m => _serializable.TryGetValue(MemberType(m), out var proven) && proven))
-                _nothingToCapture.Add(compType);
-        }
-    }
-
-    /// <summary>
-    /// Abort path, called from the store's unwind: put every field <see cref="CaptureAndStripSliced"/>
-    /// cleared back to its original live value and remove the sidecars it added, leaving the
-    /// still-live ship exactly as usable as it was. This works on the same live entities, with no
-    /// serialization involved, which is what separates it from <see cref="RestoreCapturedSliced"/>.
-    /// </summary>
-    /// <remarks>
-    /// Synchronous, and it has to stay that way: it runs from an unwind, and an unwind that could
-    /// suspend is an unwind a cancelled pipeline could never finish. The per-entry guards are what
-    /// slicing added. The component references in the ledger can now be many ticks old and an entity
-    /// that died in the meantime would throw on the dirty call - inside the unwind, which would
-    /// abandon the ship on its staging map with no return leg.
-    /// </remarks>
-    public void RestoreSnapshot(DrydockFidelityCapture capture)
-    {
-        foreach (var (uid, comp, member, original) in capture.Snapshot)
-        {
-            if (comp.Deleted || TerminatingOrDeleted(uid))
-                continue;
-
-            SetMember(comp, member, original);
-            DirtyIfNetworked(uid, comp);
-        }
-
-        foreach (var uid in capture.Sidecarred)
-        {
-            if (!TerminatingOrDeleted(uid))
-                RemComp<DrydockCapturedStateComponent>(uid);
-        }
-    }
-
-    /// <summary>
-    /// How a captured node is held in a sidecar string: its YAML text, base64 so the map document
-    /// carries it as one opaque scalar. It is a persisted format, so it moves only behind a
-    /// <see cref="DrydockFormat"/> bump.
-    /// </summary>
-    private static string EncodeNode(DataNode node)
-    {
-        return Convert.ToBase64String(Encoding.UTF8.GetBytes(node.ToString()));
     }
 
     /// <summary>
@@ -242,80 +50,17 @@ public sealed partial class DrydockFidelitySystem : EntitySystem
             : new Dictionary<Enum, object>();
     }
 
-    private bool IsSerializable(Type type, object value)
-    {
-        // Emptiness is decided before the populated cache is ever read. An empty collection writes
-        // whatever its element type is, so a populated value's "no serializer" verdict says nothing
-        // about it, and reading that cached false first would capture and clear every later empty
-        // field of the same type. The captured-key set is persisted in the manifest and hashed into
-        // CapturedKeyHash, so it must be a function of the ship alone, never of what the server probed
-        // earlier (DrydockCaptureVerdictOrderTest).
-        //
-        // An empty value therefore has its own memory. It cannot prove its type serializable, so its
-        // success never goes into _serializable, but a type that writes when empty writes when empty
-        // every time, and remembering that spares a probe per occurrence of the most common field
-        // state on a ship.
-        var empty = value is ICollection { Count: 0 };
-        if (empty)
-        {
-            if (_emptyWritable.Contains(type))
-                return true;
-        }
-        else if (_serializable.TryGetValue(type, out var cached))
-        {
-            return cached;
-        }
-
-        try
-        {
-            _serialization.WriteValue(type, value, alwaysWrite: true, context: _probe);
-
-            if (empty)
-                _emptyWritable.Add(type);
-            else
-                _serializable[type] = true;
-
-            return true;
-        }
-        catch (Exception e)
-        {
-            // The classification is shared with the audit gate on purpose. The gate's control is
-            // what proves it still recognises a real gap, and that proof only covers this code
-            // while this code is the same code.
-            if (!DrydockSerializationGap.IsNoCoverage(e))
-                return true; // Some other failure. Not a gap; leave it to the serializer.
-
-            _serializable[type] = false;
-            return false;
-        }
-    }
-
-    /// <summary>
-    /// A type is worth capturing when it, an element of it, or any generic argument anywhere inside
-    /// it is on the manifest, so a dictionary of market data is captured because its value type is.
-    /// </summary>
-    private static bool IsCaptureType(Type type)
-    {
-        type = Nullable.GetUnderlyingType(type) ?? type;
-        if (DrydockSerializationGap.CapturedTypes.Contains(type))
-            return true;
-        if (type.IsArray)
-            return IsCaptureType(type.GetElementType()!);
-
-        return type.IsGenericType && type.GetGenericArguments().Any(IsCaptureType);
-    }
-
     /// <summary>
     /// Every entity on the grid, including entities inside containers, since contained entities are
     /// transform children of their container's owner. Materialised, never lazy: every walk here is
-    /// now sliced, and a lazy walk reads the next entity's transform after the consumer has already
+    /// sliced, and a lazy walk reads the next entity's transform after the consumer has already
     /// parked on the previous one, which is harmless inside one tick and is not harmless across
     /// fifty.
     ///
     /// <para>The same set as an <c>AllEntityQuery</c> filtered on <c>GridUid</c>, because the engine
     /// sets <c>GridUid</c> from the parent chain and from nothing else, at the cost of the ship
-    /// rather than the cost of the sector. The store's sidecar and purge scans and the retrieve's
-    /// sweeps walk this instead of querying the world: a world query is the one un-yieldable cost
+    /// rather than the cost of the sector. The store's purge scan and the retrieve's sweeps walk
+    /// this instead of querying the world: a world query is the one un-yieldable cost
     /// that grows with the round rather than with the hull. It has no paused check either, which the
     /// frozen ship needs.</para>
     /// </summary>
@@ -361,10 +106,9 @@ public sealed partial class DrydockFidelitySystem : EntitySystem
     }
 
     /// <summary>
-    /// Memoized because the answer is a property of the type and the store asks it once per
-    /// component per entity: uncached it built two reflection arrays and asked
-    /// <see cref="MemberInfo.GetCustomAttribute{T}"/> per member every time, which on a capital ship
-    /// was most of the store's capture phase.
+    /// Memoized because the answer is a property of the type and a snapshot asks it once per
+    /// component per entity; uncached, each ask builds two reflection arrays and calls
+    /// <see cref="MemberInfo.GetCustomAttribute{T}"/> per member.
     /// </summary>
     private static readonly ConcurrentDictionary<Type, MemberInfo[]> DataFieldCache = new();
 
@@ -405,34 +149,15 @@ public sealed partial class DrydockFidelitySystem : EntitySystem
             pi.SetValue(obj, value);
     }
 
-    private static void ClearMember(object obj, MemberInfo m, Type type)
-    {
-        object? cleared;
-        if (type.IsValueType)
-            cleared = Activator.CreateInstance(type);
-        else if (type.IsArray)
-            cleared = Array.CreateInstance(type.GetElementType()!, 0); // An empty array: a null one is refused by the serializer on any non-nullable field.
-        else if (typeof(IEnumerable).IsAssignableFrom(type) && !type.IsAbstract && type.GetConstructor(Type.EmptyTypes) != null)
-            cleared = Activator.CreateInstance(type); // An empty collection rather than null: no NRE, and it writes fine.
-        else
-            cleared = null;
-
-        SetMember(obj, m, cleared);
-    }
     /// <summary>
-    /// Dirty only what the engine will accept being dirtied.
-    ///
-    /// <para>This layer walks every component carrying a populated field the serializer
-    /// cannot write, and nothing about that description says the component is networked.
-    /// <c>CargoMarketDataComponent</c> is a live example: it holds one of the two captured
-    /// types and carries no <c>[NetworkedComponent]</c>. Dirtying it trips a debug assert in
-    /// the entity manager, which on a development server throws inside the capture, aborts
-    /// the store, and refuses the ship.</para>
+    /// Dirty only what the engine will accept being dirtied. The map-init transaction puts a field
+    /// back on whatever component map init rewrote, networked or not, and dirtying one that is not
+    /// (<c>CargoMarketDataComponent</c> carries no <c>[NetworkedComponent]</c>) trips the entity
+    /// manager's debug assert (<c>EntityManager.cs:437-438</c>).
     ///
     /// <para>The test is the component registration's <c>Networked</c> flag, which the factory
     /// sets from that same attribute when it registers the type, so it is the answer the engine
-    /// asserts on, already cached per type. Every caller here is on the game thread, touching
-    /// live components.</para>
+    /// asserts on, already cached per type.</para>
     /// </summary>
     private void DirtyIfNetworked(EntityUid uid, IComponent comp)
     {
@@ -442,46 +167,11 @@ public sealed partial class DrydockFidelitySystem : EntitySystem
 }
 
 /// <summary>
-/// The ledger one <see cref="DrydockFidelitySystem.CaptureAndStripSliced"/> fills, which the caller
-/// creates and passes in: the live values it cleared, to put back verbatim on abort, and the
-/// entities it gave a sidecar, to take back off. Discarded on a successful store, since the grid
-/// despawns and there is nothing to undo.
-/// </summary>
-public sealed class DrydockFidelityCapture
-{
-    /// <summary>Every field cleared, with the exact live value to restore on abort.</summary>
-    public readonly List<(EntityUid Uid, IComponent Comp, MemberInfo Member, object? Original)> Snapshot = new();
-
-    /// <summary>Entities that received a fresh sidecar, removed again on abort.</summary>
-    public readonly List<EntityUid> Sidecarred = new();
-
-    /// <summary>
-    /// Every <c>Component|Field</c> key written, sorted, so the hash below is stable regardless of
-    /// walk order.
-    /// </summary>
-    public readonly SortedSet<string> CapturedKeys = new(StringComparer.Ordinal);
-
-    /// <summary>How many fields were cleared without being captured. Recorded, not alarming.</summary>
-    public int Stripped;
-
-    /// <summary>
-    /// The revision's <c>captured_key_hash</c>. Comparing it against the key set a later build
-    /// produces is how a C# rename that would silently orphan a key becomes a detected drift rather
-    /// than a field that quietly comes back at its default.
-    /// </summary>
-    public byte[] ComputeCapturedKeyHash()
-    {
-        return SHA256.HashData(Encoding.UTF8.GetBytes(string.Join('\n', CapturedKeys)));
-    }
-}
-
-/// <summary>
-/// A minimal serialization context whose only job is to make the probe's answer match the map
-/// serializer's. <c>EntitySerializer</c> supplies its own <see cref="EntityUid"/> writer, and the
-/// base serialization manager has none, so a naked probe throws on any field touching an entity
-/// reference and the fidelity pass would strip state the serializer round-trips perfectly well.
-/// This registers a no-op writer that returns a stub node, with no logging and no uid mapping, so
-/// the probe succeeds on exactly what the map serializer succeeds on.
+/// The serialization context a snapshot renders through (<c>DrydockFidelitySystem.RenderValue</c>). The base
+/// serialization manager has no <see cref="EntityUid"/> or <see cref="NetEntity"/> writer, where the map serializer
+/// has both, so without one a render throws on any field touching an entity reference. This writes each as a stub
+/// node, with no logging and no uid mapping, so a render succeeds on exactly what the map serializer writes and never
+/// follows a reference back through the container graph.
 /// </summary>
 internal sealed class DrydockEntityRefProbe : ISerializationContext, ITypeWriter<EntityUid>, ITypeWriter<NetEntity>
 {
@@ -491,7 +181,6 @@ internal sealed class DrydockEntityRefProbe : ISerializationContext, ITypeWriter
 
     public bool WritingReadingPrototypes => false;
 
-    // The provider takes the manager as of engine 287.
     public DrydockEntityRefProbe(ISerializationManager serialization)
     {
         SerializerProvider = new SerializationManager.SerializerProvider(serialization);
@@ -505,12 +194,6 @@ internal sealed class DrydockEntityRefProbe : ISerializationContext, ITypeWriter
         bool alwaysWrite = false,
         ISerializationContext? context = null) => Stub;
 
-    // The map serializer writes a NetEntity exactly the way it writes an EntityUid, remapped to a
-    // document id, and the base manager has no writer for it either. Without this stub every
-    // NetEntity-bearing field read as a gap and was blanked before the save: an artifact's node
-    // graph came out with its vertex array set to null, which the serializer then refused, so a
-    // ship carrying an artifact could not be stored at all (reported on Damascus),
-    // and an analysis console lost the analyzer it was linked to.
     public DataNode Write(
         ISerializationManager serializationManager,
         NetEntity value,
