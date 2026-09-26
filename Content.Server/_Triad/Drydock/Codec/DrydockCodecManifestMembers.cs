@@ -263,10 +263,10 @@ public static class DrydockCodecManifestMembers
         // and checks it against the cut power wires, which set it (WiresCarrySystem).
         new DrydockManifestMember(435, "Wires", "StateData", Before, DrydockMemberKind.Entry,
             EntryKey: PowerWireActionKey.CutWires, EntryType: typeof(int)),
-        // A pulse is cleared only by its timer (PowerWireAction.cs:269), which no store keeps, so a carried pulse would
-        // hold the wire for ever; it travels once the timed wires are re-armed.
+        // A pulse is cleared only by its timer (PowerWireAction.cs:269), which travels on the wires' carried row and runs
+        // again for the seconds it had left (WiresCarrySystem), so the two come back together.
         new DrydockManifestMember(435, "Wires", "StateData", Before, DrydockMemberKind.Entry,
-            EntryKey: PowerWireActionKey.Pulsed, EntryType: typeof(bool), OwedWith: "H12-timers"),
+            EntryKey: PowerWireActionKey.Pulsed, EntryType: typeof(bool)),
         new DrydockManifestMember(437, "WiresPanel", "Visible", Before, Field),
         new DrydockManifestMember(510, "Pda", "ContainedId", Before, Field),
         new DrydockManifestMember(511, "GhostRoleMobSpawner", "CurrentTakeovers", Before, Field),
@@ -303,7 +303,7 @@ public static class DrydockCodecManifestMembers
         new DrydockNotCarried(507, "ScuttleDevice", "NukeSongLength", MusicState, SortsAsNotCarried: true),
         new DrydockNotCarried(507, "ScuttleDevice", "PlayedNukeSong", MusicState, SortsAsNotCarried: true),
         new DrydockNotCarried(435, "Wires", "StateData",
-            "boxed values, most of them live CancellationTokenSources; PowerWireActionKey.CutWires travels as an entry of its own, and .Pulsed is owed with H12-timers"));
+            "boxed values, most of them live CancellationTokenSources, which the wires' carried timers start again; PowerWireActionKey.CutWires and .Pulsed travel as entries of their own"));
 
     /// <summary>
     /// Components the store strips, by registration name, with the reason: each is either tied to the round's station or

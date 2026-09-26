@@ -142,12 +142,11 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
         }
 
         /// <summary>
-        /// A power wire's cut count travels as an entry of the wires' state data, before init, where the wires' restore
-        /// checks it against the cut power wires; a pulse does not, because nothing re-arms the timer that would clear it
-        /// (owed with H12-timers).
+        /// A power wire's cut count and its pulse each travel as an entry of the wires' state data, before init: the wires'
+        /// restore checks the count against the cut power wires, and re-arms the timer that ends the pulse.
         /// </summary>
         [Test]
-        public async Task APowerWiresCutCountTravelsAndAPulseDoesNot()
+        public async Task APowerWiresCutCountAndPulseTravel()
         {
             await using var pair = await PoolManager.GetServerClient();
             var server = pair.Server;
@@ -155,8 +154,9 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             var factory = server.ResolveDependency<IComponentFactory>();
             var map = await pair.CreateTestMap();
 
-            bool hadCut = false, hadPulse = false, pulseWritten = true;
+            bool hadCut = false, hadPulse = false;
             (bool Found, object? Value) cut = default;
+            (bool Found, object? Value) pulse = default;
             object? setBack = null;
             var unwritable = new List<DrydockUnwritableMember>();
 
@@ -173,7 +173,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                 var row = Manifest(entMan, factory, codec, airlock, unwritable);
                 var cutMember = DrydockCodecManifestMembers.Members.Single(m => Equals(m.EntryKey, PowerWireActionKey.CutWires));
                 var pulseMember = DrydockCodecManifestMembers.Members.Single(m => Equals(m.EntryKey, PowerWireActionKey.Pulsed));
-                pulseWritten = row?.Has(pulseMember.Key) == true;
+                pulse = ReadAt(codec, factory, row, DrydockApplyMoment.BeforeInit, pulseMember.Key);
                 cut = ReadAt(codec, factory, row, DrydockApplyMoment.BeforeInit, cutMember.Key);
 
                 // Set back onto the airlock's own state data with the entry taken out first, as a fresh component holds none.
@@ -190,7 +190,8 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                 Assert.That(cut.Found, Is.True, "The cut count has to be in the row and read before init.");
                 Assert.That(cut.Value, Is.EqualTo(2), "And read as the count it was.");
                 Assert.That(setBack, Is.EqualTo(2), "Setting it back has to put it under its own key, where the power wire reads it.");
-                Assert.That(pulseWritten, Is.False, "A pulse is owed with H12-timers and must not be written.");
+                Assert.That(pulse.Found, Is.True, "The pulse has to be in the row and read before init.");
+                Assert.That(pulse.Value, Is.EqualTo(true), "And read as the pulse it was.");
             });
 
             await pair.CleanReturnAsync();
