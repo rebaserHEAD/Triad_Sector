@@ -21,7 +21,8 @@ public sealed class DrydockImageMismatchException : Exception
 
 /// <summary>
 /// Whether two images hold the same ship: the grid, the entities in the same order, per entity the id, the prototype,
-/// whether it is map-initialised, the set of row names and each row's value, the unsaved count, and the tile table.
+/// whether it is map-initialised, the set of row names and each row's value, the unsaved count, each of the left-out
+/// counts (<see cref="DrydockImage.LeftOut"/>), and the tile table.
 /// Map-initialisation is per entity because a grid made at runtime (a floor tile placed in space, a split) is started
 /// but never map-initialised (<c>SharedMapSystem.Grid.cs:63-65</c>). Values are compared as JSON with
 /// <see cref="JsonElement.DeepEquals"/>: a mapping's keys in any order, a list in order, a string ordinally. That is
@@ -59,6 +60,12 @@ public static class DrydockImageComparer
 
         if (expected.Unsaved != actual.Unsaved)
             Add($"unsaved count {expected.Unsaved} became {actual.Unsaved}");
+
+        foreach (var (want, got) in expected.LeftOut.ByName().Zip(actual.LeftOut.ByName()))
+        {
+            if (!SameCounts(want.Counts, got.Counts))
+                Add($"left-out {want.Name} counts differ");
+        }
 
         if (!JsonEqual(expected.Tiles, actual.Tiles, out var tileFault))
             Add($"tile table differs{tileFault}");
@@ -113,6 +120,9 @@ public static class DrydockImageComparer
 
         return differences;
     }
+
+    private static bool SameCounts(IReadOnlyDictionary<string, int> expected, IReadOnlyDictionary<string, int> actual) =>
+        expected.Count == actual.Count && expected.All(pair => actual.TryGetValue(pair.Key, out var count) && count == pair.Value);
 
     private static bool JsonEqual(string expected, string actual, out string fault)
     {

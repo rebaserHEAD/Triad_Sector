@@ -520,13 +520,13 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                            + string.Join(", ", parts.Dearest.Select(d => $"{d.Component} on {d.Prototype ?? "(no prototype)"} {d.Time.TotalMilliseconds:F2} ms ({d.During})"))
                            + ".");
             CodecNotes.Add($"[ladder] codec round trip {trip}: {result.AppearanceApplied} appearance entr(y/ies) set before init; "
-                           + $"not stored, by value type: {Top(stored.AppearanceSkipped)}; refused by the gate: {Top(result.AppearanceRefused)}; "
+                           + $"not stored, by value type: {Top(stored.Image.LeftOut.AppearanceSkipped)}; refused by the gate: {Top(result.AppearanceRefused)}; "
                            + $"{result.AppearanceStillDirty} of {result.AppearanceComponents} appearance component(s) still marked modified in the load's tick.");
 
             CodecNotes.Add($"[ladder] codec round trip {trip}: manifest members set before init {manifest.Set(DrydockApplyMoment.BeforeInit)}, "
                            + $"at the seam {manifest.Set(DrydockApplyMoment.Seam)}, after startup {manifest.Set(DrydockApplyMoment.AfterStart)} "
                            + $"({Top(manifest.LaterByMember)}); component gone at its moment: {Top(manifest.Missing)}; "
-                           + $"not written at the store: {Top(unwritable)}; components stripped at the store: {Top(stored.Stripped)}.");
+                           + $"not written at the store: {Top(unwritable)}; components stripped at the store: {Top(stored.Image.LeftOut.Stripped)}.");
             CodecNotes.Add($"[ladder] codec round trip {trip}: cable receivers: {manifest.Repaired} re-paired with the stored provider, "
                            + $"{manifest.AlreadyPaired} already on it, {manifest.StoredUnpaired} stored unpaired and still so; refused: {Top(manifest.Refused)}.");
             CodecNotes.Add($"[ladder] codec round trip {trip}: seam members by prototype: {Top(manifest.SeamByPrototype)}.");

@@ -27,18 +27,17 @@ public sealed record DrydockUnwritableCarried(EntityUid Entity, string? Prototyp
     public override string ToString() => $"{Key} on {Prototype ?? "(no prototype)"} {Entity}: {Exception}: {Message}";
 }
 
-/// <summary>What a store leaves besides the image: what no serializer could write, and what was counted apart.</summary>
+/// <summary>
+/// What a store leaves besides the image: what no serializer could write. What was counted and left out by design travels
+/// on the image itself (<see cref="DrydockImage.LeftOut"/>).
+/// </summary>
 /// <param name="Unwritable">Manifest members that could not be written. Each one is a member the image lost.</param>
 /// <param name="UnwritableCarried">Carried values that could not be written. Each one is a value the image lost.</param>
-/// <param name="Stripped">Components the manifest strips (a round, a crew member, a live link), by name.</param>
-/// <param name="AppearanceSkipped">Appearance values with no serializer, by type name.</param>
 /// <param name="Writes">Component rows written.</param>
 public sealed record DrydockImageStoreResult(
     DrydockImage Image,
     IReadOnlyList<DrydockUnwritableMember> Unwritable,
     IReadOnlyList<DrydockUnwritableCarried> UnwritableCarried,
-    IReadOnlyDictionary<string, int> Stripped,
-    IReadOnlyDictionary<string, int> AppearanceSkipped,
     int Writes)
 {
     /// <summary>

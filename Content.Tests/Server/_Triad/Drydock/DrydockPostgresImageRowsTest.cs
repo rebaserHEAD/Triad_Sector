@@ -117,6 +117,45 @@ public sealed class DrydockPostgresImageRowsTest
     }
 
     [Test]
+    public void TheLeftOutColumnKeepsEveryCount()
+    {
+        var image = Image(Entity(1, DrydockCodecContext.InvalidReference)) with
+        {
+            Unsaved = 2,
+            LeftOut = new DrydockLeftOut(
+                new Dictionary<string, int> { ["MobMoth"] = 1, ["MobHuman"] = 1 },
+                new Dictionary<string, int> { ["OrganHumanHeart"] = 2 },
+                new Dictionary<string, int> { ["MindContainer"] = 3 },
+                new Dictionary<string, int> { ["Color"] = 1 }),
+        };
+
+        var column = DrydockPostgresImageStore.LeftOut(image);
+        var (unsaved, leftOut) = DrydockPostgresImageStore.ReadLeftOut(column);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(column, Does.StartWith("{\"unsaved\":2,\"unsavedByPrototype\":{\"MobHuman\":1,\"MobMoth\":1}"), "Keys sorted ordinally.");
+            Assert.That(unsaved, Is.EqualTo(2));
+            foreach (var (want, got) in image.LeftOut.ByName().Zip(leftOut.ByName()))
+                Assert.That(got.Counts, Is.EquivalentTo(want.Counts), want.Name);
+        });
+    }
+
+    [Test]
+    public void ALeftOutColumnWithoutEveryCountIsRefused()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.Throws<System.IO.InvalidDataException>(() => DrydockPostgresImageStore.ReadLeftOut("{\"unsaved\":0}"), "no counts");
+            Assert.Throws<System.IO.InvalidDataException>(() => DrydockPostgresImageStore.ReadLeftOut(
+                "{\"unsavedByPrototype\":{},\"droppedByPrototype\":{},\"stripped\":{},\"appearanceSkipped\":{}}"), "no unsaved total");
+
+            // Control: what the store writes for an image that left nothing out.
+            Assert.DoesNotThrow(() => DrydockPostgresImageStore.ReadLeftOut(DrydockPostgresImageStore.LeftOut(Image(Entity(1, DrydockCodecContext.InvalidReference)))));
+        });
+    }
+
+    [Test]
     public void TheTileCountIsTheNonEmptyTiles()
     {
         var tiles = new List<(Vector2i, Tile)> { (new Vector2i(0, 0), new Tile(40)), (new Vector2i(17, -3), new Tile(77)) };

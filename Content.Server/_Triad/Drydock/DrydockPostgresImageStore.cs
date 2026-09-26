@@ -3,6 +3,7 @@ using System.Buffers;
 using System.Collections.Generic;
 using System.Data;
 using System.Globalization;
+using System.IO;
 using System.Linq;
 using System.Text;
 using System.Text.Json;
@@ -64,6 +65,7 @@ public sealed class DrydockPostgresImageStore : IDrydockImageStore
 {
     private const string TransformRow = "Transform";
     private const string ParentKey = "parent";
+    private const string UnsavedKey = "unsaved";
 
     internal const string CopyEntitiesStatement =
         "COPY drydock_entity (image_id, entity_id, parent_id, prototype_id, map_initialized, components, component_names, appearance, manifest, carried) "
@@ -104,6 +106,7 @@ public sealed class DrydockPostgresImageStore : IDrydockImageStore
     /// <summary>
     /// Two reads on the caller's connection, opening it for the read when the caller has not: the image row by its key,
     /// then every entity row in id order (<see cref="Read"/>). Inside a transaction it sees that transaction's writes.
+    /// Throws <see cref="InvalidDataException"/> where <see cref="Read"/> does.
     /// </summary>
     public async Task<DrydockImage?> Get(ServerDbContext db, DrydockImageKey key, CancellationToken ct)
     {
@@ -401,9 +404,58 @@ public sealed class DrydockPostgresImageStore : IDrydockImageStore
         return DrydockTileTable.Read(table, definition => definition == empty.Value ? Tile.Empty.TypeId : Tile.Empty.TypeId + 1).Count;
     }
 
-    /// <summary>What left the image, as counts. Only the unsaved count travels on an image today.</summary>
-    private static string LeftOut(DrydockImage image) =>
-        $"{{\"unsaved\":{image.Unsaved.ToString(CultureInfo.InvariantCulture)}}}";
+    /// <summary>
+    /// The <c>left_out</c> column: the unsaved total under <c>unsaved</c>, then each of the image's
+    /// <see cref="DrydockLeftOut"/> counts as an object under its name, keys sorted ordinally.
+    /// </summary>
+    internal static string LeftOut(DrydockImage image)
+    {
+        var buffer = new ArrayBufferWriter<byte>();
+        using (var writer = new Utf8JsonWriter(buffer))
+        {
+            writer.WriteStartObject();
+            writer.WriteNumber(UnsavedKey, image.Unsaved);
+            foreach (var (name, counts) in image.LeftOut.ByName())
+            {
+                writer.WriteStartObject(name);
+                foreach (var (key, count) in counts.OrderBy(pair => pair.Key, StringComparer.Ordinal))
+                    writer.WriteNumber(key, count);
+
+                writer.WriteEndObject();
+            }
+
+            writer.WriteEndObject();
+        }
+
+        return Encoding.UTF8.GetString(buffer.WrittenSpan);
+    }
+
+    /// <summary>
+    /// The unsaved total and the counts <see cref="LeftOut"/> writes. A column without all of them is not one this store
+    /// wrote, and is refused rather than read as nothing left out.
+    /// </summary>
+    internal static (int Unsaved, DrydockLeftOut LeftOut) ReadLeftOut(string json)
+    {
+        using var document = JsonDocument.Parse(json);
+        var root = document.RootElement;
+        if (!root.TryGetProperty(UnsavedKey, out var unsaved) || unsaved.ValueKind != JsonValueKind.Number)
+            throw new InvalidDataException($"Drydock: left_out has no unsaved count: {json}");
+
+        var byName = new Dictionary<string, IReadOnlyDictionary<string, int>>(StringComparer.Ordinal);
+        foreach (var name in DrydockLeftOut.Keys)
+        {
+            if (!root.TryGetProperty(name, out var counts) || counts.ValueKind != JsonValueKind.Object)
+                throw new InvalidDataException($"Drydock: left_out has no {name} counts: {json}");
+
+            var map = new Dictionary<string, int>(StringComparer.Ordinal);
+            foreach (var property in counts.EnumerateObject())
+                map[property.Name] = property.Value.GetInt32();
+
+            byName[name] = map;
+        }
+
+        return (unsaved.GetInt32(), DrydockLeftOut.FromNames(byName));
+    }
 
     private static async Task<long?> ImageId(NpgsqlConnection connection, NpgsqlTransaction? transaction, DrydockImageKey key, CancellationToken ct)
     {
@@ -414,14 +466,22 @@ public sealed class DrydockPostgresImageStore : IDrydockImageStore
         return await command.ExecuteScalarAsync(ct) is long id ? id : null;
     }
 
-    /// <summary>One image rebuilt from its rows: the header, then every entity in id order, which is load order.</summary>
+    /// <summary>
+    /// One image rebuilt from its rows: the header, then every entity in id order, which is load order. Throws
+    /// <see cref="InvalidDataException"/> when the entity rows or the tile table disagree with the header's counts, or
+    /// <c>left_out</c> is not one <see cref="LeftOut"/> wrote: rows changed outside this store.
+    /// </summary>
     internal static async Task<DrydockImage?> Read(NpgsqlConnection connection, NpgsqlTransaction? transaction, long imageId, CancellationToken ct)
     {
         long gridId;
         string tiles;
         int unsaved;
+        DrydockLeftOut leftOut;
+        int entityCount;
+        int tileCount;
         await using (var header = new NpgsqlCommand(
-            "SELECT grid_entity_id, tiles::text, left_out::text FROM drydock_image WHERE image_id = @id", connection, transaction))
+            "SELECT grid_entity_id, tiles::text, left_out::text, entity_count, tile_count FROM drydock_image WHERE image_id = @id",
+            connection, transaction))
         {
             header.Parameters.AddWithValue("id", imageId);
             await using var reader = await header.ExecuteReaderAsync(ct);
@@ -430,12 +490,17 @@ public sealed class DrydockPostgresImageStore : IDrydockImageStore
 
             gridId = reader.GetInt64(0);
             tiles = reader.GetString(1);
-            using var leftOut = JsonDocument.Parse(reader.GetString(2));
-            unsaved = leftOut.RootElement.TryGetProperty("unsaved", out var count) ? count.GetInt32() : 0;
+            (unsaved, leftOut) = ReadLeftOut(reader.GetString(2));
+            entityCount = reader.GetInt32(3);
+            tileCount = reader.GetInt32(4);
         }
 
+        var tilesHeld = TileCount(tiles);
+        if (tilesHeld != tileCount)
+            throw new InvalidDataException($"Drydock: image {imageId}'s tile table holds {tilesHeld} tiles, and its header counts {tileCount}.");
+
         var entities = new List<DrydockImageEntity>();
-        var bytes = tiles.Length;
+        var bytes = Encoding.UTF8.GetByteCount(tiles);
         await using (var rows = new NpgsqlCommand(
             "SELECT entity_id, prototype_id, map_initialized, components::text, appearance::text, manifest::text, carried::text "
             + "FROM drydock_entity WHERE image_id = @id ORDER BY entity_id",
@@ -460,12 +525,15 @@ public sealed class DrydockPostgresImageStore : IDrydockImageStore
                 await AddReserved(reader, 5, DrydockCodec.ManifestRow, entityRows, ct);
                 await AddReserved(reader, 6, DrydockImageSystem.CarriedRow, entityRows, ct);
 
-                bytes += entityRows.Values.Sum(v => v.Length);
+                bytes += entityRows.Values.Sum(Encoding.UTF8.GetByteCount);
                 entities.Add(new DrydockImageEntity(id, prototype, mapInitialized, entityRows));
             }
         }
 
-        return new DrydockImage(gridId, entities, tiles, unsaved, bytes);
+        if (entities.Count != entityCount)
+            throw new InvalidDataException($"Drydock: image {imageId} has {entities.Count} entity rows, and its header counts {entityCount}.");
+
+        return new DrydockImage(gridId, entities, tiles, unsaved, bytes) { LeftOut = leftOut };
     }
 
     private static async Task AddReserved(NpgsqlDataReader reader, int column, string row, Dictionary<string, string> rows, CancellationToken ct)

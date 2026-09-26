@@ -2,7 +2,9 @@
 
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
+using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using Content.IntegrationTests._Triad.PostgresPair;
@@ -47,18 +49,26 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
 
             Assert.That(db.DrydockImages, Is.InstanceOf<DrydockPostgresImageStore>(), "A PostgreSQL pair keeps images as rows.");
 
-            var image = await StoreSmallGrid(pair);
+            var image = await StoreSmallGrid(pair, gridName: "Kestrel Ærø");
             var (ship, owner) = await NewShip(db, store);
 
             var filed = await store.FileRevision(Request(ship, owner, image), image, keepBlobs: 2);
             var loaded = await store.LoadCurrentImage(ship);
+            Assert.That(loaded, Is.Not.Null);
+
+            // The codec escapes what is not ASCII and jsonb hands it back as the character, so only the read-back text
+            // tells a byte from a character.
+            var readBack = loaded!.Image.Entities.SelectMany(e => e.Rows.Values).Append(loaded.Image.Tiles).ToList();
 
             Assert.Multiple(() =>
             {
                 Assert.That(filed.Outcome, Is.EqualTo(DrydockBerthResult.Success));
                 Assert.That(image.Unsaved, Is.EqualTo(1), "The control: the mob is left out, so the unsaved count has something to carry.");
-                Assert.That(loaded, Is.Not.Null);
-                Assert.That(DrydockImageComparer.Differences(image, loaded!.Image), Is.Empty);
+                Assert.That(image.LeftOut.UnsavedByPrototype, Is.EquivalentTo(new Dictionary<string, int> { ["MobMoth"] = 1 }),
+                    "And the left-out counts name it by its prototype.");
+                Assert.That(DrydockImageComparer.Differences(image, loaded.Image), Is.Empty, "Every row and every left-out count reads back as filed.");
+                Assert.That(readBack.Any(text => text.Any(c => c > 127)), Is.True, "The control: the grid's name comes back with characters past ASCII.");
+                Assert.That(loaded.Image.Bytes, Is.EqualTo(readBack.Sum(Encoding.UTF8.GetByteCount)), "Bytes counts UTF-8 bytes, not characters.");
             });
 
             var restored = 0;
@@ -69,6 +79,44 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             });
 
             Assert.That(restored, Is.EqualTo(image.Entities.Count), "The image read back from rows loads as a grid.");
+            await pair.CleanReturnAsync();
+        }
+
+        [Test]
+        [Category("Postgres")]
+        public async Task AnImageWhoseRowsDisagreeWithItsHeaderIsRefusedOnRead()
+        {
+            await using var postgres = await PostgresTestPair.Start();
+            var pair = postgres.Pair;
+            var db = pair.Server.ResolveDependency<IServerDbManager>();
+            var store = pair.Server.ResolveDependency<DrydockStore>();
+
+            var image = await StoreSmallGrid(pair);
+            var (ship, owner) = await NewShip(db, store);
+            for (var i = 0; i < 4; i++)
+                await store.FileRevision(Request(ship, owner, image), image, keepBlobs: 0);
+
+            await Execute(db, "DELETE FROM drydock_entity WHERE image_id = @id AND entity_id = (SELECT max(entity_id) FROM drydock_entity WHERE image_id = @id)",
+                await ImageIdOf(db, ship, 2));
+            await Execute(db, "UPDATE drydock_image SET tile_count = tile_count + 1 WHERE image_id = @id", await ImageIdOf(db, ship, 3));
+            await Execute(db, "UPDATE drydock_image SET left_out = '{\"unsaved\":1}' WHERE image_id = @id", await ImageIdOf(db, ship, 4));
+
+            Task<DrydockImage?> Get(int revision) => db.RunTriadDbCommand(
+                (context, token) => db.DrydockImages.Get(context, new DrydockImageKey(ship, revision), token), CancellationToken.None);
+
+            var untouched = await Get(1);
+            var rows = Assert.ThrowsAsync<InvalidDataException>(async () => await Get(2));
+            var tiles = Assert.ThrowsAsync<InvalidDataException>(async () => await Get(3));
+            var leftOut = Assert.ThrowsAsync<InvalidDataException>(async () => await Get(4));
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(untouched, Is.Not.Null, "The control: a revision nothing touched reads.");
+                Assert.That(rows?.Message, Does.Contain($"{image.Entities.Count - 1} entity rows").And.Contain($"counts {image.Entities.Count}"));
+                Assert.That(tiles?.Message, Does.Contain("tile table"));
+                Assert.That(leftOut?.Message, Does.Contain("left_out"));
+            });
+
             await pair.CleanReturnAsync();
         }
 
@@ -304,7 +352,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             await pair.CleanReturnAsync();
         }
 
-        private static async Task<DrydockImage> StoreSmallGrid(TestPair pair)
+        private static async Task<DrydockImage> StoreSmallGrid(TestPair pair, string? gridName = null)
         {
             var server = pair.Server;
             var entMan = server.EntMan;
@@ -315,6 +363,9 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             await server.WaitPost(() =>
             {
                 var grid = map.Grid.Owner;
+                if (gridName != null)
+                    server.System<MetaDataSystem>().SetEntityName(grid, gridName);
+
                 server.System<SharedMapSystem>().SetTile(grid, entMan.GetComponent<MapGridComponent>(grid), new Vector2i(1, 0), map.Tile.Tile);
                 var wallTile = new EntityCoordinates(grid, 0.5f, 0.5f);
                 var lockerTile = new EntityCoordinates(grid, 1.5f, 0.5f);
@@ -369,6 +420,23 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                 Manifest = "[]",
             });
         }
+
+        /// <summary>One statement against a filed image's rows, taking the image's id as <c>@id</c>, outside the store.</summary>
+        private static Task Execute(IServerDbManager db, string sql, long imageId) =>
+            db.RunTriadDbCommand(async (context, token) =>
+            {
+                await context.Database.OpenConnectionAsync(token);
+                try
+                {
+                    await using var command = new NpgsqlCommand(sql, (NpgsqlConnection) context.Database.GetDbConnection());
+                    command.Parameters.AddWithValue("id", imageId);
+                    Assert.That(await command.ExecuteNonQueryAsync(token), Is.EqualTo(1), $"The corruption touched one row: {sql}");
+                }
+                finally
+                {
+                    await context.Database.CloseConnectionAsync();
+                }
+            }, CancellationToken.None);
 
         private static async Task<long> CountEntities(NpgsqlConnection connection, long imageId, CancellationToken token)
         {

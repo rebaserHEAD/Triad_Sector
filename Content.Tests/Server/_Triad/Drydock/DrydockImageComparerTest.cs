@@ -1,5 +1,6 @@
 #nullable enable
 using System.Collections.Generic;
+using System.Linq;
 using Content.Server._Triad.Drydock;
 using Content.Server._Triad.Drydock.Loader;
 using NUnit.Framework;
@@ -100,6 +101,25 @@ public sealed class DrydockImageComparerTest
         var read = new DrydockImage(1, new[] { started, Filed.Entities[1] }, Filed.Tiles, 0, 0);
 
         Assert.That(DrydockImageComparer.Differences(Filed, read), Is.EqualTo(new[] { "entity 1: map-initialised True became False" }));
+    }
+
+    [Test]
+    public void ALeftOutCountIsADifference()
+    {
+        static DrydockLeftOut Stripped(params (string Name, int Count)[] counts) => DrydockLeftOut.None with
+        {
+            Stripped = counts.ToDictionary(c => c.Name, c => c.Count),
+        };
+
+        var filed = Filed with { LeftOut = Stripped(("MindContainer", 2), ("ActiveRadio", 1)) };
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(DrydockImageComparer.Differences(filed, Filed with { LeftOut = Stripped(("MindContainer", 1), ("ActiveRadio", 1)) }),
+                Is.EqualTo(new[] { "left-out stripped counts differ" }));
+            Assert.That(DrydockImageComparer.Differences(filed, Filed with { LeftOut = Stripped(("ActiveRadio", 1), ("MindContainer", 2)) }),
+                Is.Empty, "The control: the same counts added in another order.");
+        });
     }
 
     [Test]

@@ -265,13 +265,22 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
         public const string ImageExtension = ".image.json.gz";
 
         /// <summary>
-        /// An image as a fixture file: one JSON object, the grid id, the unsaved count, the byte count, the tile table
-        /// and every entity in load order with its rows in the order the store wrote them, each row and the tile table
-        /// as a JSON value rather than a string so the file reads as JSON when unpacked, then gzipped.
-        /// <see cref="ReadImage"/> gives back rows equal as text to the ones written, since both sides are compact JSON.
+        /// An image as a fixture file: one JSON object, the grid id, the unsaved count, the left-out counts by name, the
+        /// byte count, the tile table and every entity in load order with its rows in the order the store wrote them, each
+        /// row and the tile table as a JSON value rather than a string so the file reads as JSON when unpacked, then
+        /// gzipped. <see cref="ReadImage"/> gives back rows equal as text to the ones written, since both sides are compact
+        /// JSON.
         /// </summary>
         public static byte[] WriteImage(DrydockImage image)
         {
+            var leftOut = new JsonObject();
+            foreach (var (name, counts) in image.LeftOut.ByName())
+            {
+                leftOut[name] = new JsonObject(counts
+                    .OrderBy(pair => pair.Key, StringComparer.Ordinal)
+                    .Select(pair => KeyValuePair.Create(pair.Key, (JsonNode?) pair.Value)));
+            }
+
             var entities = new JsonArray();
             foreach (var entity in image.Entities)
             {
@@ -292,6 +301,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             {
                 ["gridId"] = image.GridId,
                 ["unsaved"] = image.Unsaved,
+                ["leftOut"] = leftOut,
                 ["bytes"] = image.Bytes,
                 ["tiles"] = JsonNode.Parse(image.Tiles),
                 ["entities"] = entities,
@@ -306,7 +316,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
 
         /// <summary>
         /// The image a fixture file holds (<see cref="WriteImage"/>). A key the image no longer has, such as an older file's
-        /// <c>paused</c>, is not read.
+        /// <c>paused</c>, is not read, and a file with no <c>leftOut</c> reads as <see cref="DrydockLeftOut.None"/>.
         /// </summary>
         public static DrydockImage ReadImage(byte[] file)
         {
@@ -329,12 +339,30 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                     rows));
             }
 
+            var leftOut = DrydockLeftOut.None;
+            if (root.TryGetProperty("leftOut", out var leftOutElement))
+            {
+                var byName = new Dictionary<string, IReadOnlyDictionary<string, int>>(StringComparer.Ordinal);
+                foreach (var counts in leftOutElement.EnumerateObject())
+                {
+                    if (!DrydockLeftOut.Keys.Contains(counts.Name))
+                        throw new InvalidDataException($"leftOut names '{counts.Name}', which is not one of the image's counts.");
+
+                    byName[counts.Name] = counts.Value.EnumerateObject().ToDictionary(c => c.Name, c => c.Value.GetInt32(), StringComparer.Ordinal);
+                }
+
+                leftOut = DrydockLeftOut.FromNames(byName);
+            }
+
             return new DrydockImage(
                 root.GetProperty("gridId").GetInt64(),
                 entities,
                 root.GetProperty("tiles").GetRawText(),
                 root.GetProperty("unsaved").GetInt32(),
-                root.GetProperty("bytes").GetInt32());
+                root.GetProperty("bytes").GetInt32())
+            {
+                LeftOut = leftOut,
+            };
         }
 
         /// <summary>

@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Text;
 using System.Text.Json.Nodes;
 using Content.Server._Triad.Drydock.Codec;
 using Robust.Shared.GameObjects;
@@ -87,7 +88,7 @@ public sealed class DrydockStoreSession
             _writes++;
 
             rows[registration.Name] = text;
-            _bytes += text.Length;
+            _bytes += Encoding.UTF8.GetByteCount(text);
         }
 
         _probe?.Before(uid, DrydockImageSystem.AppearanceRow);
@@ -96,7 +97,7 @@ public sealed class DrydockStoreSession
         {
             var text = Text(appearanceRow);
             rows[DrydockImageSystem.AppearanceRow] = text;
-            _bytes += text.Length;
+            _bytes += Encoding.UTF8.GetByteCount(text);
         }
 
         _probe?.After(uid, DrydockImageSystem.AppearanceRow);
@@ -106,7 +107,7 @@ public sealed class DrydockStoreSession
         {
             var text = Text(manifestRow);
             rows[DrydockCodec.ManifestRow] = text;
-            _bytes += text.Length;
+            _bytes += Encoding.UTF8.GetByteCount(text);
         }
 
         _probe?.After(uid, DrydockCodec.ManifestRow);
@@ -120,7 +121,7 @@ public sealed class DrydockStoreSession
         {
             var text = Text(carriedRow);
             rows[DrydockImageSystem.CarriedRow] = text;
-            _bytes += text.Length;
+            _bytes += Encoding.UTF8.GetByteCount(text);
         }
 
         _probe?.After(uid, DrydockImageSystem.CarriedRow);
@@ -161,7 +162,11 @@ public sealed class DrydockStoreSession
         if (_entities.Count != _walk.Aboard.Count)
             throw new InvalidOperationException($"Drydock store: {_entities.Count} of {_walk.Aboard.Count} entities written.");
 
-        var image = new DrydockImage(_walk.Ids[_grid], _entities, _tiles, _walk.Unsaved, _bytes + _tiles.Length);
-        return new DrydockImageStoreResult(image, _unwritable, _unwritableCarried, _stripped, _appearanceSkipped, _writes);
+        var image = new DrydockImage(_walk.Ids[_grid], _entities, _tiles, _walk.Unsaved, _bytes + Encoding.UTF8.GetByteCount(_tiles))
+        {
+            LeftOut = new DrydockLeftOut(_walk.UnsavedByPrototype, _walk.DroppedByPrototype, _stripped, _appearanceSkipped),
+        };
+
+        return new DrydockImageStoreResult(image, _unwritable, _unwritableCarried, _writes);
     }
 }

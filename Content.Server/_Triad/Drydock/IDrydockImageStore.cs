@@ -62,9 +62,11 @@ public interface IDrydockImageStore
     Task Put(ServerDbContext db, DrydockImageKey key, DrydockImage image, CancellationToken ct);
 
     /// <summary>
-    /// The image filed under <paramref name="key"/>, whole, with its entities in load order, or null when there is none,
-    /// which is also what a pruned revision reads. Needs no transaction. The PostgreSQL store reads it back as filed, up
-    /// to what <see cref="DrydockImageComparer"/> leaves out; the memory store hands back the image it was given.
+    /// The image filed under <paramref name="key"/>, whole, with its entities in load order and what the store left out
+    /// (<see cref="DrydockImage.LeftOut"/>), or null when there is none, which is also what a pruned revision reads. Needs
+    /// no transaction. The PostgreSQL store reads it back as filed, up to what <see cref="DrydockImageComparer"/> leaves
+    /// out, and throws <see cref="System.IO.InvalidDataException"/> when its rows disagree with the image's own counts;
+    /// the memory store hands back the image it was given.
     /// </summary>
     Task<DrydockImage?> Get(ServerDbContext db, DrydockImageKey key, CancellationToken ct);
 
