@@ -3,7 +3,6 @@
 using System;
 using System.Linq;
 using System.Net;
-using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using Content.Server._Triad.Drydock;
@@ -36,8 +35,8 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             await store.AddBerth(owner, ShipSizeClass.Cutter, DrydockBerthKind.Granted, 0, null, null);
 
             var ship = Guid.NewGuid();
-            var good = Encoding.UTF8.GetBytes("the good document");
-            var bad = Encoding.UTF8.GetBytes("the bad document");
+            var good = DrydockTestHelpers.SeedImage(1);
+            var bad = DrydockTestHelpers.SeedImage(2);
 
             await store.FileRevision(Request(ship, owner, "Phoenix"), good, keepBlobs: 3);
             await store.FileRevision(Request(ship, owner, "Phoenix"), bad, keepBlobs: 3);
@@ -49,11 +48,11 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                 Assert.That(promoted, Is.EqualTo(3), "A promotion is a new revision, never a rewind of the pointer.");
             });
 
-            var current = await store.LoadCurrent(ship);
+            var current = await store.LoadCurrentImage(ship);
             Assert.Multiple(() =>
             {
                 Assert.That(current!.Ship.CurrentRevision, Is.EqualTo(3));
-                Assert.That(current.Blob, Is.EqualTo(good), "The promoted document is the one the admin chose.");
+                Assert.That(current.Image, Is.SameAs(good), "The promoted image is the one the admin chose.");
                 Assert.That(current.Revision.Kind, Is.EqualTo(DrydockRevisionKind.AdminRestore));
                 Assert.That(current.Revision.DerivedFromRevision, Is.EqualTo(1), "Provenance names what it was copied from.");
                 Assert.That(current.Revision.ActorUserId, Is.EqualTo(admin));
@@ -96,7 +95,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             var berth = await store.AddBerth(owner, ShipSizeClass.Cutter, DrydockBerthKind.Granted, 0, null, null);
 
             var ship = Guid.NewGuid();
-            await store.FileRevision(Request(ship, owner, "Regretted"), Encoding.UTF8.GetBytes("doc"), keepBlobs: 3);
+            await store.FileRevision(Request(ship, owner, "Regretted"), DrydockTestHelpers.SeedImage(), keepBlobs: 3);
 
             var (sold, soldName) = await store.TrySellShip(ship, owner, price: 800, appraisal: 1000, roundId: null);
             Assert.Multiple(() =>
@@ -110,11 +109,11 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
 
             Assert.That(await store.TryRestoreShip(ship, berth, admin, null, "wrong verb"), Is.EqualTo(DrydockBerthResult.WrongState),
                 "A plain restore refuses a sold hull.");
-            Assert.That((await store.LoadCurrent(ship))!.Ship.State, Is.EqualTo(DrydockShipState.Sold), "Refused means untouched.");
+            Assert.That((await store.GetShipHeader(ship))!.State, Is.EqualTo(DrydockShipState.Sold), "Refused means untouched.");
 
             Assert.That(await store.TryRestoreShip(ship, berth, admin, null, "sale reversed", fromSale: true), Is.EqualTo(DrydockBerthResult.Success));
 
-            var back = (await store.LoadCurrent(ship))!.Ship;
+            var back = (await store.GetShipHeader(ship))!;
             Assert.Multiple(() =>
             {
                 Assert.That(back.State, Is.EqualTo(DrydockShipState.Stored));
@@ -138,10 +137,10 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             var berth = await store.AddBerth(owner, ShipSizeClass.Cutter, DrydockBerthKind.Granted, 0, null, null);
 
             var ship = Guid.NewGuid();
-            await store.FileRevision(Request(ship, owner, "Doomed"), Encoding.UTF8.GetBytes("doc"), keepBlobs: 3);
+            await store.FileRevision(Request(ship, owner, "Doomed"), DrydockTestHelpers.SeedImage(), keepBlobs: 3);
 
             Assert.That(await store.TryDeleteShip(ship, admin, null, "abandoned by owner"), Is.EqualTo(DrydockBerthResult.Success));
-            Assert.That(await store.LoadCurrent(ship), Is.Null, "The record, its revisions and its documents are gone.");
+            Assert.That(await store.LoadCurrentImage(ship), Is.Null, "The record and its revisions are gone.");
 
             var slots = await store.GetBerths(owner);
             Assert.That(slots.Single(s => s.Berth.BerthId == berth).Occupant, Is.Null, "The berth is left empty, not removed.");
@@ -176,8 +175,8 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
 
             var home = Guid.NewGuid();
             var lost = Guid.NewGuid();
-            await store.FileRevision(Request(home, owner, "Home"), Encoding.UTF8.GetBytes("doc"), keepBlobs: 3);
-            await store.FileRevision(Request(lost, owner, "Lost"), Encoding.UTF8.GetBytes("doc"), keepBlobs: 3);
+            await store.FileRevision(Request(home, owner, "Home"), DrydockTestHelpers.SeedImage(), keepBlobs: 3);
+            await store.FileRevision(Request(lost, owner, "Lost"), DrydockTestHelpers.SeedImage(), keepBlobs: 3);
 
             // Out with no round to point at: that is the stranded shape a past round leaves behind.
             await store.TrySetState(lost, DrydockShipState.Stored, DrydockShipState.CheckedOut, DrydockAuditAction.Retrieve, owner, null, null);
@@ -225,7 +224,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             await store.AddBerth(recipient, ShipSizeClass.Cutter, DrydockBerthKind.Granted, 0, null, null);
 
             var ship = Guid.NewGuid();
-            await store.FileRevision(Request(ship, owner, "Contested"), Encoding.UTF8.GetBytes("doc"), keepBlobs: 3);
+            await store.FileRevision(Request(ship, owner, "Contested"), DrydockTestHelpers.SeedImage(), keepBlobs: 3);
 
             var (offered, transfer) = await store.TryOfferTransfer(ship, owner, recipient, TimeSpan.FromMinutes(30), null);
             Assert.Multiple(() =>
@@ -234,14 +233,14 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                 Assert.That(transfer, Is.Not.Null);
                 Assert.That(transfer!.ToUserId, Is.EqualTo(recipient));
             });
-            Assert.That((await store.LoadCurrent(ship))!.Ship.State, Is.EqualTo(DrydockShipState.InEscrow));
+            Assert.That((await store.GetShipHeader(ship))!.State, Is.EqualTo(DrydockShipState.InEscrow));
 
             var resolved = await store.TryResolveTransfer(transfer!.Id, DrydockTransferResolution.Cancelled, admin, null,
                 adminOverride: true, reason: "recipient reported for scamming");
             Assert.That(resolved, Is.Not.Null);
 
             var standing = await store.GetPendingOfferForShip(ship);
-            var after = (await store.LoadCurrent(ship))!.Ship;
+            var after = (await store.GetShipHeader(ship))!;
             Assert.Multiple(() =>
             {
                 Assert.That(standing, Is.Null, "The offer is gone, so the recipient's alert is too.");
@@ -285,7 +284,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             var newName = $"Vagrant{token}";
 
             var ship = Guid.NewGuid();
-            await store.FileRevision(Request(ship, owner, oldName), Encoding.UTF8.GetBytes("doc"), keepBlobs: 3);
+            await store.FileRevision(Request(ship, owner, oldName), DrydockTestHelpers.SeedImage(), keepBlobs: 3);
             Assert.That(await store.TryRenameShip(ship, owner, newName, null), Is.EqualTo(DrydockBerthResult.Success));
 
             var byOldName = await store.QueryShips(Search(oldName), 0, 50);
@@ -333,8 +332,8 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
 
             var ship = Guid.NewGuid();
             var other = Guid.NewGuid();
-            await store.FileRevision(Request(ship, owner, "Kestrel"), Encoding.UTF8.GetBytes("doc"), keepBlobs: 3);
-            await store.FileRevision(Request(other, stranger, "Harrier"), Encoding.UTF8.GetBytes("doc"), keepBlobs: 3);
+            await store.FileRevision(Request(ship, owner, "Kestrel"), DrydockTestHelpers.SeedImage(), keepBlobs: 3);
+            await store.FileRevision(Request(other, stranger, "Harrier"), DrydockTestHelpers.SeedImage(), keepBlobs: 3);
 
             var bySelected = await store.QueryShips(Search($"voss{token}"), 0, 50);
             var byAlt = await store.QueryShips(Search($"VARGA{token}"), 0, 50);
@@ -368,8 +367,6 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             CreatedRoundId = null,
             EngineFormatVer = 7,
             ProtoFingerprint = new byte[] { 1, 2, 3 },
-            CapturedKeyHash = new byte[] { 4, 5, 6 },
-            Checksum = new byte[] { 7, 8, 9 },
             SizeBytes = 3,
             Manifest = "{\"v\":1,\"e\":[]}",
         };

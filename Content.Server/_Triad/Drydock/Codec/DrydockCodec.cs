@@ -60,26 +60,26 @@ public sealed partial class DrydockCodec
         IEntityManager entMan,
         IPrototypeManager prototypes,
         IGameTiming timing,
-        Func<EntityUid, long?> allocate,
+        Func<EntityUid, long?> idOf,
         Func<long, EntityUid> resolve)
-        : this(serialization, entMan, timing, allocate, resolve)
+        : this(serialization, entMan, timing, idOf, resolve)
     {
         _prototypes = prototypes;
     }
 
-    /// <param name="allocate">See <see cref="DrydockCodecContext"/>: the stable id for an entity.</param>
+    /// <param name="idOf">See <see cref="DrydockCodecContext"/>: the entity's id in the image.</param>
     /// <param name="resolve">See <see cref="DrydockCodecContext"/>: the entity a stable id names.</param>
     public DrydockCodec(
         ISerializationManager serialization,
         IEntityManager entMan,
         IGameTiming timing,
-        Func<EntityUid, long?> allocate,
+        Func<EntityUid, long?> idOf,
         Func<long, EntityUid> resolve)
     {
         _serialization = serialization;
         _factory = entMan.ComponentFactory;
         _entMan = entMan;
-        Context = new DrydockCodecContext(serialization, entMan, allocate, resolve);
+        Context = new DrydockCodecContext(serialization, entMan, idOf, resolve);
         _pass = new DrydockCodecFieldPass(serialization, Context, entMan, timing);
     }
 

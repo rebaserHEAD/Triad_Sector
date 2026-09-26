@@ -590,7 +590,7 @@ public sealed partial class DrydockAdminEui : BaseEui
                 r.ActorUserId,
                 r.ActorUserId is { } a ? names.GetValueOrDefault(a) : null,
                 r.SizeBytes,
-                detail.RevisionsWithBlob.Contains(r.Revision),
+                detail.RevisionsWithImage.Contains(r.Revision),
                 r.DerivedFromRevision,
                 r.AppraisedValue)).ToList();
 

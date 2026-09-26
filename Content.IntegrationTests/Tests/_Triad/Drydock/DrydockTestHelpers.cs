@@ -1,10 +1,12 @@
 #nullable enable
 
 using System;
+using System.Collections.Generic;
 using System.Net;
 using System.Threading;
 using System.Threading.Tasks;
 using Content.IntegrationTests.Pair;
+using Content.Server._Triad.Drydock.Loader;
 using Content.Server.Database;
 using Robust.Shared.Log;
 
@@ -66,6 +68,20 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                 "The drydock operation never completed: either it is blocked on the database, or a continuation never came back to the game thread.");
 
             return await task;
+        }
+
+        /// <summary>
+        /// A one-entity image for a test that needs a revision on file and never loads it: a hull row seeded for a
+        /// console, a sweep or a berth test. <paramref name="marker"/> goes into the grid's Transform row, so two seeds
+        /// compare as different images and a test can tell which one a promote or a prune kept. Both stores file it:
+        /// the grid's parent is off the image and the tile table holds the empty tile at id 0, which is what the
+        /// PostgreSQL store checks before it writes.
+        /// </summary>
+        internal static DrydockImage SeedImage(int marker = 0)
+        {
+            const string tiles = "{\"size\":\"16\",\"tilemap\":{\"0\":\"Space\"},\"chunks\":{}}";
+            var rows = new Dictionary<string, string> { ["Transform"] = $"{{\"parent\":\"invalid\",\"pos\":\"{marker},0\"}}" };
+            return new DrydockImage(1, new[] { new DrydockImageEntity(1, "TestGrid", true, rows) }, tiles, 0, rows["Transform"].Length + tiles.Length);
         }
 
         /// <summary>Runs an operation that is meant to log errors, without the pair failing on them.</summary>

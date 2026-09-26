@@ -5,9 +5,9 @@ using System.Text.Json.Serialization;
 namespace Content.Server._Triad.Drydock;
 
 /// <summary>
-/// What a stored revision contained, recorded at store time from what the fidelity walk already
-/// holds. A forensic record, not a second serializer: it answers "what was aboard" and the two
-/// changes players dispute, and does not attempt a general field diff.
+/// What a stored revision contained, recorded at store time by a walk of the live tree, the last
+/// before the despawn. A forensic record, not a second serializer: it answers "what was aboard" and
+/// the two changes players dispute, and does not attempt a general field diff.
 /// </summary>
 public sealed class DrydockManifest
 {
@@ -59,18 +59,11 @@ public sealed class DrydockManifestEntry
     [JsonPropertyName("c")]
     public int? Parent { get; set; }
 
-    /// <summary>Total damage across all types, from the same dictionary the damage sidecar reads.</summary>
+    /// <summary>Total damage across all types, <c>DamageableComponent.TotalDamage</c>.</summary>
     [JsonPropertyName("d")]
     public float Damage { get; set; }
 
     /// <summary>Stack count, the one round-trip invariant nothing else here covers.</summary>
     [JsonPropertyName("s")]
     public int Stack { get; set; }
-
-    /// <summary>
-    /// The captured-state keys written for this entity, <c>ComponentName|FieldName</c>. A key that
-    /// stops resolving after a rename is the drift this records; comparing them unsilences a skip.
-    /// </summary>
-    [JsonPropertyName("k")]
-    public List<string>? CapturedKeys { get; set; }
 }

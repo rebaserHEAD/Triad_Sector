@@ -72,8 +72,8 @@ public sealed record DrydockAdminRevisionDto(
     Guid? ActorUserId,
     string? ActorName,
     int SizeBytes,
-    // Pruning takes blobs and never history; a revision without one is history only.
-    bool HasBlob,
+    // Pruning takes images and never history; a revision without one is history only.
+    bool HasImage,
     int? DerivedFromRevision,
     int? AppraisedValue);
 

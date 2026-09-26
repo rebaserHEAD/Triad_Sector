@@ -525,7 +525,7 @@ public sealed partial class DrydockAdminWindow : FancyWindow
 
         foreach (var revision in detail.Revisions)
         {
-            if (!revision.HasBlob || revision.Revision == ship.CurrentRevision)
+            if (!revision.HasImage || revision.Revision == ship.CurrentRevision)
                 continue;
 
             var captured = revision.Revision;

@@ -3,7 +3,6 @@
 using System;
 using System.Linq;
 using System.Net;
-using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using Content.Server._Triad.Drydock;
@@ -17,8 +16,8 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
     /// <summary>
     /// Exercises the drydock's persistence against a real database, because the guarantees being
     /// tested are transactional and a unit test with a fake would prove nothing about them: that a
-    /// revision is filed with its blob and its audit row together, that pruning takes blobs and
-    /// never history, and that the current revision's blob survives pruning whatever the keep count
+    /// revision is filed with its image and its audit row together, that pruning takes images and
+    /// never history, and that the current revision's image survives pruning whatever the keep count
     /// says.
     ///
     /// <para>Everything is scoped to a freshly minted ship id, so the rows this leaves behind in a
@@ -44,15 +43,15 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             await DrydockTestHelpers.InsertPlayer(db, owner);
             await store.AddBerth(owner, ShipSizeClass.Cutter, DrydockBerthKind.Granted, 0, null, null);
 
-            var firstBlob = Encoding.UTF8.GetBytes("first revision document");
-            var secondBlob = Encoding.UTF8.GetBytes("second revision document");
+            var firstImage = DrydockTestHelpers.SeedImage(1);
+            var secondImage = DrydockTestHelpers.SeedImage(2);
 
-            // Keep two blobs, so the third store below is what proves pruning happens at all.
-            var first = await store.FileRevision(Request(shipId, owner, "Kestrel"), firstBlob, keepBlobs: 2);
+            // Keep two images, so the third store below is what proves pruning happens at all.
+            var first = await store.FileRevision(Request(shipId, owner, "Kestrel"), firstImage, keepBlobs: 2);
             Assert.That(first.Outcome, Is.EqualTo(DrydockBerthResult.Success));
             Assert.That(first.Revision, Is.EqualTo(1), "The first revision of a ship is 1.");
 
-            var loaded = await store.LoadCurrent(shipId);
+            var loaded = await store.LoadCurrentImage(shipId);
             Assert.That(loaded, Is.Not.Null);
             Assert.Multiple(() =>
             {
@@ -60,54 +59,54 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                 Assert.That(loaded.Ship.CurrentRevision, Is.EqualTo(1));
                 Assert.That(loaded.Ship.OwnerUserId, Is.EqualTo(owner));
                 Assert.That(loaded.Revision.Kind, Is.EqualTo(DrydockRevisionKind.PlayerStore));
-                Assert.That(loaded.Blob, Is.EqualTo(firstBlob));
+                Assert.That(loaded.Image, Is.SameAs(firstImage));
             });
 
             // A second store lands as a new revision on the same hull rather than a second hull.
-            var second = await store.FileRevision(Request(shipId, owner, "Kestrel II"), secondBlob, keepBlobs: 2);
+            var second = await store.FileRevision(Request(shipId, owner, "Kestrel II"), secondImage, keepBlobs: 2);
             Assert.That(second.Revision, Is.EqualTo(2));
 
-            loaded = await store.LoadCurrent(shipId);
+            loaded = await store.LoadCurrentImage(shipId);
             Assert.Multiple(() =>
             {
                 Assert.That(loaded!.Ship.CurrentRevision, Is.EqualTo(2));
-                Assert.That(loaded.Blob, Is.EqualTo(secondBlob));
+                Assert.That(loaded.Image, Is.SameAs(secondImage));
                 Assert.That(loaded.Ship.ShipName, Is.EqualTo("Kestrel II"), "The display cache refreshes on every store.");
             });
 
             // The ownership rule: a store never moves the ship to whoever filed it.
             var otherOwner = Guid.NewGuid();
             await DrydockTestHelpers.InsertPlayer(db, otherOwner);
-            await store.FileRevision(Request(shipId, otherOwner, "Kestrel III"), secondBlob, keepBlobs: 2);
+            await store.FileRevision(Request(shipId, otherOwner, "Kestrel III"), secondImage, keepBlobs: 2);
 
-            loaded = await store.LoadCurrent(shipId);
+            loaded = await store.LoadCurrentImage(shipId);
             Assert.That(loaded!.Ship.OwnerUserId, Is.EqualTo(owner),
                 "A store must not transfer the ship. Ownership moves through a transfer, with its own audit row.");
 
-            // Three revisions filed with keepBlobs 2, so revision 1's blob is gone and its history
+            // Three revisions filed with keepBlobs 2, so revision 1's image is gone and its history
             // is not. This is the guarantee that lets the design promise a hull's whole history.
-            var (revisionCount, blobRevisions) = await ReadRevisionShape(db, shipId);
+            var (revisionCount, imageRevisions) = await ReadRevisionShape(db, shipId);
             Assert.Multiple(() =>
             {
                 Assert.That(revisionCount, Is.EqualTo(3), "Revision history is kept indefinitely.");
-                Assert.That(blobRevisions, Is.EquivalentTo(new[] { 2, 3 }), "Pruning takes blobs, oldest first, and never history.");
+                Assert.That(imageRevisions, Is.EquivalentTo(new[] { 2, 3 }), "Pruning takes images, oldest first, and never history.");
             });
 
             // Keep exactly one, which is the tightest setting that prunes: the floor raises it to two,
             // so the one a retrieve is about to read stays along with one step back to fall to. The
-            // case where an off-by-one would delete the live document. The floor's own tests, with
+            // case where an off-by-one would delete the live image. The floor's own tests, with
             // controls, are in DrydockDurabilityStoreTest.
-            await store.FileRevision(Request(shipId, owner, "Kestrel IV"), firstBlob, keepBlobs: 1);
-            loaded = await store.LoadCurrent(shipId);
-            Assert.That(loaded, Is.Not.Null, "Pruning must never take the blob the current revision points at.");
-            Assert.That(loaded!.Blob, Is.EqualTo(firstBlob));
+            await store.FileRevision(Request(shipId, owner, "Kestrel IV"), firstImage, keepBlobs: 1);
+            loaded = await store.LoadCurrentImage(shipId);
+            Assert.That(loaded, Is.Not.Null, "Pruning must never take the image the current revision points at.");
+            Assert.That(loaded!.Image, Is.SameAs(firstImage));
 
             var (_, afterTightPrune) = await ReadRevisionShape(db, shipId);
-            Assert.That(afterTightPrune, Is.EquivalentTo(new[] { 3, 4 }), "Keeping one is floored at two: the current blob and the one before it.");
+            Assert.That(afterTightPrune, Is.EquivalentTo(new[] { 3, 4 }), "Keeping one is floored at two: the current image and the one before it.");
 
             // Zero or less means no pruning at all rather than keep nothing, which is the only
             // reading that is safe to misconfigure: the wrong guess costs disk, not ships.
-            await store.FileRevision(Request(shipId, owner, "Kestrel V"), secondBlob, keepBlobs: 0);
+            await store.FileRevision(Request(shipId, owner, "Kestrel V"), secondImage, keepBlobs: 0);
             var (_, afterNoPrune) = await ReadRevisionShape(db, shipId);
             Assert.That(afterNoPrune, Is.EquivalentTo(new[] { 3, 4, 5 }), "A keep count of zero prunes nothing.");
 
@@ -134,7 +133,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             var shipId = Guid.NewGuid();
             await DrydockTestHelpers.InsertPlayer(db, owner);
             await store.AddBerth(owner, ShipSizeClass.Cutter, DrydockBerthKind.Granted, 0, null, null);
-            await store.FileRevision(Request(shipId, owner, "Harrier"), Encoding.UTF8.GetBytes("doc"), keepBlobs: 2);
+            await store.FileRevision(Request(shipId, owner, "Harrier"), DrydockTestHelpers.SeedImage(), keepBlobs: 2);
 
             // The retrieve gate: only a stored ship can be checked out, and the check and the move
             // are one statement so two of them cannot both win.
@@ -199,7 +198,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             // A checkout records the round it left in, and that column is a foreign key, so the
             // round has to exist. In play it always does: an impound happens inside a round.
             var round = await db.AddNewRound(await db.AddOrGetServer("drydock-test"));
-            var doc = Encoding.UTF8.GetBytes("doc");
+            var doc = DrydockTestHelpers.SeedImage();
 
             var resting = Guid.NewGuid();
             var filed = await store.FileRevision(Request(resting, owner, "Kestrel"), doc, keepBlobs: 2);
@@ -339,7 +338,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
 
             // Stored first, so there is a berth to lose.
             var shipId = Guid.NewGuid();
-            var filed = await store.FileRevision(Request(shipId, owner, "Kestrel"), Encoding.UTF8.GetBytes("doc"), keepBlobs: 2);
+            var filed = await store.FileRevision(Request(shipId, owner, "Kestrel"), DrydockTestHelpers.SeedImage(), keepBlobs: 2);
             Assert.That(filed.Outcome, Is.EqualTo(DrydockBerthResult.Success));
             Assert.That(filed.BerthId, Is.Not.Null, "A control: the ordinary store seats the hull.");
             var seated = filed.BerthId!.Value;
@@ -350,7 +349,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             var impound = new DrydockImpound(50, "left in the world at round end", Redeemable: true, ActorUserId: null);
             var taken = await store.FileRevision(
                 Request(shipId, owner, "Kestrel", markStored: false, impound: impound, evicted: 2),
-                Encoding.UTF8.GetBytes("doc2"), keepBlobs: 2);
+                DrydockTestHelpers.SeedImage(2), keepBlobs: 2);
 
             Assert.That(taken.Outcome, Is.EqualTo(DrydockBerthResult.Success));
             Assert.That(await store.MarkImpounded(shipId), Is.True);
@@ -427,7 +426,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             var round = await db.AddNewRound(await db.AddOrGetServer("drydock-test"));
 
             var shipId = Guid.NewGuid();
-            var filed = await store.FileRevision(Request(shipId, owner, "Kestrel", berthId: home), Encoding.UTF8.GetBytes("doc"), keepBlobs: 2);
+            var filed = await store.FileRevision(Request(shipId, owner, "Kestrel", berthId: home), DrydockTestHelpers.SeedImage(), keepBlobs: 2);
             Assert.That(filed.BerthId, Is.EqualTo(home));
 
             var (offered, transfer) = await store.TryOfferTransfer(shipId, owner, recipient, TimeSpan.FromMinutes(30), round);
@@ -493,7 +492,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             var home = await store.AddBerth(owner, ShipSizeClass.Cutter, DrydockBerthKind.Granted, 0, null, null);
             var spare = await store.AddBerth(owner, ShipSizeClass.Cutter, DrydockBerthKind.Granted, 0, null, null);
             var round = await db.AddNewRound(await db.AddOrGetServer("drydock-test"));
-            var doc = Encoding.UTF8.GetBytes("doc");
+            var doc = DrydockTestHelpers.SeedImage();
 
             var shipId = Guid.NewGuid();
             var filed = await store.FileRevision(Request(shipId, owner, "Kestrel", berthId: home), doc, keepBlobs: 2);
@@ -615,7 +614,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             var round = await db.AddNewRound(await db.AddOrGetServer("drydock-test"));
 
             var shipId = Guid.NewGuid();
-            var filed = await store.FileRevision(Request(shipId, owner, "Kestrel"), Encoding.UTF8.GetBytes("doc"), keepBlobs: 2);
+            var filed = await store.FileRevision(Request(shipId, owner, "Kestrel"), DrydockTestHelpers.SeedImage(), keepBlobs: 2);
             Assert.That(filed.Outcome, Is.EqualTo(DrydockBerthResult.Success));
 
             // Control: a stored ship is scrapped by the stored sale, never by the live one.
@@ -680,28 +679,22 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             CreatedRoundId = null,
             EngineFormatVer = 7,
             ProtoFingerprint = new byte[] { 1, 2, 3 },
-            CapturedKeyHash = new byte[] { 4, 5, 6 },
-            Checksum = new byte[] { 7, 8, 9 },
             SizeBytes = 23,
             AppraisedValue = 24000,
             Manifest = "{\"v\":1,\"e\":[]}",
         };
 
 
-        private static Task<(int RevisionCount, int[] BlobRevisions)> ReadRevisionShape(IServerDbManager db, Guid shipId)
+        private static Task<(int RevisionCount, int[] ImageRevisions)> ReadRevisionShape(IServerDbManager db, Guid shipId)
         {
+            var images = db.DrydockImages;
             return db.RunTriadDbCommand(async (context, token) =>
             {
                 var revisions = await context.DrydockRevision.AsNoTracking()
                     .CountAsync(r => r.ShipGuid == shipId, token);
 
-                var blobs = await context.DrydockBlob.AsNoTracking()
-                    .Where(b => b.ShipGuid == shipId)
-                    .Select(b => b.Revision)
-                    .OrderBy(r => r)
-                    .ToArrayAsync(token);
-
-                return (revisions, blobs);
+                var withImage = (await images.Revisions(context, shipId, token)).Order().ToArray();
+                return (revisions, withImage);
             }, CancellationToken.None);
         }
     }

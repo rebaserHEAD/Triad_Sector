@@ -39,7 +39,7 @@ namespace Content.Server._Triad.Drydock;
 /// a tree from the grid in load order: null only for the grid, every other parent an earlier entity of the image.</item>
 /// <item>Whether an entity is map-initialised is kept per entity in <c>map_initialized</c>: a grid made at runtime (a
 /// floor tile placed in space, a split) is started but never map-initialised (<c>SharedMapSystem.Grid.cs:63-65</c>),
-/// and the load hands each entity's flag on (<c>DrydockLoadSession.cs:114</c>). Pause is not kept: the target map
+/// and the load hands each entity's flag on (<see cref="DrydockLoadSession.CreateEntities"/>). Pause is not kept: the target map
 /// decides it on a load, so a read gives false.</item>
 /// </list>
 ///

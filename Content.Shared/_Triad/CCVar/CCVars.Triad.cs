@@ -61,15 +61,15 @@ public sealed class TriadCCVars
     /// impound sweep do not run either, and transfer offers past their deadline are not expired until
     /// it is lifted. This is the switch to
     /// reach for when a build is suspected of writing bad revisions: the deploy pipeline is a daily
-    /// cron with no rollback path, so refusing loudly for a day beats filing a day of bad blobs
+    /// cron with no rollback path, so refusing loudly for a day beats filing a day of bad images
     /// while still letting people fly the ships they already own.
     /// </summary>
     public static readonly CVarDef<bool> DrydockReadOnly =
         CVarDef.Create("triad.drydock.read_only", false, CVar.SERVERONLY);
 
     /// <summary>
-    /// How many revisions keep their blob. Revision history itself is kept indefinitely; this only
-    /// bounds the documents, and the current revision is never pruned regardless of this value.
+    /// How many revisions keep their grid image. Revision history itself is kept indefinitely; this
+    /// only bounds the images, and the current revision is never pruned regardless of this value.
     /// Zero or less prunes nothing at all, which is the safe direction to misconfigure.
     /// </summary>
     public static readonly CVarDef<int> DrydockKeepBlobs =

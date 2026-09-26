@@ -66,7 +66,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             Assert.Multiple(() =>
             {
                 Assert.That(detail!.Revisions.Select(r => r.Revision), Is.EquivalentTo(new[] { 1, 2, 3 }), "Pruning takes images, never history.");
-                Assert.That(detail.RevisionsWithBlob, Is.EquivalentTo(new[] { 2, 3 }), "The panel marks the revisions that hold an image.");
+                Assert.That(detail.RevisionsWithImage, Is.EquivalentTo(new[] { 2, 3 }), "The panel marks the revisions that hold an image.");
             });
 
             var pinPruned = await store.TryPinRevision(ship, 1, owner, null, null);

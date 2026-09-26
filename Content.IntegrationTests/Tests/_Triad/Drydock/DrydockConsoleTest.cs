@@ -712,11 +712,9 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                 Kind = DrydockRevisionKind.PlayerStore,
                 EngineFormatVer = 7,
                 ProtoFingerprint = new byte[] { 1 },
-                CapturedKeyHash = new byte[] { 1 },
-                Checksum = new byte[] { 1 },
                 SizeBytes = 1,
                 Manifest = "{}",
-            }, new byte[] { 1 }, 3);
+            }, DrydockTestHelpers.SeedImage(), 3);
 
             // The recipient gate: the stranger is not online, so the console refuses before any
             // row is written. The ownership check passed, so nothing is on the timeline for it.
@@ -985,12 +983,10 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                 Kind = DrydockRevisionKind.PlayerStore,
                 EngineFormatVer = 7,
                 ProtoFingerprint = new byte[] { 1 },
-                CapturedKeyHash = new byte[] { 1 },
-                Checksum = new byte[] { 1 },
                 SizeBytes = 1,
                 Manifest = "{}",
                 AppraisedValue = 1000,
-            }, new byte[] { 1 }, 3);
+            }, DrydockTestHelpers.SeedImage(), 3);
 
             var forged = await DrydockTestHelpers.RunOnServer(pair,
                 () => shipyard.TrySellStoredShip(console, consoleComp, operatorEnt, theirs, "NotYours", ShipyardConsoleUiKey.Shipyard));
@@ -1286,7 +1282,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
 
             // A revision with a known appraisal, so the fee is a figure this test can hold against
             // the balance; the harness hull appraises at whatever nine floor tiles are worth.
-            await store.FileRevision(Revision(shipId, me, "Kestrel", appraisal: 24000), new byte[] { 1 }, 3);
+            await store.FileRevision(Revision(shipId, me, "Kestrel", appraisal: 24000), DrydockTestHelpers.SeedImage(), 3);
 
             var (taken, fee) = await store.TryImpoundStored(shipId, new DrydockImpound(50, "ticket #94", Redeemable: true, ActorUserId: admin), null);
             Assert.Multiple(() =>
@@ -1327,7 +1323,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             // A refused reclaim gives the money back: the berth named has a ship in it.
             var occupied = await store.AddBerth(me, ShipSizeClass.SuperCapital, DrydockBerthKind.Granted, 0, null, null);
             var squatter = Guid.NewGuid();
-            var squat = await store.FileRevision(Revision(squatter, me, "Pelican", appraisal: 1000, berthId: occupied), new byte[] { 1 }, 3);
+            var squat = await store.FileRevision(Revision(squatter, me, "Pelican", appraisal: 1000, berthId: occupied), DrydockTestHelpers.SeedImage(), 3);
             Assert.That(squat.BerthId, Is.EqualTo(occupied), "Control: the berth about to be named is taken.");
 
             var refused = await DrydockTestHelpers.RunOnServer(pair,
@@ -1380,7 +1376,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             var theirs = Guid.NewGuid();
             await DrydockTestHelpers.InsertPlayer(server.ResolveDependency<IServerDbManager>(), stranger);
             await store.AddBerth(stranger, ShipSizeClass.SuperCapital, DrydockBerthKind.Granted, 0, null, null);
-            await store.FileRevision(Revision(theirs, stranger, "NotYours", appraisal: 1000), new byte[] { 1 }, 3);
+            await store.FileRevision(Revision(theirs, stranger, "NotYours", appraisal: 1000), DrydockTestHelpers.SeedImage(), 3);
             Assert.That((await store.TryImpoundStored(theirs, new DrydockImpound(50, "left out", Redeemable: true, ActorUserId: admin), null)).Outcome,
                 Is.EqualTo(DrydockBerthResult.Success));
 
@@ -1509,8 +1505,6 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             ActorUserId = owner,
             EngineFormatVer = 7,
             ProtoFingerprint = new byte[] { 1 },
-            CapturedKeyHash = new byte[] { 1 },
-            Checksum = new byte[] { 1 },
             SizeBytes = 1,
             Manifest = "{}",
             AppraisedValue = appraisal,

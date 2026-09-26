@@ -56,15 +56,6 @@ internal static class ModelDrydock
             .HasPrincipalKey(p => p.UserId)
             .OnDelete(DeleteBehavior.SetNull);
 
-        modelBuilder.Entity<DrydockBlob>()
-            .HasKey(b => new { b.ShipGuid, b.Revision });
-
-        modelBuilder.Entity<DrydockBlob>()
-            .HasOne(b => b.RevisionRow)
-            .WithOne(r => r.Blob)
-            .HasForeignKey<DrydockBlob>(b => new { b.ShipGuid, b.Revision })
-            .OnDelete(DeleteBehavior.Cascade);
-
         // The timeline read: one ship, oldest to newest.
         modelBuilder.Entity<DrydockAudit>()
             .HasIndex(a => new { a.ShipGuid, a.CreatedAt });
@@ -417,10 +408,10 @@ public sealed class DrydockRevision
     public int RebakeVersion { get; set; }
 
     /// <summary>
-    /// Excluded from blob pruning while set: keep-N and the two-blob floor both step around a pinned
-    /// revision's document, however far behind the current revision it falls. Set and cleared only
+    /// Excluded from image pruning while set: keep-N and the two-image floor both step around a pinned
+    /// revision's image, however far behind the current revision it falls. Set and cleared only
     /// through <c>DrydockStore.TryPinRevision</c> and <c>TryUnpinRevision</c>, each of which writes a
-    /// timeline row. A pin protects the document, never a promise that it still loads: content can
+    /// timeline row. A pin protects the image, never a promise that it still loads: content can
     /// have moved since.
     /// </summary>
     public bool Pinned { get; set; }
@@ -443,28 +434,16 @@ public sealed class DrydockRevision
 
     public DateTime CreatedAt { get; set; }
 
-    /// <summary>The engine's map document format version the stored document was written in.</summary>
+    /// <summary>The engine's map document format version the load builds its skeleton in.</summary>
     public int EngineFormatVer { get; set; }
 
-    /// <summary>Our own sidecar and manifest encoding version at filing, <c>DrydockFormat.Current</c>.</summary>
+    /// <summary>Our own row and manifest encoding version at filing, <c>DrydockFormat.Current</c>.</summary>
     public int DrydockFormatVer { get; set; }
 
-    /// <summary>Hash over the set of prototype ids the blob references. One of the two drift classes.</summary>
+    /// <summary>Hash over the set of prototype ids the image's entities name: the drift fingerprint.</summary>
     public byte[] ProtoFingerprint { get; set; } = Array.Empty<byte>();
 
-    /// <summary>
-    /// Hash over the captured-state keys the fidelity layer wrote. The other drift class: a C#
-    /// rename silently orphans a key, and comparing this is how that stops being silent.
-    /// </summary>
-    public byte[] CapturedKeyHash { get; set; } = Array.Empty<byte>();
-
-    /// <summary>
-    /// Over the uncompressed document, so a mismatch on retrieve distinguishes a storage fault
-    /// from a serializer fault.
-    /// </summary>
-    public byte[] Checksum { get; set; } = Array.Empty<byte>();
-
-    /// <summary>Uncompressed document size. The only source of a real blob-size distribution.</summary>
+    /// <summary>The size of the image the store wrote, <c>DrydockImage.Bytes</c>.</summary>
     public int SizeBytes { get; set; }
 
     /// <summary>
@@ -481,14 +460,11 @@ public sealed class DrydockRevision
     /// What was aboard, one entry per entity in walk order. Minified JSON held as plain text on
     /// both providers, written on every store and read by nothing yet: <c>DrydockManifest
     /// .Deserialize</c> has no production caller. No index until a query exists, because
-    /// <c>jsonb_ops</c> indexes every key and every scalar, and each entry carries a
-    /// <c>CapturedKeys</c> list, so a capital hull would pay tens of thousands of index
-    /// insertions inside the store transaction for nobody. A GIN over <c>((manifest)::jsonb)</c>
+    /// <c>jsonb_ops</c> indexes every key and every scalar, so a capital hull would pay thousands of
+    /// index insertions inside the store transaction for nobody. A GIN over <c>((manifest)::jsonb)</c>
     /// is one statement whenever a reader turns up.
     /// </summary>
     public string Manifest { get; set; } = default!;
-
-    public DrydockBlob? Blob { get; set; }
 }
 
 public enum DrydockRevisionKind
@@ -510,26 +486,6 @@ public enum DrydockRevisionKind
     /// from the old, so history stays append-only and nothing ever rewinds the pointer.
     /// </summary>
     AdminRestore = 3,
-}
-
-/// <summary>
-/// The document itself, split from the revision so that pruning a blob leaves the history intact.
-/// Nothing else belongs in this table.
-/// </summary>
-public sealed class DrydockBlob
-{
-    public Guid ShipGuid { get; set; }
-
-    public int Revision { get; set; }
-
-    public DrydockRevision RevisionRow { get; set; } = default!;
-
-    /// <summary>
-    /// Compressed by the game server, not by the database. The Postgres column is set to
-    /// <c>STORAGE EXTERNAL</c> by migration so TOAST stores it out of line without trying to
-    /// recompress data that arrives already compressed.
-    /// </summary>
-    public byte[] Blob { get; set; } = Array.Empty<byte>();
 }
 
 /// <summary>

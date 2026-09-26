@@ -1,5 +1,4 @@
 using System;
-using System.IO;
 using System.Linq;
 using System.Security.Cryptography;
 using System.Text;
@@ -1145,14 +1144,5 @@ public sealed partial class DrydockSystem
         // hull it is not. Naming it is also what lets the next store file the id back onto the row.
         if (known)
             EnsureComp<ExtraShuttleInformationComponent>(station).Vessel = vesselProto;
-    }
-
-    /// <summary>The inverse of <see cref="CompressZstd"/>.</summary>
-    internal static byte[] DecompressZstd(byte[] input)
-    {
-        using var decompress = new Robust.Shared.Utility.ZStdDecompressStream(new MemoryStream(input));
-        using var output = new MemoryStream();
-        decompress.CopyTo(output);
-        return output.ToArray();
     }
 }

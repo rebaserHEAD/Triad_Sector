@@ -11,7 +11,7 @@ using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 namespace Content.Server.Database.Migrations.Sqlite
 {
     [DbContext(typeof(SqliteServerDbContext))]
-    [Migration("20260925185156_AddTriadDrydock")]
+    [Migration("20260926063345_AddTriadDrydock")]
     partial class AddTriadDrydock
     {
         /// <inheritdoc />
@@ -1029,27 +1029,6 @@ namespace Content.Server.Database.Migrations.Sqlite
                     b.ToTable("drydock_berth", (string)null);
                 });
 
-            modelBuilder.Entity("Content.Server.Database.DrydockBlob", b =>
-                {
-                    b.Property<Guid>("ShipGuid")
-                        .HasColumnType("TEXT")
-                        .HasColumnName("ship_guid");
-
-                    b.Property<int>("Revision")
-                        .HasColumnType("INTEGER")
-                        .HasColumnName("revision");
-
-                    b.Property<byte[]>("Blob")
-                        .IsRequired()
-                        .HasColumnType("BLOB")
-                        .HasColumnName("blob");
-
-                    b.HasKey("ShipGuid", "Revision")
-                        .HasName("PK_drydock_blob");
-
-                    b.ToTable("drydock_blob", (string)null);
-                });
-
             modelBuilder.Entity("Content.Server.Database.DrydockRevision", b =>
                 {
                     b.Property<Guid>("ShipGuid")
@@ -1067,16 +1046,6 @@ namespace Content.Server.Database.Migrations.Sqlite
                     b.Property<int?>("AppraisedValue")
                         .HasColumnType("INTEGER")
                         .HasColumnName("appraised_value");
-
-                    b.Property<byte[]>("CapturedKeyHash")
-                        .IsRequired()
-                        .HasColumnType("BLOB")
-                        .HasColumnName("captured_key_hash");
-
-                    b.Property<byte[]>("Checksum")
-                        .IsRequired()
-                        .HasColumnType("BLOB")
-                        .HasColumnName("checksum");
 
                     b.Property<DateTime>("CreatedAt")
                         .HasColumnType("TEXT")
@@ -2807,18 +2776,6 @@ namespace Content.Server.Database.Migrations.Sqlite
                     b.Navigation("PurchasedRound");
                 });
 
-            modelBuilder.Entity("Content.Server.Database.DrydockBlob", b =>
-                {
-                    b.HasOne("Content.Server.Database.DrydockRevision", "RevisionRow")
-                        .WithOne("Blob")
-                        .HasForeignKey("Content.Server.Database.DrydockBlob", "ShipGuid", "Revision")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired()
-                        .HasConstraintName("FK_drydock_blob_drydock_revision_revision_row_temp_id");
-
-                    b.Navigation("RevisionRow");
-                });
-
             modelBuilder.Entity("Content.Server.Database.DrydockRevision", b =>
                 {
                     b.HasOne("Content.Server.Database.Player", "Actor")
@@ -3196,11 +3153,6 @@ namespace Content.Server.Database.Migrations.Sqlite
                     b.Navigation("ConsentToggles");
 
                     b.Navigation("ReadReceipts");
-                });
-
-            modelBuilder.Entity("Content.Server.Database.DrydockRevision", b =>
-                {
-                    b.Navigation("Blob");
                 });
 
             modelBuilder.Entity("Content.Server.Database.DrydockShip", b =>

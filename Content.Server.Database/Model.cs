@@ -60,7 +60,6 @@ namespace Content.Server.Database
         // Triad: drydock (see Model.Drydock.cs)
         public DbSet<DrydockShip>     DrydockShip     { get; set; } = default!;
         public DbSet<DrydockRevision> DrydockRevision { get; set; } = default!;
-        public DbSet<DrydockBlob>     DrydockBlob     { get; set; } = default!;
         public DbSet<DrydockAudit>    DrydockAudit    { get; set; } = default!;
         public DbSet<DrydockBerth>    DrydockBerth    { get; set; } = default!;
         public DbSet<DrydockTransfer> DrydockTransfer { get; set; } = default!;

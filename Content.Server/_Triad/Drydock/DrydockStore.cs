@@ -81,80 +81,37 @@ public sealed partial class DrydockStore
     }
 
     /// <summary>
-    /// The fewest documents a prune ever leaves a ship holding, counting the one just filed: the
-    /// current revision and one step back for the retrieve ladder to fall to. A floor rather than a
-    /// pin, because it promises only that a second document exists, not that it still loads.
+    /// The fewest images a prune ever leaves a ship holding, counting the one just filed: the current revision and one
+    /// step back for the retrieve ladder to fall to. A floor rather than a pin, because it promises only that a second
+    /// image exists, not that it still loads.
     /// </summary>
-    private const int MinimumKeptBlobs = 2;
+    private const int MinimumKeptImages = 2;
 
     /// <summary>
-    /// Deletes this ship's blobs that fall outside retention, never revisions. Three rules, all of
-    /// which have to agree before a document goes:
+    /// Deletes this ship's images that fall outside retention, never revisions. Three rules, all of which have to agree
+    /// before an image goes:
     ///
     /// <list type="bullet">
-    /// <item>Keep-N: the newest <paramref name="keepBlobs"/> documents stay, counting
-    /// <paramref name="keptRevision"/>, the one just filed or promoted, which is always the newest.</item>
-    /// <item>The floor: never fewer than <see cref="MinimumKeptBlobs"/>, so <paramref name="keepBlobs"/>
-    /// of 1 behaves exactly as 2, and a ship holding only its new document prunes nothing.</item>
-    /// <item>Pins: a <see cref="DrydockRevision.Pinned"/> revision's document is never deleted, however
-    /// far outside the window it falls. A pinned document inside the window still counts toward it.</item>
+    /// <item>Keep-N: the newest <paramref name="keepBlobs"/> images stay, counting <paramref name="keptRevision"/>, the
+    /// one just filed or promoted, which is always the newest.</item>
+    /// <item>The floor: never fewer than <see cref="MinimumKeptImages"/>, so <paramref name="keepBlobs"/> of 1 behaves
+    /// exactly as 2, and a ship holding only its new image prunes nothing.</item>
+    /// <item>Pins: a <see cref="DrydockRevision.Pinned"/> revision's image is never deleted, however far outside the
+    /// window it falls. A pinned image inside the window still counts toward it.</item>
     /// </list>
     ///
-    /// <para>Zero or less prunes nothing, rather than keeping nothing: of the two readings, only this
-    /// one costs disk when it is misconfigured.</para>
+    /// <para>Zero or less prunes nothing, rather than keeping nothing: of the two readings, only this one costs disk when
+    /// it is misconfigured.</para>
     ///
-    /// <para>The window is counted over the documents that exist rather than by revision arithmetic,
-    /// so a gap in a ship's documents (a hand repair, a prune under a smaller window) cannot
-    /// pull the edge past the only one left.
-    /// <paramref name="keptRevision"/> is still unsaved when this runs (every caller adds it to the
-    /// tracker first and saves after), which is why the count reads the table below it and reserves
-    /// one place for it.</para>
+    /// <para>The window is counted over the images that exist below <paramref name="keptRevision"/>, with one place
+    /// reserved for it, rather than by revision arithmetic, so a gap in a ship's images (a prune under a smaller window)
+    /// cannot pull the edge past the only one left. The rule lives here because the pins are revision rows; the image
+    /// store is handed only the revisions to delete, as one set.</para>
     ///
-    /// <para>Set-based rather than load-then-remove: a <see cref="DrydockBlob"/> row carries the
-    /// compressed document, multiple megabytes each, and nothing here ever wants the bytes back. The
-    /// window's edge is one integer read off the primary key; the delete is one statement with the
-    /// pin exclusion inside it. Both run on the context's current transaction, so they commit or roll
-    /// back with the revision being pruned around.</para>
-    ///
-    /// <para>Takes the ship row first (<see cref="LockShipRow"/>), the same row a pin takes before it
-    /// moves the flag, so on Postgres a pin and a prune of the same ship serialize: a pin committed
-    /// first is seen by the delete, and a pin arriving second waits for this commit and then sees what
-    /// it left, refusing a document it deleted rather than reporting success on it. Reasoned from
-    /// read-committed row locking, not exercised by a test: the integration suite runs on SQLite.</para>
-    /// </summary>
-    private static async Task PruneBlobs(ServerDbContext db, Guid shipGuid, int keptRevision, int keepBlobs, CancellationToken token)
-    {
-        if (keepBlobs <= 0)
-            return;
-
-        await LockShipRow(db, shipGuid, token);
-
-        var keep = Math.Max(keepBlobs, MinimumKeptBlobs);
-
-        // The oldest already-saved document that stays: the (keep - 1)th newest below the one just
-        // filed. Null when fewer than that exist, which is the floor refusing to prune at all.
-        var oldestKept = await db.DrydockBlob.AsNoTracking()
-            .Where(b => b.ShipGuid == shipGuid && b.Revision < keptRevision)
-            .OrderByDescending(b => b.Revision)
-            .Select(b => (int?) b.Revision)
-            .Skip(keep - 2)
-            .FirstOrDefaultAsync(token);
-
-        if (oldestKept is not { } edge)
-            return;
-
-        await db.DrydockBlob
-            .Where(b => b.ShipGuid == shipGuid
-                && b.Revision < edge
-                && !db.DrydockRevision.Any(r => r.ShipGuid == b.ShipGuid && r.Revision == b.Revision && r.Pinned))
-            .ExecuteDeleteAsync(token);
-    }
-
-    /// <summary>
-    /// <see cref="PruneBlobs"/>' rule over grid images: keep-N counting <paramref name="keptRevision"/>, never fewer than
-    /// <see cref="MinimumKeptBlobs"/>, and a pinned revision's image never deleted. The rule lives here because the pins
-    /// are revision rows; the image store is handed only the revisions to delete, as one set. Takes the ship row first,
-    /// the same order a pin takes it in, so a pin and a prune of the same ship serialize.
+    /// <para>Takes the ship row first (<see cref="LockShipRow"/>), the same row a pin takes before it moves the flag, so
+    /// on PostgreSQL a pin and a prune of the same ship serialize: a pin committed first is seen by the prune, and a pin
+    /// arriving second waits for this commit and then sees what it left, refusing an image it deleted rather than
+    /// reporting success on it. Reasoned from read-committed row locking, not exercised by a test.</para>
     /// </summary>
     private static async Task PruneImages(ServerDbContext db, IDrydockImageStore images, Guid shipGuid, int keptRevision, int keepBlobs, CancellationToken token)
     {
@@ -163,7 +120,7 @@ public sealed partial class DrydockStore
 
         await LockShipRow(db, shipGuid, token);
 
-        var keep = Math.Max(keepBlobs, MinimumKeptBlobs);
+        var keep = Math.Max(keepBlobs, MinimumKeptImages);
         var below = (await images.Revisions(db, shipGuid, token)).Where(r => r < keptRevision).OrderByDescending(r => r).ToList();
 
         // The oldest image that stays is the (keep - 1)th newest below the one just filed; fewer than that and the floor
@@ -186,7 +143,7 @@ public sealed partial class DrydockStore
     /// Takes the ship row's write lock for the rest of the transaction without changing anything, by
     /// assigning a column to itself. The ordering point between a prune and a pin of the same ship;
     /// SQLite serializes writers anyway, so this matters on Postgres. Every caller reaches it before
-    /// writing any revision or blob row, so ship-then-revision is the one lock order and a pin and a
+    /// writing any revision row or image, so ship-then-revision is the one lock order and a pin and a
     /// prune cannot deadlock each other.
     /// </summary>
     /// <returns>The number of rows matched: zero means the ship does not exist (yet, for a first store).</returns>
@@ -242,11 +199,14 @@ public sealed partial class DrydockStore
     }
 
     /// <summary>
-    /// Files a new revision against a ship, creating the hull row if this is its first store.
+    /// Files a new revision against a ship, its document a grid image, creating the hull row if this is its first
+    /// store.
     ///
-    /// <para>Everything happens in one transaction: the ship row, the revision, the blob, the blob
-    /// pruning, and the audit entry. A torn write here is the failure this design exists to prevent,
-    /// where a prune deletes the old blob without the new one landing.</para>
+    /// <para>Everything happens in one transaction: the ship row, the revision, the image, the image pruning, and the
+    /// audit entry. The revision row is flushed first and the image then goes to
+    /// <see cref="IServerDbManager.DrydockImages"/> on the same transaction, so an image the store refuses rolls the
+    /// whole filing back and a retried attempt re-files it. A torn write here is the failure this design exists to
+    /// prevent, where a prune deletes the old image without the new one landing.</para>
     ///
     /// <para>Two stores of the same ship racing cannot dupe. The revision number is read from the
     /// ship row and incremented, so a race produces the same number twice, and the composite primary
@@ -259,29 +219,12 @@ public sealed partial class DrydockStore
     /// Nothing files that kind now; it stays for the rows that carry it.</para>
     /// </summary>
     /// <param name="keepBlobs">
-    /// How many revisions keep their document, never fewer than two once two exist, plus any that
+    /// How many revisions keep their image, never fewer than two once two exist, plus any that
     /// are pinned. Zero or less prunes nothing. The revision just filed is never pruned, whatever
-    /// this says. See <see cref="PruneBlobs"/>.
+    /// this says. See <see cref="PruneImages"/>.
     /// </param>
     /// <returns>The outcome, the revision number filed, and the berth the ship now sits in.</returns>
-    public Task<DrydockFileResult> FileRevision(DrydockRevisionRequest request, byte[] blob, int keepBlobs, CancellationToken ct = default)
-    {
-        return FileRevision(request, blob, null, keepBlobs, ct);
-    }
-
-    /// <summary>
-    /// Files a new revision whose document is a grid image, in the same one transaction as the
-    /// document path above. The revision row is flushed first and the image then goes to
-    /// <see cref="IServerDbManager.DrydockImages"/> on the same transaction, so an image the store
-    /// refuses rolls the whole filing back and a retried attempt re-files it. Retention is
-    /// <see cref="PruneImages"/>.
-    /// </summary>
     public Task<DrydockFileResult> FileRevision(DrydockRevisionRequest request, DrydockImage image, int keepBlobs, CancellationToken ct = default)
-    {
-        return FileRevision(request, null, image, keepBlobs, ct);
-    }
-
-    private Task<DrydockFileResult> FileRevision(DrydockRevisionRequest request, byte[]? blob, DrydockImage? image, int keepBlobs, CancellationToken ct)
     {
         if (request.Kind == DrydockRevisionKind.SystemRebake)
             throw new ArgumentException($"{nameof(DrydockRevisionKind.SystemRebake)} is not a kind this path files.", nameof(request));
@@ -301,7 +244,7 @@ public sealed partial class DrydockStore
                 int? picked = null;
                 try
                 {
-                    return await FileRevisionOnce(db, images, request, blob, image, keepBlobs, excluded, id => picked = id, token);
+                    return await FileRevisionOnce(db, images, request, image, keepBlobs, excluded, id => picked = id, token);
                 }
                 catch (DbUpdateException e) when (picked is { } lost && IsBerthUniqueViolation(e))
                 {
@@ -731,21 +674,17 @@ public sealed partial class DrydockStore
         }, ct);
     }
 
-    /// <summary>One filing attempt. Exactly one of <paramref name="blob"/> and <paramref name="image"/> is the document.</summary>
+    /// <summary>One filing attempt.</summary>
     private static async Task<DrydockFileResult> FileRevisionOnce(
         ServerDbContext db,
         IDrydockImageStore images,
         DrydockRevisionRequest request,
-        byte[]? blob,
-        DrydockImage? image,
+        DrydockImage image,
         int keepBlobs,
         HashSet<int> excludedBerths,
         Action<int> berthPicked,
         CancellationToken token)
     {
-        if ((blob == null) == (image == null))
-            throw new ArgumentException("A revision is filed with exactly one document: a blob or an image.");
-
         await using var tx = await db.Database.BeginTransactionAsync(token);
 
         var now = DateTime.UtcNow;
@@ -819,22 +758,10 @@ public sealed partial class DrydockStore
             EngineFormatVer = request.EngineFormatVer,
             DrydockFormatVer = request.DrydockFormatVer,
             ProtoFingerprint = request.ProtoFingerprint,
-            CapturedKeyHash = request.CapturedKeyHash,
-            Checksum = request.Checksum,
             SizeBytes = request.SizeBytes,
             AppraisedValue = request.AppraisedValue,
             Manifest = request.Manifest,
         });
-
-        if (blob != null)
-        {
-            db.DrydockBlob.Add(new DrydockBlob
-            {
-                ShipGuid = request.ShipGuid,
-                Revision = revision,
-                Blob = blob,
-            });
-        }
 
         ship.CurrentRevision = revision;
 
@@ -849,21 +776,15 @@ public sealed partial class DrydockStore
             ship.CheckedOutRoundId = null;
         }
 
-        if (image != null)
-        {
-            // The image refers to its revision row, so that row is written in this transaction before the image,
-            // and the ship row is taken before either, the one lock order (LockShipRow).
-            await LockShipRow(db, request.ShipGuid, token);
-            await db.SaveChangesAsync(token);
-            await images.Put(db, new DrydockImageKey(request.ShipGuid, revision), image, token);
-        }
+        // The image refers to its revision row, so that row is written in this transaction before the image, and the
+        // ship row is taken before either, the one lock order (LockShipRow).
+        await LockShipRow(db, request.ShipGuid, token);
+        await db.SaveChangesAsync(token);
+        await images.Put(db, new DrydockImageKey(request.ShipGuid, revision), image, token);
 
-        // Prune documents, never revisions. The revision we just filed is the one a retrieve reads,
-        // so it survives whatever keepBlobs says; each prune carries the floor and the pin exclusion.
-        if (blob != null)
-            await PruneBlobs(db, request.ShipGuid, revision, keepBlobs, token);
-        else
-            await PruneImages(db, images, request.ShipGuid, revision, keepBlobs, token);
+        // Prune images, never revisions. The revision we just filed is the one a retrieve reads, so it survives
+        // whatever keepBlobs says; the prune carries the floor and the pin exclusion.
+        await PruneImages(db, images, request.ShipGuid, revision, keepBlobs, token);
 
         // An impound's row says which berth was vacated, who took the hull and from whom, and what
         // it cost; a store's says where the hull was seated and who put it there.
@@ -1040,48 +961,10 @@ public sealed partial class DrydockStore
     }
 
     /// <summary>
-    /// Reads a ship's current revision and its blob, or null when the ship is unknown or its blob
-    /// has been pruned. A pruned current revision should be impossible, since pruning has a floor,
-    /// so a null here with a live ship row is worth an operator's attention rather than a retry.
+    /// The ship, its current revision and that revision's grid image; null as <see cref="LoadImageJoined"/> says. A
+    /// pruned current revision should be impossible, since pruning has a floor, so a null here with a live ship row is
+    /// worth an operator's attention rather than a retry.
     /// </summary>
-    public Task<DrydockLoad?> LoadCurrent(Guid shipGuid, CancellationToken ct = default)
-    {
-        return _db.RunTriadDbCommand<DrydockLoad?>((db, token) => LoadJoined(db, shipGuid, null, token), ct);
-    }
-
-    /// <summary>
-    /// Reads one specific revision and its blob, which is what the retrieve fallback walks when the
-    /// current revision fails to decompress or fails its checksum. Null when that revision has no
-    /// blob left, which is the ordinary outcome once pruning has been past it.
-    /// </summary>
-    public Task<DrydockLoad?> LoadRevision(Guid shipGuid, int revision, CancellationToken ct = default)
-    {
-        return _db.RunTriadDbCommand<DrydockLoad?>((db, token) => LoadJoined(db, shipGuid, revision, token), ct);
-    }
-
-    /// <summary>
-    /// The read behind both loads: the ship, the revision numbered <paramref name="revision"/> or
-    /// the ship's current one when that is null, and its blob. One query, two joins, rather than the
-    /// three round trips a header read followed by a revision read followed by a blob read would
-    /// cost. An INNER JOIN drops out exactly where each of those would return null: no ship, no
-    /// revision row at that number, or no blob left for it.
-    /// </summary>
-    private static Task<DrydockLoad?> LoadJoined(ServerDbContext db, Guid shipGuid, int? revision, CancellationToken token)
-    {
-        return db.DrydockShip.AsNoTracking()
-            .Where(s => s.ShipGuid == shipGuid)
-            .Join(db.DrydockRevision.AsNoTracking(),
-                s => new { s.ShipGuid, Revision = revision ?? s.CurrentRevision },
-                r => new { r.ShipGuid, r.Revision },
-                (s, r) => new { Ship = s, Revision = r })
-            .Join(db.DrydockBlob.AsNoTracking(),
-                sr => new { sr.Revision.ShipGuid, sr.Revision.Revision },
-                b => new { b.ShipGuid, b.Revision },
-                (sr, b) => new DrydockLoad(sr.Ship, sr.Revision, b.Blob))
-            .SingleOrDefaultAsync(token);
-    }
-
-    /// <summary>The ship, its current revision and that revision's grid image; null as <see cref="LoadImageJoined"/> says.</summary>
     public Task<DrydockImageLoad?> LoadCurrentImage(Guid shipGuid, CancellationToken ct = default)
     {
         var images = _db.DrydockImages;
@@ -1096,9 +979,9 @@ public sealed partial class DrydockStore
     }
 
     /// <summary>
-    /// The image read: the ship and the revision in one query, as <see cref="LoadJoined"/> reads them, then the image
-    /// from the store. Null exactly where <see cref="LoadJoined"/>'s inner joins drop out: no ship, no revision row at
-    /// that number, or no image left for it.
+    /// The read behind both image loads: the ship and the revision numbered <paramref name="revision"/>, or the ship's
+    /// current one when that is null, in one query, then the image from the store. Null where any of the three is
+    /// missing: no ship, no revision row at that number, or no image left for it.
     /// </summary>
     private static async Task<DrydockImageLoad?> LoadImageJoined(ServerDbContext db, IDrydockImageStore images, Guid shipGuid, int? revision, CancellationToken token)
     {
@@ -1119,8 +1002,8 @@ public sealed partial class DrydockStore
 
     /// <summary>
     /// The hull row alone, for the ownership and state checks a console makes before it commits
-    /// to anything. Deliberately not <see cref="LoadCurrent"/>: that reads the document too, and a
-    /// refusal should not cost a blob.
+    /// to anything. Deliberately not <see cref="LoadCurrentImage"/>: that reads the image too, and a
+    /// refusal should not cost one.
     /// </summary>
     public Task<DrydockShip?> GetShipHeader(Guid shipGuid, CancellationToken ct = default)
     {
@@ -1931,7 +1814,7 @@ public sealed partial class DrydockStore
 
     /// <summary>
     /// The owner scraps a stored ship. The row goes to <see cref="DrydockShipState.Sold"/> and
-    /// leaves its berth; revisions and blobs stay under normal retention so an admin can undo a
+    /// leaves its berth; revisions and images stay under normal retention so an admin can undo a
     /// sale made in anger. The price was computed by the caller from the appraisal it read; both
     /// are written to the timeline so the reversal knows what to take back.
     /// </summary>
@@ -2257,20 +2140,14 @@ public sealed partial class DrydockStore
                     r.AppraisedValue))
                 .ToListAsync(token);
 
-            var withBlob = await db.DrydockBlob.AsNoTracking()
-                .Where(b => b.ShipGuid == shipGuid)
-                .Select(b => b.Revision)
-                .ToListAsync(token);
-
-            // A revision's document is a blob or a grid image; the panel marks either.
-            withBlob.AddRange(await images.Revisions(db, shipGuid, token));
+            var withImage = (await images.Revisions(db, shipGuid, token)).ToHashSet();
 
             var timeline = await db.DrydockAudit.AsNoTracking()
                 .Where(a => a.ShipGuid == shipGuid)
                 .OrderByDescending(a => a.CreatedAt)
                 .ToListAsync(token);
 
-            return new DrydockShipDetail(ship, revisions, withBlob.ToHashSet(), timeline);
+            return new DrydockShipDetail(ship, revisions, withImage, timeline);
         }, ct);
     }
 
@@ -2304,9 +2181,9 @@ public sealed partial class DrydockStore
 
     /// <summary>
     /// Admin: promotes an older revision to current by filing it again as a new one, kind
-    /// AdminRestore, derived from the original. History stays append-only; the promoted document
+    /// AdminRestore, derived from the original. History stays append-only; the promoted image
     /// is copied, never moved, along with the source's appraisal, and the usual pruning
-    /// (<see cref="PruneBlobs"/>, or <see cref="PruneImages"/> for a grid image) runs around the new revision.
+    /// (<see cref="PruneImages"/>) runs around the new revision.
     /// </summary>
     public Task<(DrydockBerthResult Outcome, int Revision)> TryPromoteRevision(
         Guid shipGuid,
@@ -2329,18 +2206,13 @@ public sealed partial class DrydockStore
             var source = await db.DrydockRevision.AsNoTracking()
                 .SingleOrDefaultAsync(r => r.ShipGuid == shipGuid && r.Revision == revision, token);
 
-            // Refused before the blob read, so a revision that never existed costs no document.
+            // Refused before the image read, so a revision that never existed costs no read.
             if (source == null)
                 return (DrydockBerthResult.NotFound, 0);
 
-            var blob = await db.DrydockBlob.AsNoTracking()
-                .SingleOrDefaultAsync(b => b.ShipGuid == shipGuid && b.Revision == revision, token);
-
+            // History without an image cannot be promoted; that is what pruning took.
             var sourceImage = new DrydockImageKey(shipGuid, revision);
-            var hasImage = blob == null && await images.Has(db, sourceImage, token);
-
-            // History without a document cannot be promoted; that is what pruning took.
-            if (blob == null && !hasImage)
+            if (!await images.Has(db, sourceImage, token))
                 return (DrydockBerthResult.NotFound, 0);
 
             var now = DateTime.UtcNow;
@@ -2359,40 +2231,21 @@ public sealed partial class DrydockStore
                 EngineFormatVer = source.EngineFormatVer,
                 DrydockFormatVer = source.DrydockFormatVer,
                 ProtoFingerprint = source.ProtoFingerprint,
-                CapturedKeyHash = source.CapturedKeyHash,
-                Checksum = source.Checksum,
                 SizeBytes = source.SizeBytes,
-                // The appraisal rides with the document: it is what a sale quotes and an impound
+                // The appraisal rides with the image: it is what a sale quotes and an impound
                 // charges against, and a promoted current revision without one sells for nothing.
                 AppraisedValue = source.AppraisedValue,
                 Manifest = source.Manifest,
             });
 
-            if (blob != null)
-            {
-                db.DrydockBlob.Add(new DrydockBlob
-                {
-                    ShipGuid = shipGuid,
-                    Revision = next,
-                    Blob = blob.Blob,
-                });
-            }
-
             ship.CurrentRevision = next;
             ship.UpdatedAt = now;
 
-            if (blob != null)
-            {
-                await PruneBlobs(db, shipGuid, next, keepBlobs, token);
-            }
-            else
-            {
-                // As a filing does it: the ship row, then the revision row the copy refers to, then the copy.
-                await LockShipRow(db, shipGuid, token);
-                await db.SaveChangesAsync(token);
-                await images.Copy(db, sourceImage, new DrydockImageKey(shipGuid, next), token);
-                await PruneImages(db, images, shipGuid, next, keepBlobs, token);
-            }
+            // As a filing does it: the ship row, then the revision row the copy refers to, then the copy.
+            await LockShipRow(db, shipGuid, token);
+            await db.SaveChangesAsync(token);
+            await images.Copy(db, sourceImage, new DrydockImageKey(shipGuid, next), token);
+            await PruneImages(db, images, shipGuid, next, keepBlobs, token);
 
             AddAudit(db, DrydockAuditAction.RevisionPromoted, now,
                 shipGuid: shipGuid,
@@ -2420,7 +2273,7 @@ public sealed partial class DrydockStore
     /// <para>One conditional update on the flag as it was read (and, for a pin, on the document still
     /// existing) plus a <see cref="DrydockAuditAction.RevisionPinned"/> row, in one transaction. The
     /// ship row is locked first, so the pin serializes with any prune of the same ship; see
-    /// <see cref="PruneBlobs"/>.</para>
+    /// <see cref="PruneImages"/>.</para>
     /// </summary>
     /// <param name="actorUserId">Who pinned it; null for the system.</param>
     /// <param name="reason">Why, for the timeline. Appended to "pinned revision N" when given.</param>
@@ -2480,12 +2333,12 @@ public sealed partial class DrydockStore
             var query = db.DrydockRevision
                 .Where(r => r.ShipGuid == shipGuid && r.Revision == revision && r.Pinned != pinned);
 
-            // A grid image is read before the update rather than inside it, which holds only because a prune takes the
+            // The image is read before the update rather than inside it, which holds only because a prune takes the
             // same ship row first and so cannot delete the image between the read and the update.
             if (pinned)
             {
                 var hasImage = await images.Has(db, new DrydockImageKey(shipGuid, revision), token);
-                query = query.Where(r => hasImage || db.DrydockBlob.Any(b => b.ShipGuid == r.ShipGuid && b.Revision == r.Revision));
+                query = query.Where(r => hasImage);
             }
 
             var moved = await query.ExecuteUpdateAsync(set => set.SetProperty(r => r.Pinned, pinned), token);
@@ -2519,33 +2372,22 @@ public sealed partial class DrydockStore
     }
 
     /// <summary>
-    /// The revisions of a ship that still hold a document, newest first, whether retention or a pin
-    /// kept them. Revision numbers only, read off the blob table's primary key and the image store's
-    /// revisions without touching a document. This is the honest lower bound for a retrieve's fallback walk: counting down
-    /// <c>keepBlobs</c> from the current revision misses pinned documents below the window, and walks
-    /// revisions whose documents are already gone. Empty for an unknown ship.
+    /// The revisions of a ship that still hold an image, newest first, whether retention or a pin kept them. Revision
+    /// numbers only, from the image store (<see cref="IDrydockImageStore.Revisions"/>), without reading an image. This is
+    /// the honest lower bound for a retrieve's fallback walk: counting down <c>keepBlobs</c> from the current revision
+    /// misses pinned images below the window, and walks revisions whose images are already gone. Empty for an unknown ship.
     /// </summary>
     public Task<List<int>> ListRetrievableRevisions(Guid shipGuid, CancellationToken ct = default)
     {
         var images = _db.DrydockImages;
-        return _db.RunTriadDbCommand(async (db, token) =>
-        {
-            var blobs = await db.DrydockBlob.AsNoTracking()
-                .Where(b => b.ShipGuid == shipGuid)
-                .Select(b => b.Revision)
-                .ToListAsync(token);
-
-            // A revision's document is a blob or a grid image.
-            return blobs.Concat(await images.Revisions(db, shipGuid, token))
-                .Distinct()
-                .OrderByDescending(r => r)
-                .ToList();
-        }, ct);
+        return _db.RunTriadDbCommand((db, token) => images.Revisions(db, shipGuid, token), ct);
     }
 
     /// <summary>
-    /// Admin: deletes a hull and, by cascade, its revisions and blobs. The timeline row is written
-    /// first and has no foreign key, so the evidence of the deletion outlives the thing deleted.
+    /// Admin: deletes a hull and, by cascade, its revisions and, under PostgreSQL, their images; the
+    /// memory store keeps a deleted hull's images until the process ends, under a ship id nothing
+    /// reads again. The timeline row is written first and has no foreign key, so the evidence of the
+    /// deletion outlives the thing deleted.
     /// The berth the hull sat in is left empty rather than removed.
     /// </summary>
     public Task<DrydockBerthResult> TryDeleteShip(Guid shipGuid, Guid? actorUserId, int? roundId, string? reason, CancellationToken ct = default)
@@ -2718,12 +2560,6 @@ public sealed class DrydockRevisionRequest
 
     public required byte[] ProtoFingerprint { get; init; }
 
-    /// <summary>The document path's hash of its captured keys. Empty for a grid image, which has none.</summary>
-    public byte[] CapturedKeyHash { get; init; } = Array.Empty<byte>();
-
-    /// <summary>The document path's hash of its uncompressed document. Empty for a grid image, which has no document bytes.</summary>
-    public byte[] Checksum { get; init; } = Array.Empty<byte>();
-
     public required int SizeBytes { get; init; }
 
     /// <summary>The shipyard's appraisal of the live hull, so a sale of the stored ship has a price. Null when nothing appraised it.</summary>
@@ -2747,10 +2583,7 @@ public sealed class DrydockRevisionRequest
     public int Evicted { get; init; }
 }
 
-/// <summary>What a retrieve reads: the hull row, the revision it is about to rebuild, and the document.</summary>
-public sealed record DrydockLoad(DrydockShip Ship, DrydockRevision Revision, byte[] Blob);
-
-/// <summary>What a retrieve reads when the document is a grid image: the hull row, the revision, and the image.</summary>
+/// <summary>What a retrieve reads: the hull row, the revision it is about to rebuild, and its grid image.</summary>
 public sealed record DrydockImageLoad(DrydockShip Ship, DrydockRevision Revision, DrydockImage Image);
 
 /// <summary>
@@ -2805,11 +2638,11 @@ public sealed record DrydockShipFilter(
     // name, and every name the ship has had.
     string? Search = null);
 
-/// <summary>One hull with its history and timeline, newest first, and which revisions still have a document.</summary>
+/// <summary>One hull with its history and timeline, newest first, and which revisions still have an image.</summary>
 public sealed record DrydockShipDetail(
     DrydockShip Ship,
     List<DrydockRevisionSummary> Revisions,
-    HashSet<int> RevisionsWithBlob,
+    HashSet<int> RevisionsWithImage,
     List<DrydockAudit> Timeline);
 
 /// <summary>One row of a hull's history as the admin panel draws it: a revision's columns without its manifest.</summary>

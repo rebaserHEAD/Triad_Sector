@@ -20,9 +20,9 @@ namespace Content.Server._Triad.Drydock.Codec;
 /// (<c>RobustToolbox/Robust.Shared/EntitySerialization/EntitySerializer.cs:1006-1007</c>) and whose
 /// reader looks that number up in the same document's map
 /// (<c>RobustToolbox/Robust.Shared/EntitySerialization/EntityDeserializer.cs:1199-1200</c>). Here a
-/// reference writes as the target's <see cref="DrydockStableIdComponent.Value"/>, the same id that
-/// entity's own row carries, so a row addresses another row without either of them being read as
-/// part of a document.</para>
+/// reference writes as the target's id in the image (<see cref="Loader.DrydockImageEntity.Id"/>), the
+/// same id that entity's own row is stored under, so a row addresses another row without either of
+/// them being read as part of a document.</para>
 ///
 /// <para>The <see cref="NetEntity"/> half is the same reference spelled for the network, and the
 /// engine's contexts carry both halves as a pair: <c>EntitySerializer</c>, <c>EntityDeserializer</c>
@@ -61,7 +61,7 @@ public sealed class DrydockCodecContext :
     public const string InvalidReference = "invalid";
 
     private readonly IEntityManager _entMan;
-    private readonly Func<EntityUid, long?> _allocate;
+    private readonly Func<EntityUid, long?> _idOf;
     private readonly Func<long, EntityUid> _resolve;
 
     /// <inheritdoc/>
@@ -76,10 +76,9 @@ public sealed class DrydockCodecContext :
     /// </summary>
     public List<string> DroppedBatches { get; } = new();
 
-    /// <param name="allocate">
-    /// The entity's stable id, minting one if this is the first capture that has seen it. Null means
-    /// the entity is not part of this image, and the reference is written as
-    /// <see cref="InvalidReference"/>.
+    /// <param name="idOf">
+    /// The entity's id in the image, or null when it is not in the image, and the reference is then
+    /// written as <see cref="InvalidReference"/>.
     /// </param>
     /// <param name="resolve">
     /// The live entity a stored id names, or <see cref="EntityUid.Invalid"/> if nothing in this load
@@ -88,11 +87,11 @@ public sealed class DrydockCodecContext :
     public DrydockCodecContext(
         ISerializationManager serialization,
         IEntityManager entMan,
-        Func<EntityUid, long?> allocate,
+        Func<EntityUid, long?> idOf,
         Func<long, EntityUid> resolve)
     {
         _entMan = entMan;
-        _allocate = allocate;
+        _idOf = idOf;
         _resolve = resolve;
 
         // Registers both reference halves at once, as the engine's own contexts do: the provider
@@ -138,7 +137,7 @@ public sealed class DrydockCodecContext :
         bool alwaysWrite = false,
         ISerializationContext? context = null)
     {
-        if (!value.IsValid() || _allocate(value) is not { } stableId)
+        if (!value.IsValid() || _idOf(value) is not { } stableId)
             return new ValueDataNode(InvalidReference);
 
         return new ValueDataNode(stableId.ToString(CultureInfo.InvariantCulture));

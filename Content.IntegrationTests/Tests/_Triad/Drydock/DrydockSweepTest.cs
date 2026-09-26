@@ -65,7 +65,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             var gone = Guid.NewGuid();
             foreach (var id in new[] { homeward, helpless, gone })
             {
-                Assert.That((await store.FileRevision(Revision(id, owner), new byte[] { 1 }, 3)).Outcome, Is.EqualTo(DrydockBerthResult.Success));
+                Assert.That((await store.FileRevision(Revision(id, owner), DrydockTestHelpers.SeedImage(), 3)).Outcome, Is.EqualTo(DrydockBerthResult.Success));
                 Assert.That(await store.TrySetState(id, DrydockShipState.Stored, DrydockShipState.CheckedOut, DrydockAuditAction.Retrieve, owner, round, null), Is.True);
                 await store.VacateBerth(id);
             }
@@ -198,7 +198,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             var round = await db.AddNewRound(await db.AddOrGetServer("drydock-test"));
 
             var shipId = Guid.NewGuid();
-            Assert.That((await store.FileRevision(Revision(shipId, owner), new byte[] { 1 }, 3)).Outcome, Is.EqualTo(DrydockBerthResult.Success));
+            Assert.That((await store.FileRevision(Revision(shipId, owner), DrydockTestHelpers.SeedImage(), 3)).Outcome, Is.EqualTo(DrydockBerthResult.Success));
             Assert.That(await store.TrySetState(shipId, DrydockShipState.Stored, DrydockShipState.CheckedOut, DrydockAuditAction.Retrieve, owner, round, null), Is.True);
             await store.VacateBerth(shipId);
 
@@ -314,8 +314,6 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             ActorUserId = owner,
             EngineFormatVer = 7,
             ProtoFingerprint = new byte[] { 1 },
-            CapturedKeyHash = new byte[] { 1 },
-            Checksum = new byte[] { 1 },
             SizeBytes = 1,
             Manifest = "{}",
             AppraisedValue = 24000,

@@ -178,7 +178,7 @@ public sealed class DrydockLoadSession
             _system.Entities,
             _system.Prototypes,
             _system.Timing,
-            _ => throw new InvalidOperationException("The load allocates nothing."),
+            _ => throw new InvalidOperationException("The load writes no reference, so it asks no entity for its id in the image."),
             id => deserializer.UidMap.TryGetValue((int) id, out var uid)
                 ? uid
                 : throw new FormatException($"Drydock load: a row names stable id {id}, which the image does not hold."));
