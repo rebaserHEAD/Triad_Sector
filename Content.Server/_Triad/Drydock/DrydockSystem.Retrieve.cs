@@ -426,9 +426,9 @@ public sealed partial class DrydockSystem
                     // the same way the station is, so an imported hull docks where its class does.
                     var dockTag = PriorityDockTagFor(ResolveVesselProto(grid, stored.Ship));
 
-                    // The thaw, with every time the load restored as a sentinel held through it
-                    // (DrydockImageSystem.PreserveSentinels).
-                    _image.PreserveSentinels(loaded, () =>
+                    // The thaw, with every time the load set brought through it as though paused with
+                    // its entity (DrydockImageSystem.Thaw).
+                    _image.Thaw(loaded, () =>
                     {
                         // TryFTLDock's own first guard, kept: a target with no valid map goes straight
                         // to proximity, since the search reads the target's grid and transform bare.

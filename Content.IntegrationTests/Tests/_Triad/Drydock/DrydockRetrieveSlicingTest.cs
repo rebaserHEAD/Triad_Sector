@@ -80,6 +80,63 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
         }
 
         /// <summary>
+        /// The same hull at the same budget with the four deadlines of <see cref="DrydockThawTest.PlaceDeadlines"/> aboard,
+        /// all set in one tick: after a restore that sat paused across ticks, each is the same distance from the engine's own
+        /// shifted one (<c>RepeatingTriggerComponent.NextTrigger</c>) as when it was set, so the two nothing shifts on unpause
+        /// lost none of the time the hull sat paused and the one a hand-written handler shifts was not shifted twice.
+        /// Control: the restore spanned more than one tick.
+        /// </summary>
+        [Test]
+        public async Task ARestoreAcrossTicksKeepsEveryDeadline()
+        {
+            await using var pair = await PoolManager.GetServerClient();
+            var server = pair.Server;
+            var entMan = server.EntMan;
+            var cfg = server.ResolveDependency<IConfigurationManager>();
+            var drydock = server.System<DrydockSystem>();
+
+            var (station, shipGrid, owner) = await WalledShip(pair);
+            await server.WaitPost(() => DrydockThawTest.PlaceDeadlines(entMan, shipGrid));
+
+            var (result, shipId) = await DrydockTestHelpers.RunOnServer(pair, () => drydock.TryStoreShip(shipGrid, owner, null));
+            Assert.That(result, Is.EqualTo(DrydockStoreResult.Success));
+            await pair.RunTicksSync(5);
+
+            await server.WaitPost(() => cfg.SetCVar(TriadCCVars.DrydockTickBudgetMs, 1));
+            var retrieved = await DrydockTestHelpers.RunOnServer(pair, () => drydock.TryRetrieveShip(shipId!.Value, owner, station, null));
+            await server.WaitPost(() => cfg.SetCVar(TriadCCVars.DrydockTickBudgetMs, 0));
+
+            DrydockPhaseCost restore = default;
+            DrydockThawTest.Deadlines after = default;
+            await server.WaitPost(() =>
+            {
+                restore = drydock.LastPhaseCosts?.GetValueOrDefault(DrydockPhase.Restore) ?? default;
+                var hull = new List<EntityUid>();
+                var children = entMan.GetComponent<TransformComponent>(retrieved.Grid!.Value).ChildEnumerator;
+                while (children.MoveNext(out var child))
+                    hull.Add(child);
+
+                after = DrydockThawTest.ReadDeadlines(entMan, hull, TimeSpan.Zero);
+            });
+
+            var exact = TimeSpan.FromMilliseconds(1);
+            Assert.Multiple(() =>
+            {
+                Assert.That(retrieved.Result, Is.EqualTo(DrydockRetrieveResult.Success));
+                Assert.That(restore.Ticks, Is.GreaterThan(1), $"The control: the restore sat paused across ticks ({restore.Ticks}).");
+
+                Assert.That(after.Advertised - after.Triggered, Is.EqualTo(DrydockThawTest.Advertised - DrydockThawTest.Triggered).Within(exact),
+                    "Nothing shifts the next advertisement on unpause; the thaw paid it the pause.");
+                Assert.That(after.Charged - after.Triggered, Is.EqualTo(DrydockThawTest.Charged - DrydockThawTest.Triggered).Within(exact),
+                    "Nothing shifts a charge's last update on unpause; the thaw paid it the pause.");
+                Assert.That(after.Delayed - after.Triggered, Is.EqualTo(DrydockThawTest.Delayed - DrydockThawTest.Triggered).Within(exact),
+                    "The use delay's handler shifted it once.");
+            });
+
+            await pair.CleanReturnAsync();
+        }
+
+        /// <summary>
         /// The staging map deleted while the retrieve is parked in its restore, as an admin or a round's end would: the
         /// retrieve answers <see cref="DrydockRetrieveResult.Cancelled"/>, the ship stays stored, and nothing of the load is
         /// left. Control: the staging map did hold the started hull when it was deleted.

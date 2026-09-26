@@ -42,9 +42,9 @@ public sealed partial class DrydockCodec
     /// </summary>
     public IReadOnlyList<(string Member, bool Nullable)> Severed => _pass.Severed;
 
-    /// <inheritdoc cref="DrydockCodecFieldPass.CollectSentinels(IComponent, List{ValueTuple{string, TimeSpan, Func{object}, Action{object}}})"/>
-    public void CollectSentinels(IComponent component, List<(string Member, TimeSpan Value, Func<object?> Get, Action<object?> Set)> into) =>
-        _pass.CollectSentinels(component, into);
+    /// <inheritdoc cref="DrydockCodecFieldPass.CollectTimes(IComponent, List{ValueTuple{string, TimeSpan, Func{object}, Action{object}}})"/>
+    public void CollectTimes(IComponent component, List<(string Member, TimeSpan Value, Func<object?> Get, Action<object?> Set)> into) =>
+        _pass.CollectTimes(component, into);
 
     /// <summary>
     /// The prototype manager a manifest's prototype-id member reads through, where the caller has one. A caller that

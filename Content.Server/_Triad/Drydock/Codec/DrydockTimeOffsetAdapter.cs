@@ -28,9 +28,10 @@ namespace Content.Server._Triad.Drydock.Codec;
 /// <see cref="Write"/> has a pause branch and <see cref="Read"/> does not, so an entity stored while
 /// paused comes back with its remaining time measured from the load clock. Its distance survives the
 /// time the load then spends paused only if the load pauses it, as a load onto a paused map does
-/// (<see cref="Loader.DrydockLoadSession"/>), because the shift that pays it back is
-/// <c>[AutoPausedField]</c>'s, raised on unpause
-/// (<c>RobustToolbox/Robust.Serialization.Generator/ComponentPauseGenerator.cs:169</c>).</para>
+/// (<see cref="Loader.DrydockLoadSession"/>), and something pays that time back on unpause:
+/// <c>[AutoPausedField]</c>'s shift
+/// (<c>RobustToolbox/Robust.Serialization.Generator/ComponentPauseGenerator.cs:169</c>) or a
+/// hand-written handler, and for a field neither reaches, <see cref="Loader.DrydockImageSystem.Thaw"/>.</para>
 /// </summary>
 public static class DrydockTimeOffsetAdapter
 {

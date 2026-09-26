@@ -183,32 +183,50 @@ public sealed partial class DrydockImageSystem : EntitySystem
     }
 
     /// <summary>
-    /// Runs <paramref name="thaw"/>, a move that unpauses a loaded hull, with every time the load set to a sentinel held.
-    /// An unpause adds the time spent paused to each paused time, in the generated handler
-    /// (<c>ComponentPauseGenerator.cs:182-186</c>) and in hand-written ones (<c>UseDelaySystem.OnUnpaused</c>), guarding
-    /// neither end: a zero, which means "never", becomes a deadline, and a maximum overflows and throws inside the thaw. So
-    /// every member still holding its sentinel is set to zero before the thaw, and set back to its sentinel after it,
-    /// thrown or not, with a networked component dirtied.
+    /// Runs <paramref name="thaw"/>, a move that unpauses a loaded hull, and brings every time the load set through it as
+    /// though each were paused with its entity. An unpause adds the time spent paused to each paused time, in the generated
+    /// handler (<c>ComponentPauseGenerator.cs:182-186</c>) and in hand-written ones (<c>UseDelaySystem.OnUnpaused</c>),
+    /// guarding neither end: a zero, which means "never", becomes a deadline, and a maximum overflows and throws inside the
+    /// thaw. So every member still holding its sentinel is set to zero before the thaw, and set back to its sentinel after
+    /// it, thrown or not. A time no handler shifts (a time-offset field without <c>[AutoPausedField]</c>, such as
+    /// <c>AdvertiseComponent.NextAdvertisementTime</c>) would lose every tick the hull sat paused, so a deadline the thaw
+    /// unpaused and left at the value the load set is paid what the engine pays a paused field: how long its entity was
+    /// paused (<c>MetaDataSystem.cs:108</c>). One the thaw moved was paid by its handler, and one anything else moved
+    /// before the thaw is that writer's. Every member set is dirtied when its component is networked.
     /// </summary>
-    public void PreserveSentinels(DrydockLoadResult result, Action thaw)
+    public void Thaw(DrydockLoadResult result, Action thaw)
     {
-        var held = new List<DrydockSentinel>();
-        foreach (var sentinel in result.Sentinels)
+        var held = new List<DrydockLoadedTime>();
+        var owed = new List<(DrydockLoadedTime Time, TimeSpan Paused)>();
+        foreach (var time in result.Times)
         {
-            if (TerminatingOrDeleted(sentinel.Entity) || sentinel.Component.Deleted
-                || sentinel.Get() is not TimeSpan now || now != sentinel.Value)
-            {
+            if (!StillAsLoaded(time))
                 continue;
-            }
 
-            held.Add(sentinel);
-            if (sentinel.Value != TimeSpan.Zero)
-                sentinel.Set(TimeSpan.Zero);
+            if (time.IsSentinel)
+            {
+                held.Add(time);
+                if (time.Value != TimeSpan.Zero)
+                    time.Set(TimeSpan.Zero);
+            }
+            else if (Meta.GetPauseTime(time.Entity) is var paused && paused > TimeSpan.Zero)
+            {
+                owed.Add((time, paused));
+            }
         }
 
         try
         {
             thaw();
+
+            foreach (var (time, paused) in owed)
+            {
+                if (!StillAsLoaded(time) || MetaData(time.Entity).EntityPaused)
+                    continue;
+
+                time.Set(time.Value > TimeSpan.MaxValue - paused ? TimeSpan.MaxValue : time.Value + paused);
+                DirtyIfNetworked(time);
+            }
         }
         finally
         {
@@ -218,10 +236,19 @@ public sealed partial class DrydockImageSystem : EntitySystem
                     continue;
 
                 sentinel.Set(sentinel.Value);
-                if (ComponentFactory.GetRegistration(sentinel.Component).Networked)
-                    Dirty(sentinel.Entity, sentinel.Component);
+                DirtyIfNetworked(sentinel);
             }
         }
+    }
+
+    /// <summary>Whether a loaded time's entity and component are alive and the member still holds the value the load set.</summary>
+    private bool StillAsLoaded(DrydockLoadedTime time) =>
+        !TerminatingOrDeleted(time.Entity) && !time.Component.Deleted && time.Get() is TimeSpan now && now == time.Value;
+
+    private void DirtyIfNetworked(DrydockLoadedTime time)
+    {
+        if (ComponentFactory.GetRegistration(time.Component).Networked)
+            Dirty(time.Entity, time.Component);
     }
 
     internal void RaiseStoring(EntityUid uid, ref GridStoringEvent ev) =>

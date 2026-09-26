@@ -1,5 +1,6 @@
 using Content.Shared.Dataset;
 using Robust.Shared.Prototypes;
+using Robust.Shared.Serialization.TypeSerializers.Implementations.Custom; // Triad - for TimeOffsetSerializer
 
 namespace Content.Server.Ghost.Components;
 
@@ -32,6 +33,6 @@ public sealed partial class SpookySpeakerComponent : Component
     /// <summary>
     /// Time when the cooldown will have elapsed and the entity can speak again.
     /// </summary>
-    [DataField, AutoPausedField]
-    public TimeSpan NextSpeakTime;
+    [DataField(customTypeSerializer: typeof(TimeOffsetSerializer)), AutoPausedField]
+    public TimeSpan NextSpeakTime; // Triad - TimeOffsetSerializer: absolute game time, re-based on load so a saved ship does not carry the previous server clock
 }
