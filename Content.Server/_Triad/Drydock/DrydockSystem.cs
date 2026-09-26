@@ -9,6 +9,7 @@ using Content.Server._Mono.Shuttles.Components;
 using Content.Server._NF.Shipyard.Systems;
 using Content.Server._Triad.ContrabandPermit;
 using Content.Server._NF.Station.Components;
+using Content.Server._Triad.Drydock.Loader;
 using Content.Server.NodeContainer;
 using Content.Server.NodeContainer.Nodes;
 using Content.Server.Nuke;
@@ -51,9 +52,9 @@ using YamlDotNet.RepresentationModel;
 namespace Content.Server._Triad.Drydock;
 
 /// <summary>
-/// Stores a deeded grid as an engine-serialized document in the database and takes it off the map.
-/// The pipeline is entirely in memory: serialize, validate, checksum, compress, file, despawn. No
-/// file ever touches disk, which is the whole point of replacing the ship save system.
+/// Stores a deeded grid as a grid image (<see cref="DrydockImageSystem"/>) in the database and takes
+/// it off the map. The pipeline is entirely in memory: write the image, file it, despawn. No file
+/// ever touches disk, which is the whole point of replacing the ship save system.
 ///
 /// <para>None of those phases happens in one tick any more. Everything from the freeze onwards runs
 /// a few milliseconds at a time, on a private map that was paused before the ship was moved onto it:
@@ -69,36 +70,11 @@ public sealed partial class DrydockSystem : EntitySystem
     [Dependency] private ISerializationManager _serialization = default!;
     [Dependency] private DrydockStore _store = default!;
     [Dependency] private DrydockFidelitySystem _fidelity = default!;
-    [Dependency] private MapLoaderSystem _mapLoader = default!;
     [Dependency] private ShipSizeSystem _shipSize = default!;
     [Dependency] private ShipyardSystem _shipyard = default!;
     [Dependency] private DockingSystem _docking = default!;
     [Dependency] private StationSystem _station = default!;
     [Dependency] private ContrabandPermitSystem _contrabandPermit = default!;
-
-    /// <summary>
-    /// Components cut from the live grid before it is written, because they are derived state or
-    /// hold references that rot across a reload.
-    ///
-    /// <para>The repair data is session-scoped: entity references and raw tile ids, regenerated
-    /// against the loaded grid. Station membership must not ride the document at all, because the
-    /// station is round-scoped and rebuilt on retrieve, so a serialized reference reloads as invalid
-    /// and the deserializer logs an error on every single load, the validation scratch load
-    /// included.</para>
-    /// </summary>
-    private static readonly Type[] StoreStripList =
-    {
-        typeof(ShipRepairDataComponent),
-        typeof(StationMemberComponent),
-        // A powered-down helm parks its job slots here with the station they belonged to, and the
-        // station is round-scoped like the membership above: serialized, it reloads as an invalid
-        // reference and logs on every load. The recreated station gets its vessel's slots anyway.
-        typeof(ShuttleConsoleJobSlotsComponent),
-        // Guest access granted at the helm, as raw uids of cards the guests carry away with them:
-        // off-grid references that reload invalid, and a permission that should not outlast the
-        // voyage. Retrieve starts with none.
-        typeof(ShipGuestAccessComponent),
-    };
 
     /// <summary>
     /// Whether the drydock is on and not read-only, the gate every write path checks before it
@@ -108,8 +84,8 @@ public sealed partial class DrydockSystem : EntitySystem
 
     /// <summary>
     /// Stores <paramref name="gridUid"/> for <paramref name="ownerUserId"/>. The order is gate,
-    /// depart, freeze, prepare, serialize, validate, commit, despawn, and the grid is only removed
-    /// once the document is filed.
+    /// depart, freeze, purge, appraise, prepare, write the image, manifest, commit, despawn, and the
+    /// grid is only removed once the image is filed.
     ///
     /// <para>This method is only the wrapper. It owns three things: the two refusals that must bypass
     /// every undo, the re-entrancy sentinel, and the choice between a sliced job and running the
@@ -144,9 +120,9 @@ public sealed partial class DrydockSystem : EntitySystem
     /// and get every gate the way it was written.
     /// </param>
     /// <param name="inline">
-    /// Run the whole pipeline on this caller's async path with no job and the engine's own
-    /// serializer, whatever the slicing cvars say. The round-end sweep sets it: nobody is left to
-    /// protect from a hitch and the restart is waiting. See <see cref="DrydockStoreContext.Inline"/>.
+    /// Run the whole pipeline on this caller's async path with no job, whatever
+    /// <see cref="TriadCCVars.DrydockTickBudgetMs"/> says. The round-end sweep sets it: nobody is left
+    /// to protect from a hitch and the restart is waiting.
     /// </param>
     /// <param name="permitHolderMind">
     /// The mind of whoever is putting the ship away, when somebody is: a console store and an import
@@ -202,7 +178,6 @@ public sealed partial class DrydockSystem : EntitySystem
             BerthId = berthId,
             StationUid = stationUid ?? _station.GetOwningStation(gridUid) ?? EntityUid.Invalid,
             Impound = impound,
-            Inline = inline,
             PermitHolderMind = permitHolderMind,
             HomeMap = homeXform.MapUid,
             HomePosition = _xform.GetWorldPosition(gridUid),
@@ -380,11 +355,9 @@ public sealed partial class DrydockSystem : EntitySystem
                 return new DrydockStoreOutcome(DrydockStoreResult.OrganicsAboard, null);
 
             // Hoisted above the reparent, which is where upstream's own jump setup puts it. A stored
-            // ship has to be fully detached regardless - its docking partner is not in the document,
-            // so a serialized dock reloads as an invalid reference and crashes the docking system's
-            // startup on every load, the validation scratch load included - but the reason it has to
-            // happen HERE is that a grid still weld-jointed to a station cannot be reparented
-            // cleanly.
+            // ship has to be fully detached regardless, since its docking partner is not in the
+            // image, but the reason it has to happen HERE is that a grid still weld-jointed to a
+            // station cannot be reparented cleanly.
             ctx.Undocked = true;
             _docking.UndockDocks(gridUid);
 
@@ -416,165 +389,68 @@ public sealed partial class DrydockSystem : EntitySystem
             await PurgeSavingContrabandSliced(ctx, slice);
             MarkPhase(DrydockPhase.Purge);
 
-            // The sale quote, taken while the hull is whole and before any sidecar or strip
-            // touches it, so what a scrap pays is what the shipyard would have paid at this moment.
+            // The sale quote, taken while the hull is whole and before the prepare touches it, so
+            // what a scrap pays is what the shipyard would have paid at this moment.
             await slice.Begin(DrydockPhase.Appraise, 0);
             GuardStoreResume(ctx);
             var appraisal = _shipyard.AppraiseHull(gridUid);
             MarkPhase(DrydockPhase.Appraise);
 
-            // Three walks under one phase name, each opening it with its own item count. The
-            // percentage is clamped monotonic, so re-opening a phase reads as a stall inside its band
-            // rather than as a bar running backwards.
-            //
-            // A pipe net's air lives on the node-group graph, which the serializer cannot reach.
-            // Distribute each net's gas across its members by volume. The live net is left alone -
-            // pointlessly now, since the ship is frozen on a private map and nothing will ever read
-            // it again, but writing to it would be a mutation with no undo entry for no gain.
-            await InjectPipeGasSidecarsSliced(ctx, slice);
-
-            // Damage is read-only to the serializer, so a damaged ship would come back pristine.
-            await InjectDamageSidecarsSliced(ctx, slice);
-
-            // Appearance data is not a data field at all, so no save has ever carried it and the
-            // probe below cannot see it either. Without this a retrieved ship's visuals come back
-            // at prototype defaults wherever the owning system does not re-derive them on startup.
-            await _fidelity.CaptureAppearanceSliced(gridUid, ctx.InjectedAppearance, slice);
-            GuardStoreResume(ctx);
-            MarkPhase(DrydockPhase.Sidecars);
-
-            await StripListedComponentsSliced(ctx, slice);
-
-            // The grid's own deed names the card holding it, which is outside the document. Written
-            // as-is it reloads as an invalid reference and the deserializer logs an error on every
-            // scratch load and every retrieve; retrieve sets the holder afresh anyway. The flag goes
-            // up before the call, not after: an abort between the two restores a null holder, which
-            // is what the reattach would have been handed anyway.
-            ctx.DeedDetached = true;
-            ctx.DeedHolder = _shipyard.DetachGridDeedHolder(gridUid);
-
-            // A PDA's store remembers the map it was set up on, which is likewise outside the
-            // document and reloads as an invalid reference that logs on every load. Purchased
-            // ships already leave that map behind when they dock, so a retrieved store is no
-            // worse off for coming back with the field blank.
-            await DetachStoreMapsSliced(ctx, slice);
-            GuardStoreResume(ctx);
-            MarkPhase(DrydockPhase.Strip);
-
-            // The general net, after the two specific sidecars and the strip list so it sees the
-            // final live component set. For every unserializable populated field it either captures
-            // the value or strips it, and clears the live field either way. The ledger is created and
-            // handed to the context BEFORE the walk starts: it is the only record of what was blanked
-            // and on which entity, and a walk that can now be abandoned half-way through must not be
-            // the thing that owns it.
-            ctx.Fidelity = new DrydockFidelityCapture();
-            await _fidelity.CaptureAndStripSliced(gridUid, ctx.Fidelity, slice);
-            GuardStoreResume(ctx);
-            MarkPhase(DrydockPhase.Capture);
-
             await slice.Begin(DrydockPhase.Prepare, 0);
             GuardStoreResume(ctx);
 
-            // The rest of preparation is deliberately not undoable, and runs last for that reason.
-            // An empty AI core is the intended end state, and a ship at rest has no business carrying
-            // FTL state.
+            // Not undoable, so it runs after every refusal that can still hand the ship back whole. A
+            // vacant core's eye lives in null space, which the despawn does not reach.
             SanitizeStationAiCores(gridUid);
-
-            // A ship stored during its FTL cooldown still carries the component the jump added. A
-            // reborn ship carrying it comes back mid-jump and the shuttle system errors on it every
-            // tick, which leaves it stuck.
-            RemComp<FTLComponent>(gridUid);
-
-            // A ship document is self-contained. The engine default drags any referenced null-space
-            // entity into the save, and a ship that is its own station references that station,
-            // which pulls the whole station in along with state the serializer cannot write. Ignore
-            // turns those references into invalid ones, which retrieve rebinds. Transform parenting
-            // is exempt, so grid children are unaffected.
-            var saveOptions = new SerializationOptions { MissingEntityBehaviour = MissingEntityBehaviour.Ignore };
             MarkPhase(DrydockPhase.Prepare);
 
-            // The backstop to the eviction at the gates: a creature or body the store would leave out,
-            // and so the despawn would delete, refuses the store instead.
-            if (MobsLeftOut(gridUid, null) is { Count: > 0 } leftBehind)
+            // The image write. The walk is taken whole before the first row, and the rows are written
+            // one entity per step against the tick budget.
+            await slice.Begin(DrydockPhase.Serialize, 0);
+            GuardStoreResume(ctx);
+            var session = _image.BeginStore(gridUid);
+
+            // The backstop to the eviction at the gates, on the walk the store files: a creature or body
+            // the store leaves out, and so the despawn would delete, refuses the store instead.
+            if (MobsLeftOut(gridUid, session.Ids) is { Count: > 0 } leftBehind)
             {
                 Log.Warning($"Drydock: store of {shipId} refused, {leftBehind.Count} creature(s) or bod(y/ies) aboard would be left out: "
                             + string.Join(", ", leftBehind.Select(uid => MetaData(uid).EntityPrototype?.ID ?? "(no prototype)")));
                 return new DrydockStoreOutcome(DrydockStoreResult.CreatureAboard, null);
             }
 
-            // Two ways to write the document. With DrydockSlicedSerialize on, SerializeGridSliced
-            // drives the engine's public per-entity serializer one entity at a time against the
-            // budget, working around the two private members of the engine's own wrapper (see
-            // DrydockSystem.Serialize.cs). Off, or on an inline store, it is TrySaveGrid: one atomic
-            // call that is then one of the calls setting the real per-tick ceiling - the honest
-            // claim there is "the budget plus the longest bulk call", not "the budget" - with the
-            // whole phase landing inside one tick.
-            string yaml;
-
-            if (_cfg.GetCVar(TriadCCVars.DrydockSlicedSerialize) && !ctx.Inline)
+            await StoreSweep(ctx, slice, DrydockPhase.Serialize, session.Aboard, uid =>
             {
-                // Opens its own phase, because it knows the entity count and the bar wants it.
-                var sliced = await SerializeGridSliced(ctx, slice, saveOptions);
-                GuardStoreResume(ctx);
+                // Only an admin can delete an entity on a private paused map. Refused rather than
+                // written short, since every row that names it would then name nothing.
+                if (TerminatingOrDeleted(uid))
+                    throw new DrydockAbortedException($"{ToPrettyString(uid)} was deleted while its hull was being written");
 
-                if (sliced == null)
-                    return new DrydockStoreOutcome(DrydockStoreResult.SerializeFailed, null);
+                session.WriteEntity(uid);
+            });
 
-                yaml = sliced;
-            }
-            else
+            session.WriteTiles();
+            var stored = session.Complete();
+            if (!stored.Whole)
             {
-                await slice.Begin(DrydockPhase.Serialize, 0);
-                GuardStoreResume(ctx);
+                foreach (var member in stored.Unwritable)
+                    Log.Error($"Drydock: store of {shipId} refused, {member.Prototype ?? "(no prototype)"} {member.Entity} {member.Member.Key} could not be written: {member.Exception}: {member.Message}");
 
-                using var writer = new StringWriter();
-                if (!_mapLoader.TrySaveGrid(gridUid, writer, saveOptions))
-                    return new DrydockStoreOutcome(DrydockStoreResult.SerializeFailed, null);
+                foreach (var carried in stored.UnwritableCarried)
+                    Log.Error($"Drydock: store of {shipId} refused, carried value {carried} could not be written.");
 
-                yaml = writer.ToString();
+                return new DrydockStoreOutcome(DrydockStoreResult.SerializeFailed, null);
             }
 
+            // Kept at the stage it was stored in and named, not refused: see DrydockImage.BelowMapInit.
+            if (stored.Image.BelowMapInit.Select(e => e.Id).ToHashSet() is { Count: > 0 } belowMapInit)
+            {
+                Log.Warning($"Drydock: store of {shipId} wrote {belowMapInit.Count} entit(y/ies) below MapInitialized: "
+                            + string.Join(", ", session.Ids.Where(p => belowMapInit.Contains(p.Value)).Select(p => ToPrettyString(p.Key))));
+            }
+
+            var storedEntities = stored.Image.Entities.Count;
             MarkPhase(DrydockPhase.Serialize);
-
-            // The parse half of the reload can leave the main thread; the build half cannot, so this
-            // is now two marks instead of one. See DetectRoundTripMismatch for why.
-            await slice.Begin(DrydockPhase.Validate, 0);
-            GuardStoreResume(ctx);
-
-            var (mismatch, liveEntities) = await DetectRoundTripMismatch(ctx, slice, yaml);
-            if (mismatch)
-            {
-                DrydockMetrics.ValidationMismatches.Inc();
-                return new DrydockStoreOutcome(DrydockStoreResult.ValidationFailed, null);
-            }
-
-            MarkPhase(DrydockPhase.Validate);
-
-            // Everything from here to the commit is pure byte work: no entity, no component, no map,
-            // so it is the one part of a store that can leave the main thread at all. Encoding and
-            // checksumming a multi-megabyte document, and compressing it, are real milliseconds that
-            // the server no longer has to spend. Each hop back costs a tick of latency, which an
-            // elastic store does not care about.
-            //
-            // Checksum the uncompressed document, so stored hashes survive a future change of
-            // compression.
-            await slice.Begin(DrydockPhase.Hash, 0);
-            var hashed = await slice.Await(Task.Run(() =>
-            {
-                var bytes = Encoding.UTF8.GetBytes(yaml);
-                return (Bytes: bytes, Checksum: SHA256.HashData(bytes));
-            }));
-
-            GuardStoreResume(ctx);
-            MarkPhase(DrydockPhase.Hash);
-
-            await slice.Begin(DrydockPhase.Drift, 0);
-            var (fingerprint, engineFormat) = await slice.Await(Task.Run(() => ReadDriftMetadata(yaml)));
-            GuardStoreResume(ctx);
-            MarkPhase(DrydockPhase.Drift);
-
-            // Its last read: the async state machine would otherwise pin the document to the commit.
-            yaml = null!;
 
             // The last walk of the live tree, and it has to finish before the despawn below.
             var manifest = new DrydockManifest();
@@ -595,11 +471,9 @@ public sealed partial class DrydockSystem : EntitySystem
                 // owner impounded their own ship is the wrong record of an adjudication.
                 ActorUserId = ctx.Impound != null ? ctx.Impound.ActorUserId : ctx.OwnerUserId,
                 CreatedRoundId = ctx.RoundId,
-                EngineFormatVer = engineFormat,
-                ProtoFingerprint = fingerprint,
-                CapturedKeyHash = ctx.Fidelity.ComputeCapturedKeyHash(),
-                Checksum = hashed.Checksum,
-                SizeBytes = hashed.Bytes.Length,
+                EngineFormatVer = ImageEngineFormat,
+                ProtoFingerprint = DriftFingerprint(ImagePrototypes(stored.Image)),
+                SizeBytes = stored.Image.Bytes,
                 AppraisedValue = appraisal,
                 Manifest = manifest.Serialize(),
 
@@ -609,14 +483,6 @@ public sealed partial class DrydockSystem : EntitySystem
 
             MarkPhase(DrydockPhase.Manifest);
 
-            await slice.Begin(DrydockPhase.Compress, 0);
-            var payload = await slice.Await(Task.Run(() => CompressZstd(hashed.Bytes)));
-            GuardStoreResume(ctx);
-            MarkPhase(DrydockPhase.Compress);
-
-            // Likewise: checksum and size are already on the request.
-            hashed = default;
-
             await slice.Begin(DrydockPhase.Commit, 0);
             GuardStoreResume(ctx);
 
@@ -625,7 +491,7 @@ public sealed partial class DrydockSystem : EntitySystem
             // (RobustToolbox Job.cs:92-107), which Job.Run cancels when the job is cancelled.
             // Reading the result off the task is what stops a round restart landing in that gap from
             // throwing out of a store whose revision is already durable.
-            var fileTask = _store.FileRevision(request, payload, _cfg.GetCVar(TriadCCVars.DrydockKeepBlobs));
+            var fileTask = _store.FileRevision(request, stored.Image, _cfg.GetCVar(TriadCCVars.DrydockKeepBlobs));
 
             DrydockFileResult filed;
             try
@@ -712,7 +578,7 @@ public sealed partial class DrydockSystem : EntitySystem
                 ? (job.WorstSliceMs, job.Slices)
                 : (0d, 0);
 
-            Log.Info(timer.Format("store", shipId, liveEntities, worstSliceMs, slices));
+            Log.Info(timer.Format("store", shipId, storedEntities, worstSliceMs, slices));
 
             return new DrydockStoreOutcome(DrydockStoreResult.Success, shipId);
         }
@@ -749,7 +615,7 @@ public sealed partial class DrydockSystem : EntitySystem
     /// The staleness check after every suspension. Slicing replaced three await-driven re-checks with
     /// a hole at every yield point: an administrator can delete the grid or its private map between
     /// any two slices, and a walk that carried on past that would blank a ship that no longer exists
-    /// or file a document of half a hull.
+    /// or file an image of half a hull.
     /// </summary>
     /// <exception cref="DrydockAbortedException">
     /// Always the way this fails. The pipeline catches it and turns it into an outcome.
@@ -804,52 +670,19 @@ public sealed partial class DrydockSystem : EntitySystem
     }
 
     /// <summary>
-    /// Puts back everything a refused store took off the ship, then puts the ship itself back at the
-    /// station. Runs from the pipeline's finally on every path that did not commit, cancellation
-    /// included.
+    /// Puts the ship back at the station after a refused store. Runs from the pipeline's finally on
+    /// every path that did not commit, cancellation included. The image store reads the live hull
+    /// without changing it, so the only things a refusal leaves to undo are the freeze and the
+    /// undock; what the gates and the purge deleted, and what the gates moved off, stays as it is.
     ///
     /// <para>Fully synchronous and cancellation-blind, and it has to be both. An async unwind inside a
     /// job would need to suspend, which is the one thing a cancelled job can no longer do; an unwind
     /// that honoured cancellation could never finish. It is also why the whole thing is written to
     /// tolerate anything already being gone rather than to assume a coherent world.</para>
-    ///
-    /// <para>The restores run in PREPARATION order rather than in reverse, which works because each
-    /// one is independent of the others. The return leg is appended at the end deliberately: by the
-    /// time the ship reappears at the station it is already whole.</para>
     /// </summary>
     private void UnwindStore(DrydockStoreContext ctx)
     {
         var gridUid = ctx.GridUid;
-
-        if (!TerminatingOrDeleted(gridUid))
-        {
-            RemoveInjected<DrydockPipeGasComponent>(ctx.InjectedGas);
-            RemoveInjected<DrydockDamageSidecarComponent>(ctx.InjectedDamage);
-            RemoveInjected<DrydockAppearanceComponent>(ctx.InjectedAppearance);
-
-            RestoreStrippedComponents(gridUid, ctx.Stripped);
-
-            if (ctx.DeedDetached)
-                _shipyard.ReattachGridDeedHolder(gridUid, ctx.DeedHolder);
-
-            ReattachStoreMaps(ctx.StoreMaps);
-
-            // Stripping station membership fired the station system's shutdown handler, which
-            // removed this grid from its station's set. Restoring the component brings the
-            // reference back but not the set entry, and that set is access-locked to the station
-            // system, so the re-add has to go through it. Only after a strip actually happened:
-            // the gates above the strip refuse through this same path, and re-booking a grid
-            // that never left its station is not a no-op for the station's listeners.
-            if (ctx.Stripped.Count > 0
-                && TryComp<StationMemberComponent>(gridUid, out var restoredMember)
-                && HasComp<StationDataComponent>(restoredMember.Station))
-            {
-                _station.AddGridToStation(restoredMember.Station, gridUid);
-            }
-
-            if (ctx.Fidelity != null)
-                _fidelity.RestoreSnapshot(ctx.Fidelity);
-        }
 
         if (ctx.StagingMap is not { } staging)
         {
@@ -888,16 +721,6 @@ public sealed partial class DrydockSystem : EntitySystem
                   + $"It is frozen on staging map {ToPrettyString(staging)}, restored and intact, awaiting an admin.");
     }
 
-    /// <summary>Takes a sidecar ledger's component back off every entity on it that still exists.</summary>
-    private void RemoveInjected<T>(List<EntityUid> injected) where T : IComponent
-    {
-        foreach (var uid in injected)
-        {
-            if (!TerminatingOrDeleted(uid))
-                RemComp<T>(uid);
-        }
-    }
-
     /// <summary>
     /// Resolves before minting. The grid-side identity component survives both a store and retrieve
     /// cycle and a round boundary, so a second store lands on the same hull.
@@ -926,213 +749,6 @@ public sealed partial class DrydockSystem : EntitySystem
     }
 
     /// <summary>
-    /// Deserializes the document that was just written onto an inert scratch map and compares it
-    /// with the live grid, in two tiers: a whole-grid entity count, then a per-prototype tally of
-    /// each side's direct grid children, so a bug that swaps one kind of entity for another while
-    /// preserving the count is caught too. The scratch map never initializes or ticks, so it cannot
-    /// touch the live simulation, and it is deleted on every path out of this call.
-    ///
-    /// <para>The reload is two calls, not one. Parsing the YAML text into a document is pure CPU
-    /// with no entity access, so it runs on a threadpool thread behind <see cref="ParseDocument"/>
-    /// and the pipeline is free to suspend around it; that hop is what the <c>validate_parse</c>
-    /// timer key measures. Building the parsed document into entities and diffing them against the
-    /// live grid stays one atomic main-thread call, because the entities it creates have to be built
-    /// and started within a single tick: a yield in the middle would hand every other system's
-    /// Update a half-built scratch entity for however long the slice budget left it there. That call
-    /// is what the caller's own <c>validate</c> mark now measures alone, so the two keys together
-    /// show how the old single number split.</para>
-    ///
-    /// <para>That last clause used to be a promise about the whole store and is now only a promise
-    /// about this method: the store around it spans ticks. Nothing inside here yields, so the map
-    /// still lives and dies within one call and the tag it is given is not load-bearing today. It is
-    /// tagged anyway, because it is now a private map created from inside a pipeline that can be
-    /// cancelled, and an untagged private map is invisible to the sweep the moment anything ever does
-    /// leave one behind. Deliberately loaded pre-init: map-initialising the scratch copy would fire
-    /// map init across it and make the composition tally disagree on every store.</para>
-    ///
-    /// <para>A byte-for-byte double-serialize comparison would be the deeper check and was tried
-    /// first in the implementation this comes from. It is not usable as a production gate on real
-    /// ship content: a reload rebuilds fixtures and the broadphase, which legitimately resets
-    /// physics state that is itself a data field, so the comparison differs with no content drift
-    /// at all. That is one instance of an open-ended class rather than a single normalizable noise
-    /// source.</para>
-    ///
-    /// <para>Both tiers count only what the serializer will actually write. The engine's
-    /// <c>EntitySerializer.IsSerializable</c> skips any entity whose prototype declares
-    /// <c>save: false</c>, a class of ninety-odd prototypes that includes every live sound effect:
-    /// a sound played at grid coordinates is a real grid child until its despawn timer fires.
-    /// Before this filter, a ship that happened to have a sound in the air at the moment of the
-    /// store counted it on the live side, never saw it on the scratch side, and was refused - which
-    /// vessel that hit depended on the instant the store ran. The roster sweep caught it
-    /// refusing different vessels on identical back-to-back runs.</para>
-    /// </summary>
-    /// <returns>
-    /// A mismatch flag, true meaning the store must abort, paired with how many serializable direct
-    /// children the live grid holds: the sum of the per-prototype tally above, which skips
-    /// <c>save: false</c> prototypes and does not descend into containers or grandchildren. It is
-    /// what the store's timing line prints as its entity count. Zero on the two reload-failure
-    /// paths, since neither reaches the tally.
-    /// </returns>
-    private async Task<(bool Mismatch, int LiveEntities)> DetectRoundTripMismatch(
-        DrydockStoreContext ctx, IDrydockSlice slice, string yaml)
-    {
-        var gridUid = ctx.GridUid;
-
-        // The parse alone, off-thread: no entity is touched until the data node comes back.
-        var data = await slice.Await(Task.Run(() => ParseDocument(yaml)));
-        GuardStoreResume(ctx);
-        ctx.Timer.Mark("validate_parse");
-
-        if (data == null
-            || TryLoadOntoNewPausedMap(data, "drydock/validation", initializeMap: false) is not { } load)
-        {
-            Log.Warning($"Drydock store validation failed for {ToPrettyString(gridUid)}: the document just written would not reload.");
-            return (true, 0);
-        }
-
-        var (mapUid, scratchGrid) = load;
-
-        TagStagingMap(mapUid, JobIdOf(slice), DrydockStagingKind.Validation, ctx.ShipId);
-
-        try
-        {
-            var live = CountChildPrototypes(gridUid);
-            var scratch = CountChildPrototypes(scratchGrid);
-
-            var liveCount = live.Values.Sum();
-            var scratchCount = scratch.Values.Sum();
-            if (liveCount != scratchCount)
-            {
-                Log.Warning($"Drydock store validation failed for {ToPrettyString(gridUid)}: entity count mismatch (live={liveCount}, scratch={scratchCount}).");
-                return (true, liveCount);
-            }
-
-            if (!PrototypeCountsMatch(live, scratch, out var detail))
-            {
-                Log.Warning($"Drydock store validation failed for {ToPrettyString(gridUid)}: composition mismatch ({detail}).");
-                return (true, liveCount);
-            }
-
-            return (false, liveCount);
-        }
-        finally
-        {
-            Del(mapUid);
-        }
-    }
-
-    /// <summary>
-    /// Loads an already-parsed grid document onto a new map of its own, paused while it is still
-    /// empty so the engine's recursive pause walks one entity instead of a whole hull.
-    ///
-    /// <para>Replicates the map-creating <c>TryLoadGrid</c> wrapper by hand, because that wrapper
-    /// parses and builds in one call and there is no overload that takes an already-parsed document
-    /// and still owns creating the target map. Untagged: each caller tags the map for its own
-    /// pipeline once the load has held.</para>
-    /// </summary>
-    /// <param name="initializeMap">
-    /// Whether the map, and so the load, is map-initialised. The validation scratch load is
-    /// deliberately not; a retrieve is.
-    /// </param>
-    /// <returns>
-    /// The map and its one grid, or null when the load failed or produced anything but exactly one
-    /// grid. On null, everything the load created and the map itself are already deleted.
-    /// </returns>
-    private (EntityUid Map, EntityUid Grid)? TryLoadOntoNewPausedMap(MappingDataNode data, string source, bool initializeMap)
-    {
-        var mapUid = _maps.CreateMap(out var mapId, runMapInit: initializeMap);
-        _maps.SetPaused(mapUid, true);
-
-        var loadOptions = new MapLoadOptions
-        {
-            MergeMap = mapId,
-            DeserializationOptions = new DeserializationOptions
-            {
-                InitializeMaps = initializeMap,
-                PauseMaps = true,
-            },
-            ExpectedCategory = FileCategory.Grid,
-        };
-
-        var loaded = _mapLoader.TryLoadGeneric(data, source, out var result, loadOptions);
-
-        if (loaded && result!.Grids.Count == 1)
-            return (mapUid, result.Grids.Single().Owner);
-
-        if (result != null)
-        {
-            foreach (var uid in result.Entities)
-            {
-                if (Exists(uid))
-                    Del(uid);
-            }
-        }
-
-        Del(mapUid);
-        return null;
-    }
-
-    /// <summary>
-    /// The parse half of the reload, split out so it can run off the main thread: pure text-to-node
-    /// work with no entity access. No logging in here, since a Task.Run body runs off-thread and the
-    /// caller is the one positioned to attribute a failure to a grid and a ship.
-    /// </summary>
-    /// <returns>The parsed document, or null if the stream held anything but exactly one.</returns>
-    private static MappingDataNode? ParseDocument(string yaml)
-    {
-        using var reader = new StringReader(yaml);
-        var documents = DataNodeParser.ParseYamlStream(reader).ToArray();
-        return documents.Length == 1 ? (MappingDataNode) documents[0].Root : null;
-    }
-
-    private Dictionary<string, int> CountChildPrototypes(EntityUid gridUid)
-    {
-        var counts = new Dictionary<string, int>();
-        var enumerator = Transform(gridUid).ChildEnumerator;
-        while (enumerator.MoveNext(out var child))
-        {
-            var meta = MetaData(child);
-
-            // The serializer's own gate, mirrored: EntitySerializer.IsSerializable refuses any
-            // entity whose prototype declares save: false, so such a child is live but will never
-            // be in the document. Counting it refuses the store for content the store was never
-            // going to write. A prototype-less entity is serializable and stays counted.
-            if (meta.EntityPrototype?.MapSavable == false)
-                continue;
-
-            var protoId = meta.EntityPrototype?.ID ?? "<no-prototype>";
-            counts.TryGetValue(protoId, out var count);
-            counts[protoId] = count + 1;
-        }
-
-        return counts;
-    }
-
-    private static bool PrototypeCountsMatch(Dictionary<string, int> live, Dictionary<string, int> scratch, out string detail)
-    {
-        foreach (var (proto, liveCount) in live)
-        {
-            if (!scratch.TryGetValue(proto, out var scratchCount) || scratchCount != liveCount)
-            {
-                detail = $"prototype '{proto}': live={liveCount}, scratch={(scratch.TryGetValue(proto, out var sc) ? sc : 0)}";
-                return false;
-            }
-        }
-
-        foreach (var (proto, scratchCount) in scratch)
-        {
-            if (!live.ContainsKey(proto))
-            {
-                detail = $"prototype '{proto}': live=0, scratch={scratchCount}";
-                return false;
-            }
-        }
-
-        detail = string.Empty;
-        return true;
-    }
-
-    /// <summary>
     /// The forensic record of what was aboard, built from what the store already has in hand and
     /// filled in place into <paramref name="manifest"/>. Parents are recorded as indices into the
     /// entry list rather than as entity references, since entity ids do not survive a round trip and
@@ -1148,12 +764,6 @@ public sealed partial class DrydockSystem : EntitySystem
     /// </remarks>
     private async Task BuildManifestSliced(DrydockStoreContext ctx, IDrydockSlice slice, DrydockManifest manifest)
     {
-        var capturedByEntity = ctx.Fidelity == null
-            ? new Dictionary<EntityUid, List<string>>()
-            : ctx.Fidelity.Snapshot
-                .GroupBy(s => s.Uid)
-                .ToDictionary(g => g.Key, g => g.Select(s => $"{s.Comp.GetType().Name}|{s.Member.Name}").ToList());
-
         var order = new List<(EntityUid Uid, int? Parent)>();
         var stack = new Stack<(EntityUid Uid, int? Parent)>();
         stack.Push((ctx.GridUid, null));
@@ -1185,143 +795,10 @@ public sealed partial class DrydockSystem : EntitySystem
 
                 if (TryComp<Content.Shared.Stacks.StackComponent>(uid, out var stackComp))
                     entry.Stack = stackComp.Count;
-
-                if (capturedByEntity.TryGetValue(uid, out var keys))
-                    entry.CapturedKeys = keys;
             }
 
             manifest.Entries.Add(entry);
         });
-    }
-
-    /// <summary>
-    /// Files each pipe net's gas onto its member pipes as a per-node share, so a document that cannot
-    /// carry the node-group graph still carries the air.
-    /// </summary>
-    /// <remarks>
-    /// The read half is one un-yielded pass and cannot be anything else. The dictionary is keyed by
-    /// live node-group object identity and the second pass reads a member's air off that same live
-    /// group; node group updates are not gated by pause, so a group rebuilt between two slices would
-    /// leave the second pass reading a dead one. Snapshotting every share first and slicing only the
-    /// write-out keeps the whole graph read inside one tick, which is where it has to be.
-    /// </remarks>
-    private async Task InjectPipeGasSidecarsSliced(DrydockStoreContext ctx, IDrydockSlice slice)
-    {
-        // Nets are de-duplicated by node-group identity: a net has many member pipes and its gas
-        // must be distributed exactly once. Members are (entity, node name, node), because a
-        // two-port device sits in two nets and each node's share has to be filed under its own
-        // name, or the last net written wins and the restore leaks it into the other.
-        var nets = new Dictionary<object, List<(EntityUid Owner, string Name, PipeNode Pipe)>>();
-
-        foreach (var uid in _fidelity.GridTreeList(ctx.GridUid))
-        {
-            if (!TryComp<NodeContainerComponent>(uid, out var nodeContainer))
-                continue;
-
-            foreach (var (name, node) in nodeContainer.Nodes)
-            {
-                if (node is not PipeNode { NodeGroup: { } group } pipe)
-                    continue;
-
-                if (!nets.TryGetValue(group, out var members))
-                    nets[group] = members = new List<(EntityUid, string, PipeNode)>();
-
-                members.Add((uid, name, pipe));
-            }
-        }
-
-        var shares = new List<(EntityUid Owner, string Name, Content.Shared.Atmos.GasMixture Share)>();
-
-        foreach (var members in nets.Values)
-        {
-            var totalVolume = 0f;
-            foreach (var (_, _, pipe) in members)
-                totalVolume += pipe.Volume;
-
-            if (totalVolume <= 0f)
-                continue;
-
-            var netAir = members[0].Pipe.Air;
-
-            foreach (var (owner, name, pipe) in members)
-            {
-                var share = new Content.Shared.Atmos.GasMixture(netAir) { Volume = pipe.Volume };
-                share.Multiply(pipe.Volume / totalVolume);
-                shares.Add((owner, name, share));
-            }
-        }
-
-        await StoreSweep(ctx, slice, DrydockPhase.Sidecars, shares, item =>
-        {
-            var (owner, name, share) = item;
-            if (TerminatingOrDeleted(owner))
-                return;
-
-            // One ledger entry per owner, and it goes in before the component does. Asking
-            // whether the sidecar was already there beats counting the shares afterwards: an
-            // owner with two nodes gets two shares and must still be removed exactly once, and an
-            // abort between the two writes must still find it on the ledger.
-            if (!HasComp<DrydockPipeGasComponent>(owner))
-                ctx.InjectedGas.Add(owner);
-
-            EnsureComp<DrydockPipeGasComponent>(owner).Shares[name] = share;
-        });
-    }
-
-    private async Task InjectDamageSidecarsSliced(DrydockStoreContext ctx, IDrydockSlice slice)
-    {
-        var damaged = new List<(EntityUid Uid, Dictionary<string, FixedPoint2> Damage)>();
-
-        foreach (var uid in _fidelity.GridTreeList(ctx.GridUid))
-        {
-            if (!TryComp<DamageableComponent>(uid, out var damageable) || damageable.TotalDamage <= FixedPoint2.Zero)
-                continue;
-
-            damaged.Add((uid, new Dictionary<string, FixedPoint2>(damageable.Damage.DamageDict)));
-        }
-
-        await StoreSweep(ctx, slice, DrydockPhase.Sidecars, damaged, item =>
-        {
-            var (uid, damage) = item;
-            if (TerminatingOrDeleted(uid))
-                return;
-
-            if (!HasComp<DrydockDamageSidecarComponent>(uid))
-                ctx.InjectedDamage.Add(uid);
-
-            EnsureComp<DrydockDamageSidecarComponent>(uid).DamageDict = damage;
-        });
-    }
-
-    /// <summary>
-    /// Removes each listed component, keeping a deep copy rather than the live instance so an
-    /// aborted store can put the field data back. A bare re-add of a fresh instance would come back
-    /// empty.
-    /// </summary>
-    private Task StripListedComponentsSliced(DrydockStoreContext ctx, IDrydockSlice slice)
-    {
-        return StoreSweep(ctx, slice, DrydockPhase.Strip, StoreStripList, type =>
-        {
-            if (TerminatingOrDeleted(ctx.GridUid) || !TryComp(ctx.GridUid, type, out var comp))
-                return;
-
-            // The copy lands on the ledger before the live component is taken off, so an abort
-            // between the two finds the component still on the grid and re-adds a duplicate of
-            // it, which is a no-op, rather than finding it gone with no copy to put back.
-            ctx.Stripped.Add(_serialization.CreateCopy(comp, notNullableOverride: true));
-            RemComp(ctx.GridUid, comp);
-        });
-    }
-
-    private void RestoreStrippedComponents(EntityUid gridUid, List<IComponent> stripped)
-    {
-        foreach (var comp in stripped)
-        {
-#pragma warning disable CS0618 // Owner is obsolete for external callers; this is the component-restore seam.
-            comp.Owner = gridUid;
-#pragma warning restore CS0618
-            AddComp(gridUid, comp, true);
-        }
     }
 
     /// <summary>
@@ -1332,10 +809,9 @@ public sealed partial class DrydockSystem : EntitySystem
     /// not travel with whoever the ship is being put away for (<c>ClearPermitItemsOnGrid</c>, judged
     /// by <see cref="ContrabandPermitSystem.PermitTravelsWith"/>), whether or not it is marked, since
     /// a permit follows its person and is not the ship's to carry. Immediate deletes, not queued: the
-    /// serializer walks the tree many ticks later now, and a queued deletion would be honoured well
+    /// image write walks the tree many ticks later, and a queued deletion would be honoured well
     /// before then, but a merely queued entity is still a real grid child in the meantime and every
-    /// walk between here and the save - the sidecars, the capture, the manifest - would count and
-    /// touch it.
+    /// walk between here and the write, the image's and the manifest's, would count and touch it.
     ///
     /// <para>Deliberately absolute, with no exemption for anchored entities. Anchoring is a state a
     /// player can create with a wrench, so exempting it would let anyone bolt restricted kit to a
@@ -1374,44 +850,6 @@ public sealed partial class DrydockSystem : EntitySystem
 
         if (count > 0)
             Log.Info($"Drydock: {ctx.ShipId} store purged {count} entities: saving contraband without a permit, or a permit that is not the holder's.");
-    }
-
-    /// <summary>
-    /// Blanks the starting-map reference on every store aboard (a PDA's uplink store, mostly) and
-    /// returns what was there, so an aborted store can put it back.
-    /// </summary>
-    private async Task DetachStoreMapsSliced(DrydockStoreContext ctx, IDrydockSlice slice)
-    {
-        var found = new List<(EntityUid Store, EntityUid? Map)>();
-        foreach (var uid in _fidelity.GridTreeList(ctx.GridUid))
-        {
-            if (!TryComp<StoreComponent>(uid, out var store) || store.StartingMap == null)
-                continue;
-
-            found.Add((uid, store.StartingMap));
-        }
-
-        await StoreSweep(ctx, slice, DrydockPhase.Strip, found, item =>
-        {
-            var (uid, map) = item;
-
-            // Ledger first, blank second, so an abort between them re-writes a value that is still
-            // there rather than losing one that is already gone.
-            if (TryComp<StoreComponent>(uid, out var store) && store.StartingMap != null)
-            {
-                ctx.StoreMaps.Add((uid, map));
-                store.StartingMap = null;
-            }
-        });
-    }
-
-    private void ReattachStoreMaps(List<(EntityUid Store, EntityUid? Map)> detached)
-    {
-        foreach (var (uid, map) in detached)
-        {
-            if (TryComp<StoreComponent>(uid, out var store))
-                store.StartingMap = map;
-        }
     }
 
     /// <summary>
@@ -1503,9 +941,8 @@ public sealed partial class DrydockSystem : EntitySystem
     }
 
     /// <summary>
-    /// The document's format version, and a hash over the sorted set of prototype ids it references.
-    /// That id set is the drift key: <see cref="DetectDrift"/> reads it at retrieve and in the re-bake
-    /// sweep, after the migration mappings.
+    /// A YAML document's format version, and a hash over the sorted set of prototype ids it
+    /// references: the drift key a document revision was filed with.
     /// </summary>
     /// <remarks>
     /// <para>Streams the document rather than loading it into a node tree. The two facts wanted here
@@ -1527,8 +964,7 @@ public sealed partial class DrydockSystem : EntitySystem
 
     /// <summary>
     /// The fingerprint's input without the hash: the ordinal-sorted set of non-empty <c>proto</c>
-    /// ids and the <c>meta.format</c> value, 0 where either is absent. The drift detector and the
-    /// re-bake read this rather than the hash, because they need to know which ids moved.
+    /// ids and the <c>meta.format</c> value, 0 where either is absent.
     /// </summary>
     internal static (SortedSet<string> Ids, int FormatVersion) ReadDriftIds(string yaml)
     {
@@ -1561,6 +997,28 @@ public sealed partial class DrydockSystem : EntitySystem
         }
 
         return (protos, formatVer);
+    }
+
+    /// <summary>
+    /// The engine map format the loader builds its skeleton document in (<c>DrydockLoadSession.cs:140</c>),
+    /// recorded as an image revision's engine format and read by the drift gate's window.
+    /// </summary>
+    internal const int ImageEngineFormat = 7;
+
+    /// <summary>
+    /// The drift key's input for an image: its distinct non-empty prototype ids, ordinal-sorted, the
+    /// same shape <see cref="ReadDriftIds"/> gives for a document.
+    /// </summary>
+    internal static SortedSet<string> ImagePrototypes(DrydockImage image)
+    {
+        var ids = new SortedSet<string>(StringComparer.Ordinal);
+        foreach (var entity in image.Entities)
+        {
+            if (!string.IsNullOrEmpty(entity.Prototype))
+                ids.Add(entity.Prototype);
+        }
+
+        return ids;
     }
 
     /// <summary>

@@ -27,34 +27,21 @@ using Robust.Shared.Maths;
 namespace Content.IntegrationTests.Tests._Triad.Drydock
 {
     /// <summary>
-    /// A store that fails must leave the ship exactly as usable as it was. This is the half of the
-    /// pipeline that had no proof behind it: the protective <c>try</c> was moved to open before the
-    /// first restorable mutation rather than after the whole preparation, and until this ran that
-    /// correction was an argument rather than a measurement.
-    ///
-    /// <para>The bar rose when the store learned to freeze and slice. The unwind used to owe the
-    /// caller a set of components put back; it now owes a ship taken off a private paused map,
-    /// thawed entity by entity, and flown back to the station, with the private map scrapped behind
-    /// it. Every one of those is a step that can be skipped without any of the old assertions
-    /// noticing, and the result of skipping one is not a missing field but a ship that is gone, or
-    /// frozen, or parked somewhere no player can reach. So the obligations are asserted here rather
-    /// than assumed, and <see cref="AStoreCancelledMidSliceHandsTheShipBackWhole"/> puts the abort
-    /// in the middle of the sliced mutators rather than after all of them.</para>
+    /// A store that fails must leave the ship exactly as usable as it was. The unwind owes a ship
+    /// taken off a private paused map, thawed, and flown back to the station, with the private map
+    /// scrapped behind it; skipping any of those leaves a ship that is gone, or frozen, or parked
+    /// somewhere no player can reach. The image write reads the live hull without changing it, so
+    /// the components the ship carried, its station membership among them, have to be exactly as they
+    /// were. <see cref="AStoreCancelledMidSliceHandsTheShipBackWhole"/> puts the abort in the middle
+    /// of the sliced image write.
     ///
     /// <para>The first failure is induced through the round foreign key rather than by patching the
     /// system under test. Filing a revision against a round that has no row throws inside
-    /// <c>FileRevision</c>, which sits after the sidecars, the strip list and the fidelity capture,
-    /// so the unwind is exercised across its whole surface by a fault the database really produces
-    /// rather than by a seam opened for the test. It used to be the owner foreign key, until the
-    /// capacity gate started reading the owner's berths before the pipeline mutates anything: an
-    /// owner with no row has no berths, and that refusal happens before there is anything to
-    /// unwind.</para>
-    ///
-    /// <para>The sharpest of the component assertions is the station re-book. Stripping station
-    /// membership fires the station system's shutdown handler, which removes the grid from the
-    /// station's own grid set. Restoring the component brings the reference back but <em>not</em>
-    /// the set entry, so an unwind that only restores components looks complete and is not: the ship
-    /// would come out of a failed store no longer part of its own station.</para>
+    /// <c>FileRevision</c>, after the whole image is written, so the unwind is exercised by a fault
+    /// the database really produces rather than by a seam opened for the test. It is not the owner
+    /// foreign key, because the capacity gate reads the owner's berths before the pipeline changes
+    /// anything: an owner with no row has no berths, and that refusal happens before there is
+    /// anything to unwind.</para>
     /// </summary>
     [TestFixture]
     [TestOf(typeof(DrydockSystem))]
@@ -123,17 +110,14 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
         }
 
         /// <summary>
-        /// The abort a sliced store made possible, and the one the old fixture could not reach. With
-        /// the pipeline spread over ticks there is a real window in which the ship is stripped,
-        /// sidecarred and sitting frozen on a private map, and the world can move under it: an
-        /// admin, a round restart, a shutdown, or the slice watchdog can all cancel it there.
+        /// The abort a sliced store made possible. With the pipeline spread over ticks there is a real
+        /// window in which the ship is frozen on a private map with its image half written, and the
+        /// world can move under it: an admin, a round restart, a shutdown, or the slice watchdog can
+        /// all cancel it there.
         ///
-        /// <para>The cancel is timed off the ship rather than off a tick count. The strip is the
-        /// first mutation with a visible edge, so the test waits until a strip-list component is
-        /// actually gone and cancels on that tick. That is what makes this an inversion test rather
-        /// than a re-run of the one above: the undo ledger has to have been written entry by entry
-        /// as the mutations happened, because there is no end of the phase here for a
-        /// build-it-and-return-it ledger to be handed over at.</para>
+        /// <para>The cancel is timed off the pipeline rather than off a tick count: the test cancels
+        /// on the tick after the image write's phase opens, so the write is under way when the
+        /// cancellation lands.</para>
         /// </summary>
         [Test]
         public async Task AStoreCancelledMidSliceHandsTheShipBackWhole()
@@ -156,9 +140,16 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
 
             // A real round id, so nothing about this store would refuse on its own. The cancel is
             // the only reason it stops, which is what makes the outcome below mean something.
+            var writeOpened = false;
+            void OnProgress(int percent, DrydockPhase phase)
+            {
+                if (phase == DrydockPhase.Serialize)
+                    writeOpened = true;
+            }
+
             Task<(DrydockStoreResult Result, Guid? ShipId)>? storeTask = null;
             await server.WaitPost(() => storeTask = drydock.TryStoreShip(
-                fixture.Ship, owner, null, stationUid: fixture.HostStation));
+                fixture.Ship, owner, null, stationUid: fixture.HostStation, onProgress: OnProgress));
 
             // Cancelling logs at error level on purpose: a pipeline abandoned mid-flight is
             // something an administrator should see in the log. Lift the bar across the cancel and
@@ -166,18 +157,15 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             var failureLevel = pair.ServerLogHandler.FailureLevel;
             pair.ServerLogHandler.FailureLevel = LogLevel.Fatal;
 
-            var strippedAtTick = -1;
-            for (var i = 0; i < 600 && strippedAtTick < 0; i++)
+            var cancelledAtTick = -1;
+            for (var i = 0; i < 600 && cancelledAtTick < 0; i++)
             {
                 await pair.RunTicksSync(1);
 
-                var stripped = false;
-                await server.WaitPost(() => stripped = !entMan.HasComponent<ShipRepairDataComponent>(fixture.Ship));
-
-                if (!stripped)
+                if (!writeOpened)
                     continue;
 
-                strippedAtTick = i;
+                cancelledAtTick = i;
                 await server.WaitPost(() => drydock.CancelAllJobs("a mid-slice abort, induced by DrydockAbortTest"));
             }
 
@@ -194,10 +182,10 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
 
             Assert.Multiple(() =>
             {
-                // Without this the test can pass by never reaching the strip at all, cancelling
+                // Without this the test can pass by never reaching the write at all, cancelling
                 // nothing and asserting that an untouched ship is untouched.
-                Assert.That(strippedAtTick, Is.GreaterThanOrEqualTo(0),
-                    "The control: the strip never bit, so the cancel below landed on a store that had not mutated anything yet.");
+                Assert.That(cancelledAtTick, Is.GreaterThanOrEqualTo(0),
+                    "The control: the image write never opened, so the cancel never landed on a store in flight.");
                 Assert.That(storeTask!.IsCompleted, Is.True, "The cancelled store never finished unwinding.");
                 Assert.That(storeTask.IsFaulted, Is.False,
                     "A cancellation is an outcome, not a fault. Letting it escape as an exception would reach Job.ProcessWrap, which logs an error for every one.");
@@ -235,32 +223,16 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                     $"{when}: the marker is the store's re-entrancy sentinel, and a store refuses outright while it is on. Leaving it behind makes this hull unstorable for the rest of the round.");
 
                 Assert.That(entMan.HasComponent<ShipRepairDataComponent>(ship), Is.True,
-                    $"{when}: stripped components are held as deep copies precisely so a refusal can put them back.");
+                    $"{when}: the store reads the live hull without taking components off it.");
 
                 Assert.That(entMan.HasComponent<StationMemberComponent>(ship), Is.True,
-                    $"{when}: station membership is the other strip-list entry.");
+                    $"{when}: station membership stays on the live hull.");
 
-                // The one that a component-only unwind gets wrong.
                 Assert.That(entMan.GetComponent<StationDataComponent>(fixture.ShipStation).Grids, Does.Contain(ship),
-                    $"{when}: restoring StationMemberComponent does not re-add the grid to the station's own set: the shutdown handler removed it, and the re-add has to go back through the station system.");
+                    $"{when}: and the station still lists the grid in its own set.");
 
                 Assert.That(entMan.HasComponent<ShuttleComponent>(ship), Is.True, $"{when}: the ship still has to be a ship.");
             });
-
-            // Sidecars are an implementation detail of a store in flight and have no business
-            // riding a ship that is still being flown.
-            var gasQuery = entMan.AllEntityQueryEnumerator<DrydockPipeGasComponent>();
-            Assert.That(gasQuery.MoveNext(out _, out _), Is.False, $"{when}: a pipe gas sidecar survived a failed store.");
-
-            var damageQuery = entMan.AllEntityQueryEnumerator<DrydockDamageSidecarComponent>();
-            Assert.That(damageQuery.MoveNext(out _, out _), Is.False, $"{when}: a damage sidecar survived a failed store.");
-
-            var appearanceQuery = entMan.AllEntityQueryEnumerator<DrydockAppearanceComponent>();
-            Assert.That(appearanceQuery.MoveNext(out _, out _), Is.False, $"{when}: an appearance sidecar survived a failed store.");
-
-            var capturedQuery = entMan.AllEntityQueryEnumerator<DrydockCapturedStateComponent>();
-            Assert.That(capturedQuery.MoveNext(out _, out _), Is.False,
-                $"{when}: a captured-state sidecar survived a failed store. The abort path restores the live fields directly, so it must take the sidecar off with them.");
 
             // Where the ship ended up. The store moves it onto a private paused map before it
             // touches anything, so an unwind that restores every component and forgets the ship is
@@ -375,18 +347,17 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
 
                 entMan.EnsureComponent<ShuttleComponent>(shipGrid);
 
-                // Both entries of the store strip list have to be present, or the unwind is only
-                // half exercised. Ships in this fork are stations, which is what makes the re-book
-                // a real path rather than a hypothetical one.
+                // Two components a store must leave on the live hull: the repair baseline, which the
+                // image carries, and station membership, since ships in this fork are stations.
                 entMan.EnsureComponent<ShipRepairDataComponent>(shipGrid);
 
                 shipStation = entMan.Spawn();
                 entMan.AddComponent<StationDataComponent>(shipStation);
                 stationSys.AddGridToStation(shipStation, shipGrid);
 
-                // Something aboard, so the freeze and the thaw both have a tree to walk and the
-                // appearance capture has an entity to sidecar. A one-entity grid would let a walk
-                // that never recursed pass every assertion here.
+                // Something aboard, so the freeze, the image write and the thaw all have a tree to
+                // walk. A one-entity grid would let a walk that never recursed pass every assertion
+                // here.
                 entMan.SpawnEntity("Airlock", new EntityCoordinates(shipGrid, new Vector2(1f, 1f)));
             });
 

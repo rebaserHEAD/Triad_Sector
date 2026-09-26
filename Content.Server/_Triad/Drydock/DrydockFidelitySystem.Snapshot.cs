@@ -43,9 +43,7 @@ public sealed partial class DrydockFidelitySystem
         nameof(ContainerManagerComponent),  // membership is entity references, and every contained
                                             // entity is visited in its own right by the walk
         nameof(DrydockCapturedStateComponent),
-        nameof(DrydockDamageSidecarComponent),
         nameof(DrydockPipeGasComponent),
-        nameof(DrydockAppearanceComponent),
         nameof(DrydockInProgressComponent),
         nameof(DrydockIdentityComponent),
     };

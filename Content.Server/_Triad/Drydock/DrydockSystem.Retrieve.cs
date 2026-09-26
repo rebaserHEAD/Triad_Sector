@@ -6,6 +6,7 @@ using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using Content.Server._NF.Station.Components;
+using Content.Server._Triad.Drydock.Loader;
 using Content.Server.Chemistry.Components;
 using Content.Server.Database;
 using Content.Server.DeviceNetwork.Systems;
@@ -139,9 +140,9 @@ public sealed partial class DrydockSystem
             return DrydockRetrieve.Refused(DrydockRetrieveResult.NoStation);
         }
 
-        // The row alone for the gates. The document is read by the pipeline instead, after the
-        // claim, so a refusal never pays for a blob and the read that does happen cannot race a
-        // transfer or a second retrieve.
+        // The row alone for the gates. The image is read by the pipeline instead, after the
+        // claim, so a refusal never pays for reading one and the read that does happen cannot race
+        // a transfer or a second retrieve.
         var header = await _store.GetShipHeader(shipId);
         if (header == null)
             return DrydockRetrieve.Refused(DrydockRetrieveResult.NotFound);
@@ -259,20 +260,6 @@ public sealed partial class DrydockSystem
                 {
                     Log.Error($"Drydock: {shipId} is out but its berth could not be vacated: {e.Message}");
                 }
-
-                // The skipped state goes on the timeline here rather than inside the pipeline.
-                // The pipeline's tail from the dock to its return may not await, and a job that is
-                // cancelled can never finish an await it did reach; out here nothing cancels this.
-                // It also records only what a player actually received: a retrieve refused after its
-                // revive scrapped that grid, and its retry would log the same skips a second time.
-                try
-                {
-                    await WriteSkippedState(ctx, header);
-                }
-                catch (Exception e)
-                {
-                    Log.Error($"Drydock: {shipId} is out but its skipped state could not be recorded: {e.Message}");
-                }
             }
         }
 
@@ -291,14 +278,13 @@ public sealed partial class DrydockSystem
     }
 
     /// <summary>
-    /// The retrieve itself, from the first blob read to the dock. Driven either by a job, a few
+    /// The retrieve itself, from the first image read to the dock. Driven either by a job, a few
     /// milliseconds of main-thread time per tick, or by <see cref="DrydockSyncSlice"/> straight
     /// through.
     ///
-    /// <para>The inbound leg has a harder floor than the outbound one. The store can drive the
-    /// engine's serializer one entity at a time from content, but every per-entity loop inside the
-    /// deserializer is private, so the grid load is one bulk call and the slicing starts at the
-    /// revive epilogue after it.</para>
+    /// <para>The inbound leg has a harder floor than the outbound one. The store writes one entity
+    /// per step, but the load's four phases run inside one tick (<see cref="LoadOntoStagingMap"/>),
+    /// and the slicing starts at the revive epilogue after it.</para>
     ///
     /// <para>The database claim is neither taken nor released here. The wrapper owns it, because a
     /// job that observes its cancellation can never finish another await, and the release is the one
@@ -312,17 +298,14 @@ public sealed partial class DrydockSystem
         {
             await slice.Begin(DrydockPhase.Fetch, 0);
 
-            var current = await slice.Await(_store.LoadCurrent(ctx.ShipId));
+            var current = await slice.Await(_store.LoadCurrentImage(ctx.ShipId));
             if (current == null)
                 return new DrydockRetrieveOutcome(DrydockRetrieve.Refused(DrydockRetrieveResult.NotFound));
 
-            // The ladder walks the documents that exist, newest first, so a pinned document below the
-            // keep-N window stays reachable and a pruned revision is never asked for.
+            // The ladder walks the images that exist, newest first, so a pinned image below the keep-N
+            // window stays reachable and a pruned revision is never asked for.
             var revisions = await slice.Await(_store.ListRetrievableRevisions(ctx.ShipId));
             GuardRetrieveResume(ctx);
-
-            // Built here, on the main thread, before the first off-thread drift read touches it.
-            _ = MigrationTable;
 
             // The newest revision the drift gate refused, for the refusal when the ladder runs out.
             (int Revision, DrydockDriftVerdict Verdict)? driftRefused = null;
@@ -338,84 +321,45 @@ public sealed partial class DrydockSystem
 
                 var stored = isCurrent
                     ? current
-                    : await slice.Await(_store.LoadRevision(ctx.ShipId, revision));
+                    : await slice.Await(_store.LoadRevisionImage(ctx.ShipId, revision));
 
                 if (stored == null)
                     continue;
 
-                byte[] yamlBytes;
-                try
-                {
-                    yamlBytes = DecompressZstd(stored.Blob);
-                }
-                catch (Exception e)
-                {
-                    Log.Error($"Drydock: {ctx.ShipId} revision {revision} would not decompress, falling back: {e.Message}");
-                    continue;
-                }
-
-                if (!SHA256.HashData(yamlBytes).AsSpan().SequenceEqual(stored.Revision.Checksum))
-                {
-                    Log.Error($"Drydock: {ctx.ShipId} revision {revision} failed its checksum, falling back.");
-                    continue;
-                }
-
                 timer.Mark("fetch");
 
-                // The drift gate. After the checksum, so a verdict is only ever taken on the
-                // bytes that were filed, and before the load, so a document naming content that no
-                // longer exists is refused with that reason instead of failing somewhere inside the
-                // loader. Off the main thread for the same reason the parse is: it reads the whole
-                // document. A throw here is a document the parser cannot read either, and the load
-                // below is what decides about that, so it is logged and the gate stands aside.
-                // The text is decoded once, inside the drift hop, and handed to the load.
-                DrydockDriftVerdict? verdict = null;
-                string? yaml = null;
-                try
-                {
-                    var formatVer = stored.Revision.DrydockFormatVer;
-                    verdict = await slice.Await(Task.Run(() => DetectDrift(yaml = Encoding.UTF8.GetString(yamlBytes), formatVer)));
-                }
-                catch (Exception e) when (e is not OperationCanceledException)
-                {
-                    Log.Error($"Drydock: {ctx.ShipId} revision {revision} could not be read for drift: {e.Message}");
-                }
-
-                GuardRetrieveResume(ctx);
+                // The drift gate, over the image's distinct prototype ids and before the load, so an
+                // image naming content that no longer exists is refused with that reason instead of
+                // failing somewhere inside the loader.
+                var verdict = DetectDrift(ImagePrototypes(stored.Image), ImageEngineFormat, stored.Revision.DrydockFormatVer);
                 timer.Mark("drift");
 
-                if (verdict is { IsRefusal: true })
+                if (verdict.IsRefusal)
                 {
                     var driftReason = DescribeDriftRefusal(verdict);
                     Log.Warning($"Drydock: {ctx.ShipId} revision {revision} references content that no longer resolves: {driftReason}");
 
-                    // The current document is refused outright. An older one is older state, and it
+                    // The current image is refused outright. An older one is older state, and it
                     // almost certainly references the same content, so falling back would trade a
                     // clear refusal for a ship that is both stale and likely just as broken.
                     if (isCurrent)
                         return await RefuseForDrift(ctx, slice, current.Ship, revision, driftReason);
 
-                    // An older document reached only because newer ones were corrupt. Stepped past
+                    // An older image reached only because newer ones would not load. Stepped past
                     // like one that would not load, and pinned the same way: it is a newer state than
-                    // whatever this ladder ends up handing out, and a re-bake can still heal it.
+                    // whatever this ladder ends up handing out.
                     driftRefused ??= (revision, verdict);
                     await PinSteppedPast(ctx, slice, revision, "references content that no longer exists");
                     continue;
                 }
 
-                // The parse half can leave the main thread, mirroring the store's validate split; the
-                // merge half cannot, for the same reason DetectRoundTripMismatch's cannot: the
-                // deserializer's constructor wants the renamed-prototype maps that only the map
-                // loader's own pre-read event produces, and the merge, the map-id assignment, the
-                // transform pass and the merge epilogue are all private, so a content-side staged
-                // loader would be a reimplementation of the engine rather than a slice of it. The
-                // honest per-tick claim for a retrieve is the budget plus this one merge call.
+                // The honest per-tick claim for a retrieve is the budget plus this one load.
                 await slice.Begin(DrydockPhase.Load, 0);
                 GuardRetrieveResume(ctx);
 
-                if (!await TryLoadOntoStagingMap(ctx, slice, revision, yaml, yamlBytes))
+                if (LoadOntoStagingMap(ctx, slice, revision, stored.Image) == null)
                 {
-                    await PinSteppedPast(ctx, slice, revision, "it passed its checksum and would not load");
+                    await PinSteppedPast(ctx, slice, revision, "its image would not load");
                     continue;
                 }
 
@@ -430,7 +374,7 @@ public sealed partial class DrydockSystem
                 // timing lines from before the sliced pipeline do not compare with these.
                 ctx.EntityCount = CountTree(grid);
 
-                // A document with no shuttle component describes something that cannot dock or fly.
+                // An image with no shuttle component describes something that cannot dock or fly.
                 // Treat it as an unusable revision and try the one before it.
                 if (!HasComp<ShuttleComponent>(grid))
                 {
@@ -446,9 +390,9 @@ public sealed partial class DrydockSystem
                 {
                     // A fallback is a retrieve of an older state than the one the player last put
                     // away, and the newer state is still on disk for now. It goes on the timeline so
-                    // an admin can see it before pruning takes the skipped document, because a
+                    // an admin can see it before pruning takes the skipped image, because a
                     // fallback followed by a few ordinary stores is how a latest state disappears.
-                    // Written once the older document has actually loaded, so the row never
+                    // Written once the older image has actually loaded, so the row never
                     // names a revision the ladder then stepped past as well, and inside this try so a
                     // failed write scraps the loaded grid on its way out like any other throw.
                     if (!isCurrent)
@@ -469,7 +413,7 @@ public sealed partial class DrydockSystem
                         GuardRetrieveResume(ctx);
                     }
 
-                    await ReviveSliced(grid, stored.Ship, slice, timer, ctx);
+                    await ReviveSliced(grid, stored.Ship, slice, timer);
 
                     // The dock is two atomic calls, not one: the config search, then the move.
                     // Each gets its own timer mark below, so a hitch here says which half it belongs
@@ -588,8 +532,8 @@ public sealed partial class DrydockSystem
                 return new DrydockRetrieveOutcome(new DrydockRetrieve(DrydockRetrieveResult.Success, grid));
             }
 
-            // A ladder that ran out having refused a document for drift says so, since the
-            // re-bake that could heal that document is a different remedy from an unreadable one.
+            // A ladder that ran out having refused an image for drift says so, since content that no
+            // longer exists is a different remedy from an image that will not load.
             if (driftRefused is { } refused)
             {
                 return await RefuseForDrift(ctx, slice, current.Ship, refused.Revision,
@@ -616,18 +560,13 @@ public sealed partial class DrydockSystem
     }
 
     /// <summary>
-    /// Loads one revision onto a private, paused map of its own.
+    /// Loads one revision's image onto a private, paused map of its own, in one tick: the loader's four
+    /// phases, with the strip rule and the research reset between its start and its completion, so the
+    /// restore events it raises last see the population that stays. Null when the image would not
+    /// load, with whatever the load made scrapped.
     ///
-    /// <para>The load itself is <see cref="TryLoadOntoNewPausedMap"/>, which the validation scratch
-    /// load shares; this one asks for a map-initialised map. The map is paused while it is still
-    /// empty, so the engine's recursive pause walks one entity instead of a whole hull, and the
-    /// merge's own epilogue then applies the target map's pause state to everything it
-    /// loads. The mechanism is the target map's state and not the document's own per-entity paused
-    /// flags. Documents written by the older readers carry no such flags at all, deriving pause from
-    /// a file-level one instead, and it makes no difference here.</para>
-    ///
-    /// <para>The parse half runs off-thread, behind the <c>load_parse</c> timer mark; the merge half
-    /// stays one atomic main-thread call, behind <c>load</c>, for the reason given at the call site.</para>
+    /// <para>The map is created paused while it is still empty, so the engine's recursive pause walks
+    /// one entity instead of a whole hull (<see cref="CreateStagingMap"/>).</para>
     ///
     /// <para>A map per retrieve also retires the spacing scheme that came before it. The shared
     /// shipyard map is unpaused and holds purchases and dead drops, so every retrieve used to be
@@ -635,30 +574,41 @@ public sealed partial class DrydockSystem
     /// a tick they shared. Residency is measured in seconds now, which is precisely the case that
     /// spacing could not have covered, and a private map has nothing to overlap with.</para>
     /// </summary>
-    private async Task<bool> TryLoadOntoStagingMap(
-        DrydockRetrieveContext ctx, IDrydockSlice slice, int revision, string? yaml, byte[] yamlBytes)
+    private DrydockLoadResult? LoadOntoStagingMap(DrydockRetrieveContext ctx, IDrydockSlice slice, int revision, DrydockImage image)
     {
-        // The parse alone, off-thread: no entity is touched until the data node comes back. The
-        // bytes are decoded here only when the drift hop never got as far as decoding them.
-        var data = await slice.Await(Task.Run(() => ParseDocument(yaml ?? Encoding.UTF8.GetString(yamlBytes))));
-        GuardRetrieveResume(ctx);
-        ctx.Timer.Mark("load_parse");
-
-        if (data == null
-            || TryLoadOntoNewPausedMap(data, $"drydock/{ctx.ShipId}", initializeMap: true) is not { } load)
+        ctx.StagingMap = CreateStagingMap(JobIdOf(slice), DrydockStagingKind.Retrieve, ctx.ShipId, mapInit: true);
+        var session = _image.BeginLoad(image, ctx.StagingMap.Value);
+        try
         {
-            Log.Error($"Drydock: {ctx.ShipId} revision {revision} passed its checksum but would not load.");
-            return false;
+            session.CreateEntities();
+            ctx.Grid = session.Grid;
+            session.ApplyRows();
+            session.Start();
+
+            // A sync slice never suspends, so both sweeps finish inside this call.
+            var sync = new DrydockSyncSlice(DrydockPhases.Retrieve);
+            StripSliced(session.Grid, sync).GetAwaiter().GetResult();
+            ResetResearchSliced(session.Grid, sync).GetAwaiter().GetResult();
+
+            var result = session.Complete();
+            Log.Info($"Drydock: {ctx.ShipId} revision {revision} loaded {result.Ids.Count} entities; "
+                     + $"severed {result.Severed.Count}, manifest missing {result.Manifest.Missing.Values.Sum()} and refused {result.Manifest.Refused.Values.Sum()}, "
+                     + $"appearance refused {result.AppearanceRefused.Values.Sum()}, unresolved prototypes {result.UnresolvedPrototypes.Count}, "
+                     + $"dropped batches {result.DroppedBatches.Count}.");
+            return result;
         }
+        catch (Exception e) when (e is not OperationCanceledException)
+        {
+            Log.Error($"Drydock: {ctx.ShipId} revision {revision} would not load: {e}");
 
-        ctx.StagingMap = load.Map;
-        ctx.Grid = load.Grid;
+            // Before the grid is parented onto the map it is in null space, where the staging scrap
+            // below does not look for it.
+            if (session.Grid.IsValid() && Exists(session.Grid))
+                Del(session.Grid);
 
-        // Tagged only once the load has held: a failed load deletes the map above. The tag is what
-        // lets the orphan sweep tell a map whose pipeline is still running from one whose pipeline
-        // died holding it.
-        TagStagingMap(load.Map, JobIdOf(slice), DrydockStagingKind.Retrieve, ctx.ShipId);
-        return true;
+            ScrapRetrieveStaging(ctx);
+            return null;
+        }
     }
 
     /// <summary>
@@ -708,9 +658,6 @@ public sealed partial class DrydockSystem
 
     /// <summary>How many unresolved ids a drift refusal names before it summarises the rest.</summary>
     private const int DriftReasonIdCap = 10;
-
-    /// <summary>How many skipped keys one skip row names before it summarises the rest.</summary>
-    private const int SkipReasonKeyCap = 20;
 
     /// <summary>
     /// Refuses the whole retrieve for content drift: one <see cref="DrydockAuditAction.DriftRefused"/>
@@ -777,33 +724,6 @@ public sealed partial class DrydockSystem
         }
 
         GuardRetrieveResume(ctx);
-    }
-
-    /// <summary>
-    /// One <see cref="DrydockAuditAction.StateSkipped"/> row per sidecar whose restore skipped keys,
-    /// each naming the keys and why, and the counter by sidecar. Nothing when neither skipped.
-    /// </summary>
-    private async Task WriteSkippedState(DrydockRetrieveContext ctx, DrydockShip header)
-    {
-        foreach (var (sidecar, report) in new[] { ("captured", ctx.CapturedRestore), ("appearance", ctx.AppearanceRestore) })
-        {
-            if (report is not { Skipped.Count: > 0 })
-                continue;
-
-            DrydockMetrics.SkippedStateKeys.WithLabels(sidecar).Inc(report.Skipped.Count);
-
-            await _store.WriteAudit(new DrydockAudit
-            {
-                ShipGuid = ctx.ShipId,
-                ShipName = header.ShipName,
-                BerthId = header.BerthId,
-                Action = DrydockAuditAction.StateSkipped,
-                ActorUserId = ctx.OwnerUserId,
-                Revision = ctx.LoadedRevision,
-                RoundId = ctx.RoundId,
-                Reason = $"{sidecar}: " + CapList(report.Skipped.Select(s => $"{s.Key} ({s.Reason})").ToList(), SkipReasonKeyCap, "; "),
-            });
-        }
     }
 
     /// <summary>The first <paramref name="cap"/> entries joined, then "and N more".</summary>
@@ -886,127 +806,27 @@ public sealed partial class DrydockSystem
     }
 
     /// <summary>
-    /// Puts back everything a normal spawn would have set up but a restored entity never gets, a
-    /// few milliseconds of main-thread time at a time.
+    /// What the console's retrieve does to a loaded ship after the load and before the dock, a few
+    /// milliseconds of main-thread time at a time.
     ///
-    /// <para>This is the map-init boundary made concrete. A restored entity comes back already
-    /// marked initialized, so the engine never raises <c>MapInitEvent</c> for it again. The
-    /// transaction (<see cref="DrydockFidelitySystem.RefireMapInitSliced"/>, behind
-    /// <see cref="TriadCCVars.DrydockMapInitRefire"/>) raises it anyway and undoes what it did to
-    /// persisted state, so every system's runtime registration comes back without being named
-    /// here. The sweeps below that redo a system's own map-init job run only with the transaction
-    /// off; the rest are policy or edge work no map init does, and always run.</para>
+    /// <para>Five sweeps are stopgaps for restore handlers the image does not have yet, and run on
+    /// the console's retrieve only: the wire layout (H12), the research clients (H10), the console
+    /// locks' grid id, the artifact analyzers' back-link (H06) and the hands of hands-fill machines
+    /// (H20). Each goes with its handler. The strip rule and the research reset are not here: they
+    /// run inside the load, between its start and its completion (<see cref="LoadOntoStagingMap"/>).</para>
     ///
-    /// <para>Each step below is a system whose runtime registration lives entirely behind that
-    /// event or the purchase path. Without them a retrieved ship comes back with dead machines that
-    /// look perfectly fine, or a helm its own captain cannot unlock.</para>
-    ///
-    /// <para>The order is load-bearing and each step carries its own reason for standing where it
-    /// does. Slicing may reorder entities inside a step; it must never reorder the steps.</para>
+    /// <para>The research clients register after the reset, so a lathe syncing from its server copies
+    /// the empty database.</para>
     /// </summary>
-    /// <param name="timer">
-    /// Split into its own phases, because "revive" as one number cannot say whether the cost is the
-    /// fidelity restore or the per-system sweeps below it, and those have opposite fixes. Under
-    /// slicing every one of these phases is wall clock rather than main-thread time, which is why
-    /// the timing line carries a worst-slice figure beside them.
-    /// </param>
-    /// <param name="ctx">
-    /// Where the two restore reports are left. The skips they name are written to the timeline by
-    /// the wrapper once the ship is presented, not here; see <see cref="WriteSkippedState"/>.
-    /// </param>
-    private async Task ReviveSliced(EntityUid grid, DrydockShip record, IDrydockSlice slice, DrydockPhaseTimer timer, DrydockRetrieveContext ctx)
+    private async Task ReviveSliced(EntityUid grid, DrydockShip record, IDrydockSlice slice, DrydockPhaseTimer timer)
     {
-        await ReviveBegin(grid, slice, DrydockPhase.Fidelity, 0);
-
-        // The general fidelity net first: everything captured into a sidecar goes back before
-        // anything else reads component state.
-        var restore = await _fidelity.RestoreCapturedSliced(grid, slice);
-        ctx.CapturedRestore = restore;
-        if (restore.Skipped.Count > 0)
-            Log.Warning($"Drydock: {record.ShipGuid} restored with {restore.Skipped.Count} captured field(s) skipped.");
-
-        // Appearance next, and before every step below it. Those steps correct specific machines
-        // against the state the ship actually came back with, and a machine's captured appearance
-        // can disagree with that: a lathe stored mid-production comes back without the marker that
-        // made the animation true. Restoring appearance after them would reinstate exactly the
-        // frozen animations this is here to end.
-        var appearance = await _fidelity.RestoreAppearanceSliced(grid, slice);
-        ctx.AppearanceRestore = appearance;
-        if (appearance.Skipped.Count > 0)
-            Log.Warning($"Drydock: {record.ShipGuid} restored with {appearance.Skipped.Count} appearance key(s) skipped.");
-
-        // Scrubs for documents written before the store learned to strip these. A stale FTL
-        // component leaves the ship stuck mid-jump with the shuttle system erroring every tick. A
-        // stale in-progress marker is the store's re-entrancy sentinel, so a ship whose document
-        // carries one has every later store of it refused as already in progress, permanently. No
-        // code change heals a document that is already filed, which is why both scrubs stay.
-        RemComp<FTLComponent>(grid);
-        RemComp<DrydockInProgressComponent>(grid);
-
-        timer.Mark("fidelity");
-
-        // First of the sweeps: what a strip rule names (mechs and everything mech) leaves before any
-        // later sweep would wake, register or revive it.
-        await StripSliced(grid, slice);
-
-        // Map init for everything that survived the strip, before the sweeps: a sweep that runs
-        // after it corrects against the state the ship actually has (the lathe scrub reads the
-        // producing marker the fire may have touched), and the research reset below still clears
-        // whatever a client's registration synced.
-        var mapInitMode = DrydockFidelitySystem.ParseMapInitMode(_cfg.GetCVar(TriadCCVars.DrydockMapInitRefire));
-        ctx.MapInitReport = await _fidelity.RefireMapInitSliced(grid, slice, mapInitMode);
-
-        timer.Mark("mapinit");
-
-        await ReviveGravitySliced(grid, slice);
-        await ReviveNpcsSliced(grid, slice);
-
-        // The sweeps that redo a system's own map-init handler run only when the transaction did
-        // not: with the event raised, a second wire layout doubles the wire list and a second
-        // device-network connect reassigns the address. They are the rollback for the cvar's off
-        // setting, not a second pass.
-        var mapInitRaised = mapInitMode != DrydockMapInitMode.Off;
-        if (!mapInitRaised)
-        {
-            await ReviveWiresSliced(grid, slice);
-            await ReviveDeviceNetworkSliced(grid, slice);
-        }
-
-        // Before the clients register, so a lathe syncing from its server copies the empty database.
-        // With the event raised the clients registered during the fire and synced a live database,
-        // and this resets every database aboard after the fact, lathes included.
-        await ResetResearchSliced(grid, slice);
-        if (!mapInitRaised)
-            await ReviveResearchClientsSliced(grid, slice);
-
+        await ReviveWiresSliced(grid, slice);
+        await ReviveResearchClientsSliced(grid, slice);
         await ReviveConsoleLocksSliced(grid, slice);
-        await ReviveGeneratorsSliced(grid, slice);
-
-        if (!mapInitRaised)
-        {
-            await ReviveSmartFridgesSliced(grid, slice);
-            await ReviveArtifactAnalyzersSliced(grid, slice);
-        }
-
+        await ReviveArtifactAnalyzersSliced(grid, slice);
         await ReviveFilledHandsSliced(grid, slice);
 
-        if (!mapInitRaised)
-        {
-            await ReviveDispenserSlotsSliced(grid, slice);
-            await ReviveCabinetLocksSliced(grid, slice);
-        }
-
-        await ScrubStaleLatheProductionSliced(grid, slice);
-
         timer.Mark("sweeps");
-
-        await RehydrateDamageSliced(grid, slice);
-
-        // The repair baseline is derived state, stripped at store. The repair system builds it only on
-        // the purchase event, which a retrieve never raises.
-        _shipRepair.GenerateRepairData(grid);
-
-        timer.Mark("damage");
 
         await ReviveBegin(grid, slice, DrydockPhase.Station, 0);
 
@@ -1017,9 +837,8 @@ public sealed partial class DrydockSystem
         RefreshShipOwnership(grid, record);
 
         // The vessel's own component grant, which the purchase applies and no load ever has. Mostly
-        // a no-op on a document that came from a purchased hull, since what the shipyard granted
-        // then rode the store; it is the hulls imported from a ship file that arrive without it, and
-        // the ones already sitting in the database with the blank IFF the old import minted.
+        // a no-op on an image that came from a purchased hull, since what the shipyard granted then
+        // rode the store; it is the hulls imported from a ship file that arrive without it.
         _shipyard.GrantVesselComponents(grid, ResolveVesselProto(grid, record));
 
         // The station itself is NOT recreated here: that waits for the dock's thaw, in the pipeline's
@@ -1089,52 +908,6 @@ public sealed partial class DrydockSystem
     }
 
     /// <summary>
-    /// A gravity generator pushes gravity onto its grid only on the edge where its charge
-    /// activates. On load the charge comes back already full, so the loop sees no edge and never
-    /// pushes, while the generator's own active flag is not serialized and reads false. The result
-    /// is a live generator and no gravity. Re-raising the activation lets its own handler do the
-    /// work, which matters because the component is access-locked to that system.
-    /// </summary>
-    private Task ReviveGravitySliced(EntityUid grid, IDrydockSlice slice)
-    {
-        return SweepRaw(grid, slice, DrydockPhase.Sweeps, SnapshotOnGrid<GravityGeneratorComponent>(grid), uid =>
-        {
-            if (!Exists(uid))
-                return;
-
-            var activated = new ChargedMachineActivatedEvent();
-            RaiseLocalEvent(uid, ref activated);
-        });
-    }
-
-    /// <summary>
-    /// Autopilot is an HTN behaviour on the shuttle console, and turrets and drones are HTN too.
-    /// The active marker and the blackboard's owner are installed only on map init, so without this
-    /// a restored ship's autopilot never plans and never steers.
-    ///
-    /// <para>The stored autopilot destination is dropped deliberately: a ship that has been sitting
-    /// in a drydock has no business resuming a course to a point that may no longer mean
-    /// anything.</para>
-    /// </summary>
-    private Task ReviveNpcsSliced(EntityUid grid, IDrydockSlice slice)
-    {
-        return SweepOnGrid<HTNComponent>(grid, slice, DrydockPhase.Sweeps, (uid, htn) =>
-        {
-            // A minded HTN should not have survived the organics gate, but the NPC system refuses to
-            // wake one anyway, so match that rather than fight it.
-            if (TryComp<MindContainerComponent>(uid, out var mind) && mind.HasMind)
-                return;
-
-            htn.Blackboard.SetValue(NPCBlackboard.Owner, uid);
-
-            if (TryComp<ShuttleConsoleComponent>(uid, out var console))
-                htn.Blackboard.Remove<EntityCoordinates>(console.AutopilotTargetKey);
-
-            _npc.WakeNPC(uid, htn);
-        });
-    }
-
-    /// <summary>
     /// A wired machine's actual wire list is not a data field, so it does not persist, and the only
     /// thing that ever built it was map init. Without this every panel on a restored ship opens
     /// empty: nothing to cut, nothing to pulse, on every airlock and every APC aboard.
@@ -1149,19 +922,8 @@ public sealed partial class DrydockSystem
     }
 
     /// <summary>
-    /// Device network membership is runtime registration held by the network system, not state on
-    /// the device, and joining happens on map init. Without this a restored ship's air alarms,
-    /// sensors and consoles are all present, all powered, and all deaf.
-    /// </summary>
-    private Task ReviveDeviceNetworkSliced(EntityUid grid, IDrydockSlice slice)
-    {
-        return SweepOnGrid<DeviceNetworkComponent>(grid, slice, DrydockPhase.Sweeps,
-            (uid, device) => _deviceNetwork.ConnectDevice(uid, device));
-    }
-
-    /// <summary>
     /// Research points and unlocked technology stay with the round, not the ship: the legacy ship
-    /// save stripped them from the file, and live still does. The drydock stores the full document,
+    /// save stripped them from the file, and live still does. The drydock stores the full image,
     /// so the reset happens here instead, which also covers every ship already filed with research in
     /// it. Every database aboard is reset, lathes and consoles included, since a lathe with no server
     /// keeps whatever recipes it last synced.
@@ -1223,37 +985,6 @@ public sealed partial class DrydockSystem
     }
 
     /// <summary>
-    /// A fuel generator's on flag is written into the save, but it did not survive
-    /// the load: the transform system raises AnchorStateChangedEvent on every entity that starts up
-    /// anchored, and the generator's handler switched off on any anchor change rather than only on
-    /// coming unanchored. So the flag arrived true and was false by the time this ran, this step
-    /// skipped every generator, and the fleet sweep showed On: True -> False on 73 of them. The
-    /// handler is fixed at the source (GeneratorSystem.OnAnchorStateChanged); this step stays for
-    /// what the flag drives and the save does not carry: the running sprite, the ambient hum, the
-    /// radiation source and its glow. Re-applying the flag through the generator system re-derives
-    /// all of it.
-    /// </summary>
-    private Task ReviveGeneratorsSliced(EntityUid grid, IDrydockSlice slice)
-    {
-        return SweepOnGrid<FuelGeneratorComponent>(grid, slice, DrydockPhase.Sweeps, (uid, generator) =>
-        {
-            if (generator.On)
-                _generator.SetFuelGeneratorOn(uid, true, generator);
-        });
-    }
-
-    /// <summary>
-    /// A smart fridge's stock listing is an index over its container, rebuilt on map init because
-    /// its key type cannot be a YAML mapping key. With the map-init transaction off nothing rebuilds
-    /// it, so this does, or a stocked fridge reports itself empty and its contents are unreachable.
-    /// </summary>
-    private Task ReviveSmartFridgesSliced(EntityUid grid, IDrydockSlice slice)
-    {
-        return SweepOnGrid<SmartFridgeComponent>(grid, slice, DrydockPhase.Sweeps,
-            (uid, fridge) => _smartFridge.RebuildEntries((uid, fridge)));
-    }
-
-    /// <summary>
     /// An analysis console holds its analyzer as a NetEntity, which no loader remaps, and the only
     /// thing that re-resolves it from the device-link wire is the analyzer's map init. Without this
     /// the pair comes back linked on the wire and dead on the console.
@@ -1287,103 +1018,8 @@ public sealed partial class DrydockSystem
     }
 
     /// <summary>
-    /// The item-slot registry is a read-only data field, so a slot added at runtime is never saved
-    /// and only the prototype's own slots come back. A reagent dispenser registers its beaker slot on
-    /// map init and its storage slots from its parts, so a retrieved one has jugs in containers no
-    /// slot knows about and nowhere to put a new one. The slot definitions persist on the dispenser;
-    /// re-registering them finds the jugs already in their containers.
-    /// </summary>
-    private Task ReviveDispenserSlotsSliced(EntityUid grid, IDrydockSlice slice)
-    {
-        return SweepOnGrid<ReagentDispenserComponent>(grid, slice, DrydockPhase.Sweeps, (uid, dispenser) =>
-        {
-            if (!TryComp<ItemSlotsComponent>(uid, out var itemSlots))
-                return;
-
-            if (!_itemSlots.TryGetSlot(uid, SharedReagentDispenser.OutputSlotName, out _, itemSlots))
-                _itemSlots.AddItemSlot(uid, SharedReagentDispenser.OutputSlotName, dispenser.BeakerSlot, itemSlots);
-
-            var count = Math.Min(dispenser.StorageSlotIds.Count, dispenser.StorageSlots.Count);
-            for (var slot = 0; slot < count; slot++)
-            {
-                if (!_itemSlots.TryGetSlot(uid, dispenser.StorageSlotIds[slot], out _, itemSlots))
-                    _itemSlots.AddItemSlot(uid, dispenser.StorageSlotIds[slot], dispenser.StorageSlots[slot], itemSlots);
-            }
-        });
-    }
-
-    /// <summary>
-    /// Same read-only registry: a slot's lock state is not saved either, and a cabinet locks its
-    /// slot to its door on map init. A retrieved closed cabinet therefore handed out its contents
-    /// through the closed door ("cabinets that require them to be opened no longer do").
-    /// </summary>
-    private Task ReviveCabinetLocksSliced(EntityUid grid, IDrydockSlice slice)
-    {
-        return SweepOnGrid<ItemCabinetComponent>(grid, slice, DrydockPhase.Sweeps,
-            (uid, cabinet) => _itemCabinet.SetSlotLock((uid, cabinet), !_openable.IsOpen(uid)));
-    }
-
-    /// <summary>
-    /// Two things for every lathe aboard. First, a scrub for documents written before the
-    /// producing marker opted out of saving: a lathe stored mid-print reloaded carrying the marker
-    /// with no recipe behind it, the lathe loop skips a producing lathe with no recipe and the
-    /// reboot pass skips any lathe that is producing, so it neither finished nor restarted, forever.
-    /// Dropping the marker lets the reboot pass resume the queue, which is the state that actually
-    /// persisted. Second, the appearance keys the lathe's map init sets ("appearance requires
-    /// initialization or the layers break", in its own words), set here against the marker the ship
-    /// came back with rather than the one it was stored with.
-    ///
-    /// <para>The appearance carrier restores both keys before this runs, and that is not enough on
-    /// its own: what it restores is what the lathe looked like at store, and a lathe stored mid-print
-    /// looked like it was running. The marker behind that animation does not ride the save, so this
-    /// is the step that settles the two against each other.</para>
-    /// </summary>
-    private Task ScrubStaleLatheProductionSliced(EntityUid grid, IDrydockSlice slice)
-    {
-        return SweepOnGrid<LatheComponent>(grid, slice, DrydockPhase.Sweeps, (uid, lathe) =>
-        {
-            var producing = HasComp<LatheProducingComponent>(uid);
-            if (producing && lathe.CurrentRecipe == null)
-            {
-                RemCompDeferred<LatheProducingComponent>(uid);
-                producing = false;
-            }
-
-            _appearance.SetData(uid, LatheVisuals.IsInserting, false);
-            _appearance.SetData(uid, LatheVisuals.IsRunning, producing);
-        });
-    }
-
-    /// <summary>
-    /// Applies each damage sidecar back onto its holder and removes it.
-    ///
-    /// <para>Run from this explicit pass rather than a startup hook on purpose. Applying damage at
-    /// component startup fires the damage-changed event into the destructible system while the grid
-    /// is still settling, which risks tripping a destruction threshold against state that is not
-    /// final yet. Running after the load has returned lets thresholds see a finished ship, and it is
-    /// why this keeps its place at the end of the epilogue: a slice boundary that moved it earlier
-    /// would reintroduce exactly that.</para>
-    ///
-    /// <para>Snapshot-then-apply, and not only for the reason every sweep here is. This one removes
-    /// the very component it selects on, so consuming a live query would be reading a dictionary it
-    /// is mutating as it goes.</para>
-    /// </summary>
-    private Task RehydrateDamageSliced(EntityUid grid, IDrydockSlice slice)
-    {
-        return SweepOnGrid<DrydockDamageSidecarComponent>(grid, slice, DrydockPhase.Damage, (uid, sidecar) =>
-        {
-            if (!TryComp<DamageableComponent>(uid, out var damageable))
-                return;
-
-            var damage = new DamageSpecifier { DamageDict = new Dictionary<string, FixedPoint2>(sidecar.DamageDict) };
-            _damageable.SetDamage(uid, damageable, damage);
-            RemComp<DrydockDamageSidecarComponent>(uid);
-        });
-    }
-
-    /// <summary>
     /// The row is authoritative for ownership, and this is where the grid learns it. The
-    /// ownership component rides the document, so without this a transferred ship would come back
+    /// ownership component rides the image, so without this a transferred ship would come back
     /// stamped with its previous owner, the console would refuse the new owner's store as "not
     /// yours", and a store by the old owner would file the row back under them. Its last-status
     /// timestamp is round-scoped absolute time too, and a previous round's clock would feed the
@@ -1419,7 +1055,7 @@ public sealed partial class DrydockSystem
     /// The vessel this hull came from, row first and grid second. The row is filled in by the store
     /// from the ship's own station, which a legacy import never had one of; the grid's
     /// <c>VesselComponent</c> is written by the purchase, is not on the ship-save exporter's strip
-    /// list and is not stripped at store either, so it rides both kinds of document. A hull that was
+    /// list and is not stripped at store either, so it rides both a ship file and an image. A hull that was
     /// never bought - a mapped one, or a save old enough to predate the component - carries neither,
     /// and that is what the plain station is for.
     ///
@@ -1474,7 +1110,7 @@ public sealed partial class DrydockSystem
         // The roundstart variation passes run on every new station and read this marker off the
         // station, which is recreated below, so a retrieved ship was re-varied on every retrieve:
         // fresh trash and spills each time, some of it inside the hull. The marker on the grid is
-        // what the rule now honours, and it rides the document, so a ship is varied once at most.
+        // what the rule now honours, and it rides the image, so a ship is varied once at most.
         // Stamped before the vessel check: a stationless retrieve must not be varied later either.
         EnsureComp<StationVariationHasRunComponent>(grid);
 

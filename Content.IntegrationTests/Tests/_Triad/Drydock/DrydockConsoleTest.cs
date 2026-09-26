@@ -1620,6 +1620,11 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             var session = playerMan.Sessions.First();
             var (station, stationGrid, ship, console, consoleComp, card, operatorEnt) = await BuildConsoleAndShip(pair, session.UserId);
 
+            // Sliced, as a store at a live console is: the fixture's zero leaves nothing on the
+            // store's path that yields, so the first press would be over before the second landed.
+            var cfg = server.ResolveDependency<IConfigurationManager>();
+            await server.WaitPost(() => cfg.SetCVar(TriadCCVars.DrydockTickBudgetMs, 2));
+
             Task<(DrydockStoreResult Result, Guid? ShipId)?>? firstPress = null;
             Task<(DrydockStoreResult Result, Guid? ShipId)?>? secondPress = null;
 
@@ -1635,8 +1640,8 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                     "The control on the overlap: the sentinel is stamped before the store's first await, so both presses really were in flight together.");
             });
 
-            // Wall clock, not ticks: with the budget off the store's remaining suspensions are
-            // thread-pool hops, and a tick ceiling drains long before they land.
+            // A sliced store advances one budget per tick, so this ticks until both land, under a
+            // wall-clock ceiling.
             var deadline = System.Diagnostics.Stopwatch.StartNew();
             while (!(firstPress!.IsCompleted && secondPress!.IsCompleted) && deadline.Elapsed < TimeSpan.FromSeconds(60))
             {
@@ -1727,8 +1732,9 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                 // job with a zero budget. These tests are about what a person at a console can and
                 // cannot reach, and the wall-clock pump in DrydockTestHelpers.RunOnServer is sized for
                 // a pipeline that only ever waits on the database. What slicing costs is a different fixture's
-                // question; the one thing the console cares about, that a second press during a
-                // store is refused, holds at any budget and is asserted below.
+                // question. The one thing here that needs it is a second press during a store: at
+                // zero with this harness's synchronous database a store finishes inside the call
+                // that starts it, so ASecondStorePressDuringAStoreIsRefusedAsInProgress turns it on.
                 cfg.SetCVar(TriadCCVars.DrydockTickBudgetMs, 0);
 
                 shipyard.SetupShipyardIfNeeded();

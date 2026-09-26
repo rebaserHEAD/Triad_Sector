@@ -163,52 +163,12 @@ public sealed class TriadCCVars
         CVarDef.Create("triad.drydock.slice_watchdog_seconds", 120, CVar.SERVERONLY);
 
     /// <summary>
-    /// Whether the store drives the engine's serializer one entity at a time against the tick budget
-    /// instead of calling <c>TrySaveGrid</c>, which serializes the whole ship in a single
-    /// un-interruptible call.
-    ///
-    /// <para>That one call is the store's entire tick spike: it was measured at 807 ms warm and
-    /// 3275 ms on a fresh import of the same hull, and the pipeline's worst slice equals it to a
-    /// tenth of a millisecond. Every piece needed to drive the loop from content is public on
-    /// <c>EntitySerializer</c>, so this costs no engine divergence; what it gives up is the engine's
-    /// own wrapper, and with it the tile-map reuse that only exists to keep map file diffs small.
-    /// A drydock document is an opaque blob in Postgres that nothing ever diffs.</para>
-    ///
-    /// <para>Off is the engine path, which is the rollback if the sliced walk and the batch call
-    /// ever disagree about a document.</para>
-    /// </summary>
-    public static readonly CVarDef<bool> DrydockSlicedSerialize =
-        CVarDef.Create("triad.drydock.sliced_serialize", false, CVar.SERVERONLY);
-
-    /// <summary>
-    /// With <see cref="DrydockSlicedSerialize"/> on, also run the engine's own whole-grid serialize
-    /// over the same ship in the same tick and log every difference between the two documents.
-    ///
-    /// <para>The fidelity guard for the sliced walk. Both documents come from one grid at one
-    /// instant, so a difference is the walk's and cannot be content nondeterminism: two separately
-    /// loaded copies of the same hull disagree by tens of entities all on their own, which is why
-    /// an A/B across two loads cannot answer this question and this can.</para>
-    ///
-    /// <para>Doubles what a store costs while it is on. For a soak on a test server and for the
-    /// roster sweep, never for production.</para>
-    /// </summary>
-    public static readonly CVarDef<bool> DrydockSerializeShadowCompare =
-        CVarDef.Create("triad.drydock.serialize_shadow_compare", false, CVar.SERVERONLY);
-
-    /// <summary>
-    /// What a retrieve does with <c>MapInitEvent</c>, which the engine never raises for a restored
-    /// entity: <c>off</c> leaves it unraised, <c>report</c> raises it on every entity of the ship and
-    /// logs every persisted field it rewrote and every entity it spawned or deleted, <c>revert</c>
-    /// raises it and puts every rewritten persisted field back and deletes every spawned entity, so
-    /// the ship keeps what its document said and gains what map init builds at runtime.
-    ///
-    /// <para><c>report</c> lands the damage on the ship; it is the soak mode for a test server.
-    /// <c>off</c> is the rollback: the retrieve's named sweeps then redo the handful of map-init
-    /// jobs they know about and nothing else.</para>
-    ///
-    /// <para>A legacy import reads the same knob before it files the hull: <c>revert</c> there puts
-    /// persisted fields back but keeps every entity map init spawned, since an old save never
-    /// carried its fills (door electronics among them).</para>
+    /// What a legacy import does with <c>MapInitEvent</c> on the staged hull before it files it:
+    /// <c>off</c> leaves it unraised, <c>report</c> raises it on every entity of the ship and logs
+    /// every persisted field it rewrote and every entity it spawned or deleted, <c>revert</c> raises
+    /// it, puts every rewritten persisted field back and keeps every entity map init spawned, since
+    /// an old save never carried its fills (door electronics among them). A retrieve never raises it:
+    /// the image loader puts each entity back at the stage it was stored in, with no event.
     /// </summary>
     public static readonly CVarDef<string> DrydockMapInitRefire =
         CVarDef.Create("triad.drydock.mapinit_refire", "revert", CVar.SERVERONLY);

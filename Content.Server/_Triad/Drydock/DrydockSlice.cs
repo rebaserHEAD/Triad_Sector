@@ -39,16 +39,9 @@ public static class DrydockPhases
         DrydockPhase.Freeze,
         DrydockPhase.Purge,
         DrydockPhase.Appraise,
-        DrydockPhase.Sidecars,
-        DrydockPhase.Strip,
-        DrydockPhase.Capture,
         DrydockPhase.Prepare,
         DrydockPhase.Serialize,
-        DrydockPhase.Validate,
-        DrydockPhase.Hash,
-        DrydockPhase.Drift,
         DrydockPhase.Manifest,
-        DrydockPhase.Compress,
         DrydockPhase.Commit,
         DrydockPhase.Despawn,
     };
@@ -57,21 +50,16 @@ public static class DrydockPhases
     {
         DrydockPhase.Fetch,
         DrydockPhase.Load,
-        DrydockPhase.Fidelity,
-        DrydockPhase.MapInit,
         DrydockPhase.Sweeps,
-        DrydockPhase.Damage,
         DrydockPhase.Station,
         DrydockPhase.Dock,
         DrydockPhase.Release,
     };
 
     /// <summary>
-    /// Relative main-thread cost, seeding the percentage. Measured on one capital hull, so it is a
-    /// shape and not a law: a 144-entity hull and a 960-entity hull do not share the split, and the
-    /// bar's apparent rate will differ between them. Serialize and Validate carry the two largest
-    /// weights because they are the two atomic bulk calls of the store, and Load and Dock are the
-    /// same for the retrieve.
+    /// Relative main-thread cost, seeding the percentage. Not measured on the image path: these are
+    /// the pipelines' shape, the store's sliced image write and the commit that reads it back, and
+    /// the retrieve's one-tick load and dock.
     ///
     /// <para>The numbers do not have to sum to anything: <see cref="DrydockProgress"/> normalises
     /// against the total of whichever roster it was handed, so a phase a pipeline skips costs the
@@ -81,34 +69,21 @@ public static class DrydockPhases
     {
         return phase switch
         {
-            // store. The 2026-09 measurement of a 2.1s store: validate 43%, serialize 37%,
-            // drift ~5% after the optimisation that shipped, sidecars 6%, capture 2%.
+            // store
             DrydockPhase.Gate => 2,
             DrydockPhase.Freeze => 1,
             DrydockPhase.Purge => 1,
             DrydockPhase.Appraise => 1,
-            DrydockPhase.Sidecars => 6,
-            DrydockPhase.Strip => 1,
-            DrydockPhase.Capture => 2,
             DrydockPhase.Prepare => 1,
-            DrydockPhase.Serialize => 37,
-            DrydockPhase.Validate => 43,
-            DrydockPhase.Hash => 1,
-            DrydockPhase.Drift => 5,
-            DrydockPhase.Manifest => 1,
-            DrydockPhase.Compress => 3,
-            DrydockPhase.Commit => 3,
+            DrydockPhase.Serialize => 60,
+            DrydockPhase.Manifest => 2,
+            DrydockPhase.Commit => 20,
             DrydockPhase.Despawn => 1,
 
-            // retrieve. Never measured against a profiler the way the store was, so these are the
-            // pipeline's own shape - one bulk load, then a long revive epilogue, then one dock.
-            DrydockPhase.Fetch => 5,
-            DrydockPhase.Load => 40,
-            DrydockPhase.Fidelity => 15,
-            // Two renders of every persisted field on the hull, so about the fidelity restore twice.
-            DrydockPhase.MapInit => 25,
+            // retrieve
+            DrydockPhase.Fetch => 10,
+            DrydockPhase.Load => 50,
             DrydockPhase.Sweeps => 20,
-            DrydockPhase.Damage => 5,
             DrydockPhase.Station => 3,
             DrydockPhase.Dock => 10,
             DrydockPhase.Release => 2,
@@ -153,7 +128,7 @@ public delegate void DrydockProgressCallback(int percent, DrydockPhase phase);
 /// acceptable to the player who pressed the button.
 ///
 /// <para>Monotonic by construction. The retrieve's revision-fallback loop re-enters Fetch and Load
-/// on a document that would not load, and a bar that jumped backwards there would read as a failure
+/// on an image that would not load, and a bar that jumped backwards there would read as a failure
 /// rather than as a retry.</para>
 /// </summary>
 public sealed class DrydockProgress
@@ -448,11 +423,8 @@ public sealed record DrydockRetrieveOutcome(DrydockRetrieve Retrieve);
 /// <summary>
 /// Per-store mutable state. Constructed by <c>TryStoreShip</c>, handed to the job, filled by
 /// <c>RunStorePipeline</c>, read by the unwind and by the wrapper's finally after a cancellation.
-///
-/// <para>Every list here is an undo ledger and every one of them is appended to <em>before</em> the
-/// mutation it records. A phase that built a local ledger and returned it at the end would leave a
-/// ship blanked with no record of what was taken off it if the pipeline aborted mid-phase, which
-/// across ticks is no longer a theoretical window.</para>
+/// The image write reads the live hull without changing it, so the unwind's only state here is where
+/// the ship was and whether it was undocked and frozen.
 /// </summary>
 public sealed class DrydockStoreContext
 {
@@ -474,7 +446,7 @@ public sealed class DrydockStoreContext
     /// then answers "the staging map" for every question about where the ship came from. An
     /// impound's eviction puts occupants down here and nowhere else: a spawn point on another map
     /// is at best a different sector and at worst a hull mid-store, where a body dropped on it is
-    /// written into somebody else's document.
+    /// written into somebody else's image.
     /// </summary>
     public EntityUid? HomeMap;
 
@@ -492,39 +464,15 @@ public sealed class DrydockStoreContext
     public bool Frozen;
     public bool Undocked;
 
-    public readonly List<EntityUid> InjectedGas = new();
-    public readonly List<EntityUid> InjectedDamage = new();
-    public readonly List<EntityUid> InjectedAppearance = new();
-    public readonly List<IComponent> Stripped = new();
-    public readonly List<(EntityUid Store, EntityUid? Map)> StoreMaps = new();
-
-    /// <summary>
-    /// Created by the pipeline and assigned here before the first cleared member, not returned at
-    /// the end. The sliced capture fills it in place, so an abort part-way through the walk still
-    /// has a record of every field already cleared.
-    /// </summary>
-    public DrydockFidelityCapture? Fidelity;
-
-    public EntityUid? DeedHolder;
-    public bool DeedDetached;
-
     /// <summary>
     /// Null on an ordinary store. Set means the hull is being taken rather than put away, which
     /// bends exactly three gates: the berth checks do not apply because the lot is not a
     /// berth, hazards are destroyed instead of refused for, and anyone found aboard is moved off
     /// instead of refusing. <see cref="DrydockStoreResult.SerializeFailed"/> and
-    /// <see cref="DrydockStoreResult.ValidationFailed"/> are never forced: a document that will not
+    /// <see cref="DrydockStoreResult.ValidationFailed"/> are never forced: an image that will not
     /// write or will not read back is the one thing an impound cannot paper over.
     /// </summary>
     public DrydockImpound? Impound;
-
-    /// <summary>
-    /// Set by the round-end sweep: the pipeline runs on the caller's own async path with no job and
-    /// the engine's own serializer, whatever the two cvars say. Slicing exists to protect bystanders
-    /// from tick hitches and costs roughly twice the wall time to do it; at round end there are no
-    /// bystanders left and the restart is waiting.
-    /// </summary>
-    public bool Inline;
 
     /// <summary>
     /// The mind of whoever is putting the ship away, or null when nobody is. Read by the purge: a
@@ -622,20 +570,8 @@ public sealed class DrydockRetrieveContext
     /// <summary>True once the ship is docked; the wrapper then also owns vacating the berth.</summary>
     public bool Presented;
 
-    /// <summary>
-    /// The revision that loaded, and the two fidelity restore reports from its revive. Left here for
-    /// the wrapper, which writes their skips to the timeline once the ship is presented.
-    /// </summary>
+    /// <summary>The revision that loaded.</summary>
     public int? LoadedRevision;
-
-    /// <inheritdoc cref="LoadedRevision"/>
-    public DrydockFidelityRestore? CapturedRestore;
-
-    /// <inheritdoc cref="LoadedRevision"/>
-    public DrydockFidelityRestore? AppearanceRestore;
-
-    /// <summary>The map-init transaction's report, null when the mode was off.</summary>
-    public DrydockMapInitReport? MapInitReport;
 
     public readonly DrydockPhaseTimer Timer = new();
 }

@@ -2622,32 +2622,4 @@ public sealed partial class ShipyardSystem
         if (HasComp<StationRecordsComponent>(shuttleStation))
             _records.Synchronize(shuttleStation);
     }
-
-    /// <summary>
-    /// Blanks the grid-side deed's holder for the length of a store and hands back what it was.
-    /// The holder is the card in the console, which is not in the ship's document, so serialized
-    /// it is an invalid reference that the deserializer logs as an error on every scratch load and
-    /// every retrieve. Retrieve mints a card deed and sets the holder afresh, so nothing is lost by
-    /// writing it blank; the abort path puts the live value back.
-    /// </summary>
-    internal EntityUid? DetachGridDeedHolder(EntityUid grid)
-    {
-        if (!TryComp<ShuttleDeedComponent>(grid, out var deed))
-            return null;
-
-        var holder = deed.DeedHolder;
-        deed.DeedHolder = null;
-        Dirty(grid, deed);
-        return holder;
-    }
-
-    /// <summary>The abort half of <see cref="DetachGridDeedHolder"/>.</summary>
-    internal void ReattachGridDeedHolder(EntityUid grid, EntityUid? holder)
-    {
-        if (holder == null || !TryComp<ShuttleDeedComponent>(grid, out var deed))
-            return;
-
-        deed.DeedHolder = holder;
-        Dirty(grid, deed);
-    }
 }

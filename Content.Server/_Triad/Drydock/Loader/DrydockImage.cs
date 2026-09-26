@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using System.Linq;
 
 namespace Content.Server._Triad.Drydock.Loader;
 
@@ -28,4 +29,13 @@ public sealed record DrydockImage(
     IReadOnlyList<DrydockImageEntity> Entities,
     string Tiles,
     int Unsaved,
-    int Bytes);
+    int Bytes)
+{
+    /// <summary>
+    /// Entities other than the grid stored below MapInitialized, which the load puts back at that stage
+    /// (<see cref="DrydockLoadSession"/> writes each record's flag as the skeleton's <c>mapInit</c>). The grid is left
+    /// out because the engine never map-initialises a grid it creates at runtime (SharedMapSystem.Grid.cs:64-65), so
+    /// every hull begun in the round stores one. A hull from a map file holds none.
+    /// </summary>
+    public IEnumerable<DrydockImageEntity> BelowMapInit => Entities.Where(e => !e.MapInitialized && e.Id != GridId);
+}

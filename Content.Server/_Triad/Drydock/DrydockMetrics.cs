@@ -3,33 +3,26 @@ using Prometheus;
 namespace Content.Server._Triad.Drydock;
 
 /// <summary>
-/// Every loss class the durability design records, as counters the dashboard reads. Two of them are
-/// incidents on sight: any fallback to an older revision, and skipped captured state after a merge,
-/// which means a rename erased a key from stored ships.
+/// Every loss class the durability design records, as counters the dashboard reads. A fallback to an
+/// older revision is an incident on sight.
 /// </summary>
 public static class DrydockMetrics
 {
     /// <summary>
-    /// A retrieve handed out an older revision than the current one: the current document was corrupt,
-    /// would not load, or was stepped past, and an older one loaded.
+    /// A retrieve handed out an older revision than the current one: the current image would not load
+    /// or was stepped past, and an older one loaded.
     /// </summary>
     public static readonly Counter RetrieveFallbacks = Metrics.CreateCounter(
         "drydock_retrieve_fallbacks",
         "Retrieves that used an older revision because a newer one could not be used.");
 
-    /// <summary>A retrieve refused because the document references content that no longer resolves.</summary>
+    /// <summary>A retrieve refused because the image references content that no longer resolves.</summary>
     public static readonly Counter DriftRefusals = Metrics.CreateCounter(
         "drydock_drift_refusals",
-        "Retrieves refused because the stored document references content that no longer exists.");
+        "Retrieves refused because the stored image references content that no longer exists.");
 
-    /// <summary>Keys a retrieve could not restore, by sidecar.</summary>
-    public static readonly Counter SkippedStateKeys = Metrics.CreateCounter(
-        "drydock_skipped_state_keys",
-        "Captured-state and appearance keys a retrieve could not restore.",
-        new CounterConfiguration { LabelNames = new[] { "sidecar" } });
-
-    /// <summary>A store refused because its document did not reload to the grid it came from.</summary>
+    /// <summary>A store refused because its image did not read back as it was written.</summary>
     public static readonly Counter ValidationMismatches = Metrics.CreateCounter(
         "drydock_validation_mismatches",
-        "Stores refused because the written document did not round-trip.");
+        "Stores refused because the written image did not read back as it was written.");
 }

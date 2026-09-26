@@ -5,6 +5,7 @@ using System.Diagnostics;
 using System.Linq;
 using System.Numerics;
 using System.Threading.Tasks;
+using Content.IntegrationTests._Triad.PostgresPair;
 using Content.Server._Triad.Drydock;
 using Content.Server.Database;
 using Content.Server.Shuttles.Components;
@@ -168,11 +169,18 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
         /// <summary>
         /// The restart waits while a sweep is filing and not past the ceiling. Driven through the
         /// same hold the ticker calls, with the sweep started for a round of this test's own.
+        ///
+        /// <para>On the PostgreSQL pair, because a sweep is only in flight across a call while its
+        /// database calls yield, as a live server's do. The pool's SQLite runs them synchronously
+        /// (<c>PoolManager.Cvars.cs:14</c>) and a sweep's stores run inline, so there the sweep is
+        /// over before the hold is asked.</para>
         /// </summary>
         [Test]
+        [Category("Postgres")]
         public async Task TheRestartWaitsForTheSweepAndNotPastItsCeiling()
         {
-            await using var pair = await PoolManager.GetServerClient();
+            await using var postgres = await PostgresTestPair.Start();
+            var pair = postgres.Pair;
             var server = pair.Server;
             var entMan = server.EntMan;
 

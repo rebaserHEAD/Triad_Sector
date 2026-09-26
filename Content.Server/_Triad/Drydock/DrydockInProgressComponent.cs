@@ -12,11 +12,11 @@ namespace Content.Server._Triad.Drydock;
 /// that could insert into it, and every container insertion on the server was paying two component
 /// lookups for the length of somebody else's store.</para>
 ///
-/// <para><c>UnsavedComponent</c> is load-bearing, and more so than before. The marker is stamped
-/// before the grid is serialized, so without it the marker rides the document into storage, comes
-/// back on the retrieved ship, and the sentinel gate at the top of the store answers "already in
-/// progress" to every future store of that hull, permanently. That is a worse failure than the
-/// blocked containers the attribute used to be justified by.</para>
+/// <para><c>UnsavedComponent</c> is load-bearing. The marker is on the grid while its image is
+/// written, and the store writes no row for an unsaved component (<c>DrydockStoreSession.WriteEntity</c>),
+/// so a retrieved ship never carries it. Saved, it would come back on the ship and the sentinel gate
+/// at the top of the store would answer "already in progress" to every future store of that hull,
+/// permanently.</para>
 /// </summary>
 [RegisterComponent, UnsavedComponent]
 public sealed partial class DrydockInProgressComponent : Component;

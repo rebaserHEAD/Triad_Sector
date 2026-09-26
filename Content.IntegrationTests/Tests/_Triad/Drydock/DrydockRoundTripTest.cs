@@ -14,6 +14,7 @@ using Content.Server._Mono.FireControl;
 using Content.Server._NF.Shipyard.Systems;
 using Content.Server._Triad.ContrabandPermit;
 using Content.Server._Triad.Drydock;
+using Content.Server._Triad.Drydock.Loader;
 using Content.Server._NF.Market.Components;
 using Content.Server.Atmos.Piping.Binary.Components;
 using Content.Server.Atmos.Piping.Trinary.Components;
@@ -76,8 +77,8 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
 {
     /// <summary>
     /// The first thing that ever moves a ship through the drydock. Everything either pipeline half
-    /// does is unproven until this runs: the six Revive steps, both sidecars, the validation
-    /// backstop, the manifest, and the claim.
+    /// does is unproven until this runs: the image write and load, the Revive steps, the manifest,
+    /// and the claim.
     ///
     /// <para>It builds a ship rather than loading a roster vessel on purpose. A hand-built grid
     /// fails for one reason at a time, which is what you want from the test that establishes the
@@ -386,12 +387,12 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             Assert.That(result, Is.EqualTo(DrydockStoreResult.Success));
             await pair.RunTicksSync(5);
 
-            var document = Encoding.UTF8.GetString(DrydockSystem.DecompressZstd(await ReadBlobs(db, shipId!.Value)));
+            var image = await ReadImage(db, shipId!.Value);
             Assert.Multiple(() =>
             {
-                Assert.That(document, Does.Contain("type: ShipShieldEmitter"), "Control: the generator itself is in the document.");
-                Assert.That(document, Does.Not.Contain("proto: ShipShield\n").And.Not.Contain("proto: ShipShield\r"), "The shield entity opts out of saving.");
-                Assert.That(document, Does.Not.Contain("ShipShielded"), "The grid's marker is an unsaved component.");
+                Assert.That(image.Entities.Any(e => e.Rows.ContainsKey("ShipShieldEmitter")), Is.True, "Control: the generator itself is in the image.");
+                Assert.That(image.Entities.Any(e => e.Prototype == "ShipShield"), Is.False, "The shield entity opts out of saving.");
+                Assert.That(image.Entities.Any(e => e.Rows.ContainsKey("ShipShielded")), Is.False, "The grid's marker is an unsaved component.");
             });
 
             var retrieved = await DrydockTestHelpers.RunOnServer(pair, () => drydock.TryRetrieveShip(shipId.Value, owner, station, null));
@@ -532,11 +533,10 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
         /// entities, so a shot that produces a projectile is the only proof that the engine's own
         /// enumerators agree with the flag we just read.</para>
         ///
-        /// <para>The document control is what stops this passing vacuously. If someone drops the
-        /// freeze, the filed document carries no paused flags, the retrieved ship is trivially
-        /// unpaused, and every assertion below still passes while testing nothing. Reading the blob
-        /// back and counting the flags is what ties the assertions to the thing they exist to
-        /// guard.</para>
+        /// <para>The image control is what stops this passing vacuously. If someone drops the
+        /// freeze, the filed image records no paused entities, the retrieved ship is trivially
+        /// unpaused, and every assertion below still passes while testing nothing. Reading the image
+        /// back and counting them is what ties the assertions to the thing they exist to guard.</para>
         /// </summary>
         [Test]
         public async Task ARetrievedShipComesBackUnpausedOnAnUnpausedMap()
@@ -581,16 +581,13 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             Assert.That(result, Is.EqualTo(DrydockStoreResult.Success));
             await pair.RunTicksSync(5);
 
-            // The document control. A freeze that silently stopped happening would leave every
+            // The image control. A freeze that silently stopped happening would leave every
             // assertion below passing on a ship that was never frozen in the first place.
-            var document = Encoding.UTF8.GetString(DrydockSystem.DecompressZstd(await ReadBlobs(db, shipId!.Value)));
-            var pausedLines = document
-                .Split('\n')
-                .Count(line => line.Trim().Equals("paused: true", StringComparison.OrdinalIgnoreCase));
+            var pausedEntities = (await ReadImage(db, shipId!.Value)).Entities.Count(e => e.Paused);
 
-            Assert.That(pausedLines, Is.GreaterThanOrEqualTo(savableBefore),
-                $"The filed document carries {pausedLines} paused flags against {savableBefore} savable entities aboard. "
-                + "The freeze pauses the grid and every descendant before the serializer walks the tree, so a shortfall means the store filed a ship that was never frozen.");
+            Assert.That(pausedEntities, Is.GreaterThanOrEqualTo(savableBefore),
+                $"The filed image records {pausedEntities} paused entities against {savableBefore} savable entities aboard. "
+                + "The freeze pauses the grid and every descendant before the store walks the tree, so a shortfall means the store filed a ship that was never frozen.");
 
             var retrieved = await DrydockTestHelpers.RunOnServer(pair, () => drydock.TryRetrieveShip(shipId.Value, owner, station, null));
             Assert.That(retrieved.Result, Is.EqualTo(DrydockRetrieveResult.Success));
@@ -798,8 +795,8 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
         /// The berth is a parking spot: a successful retrieve empties it, and only once the ship is
         /// really out. A retrieve that fails after the claim leaves the berth exactly as it was, so
         /// the release never has to re-seat a berth another store may have taken in the meantime.
-        /// The failure is induced by corrupting the stored document in place, which the ladder
-        /// catches after the claim and before anything is materialized.
+        /// The failure is induced by filing an image the load refuses in place of the stored one,
+        /// which the ladder steps past after the claim, scrapping whatever the load made.
         /// </summary>
         [Test]
         public async Task ARetrieveVacatesTheBerthOnlyWhenItSucceeds()
@@ -821,22 +818,22 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             var (result, shipId) = await DrydockTestHelpers.RunOnServer(pair, () => drydock.TryStoreShip(shipGrid, owner, null));
             Assert.That(result, Is.EqualTo(DrydockStoreResult.Success));
 
-            var seated = (await store.LoadCurrent(shipId!.Value))!.Ship;
+            var seated = (await store.GetShipHeader(shipId!.Value))!;
             Assert.That(seated.BerthId, Is.EqualTo(berth), "A stored ship sits in the berth the store found for it.");
 
-            // Break the only document, so the retrieve claims the row, finds nothing that verifies,
-            // and releases. The two error lines that produces are the ladder doing its job.
-            var original = await ReadBlobs(db, shipId.Value);
-            await WriteBlobs(db, shipId.Value, new byte[] { 1, 2, 3 });
+            // Break the only image, so the retrieve claims the row, finds nothing that loads, and
+            // releases. The error lines that produces are the ladder doing its job.
+            var original = await ReadImage(db, shipId.Value);
+            await WriteImages(db, shipId.Value, Unloadable(original));
 
             var failureLevel = pair.ServerLogHandler.FailureLevel;
             pair.ServerLogHandler.FailureLevel = LogLevel.Fatal;
             var refused = await DrydockTestHelpers.RunOnServer(pair, () => drydock.TryRetrieveShip(shipId.Value, owner, station, null));
             pair.ServerLogHandler.FailureLevel = failureLevel;
 
-            Assert.That(refused.Result, Is.EqualTo(DrydockRetrieveResult.NoReadableRevision), "A document that fails its checksum must not come back as a ship.");
+            Assert.That(refused.Result, Is.EqualTo(DrydockRetrieveResult.NoReadableRevision), "An image that will not load must not come back as a ship.");
 
-            var afterRefusal = (await store.LoadCurrent(shipId.Value))!.Ship;
+            var afterRefusal = (await store.GetShipHeader(shipId.Value))!;
             Assert.Multiple(() =>
             {
                 Assert.That(afterRefusal.State, Is.EqualTo(DrydockShipState.Stored), "A failed retrieve releases the claim.");
@@ -844,12 +841,12 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             });
 
             // Mend it and bring it out for real.
-            await WriteBlobs(db, shipId.Value, original);
+            await WriteImages(db, shipId.Value, original);
             var retrieved = await DrydockTestHelpers.RunOnServer(pair, () => drydock.TryRetrieveShip(shipId.Value, owner, station, null));
             Assert.That(retrieved.Result, Is.EqualTo(DrydockRetrieveResult.Success));
             await pair.RunTicksSync(5);
 
-            var afterRetrieve = (await store.LoadCurrent(shipId.Value))!.Ship;
+            var afterRetrieve = (await store.GetShipHeader(shipId.Value))!;
             Assert.Multiple(() =>
             {
                 Assert.That(afterRetrieve.State, Is.EqualTo(DrydockShipState.CheckedOut));
@@ -868,7 +865,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                 Assert.That(sameShip, Is.EqualTo(shipId), "A re-store files against the same hull.");
             });
 
-            var reseated = (await store.LoadCurrent(shipId.Value))!.Ship;
+            var reseated = (await store.GetShipHeader(shipId.Value))!;
             Assert.That(reseated.BerthId, Is.EqualTo(berth));
 
             await pair.CleanReturnAsync();
@@ -966,7 +963,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
 
             var refused = await DrydockTestHelpers.RunOnServer(pair, () => drydock.TryAdminRestore(shipId!.Value, berth, admin, null, "player says it vanished"));
             Assert.That(refused, Is.EqualTo(DrydockBerthResult.WrongState), "A hull that is in the world cannot be restored: that would be a duplicate.");
-            Assert.That((await store.LoadCurrent(shipId!.Value))!.Ship.State, Is.EqualTo(DrydockShipState.CheckedOut));
+            Assert.That((await store.GetShipHeader(shipId!.Value))!.State, Is.EqualTo(DrydockShipState.CheckedOut));
 
             // Now it really is gone.
             await server.WaitPost(() => entMan.DeleteEntity(retrieved.Grid!.Value));
@@ -980,7 +977,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             var restored = await DrydockTestHelpers.RunOnServer(pair, () => drydock.TryAdminRestore(shipId!.Value, berth, admin, null, "hull lost to a bug"));
             Assert.That(restored, Is.EqualTo(DrydockBerthResult.Success));
 
-            var row = (await store.LoadCurrent(shipId!.Value))!.Ship;
+            var row = (await store.GetShipHeader(shipId!.Value))!;
             Assert.Multiple(() =>
             {
                 Assert.That(row.State, Is.EqualTo(DrydockShipState.Stored));
@@ -1000,33 +997,44 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             }
         }
 
-        private static Task<byte[]> ReadBlobs(IServerDbManager db, Guid shipId)
+        private static async Task<DrydockImage> ReadImage(IServerDbManager db, Guid shipId)
+        {
+            var load = await db.RunTriadDbCommand(async (context, token) =>
+            {
+                var revisions = await db.DrydockImages.Revisions(context, shipId, token);
+                return await db.DrydockImages.Get(context, new DrydockImageKey(shipId, revisions.Single()), token);
+            }, CancellationToken.None);
+
+            return load!;
+        }
+
+        /// <summary>Files <paramref name="image"/> in place of every image the ship holds.</summary>
+        private static Task WriteImages(IServerDbManager db, Guid shipId, DrydockImage image)
         {
             return db.RunTriadDbCommand(async (context, token) =>
             {
-                var row = await context.DrydockBlob.AsNoTracking().SingleAsync(b => b.ShipGuid == shipId, token);
-                return row.Blob;
+                foreach (var revision in await db.DrydockImages.Revisions(context, shipId, token))
+                    await db.DrydockImages.Put(context, new DrydockImageKey(shipId, revision), image, token);
             }, CancellationToken.None);
         }
 
-        private static Task WriteBlobs(IServerDbManager db, Guid shipId, byte[] bytes)
+        /// <summary>The image with a row on its grid entity naming a component no registration has, which the load refuses.</summary>
+        private static DrydockImage Unloadable(DrydockImage image)
         {
-            return db.RunTriadDbCommand(async (context, token) =>
+            return image with
             {
-                var rows = await context.DrydockBlob.Where(b => b.ShipGuid == shipId).ToListAsync(token);
-                foreach (var row in rows)
-                    row.Blob = bytes;
-
-                await context.SaveChangesAsync(token);
-            }, CancellationToken.None);
+                Entities = image.Entities
+                    .Select(entity => entity.Id != image.GridId
+                        ? entity
+                        : entity with { Rows = new Dictionary<string, string>(entity.Rows) { ["DrydockTestNoSuchComponent"] = "{}" } })
+                    .ToList(),
+            };
         }
 
         /// <summary>
-        /// Damage is the second reason a ship needs a fidelity layer at all, and it is a different
-        /// reason from the first. <c>DamageableComponent.Damage</c> is not unserializable, it is
-        /// declared read-only to the serializer, so it is never written and a shot-up hull comes
-        /// back pristine. That is a free repair on every combat vessel in a fork whose ships get
-        /// shot at, which is why the sidecar carries the raw damage dictionary across.
+        /// <c>DamageableComponent.Damage</c> is declared read-only to the engine's serializer, so an
+        /// engine save never writes it and a shot-up hull would come back pristine, a free repair on
+        /// every combat vessel. The image's codec writes the damage dictionary inline.
         /// </summary>
         [Test]
         public async Task DamageSurvivesTheRoundTrip()
@@ -1081,10 +1089,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             {
                 Assert.That(entMan.GetComponent<DamageableComponent>(retrievedAirlock!.Value).TotalDamage,
                     Is.EqualTo(damageBefore),
-                    "Damage is read-only to the serializer, so this passes only because the sidecar carried it and the rehydrate pass applied it.");
-
-                Assert.That(entMan.HasComponent<DrydockDamageSidecarComponent>(retrievedAirlock.Value), Is.False,
-                    "The sidecar is scaffolding for the crossing. Leaving it aboard would re-apply the same damage on the next retrieve.");
+                    "Damage is read-only to the engine's serializer; the image's codec writes the damage dictionary inline.");
             });
 
             await pair.CleanReturnAsync();
@@ -1485,19 +1490,16 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
         }
 
         /// <summary>
-        /// The capture manifest, finally carrying something. Everything above tests state the
-        /// serializer could write and something forgot to re-run; this tests state the serializer
-        /// cannot write at all.
+        /// State the engine's serializer cannot write at all. Everything above tests state it could
+        /// write and something forgot to re-run.
         ///
-        /// <para>A lathe queue is a <c>[DataField]</c> whose element type has no serializer
-        /// anywhere, which is the exact failure the fidelity probe exists to find. The field is
-        /// captured into a sidecar, cleared so the map serializer does not choke on it, and put
-        /// back on arrival. Without that the store does not merely lose the queue: the serializer
-        /// aborts the whole grid, so this is also the difference between a ship that stores and one
-        /// that refuses.</para>
+        /// <para>A lathe queue is a <c>[DataField]</c> whose element type the engine has no
+        /// serializer for. The codec registers its own (<c>DrydockLatheRecipeBatchSerializer</c>,
+        /// in <c>DrydockCodecContext</c>), so the queue is written in the lathe's own row and read
+        /// back with it.</para>
         ///
-        /// <para>The other manifest entry is market data, which needs a market to be meaningful.
-        /// This covers the mechanism; that entry rides the same code path.</para>
+        /// <para>Market data is the other list the codec carries this way, and needs a market to be
+        /// meaningful; <see cref="CargoMarketDataSurvivesTheRoundTrip"/> covers it.</para>
         /// </summary>
         [Test]
         public async Task AQueuedLatheRecipeSurvivesTheRoundTrip()
@@ -1535,7 +1537,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
 
             var (result, shipId) = await DrydockTestHelpers.RunOnServer(pair, () => drydock.TryStoreShip(shipGrid, owner, null));
             Assert.That(result, Is.EqualTo(DrydockStoreResult.Success),
-                "A populated queue must not fail the store. If the probe stopped recognising the gap this would come back SerializeFailed.");
+                "A populated queue must not fail the store.");
 
             await pair.RunTicksSync(5);
 
@@ -1552,7 +1554,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                 var queue = entMan.GetComponent<LatheComponent>(retrievedLathe!.Value).Queue;
 
                 Assert.That(queue, Has.Count.EqualTo(1),
-                    "The queue is carried by the capture sidecar, so an empty one here means it was stripped rather than captured, or never restored.");
+                    "The queue is carried in the lathe's own row, so an empty one here means it was not written or not read back.");
 
                 Assert.Multiple(() =>
                 {
@@ -1845,10 +1847,8 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
 
         /// <summary>
         /// A xenoartifact is the one entity aboard whose whole structure is a NetEntity graph. The
-        /// fidelity probe had no NetEntity writer, so it judged every such field unserializable and
-        /// blanked it before the save: the vertex array went to null and the serializer refused the
-        /// entire ship. The map serializer remaps NetEntity like EntityUid, so the probe must leave
-        /// those fields alone; this proves the store goes through and the graph comes back pointing
+        /// codec's context writes a NetEntity as the stable id of the entity it names
+        /// (<c>DrydockCodecContext</c>), so the store goes through and the graph comes back pointing
         /// at real nodes.
         /// </summary>
         [Test]
@@ -1885,7 +1885,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
 
             var (result, shipId) = await DrydockTestHelpers.RunOnServer(pair, () => drydock.TryStoreShip(shipGrid, owner, null));
             Assert.That(result, Is.EqualTo(DrydockStoreResult.Success),
-                "A ship carrying an artifact must store. SerializeFailed here means the probe blanked a NetEntity field and the writer refused the null.");
+                "A ship carrying an artifact must store.");
 
             await pair.RunTicksSync(5);
 
@@ -2497,16 +2497,16 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
 
         /// <summary>
         /// Appearance data written by the game, rather than seeded by a prototype, survives a round
-        /// trip. No save has ever carried it: the component declares one read-only data field for
-        /// the prototype seed and keeps everything else in a dictionary the serializer never sees,
-        /// which is why a retrieved lathe froze mid-animation and a retrieved tray showed no dead
-        /// plant while still holding one.
+        /// trip. The component declares one read-only data field for the prototype seed and keeps
+        /// everything else in a dictionary no data field holds, so the image carries it in the
+        /// entity's appearance row (<c>DrydockImageSystem.AppearanceRow</c>).
         /// </summary>
         /// <remarks>
         /// The two keys are deliberately ones nothing aboard this ship reads. A key some system
         /// re-derives on startup would pass whether the carrier worked or not, and the carrier is
         /// the only thing under test here. Two different enum types with two different value types,
-        /// because the sidecar has to resolve both halves of each entry by name on the way back.
+        /// because the appearance row has to resolve both halves of each entry by name on the way
+        /// back.
         /// </remarks>
         [Test]
         public async Task AppearanceSetOutsideMapInitSurvivesTheRoundTrip()
@@ -2770,17 +2770,12 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
         }
 
         /// <summary>
-        /// The last of the two sidecars, and the only piece of state here that does not live on an
-        /// entity at all. A pipe net's air hangs off the node-group object graph, which the map
-        /// serializer never visits, so it is not a serialization failure to detect: it is state
-        /// attached to a structure that gets rebuilt from scratch on load. Without the sidecar a
-        /// stored ship comes back with every pipe empty.
-        ///
-        /// <para>The restore is the odd one out too. It does not run in the Revive block; it waits
-        /// for the reloaded grid's first node-group rebuild, because that is when there is a net to
-        /// merge into. The sidecar's presence is the whole apply condition, and it removes itself
-        /// immediately so that a player cutting a pipe later cannot re-fire the merge and duplicate
-        /// the gas.</para>
+        /// The only piece of state here that does not live on an entity at all. A pipe net's air
+        /// hangs off the node-group object graph, which no component holds and which is rebuilt from
+        /// scratch on load. <c>PipeGasCarrySystem</c> gives each kept pipe node its share in the
+        /// carried row at store and pours it back into the net its node joins at load, holding a
+        /// share whose node has no net yet until the first rebuild. Without it a stored ship comes
+        /// back with every pipe empty.
         /// </summary>
         [Test]
         public async Task PipeNetGasSurvivesTheRoundTrip()
@@ -2829,7 +2824,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
 
             var molesBefore = await TotalPipeMoles(pair, shipGrid);
             Assert.That(molesBefore, Is.GreaterThan(0f),
-                "The control: the pipes have to actually hold gas and be in a net, or nothing below is measuring the sidecar.");
+                "The control: the pipes have to actually hold gas and be in a net, or nothing below is measuring the carry.");
 
             var (result, shipId) = await DrydockTestHelpers.RunOnServer(pair, () => drydock.TryStoreShip(shipGrid, owner, null));
             Assert.That(result, Is.EqualTo(DrydockStoreResult.Success));
@@ -2839,32 +2834,23 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             var retrieved = await DrydockTestHelpers.RunOnServer(pair, () => drydock.TryRetrieveShip(shipId!.Value, owner, station, null));
             Assert.That(retrieved.Result, Is.EqualTo(DrydockRetrieveResult.Success));
 
-            // The merge waits for the first node-group rebuild after the load, which is later than
+            // A share held for its node's first rebuild is poured then, which is later than
             // everything Revive does synchronously.
             await pair.RunTicksSync(15);
 
             var molesAfter = await TotalPipeMoles(pair, retrieved.Grid!.Value);
 
             Assert.That(molesAfter, Is.EqualTo(molesBefore).Within(0.01f),
-                "Pipe gas is not on any entity, so this passes only because the sidecar carried each pipe's share and the rebuild merged it back.");
-
-            await server.WaitAssertion(() =>
-            {
-                var query = entMan.AllEntityQueryEnumerator<DrydockPipeGasComponent>();
-                Assert.That(query.MoveNext(out _, out _), Is.False,
-                    "The sidecar removes itself on the merge. One left behind would re-merge on the next pipe a player cuts, which duplicates the gas.");
-            });
+                "Pipe gas is not on any entity, so this passes only because each pipe's share was carried and poured back.");
 
             await pair.CleanReturnAsync();
         }
 
         /// <summary>
-        /// A pump has an inlet node in one net and an outlet node in another. The first sidecar held
-        /// one mixture per entity, so whichever net was written last won and the restore merged it
-        /// into both nodes: gas crossed the pump, a mixer's two feeds leaked into each other, and a
-        /// crystallizer's inlet dumped into its regulator loop. A lone
-        /// pump is the smallest device with two nets; its two nodes must come back holding exactly
-        /// what each held, and nothing of the other.
+        /// A pump has an inlet node in one net and an outlet node in another, so each node's share is
+        /// carried under its node name and poured into its own net. A lone pump is the smallest
+        /// device with two nets; its two nodes must come back holding exactly what each held, and
+        /// nothing of the other.
         /// </summary>
         [Test]
         public async Task ATwoPortDeviceKeepsEachNetsGasSeparate()
@@ -2930,8 +2916,8 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
         }
 
         /// <summary>
-        /// The second and last entry on the capture manifest, so between this and the lathe queue
-        /// the whole manifest is now exercised rather than half of it.
+        /// The other list the engine has no serializer for and the codec carries in its component's
+        /// own row, beside the lathe queue.
         ///
         /// <para>Cargo market data is the grid's own record of what it sells, which is player-built
         /// state accumulated over a round rather than anything a prototype provides. It sits on the
@@ -2979,14 +2965,14 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             await server.WaitAssertion(() =>
             {
                 Assert.That(entMan.TryGetComponent<CargoMarketDataComponent>(retrieved.Grid!.Value, out var market), Is.True,
-                    "The component rides the blob normally; it is the list inside it that needs carrying.");
+                    "The component rides the image normally; it is the list inside it that needs carrying.");
 
 #pragma warning disable RA0002
                 var list = market!.MarketDataList;
 #pragma warning restore RA0002
 
                 Assert.That(list, Has.Count.EqualTo(1),
-                    "MarketData has no serializer, so an empty list here means it was stripped rather than captured.");
+                    "MarketData has no engine serializer, so an empty list here means the codec did not write it or did not read it back.");
 
                 Assert.Multiple(() =>
                 {

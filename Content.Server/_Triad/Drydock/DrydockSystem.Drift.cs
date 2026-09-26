@@ -16,24 +16,16 @@ public sealed partial class DrydockSystem
 
     /// <summary>
     /// The four entity migration files as the loader applies them, read once on first use. Holiday
-    /// renames are deliberately absent: a re-bake built on them would make a seasonal swap permanent.
-    /// Not thread-safe to build: every caller touches it on the main thread before handing work to a worker.
+    /// renames are deliberately absent: a holiday swap does not apply to a stored ship.
+    /// Not thread-safe to build, so it is read only on the main thread.
     /// </summary>
     internal DrydockMigrationTable MigrationTable => _migrationTable ??= DrydockMigrationTable.Load(_resources);
 
     /// <summary>
-    /// Classifies one stored document against the mappings and the prototypes loaded now. Reads only,
-    /// so it may run off the main thread once <see cref="MigrationTable"/> has been touched there.
+    /// Classifies one stored revision's prototype ids against the mappings and the prototypes loaded
+    /// now, with its two format versions against the windows a retrieve reads.
     /// </summary>
-    /// <param name="yaml">The uncompressed document.</param>
     /// <param name="drydockFormatVer">The revision's <c>drydock_format_ver</c> column.</param>
-    internal DrydockDriftVerdict DetectDrift(string yaml, int drydockFormatVer)
-    {
-        var (ids, engineFormatVer) = ReadDriftIds(yaml);
-        return DetectDrift(ids, engineFormatVer, drydockFormatVer);
-    }
-
-    /// <summary><see cref="DetectDrift(string, int)"/> over ids already read with <see cref="ReadDriftIds"/>.</summary>
     internal DrydockDriftVerdict DetectDrift(SortedSet<string> ids, int engineFormatVer, int drydockFormatVer)
     {
         return DrydockDrift.Detect(

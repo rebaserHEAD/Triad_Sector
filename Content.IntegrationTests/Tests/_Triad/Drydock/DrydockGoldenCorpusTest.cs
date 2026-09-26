@@ -31,6 +31,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
     /// </summary>
     [TestFixture]
     [TestOf(typeof(DrydockSystem))]
+    [Ignore("The fixtures are YAML documents and a retrieve loads images only. Lifted by the image fixture form: one DrydockImage per hull as JSON, filed through the image store.")]
     public sealed class DrydockGoldenCorpusTest
     {
         [Test]
