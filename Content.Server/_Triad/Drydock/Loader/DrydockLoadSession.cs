@@ -25,7 +25,8 @@ namespace Content.Server._Triad.Drydock.Loader;
 /// <list type="number">
 /// <item>A skeleton document: every stored entity under its prototype, with its stable id as the yaml uid and its
 /// recorded <c>mapInit</c> and <c>paused</c>, and the grid's own grid component carrying the tile table's chunks.
-/// Nothing else, because every other component comes from the image's rows.</item>
+/// Every other entity's component list is empty, since its components come from the image's rows, but present: the
+/// engine resets net ticks at startup only for an entity whose data has a component list (<c>:995-996</c>).</item>
 /// <item><c>TryProcessData</c> and <c>CreateEntities</c> (<c>EntityDeserializer.cs:153</c>, <c>:183</c>): the
 /// engine allocates everyone and adds each prototype's components, and reads the tiles with its
 /// own chunk reader, tile-change and collision work suppressed. (<see cref="CreateEntities"/>.)</item>
@@ -36,8 +37,11 @@ namespace Content.Server._Triad.Drydock.Loader;
 /// (<c>:670-685</c>); and a prototype component with no row is removed. (<see cref="ApplyRows"/>.)</item>
 /// <item>The grid re-parented onto the map with <c>SetCoordinates</c>, in the same gap the engine's own merge
 /// uses (<c>MapLoaderSystem.Load.cs:192</c>, <c>MapLoaderSystem.LoadMap.cs:254-274</c>). (<see cref="ApplyRows"/>.)</item>
-/// <item><c>StartEntities</c> (<c>:213</c>): parents first, init then startup per entity, then the map-init
-/// stamp with no event (<c>:1019-1036</c>) and the pause stamp. (<see cref="Start"/>.)</item>
+/// <item><c>StartEntities</c> (<c>:213</c>): parents first, the net tick reset (<c>:984-1017</c>) then init then
+/// startup per entity, then the map-init stamp with no event (<c>:1019-1036</c>) and the pause stamp. The reset marks
+/// each restored networked component of an entity with a prototype as the prototype's own, which leaves it out of the
+/// next state, so every restored networked component is then dirtied: the first state after a load is full, and a
+/// later delta is legal because the creation tick stays clear. (<see cref="Start"/>.)</item>
 /// </list>
 ///
 /// <para>The seam between each entity's init and its startup (<c>EntityInitialized</c>) carries the item slots held
@@ -120,6 +124,10 @@ public sealed class DrydockLoadSession
                 gridRow["type"] = new ValueDataNode("MapGrid");
                 gridRow["chunks"] = _tileTable.Get<MappingDataNode>(DrydockTileTable.ChunksKey).Copy();
                 node["components"] = new SequenceDataNode { gridRow };
+            }
+            else
+            {
+                node["components"] = new SequenceDataNode();
             }
 
             var key = entity.Prototype ?? string.Empty;
@@ -453,6 +461,17 @@ public sealed class DrydockLoadSession
             {
                 _manifest.Refuse(held.Member, receiverProto, $"the cable system would not pair it with {PrototypeOf(providerUid)}");
             }
+        }
+
+        // The rows are not the prototype, so every restored networked component goes out in full on this tick, whatever
+        // the startup reset marked it as (see the class summary).
+        foreach (var uid in _ids!.Keys)
+        {
+            if (!entMan.TryGetComponent<MetaDataComponent>(uid, out var meta))
+                continue;
+
+            foreach (var (_, component) in entMan.GetNetComponents(uid))
+                entMan.Dirty(uid, component, meta);
         }
 
         _phase = 3;
