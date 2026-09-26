@@ -179,6 +179,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                 sb.AppendLine(note);
             CodecNotes.Clear();
 
+            WriteFindingSummary(sb, rung);
             sb.AppendLine($"[ladder] rung {rung} {vesselId}: {first.Before.Entities} entities, {findings} finding line(s), {clock.Elapsed.TotalSeconds:F1}s wall before cleanup");
             await TestContext.Out.WriteLineAsync(sb.ToString());
 

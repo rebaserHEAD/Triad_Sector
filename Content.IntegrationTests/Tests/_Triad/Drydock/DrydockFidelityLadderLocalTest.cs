@@ -367,7 +367,6 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             var findings = Report(sb, rung, vesselId, 1, first, EngineMode || CodecMode ? null : RetrieveGrants, gasRooms, doorPath, protoMan, findingKinds)
                            + Report(sb, rung, vesselId, 2, second, EngineMode || CodecMode ? null : RetrieveRestamps, gasRooms, doorPath, protoMan, findingKinds, secondUnexplained, previous: first);
             AppendShapes(sb, rung, vesselId, first, second, secondUnexplained);
-            WriteFindingSummary(rung);
 
             // A codec-mode run over many rungs stops on a rung that brings new kinds of finding faster than they can be
             // read, or one that failed, and the rest report themselves skipped rather than burying the stop under a
@@ -391,6 +390,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
 
             foreach (var note in CodecNotes)
                 sb.AppendLine(note);
+            WriteFindingSummary(sb, rung);
             sb.AppendLine($"[ladder] rung {rung} {vesselId}: {first.Before.Entities} entities, {findings} finding line(s), {clock.Elapsed.TotalSeconds:F1}s wall before cleanup");
             await TestContext.Out.WriteLineAsync(sb.ToString());
 
@@ -2561,23 +2561,23 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             return sb.ToString();
         }
 
-        /// <summary>Rewrites the summary after every rung when <c>LADDER_DUMP</c> names a directory, so a run that dies keeps it.</summary>
-        private static void WriteFindingSummary(int rung)
+        /// <summary>
+        /// The summary so far, at the end of every rung's report, where a console log shows it; and, when <c>LADDER_DUMP</c>
+        /// names a directory, rewritten there, so a run that dies keeps it. Not printed at fixture teardown, since output
+        /// written there belongs to no test result and a console log never shows it.
+        /// </summary>
+        private static void WriteFindingSummary(StringBuilder report, int rung)
         {
             _firstRung ??= rung;
+            var summary = FindingSummary();
+            report.Append(summary);
+
             var directory = Environment.GetEnvironmentVariable("LADDER_DUMP");
             if (string.IsNullOrEmpty(directory))
                 return;
 
             System.IO.Directory.CreateDirectory(directory);
-            System.IO.File.WriteAllText(System.IO.Path.Combine(directory, $"summary_from{_firstRung:000}.txt"), FindingSummary());
-        }
-
-        [OneTimeTearDown]
-        public async Task PrintFindingSummary()
-        {
-            if (LargestByKind.Count > 0)
-                await TestContext.Out.WriteLineAsync(FindingSummary());
+            System.IO.File.WriteAllText(System.IO.Path.Combine(directory, $"summary_from{_firstRung:000}.txt"), summary);
         }
 
         /// <summary>
