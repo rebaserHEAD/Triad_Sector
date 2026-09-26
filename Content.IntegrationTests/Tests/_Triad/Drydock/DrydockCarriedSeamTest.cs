@@ -2,7 +2,9 @@
 
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
+using System.Text.Json.Nodes;
 using System.Threading.Tasks;
 using Content.IntegrationTests.Pair;
 using Content.Server._Triad.Drydock;
@@ -12,6 +14,8 @@ using Robust.Shared.GameObjects;
 using Robust.Shared.Map;
 using Robust.Shared.Player;
 using Robust.Shared.Serialization.Manager.Attributes;
+using Robust.Shared.Serialization.Markdown;
+using Robust.Shared.Serialization.Markdown.Mapping;
 using Robust.Shared.Timing;
 using Robust.Shared.Utility;
 
@@ -42,7 +46,14 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
   save: false
   components:
   - type: DrydockCarryProbe
+
+- type: entity
+  id: DrydockCarryProbeDoomedDummy
+  components:
+  - type: DrydockCarryProbe
 ";
+
+        private const string Doomed = "DrydockCarryProbeDoomedDummy";
 
         /// <summary>
         /// The fake owner: carries <see cref="DrydockCarryProbeComponent.Live"/> and <see cref="DrydockCarryProbeComponent.Second"/>,
@@ -54,6 +65,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             public const string SecondKey = "Probe.Second";
 
             public readonly List<EntityUid> Directed = new();
+            public readonly List<EntityUid> AtHead = new();
             public readonly List<EntityUid> DeletedAtHead = new();
             public readonly Dictionary<EntityUid, bool> HasAfterDelete = new();
             public DrydockCarried? LastLookup;
@@ -69,6 +81,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             public void Clear()
             {
                 Directed.Clear();
+                AtHead.Clear();
                 DeletedAtHead.Clear();
                 HasAfterDelete.Clear();
                 LastLookup = null;
@@ -118,6 +131,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                     if (!TryComp<DrydockCarryProbeComponent>(uid, out var probe))
                         continue;
 
+                    AtHead.Add(uid);
                     probe.HasAtHead = ev.Carried?.Has(uid, LiveKey);
                     if (ev.TryGetCarried<int>(uid, LiveKey, out var live))
                         probe.ReadAtHead = live;
@@ -376,6 +390,82 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                     Assert.That(owner.HasAfterDelete[gone], Is.True, "The lookup answers about the image, whatever became of the entity.");
                     Assert.That(survivor.Comp.ReadDirected, Is.EqualTo(6), "The control: the other probe restored as usual.");
                 });
+            });
+
+            await pair.CleanReturnAsync();
+        }
+
+        /// <summary>
+        /// Test 3, the seam note's dropped root: a probe whose prototype the migration mappings delete, with a second such
+        /// probe and an ordinary one under it. None of the three is raised at, at the head or directed, so no carried value
+        /// of theirs is read; the engine deletes all three after startup; and the load records one root, under the
+        /// prototype it was stored with, with a subtree of three, the flagged child counted there and not listed again. A
+        /// dropped entity has no row in the lookup, unlike 3b's, which a handler deletes after the lookup is built. The
+        /// survivor beside them restores as usual. Control: the same image loaded with no mappings brings back all four.
+        /// </summary>
+        [Test]
+        public async Task ADroppedRootIsNeverRaisedAtAndIsRecordedOnceWithItsSubtree()
+        {
+            await using var pair = await PoolManager.GetServerClient(new PoolSettings { Dirty = true });
+            var server = pair.Server;
+            var entMan = server.EntMan;
+            var map = await pair.CreateTestMap();
+            var image = server.System<DrydockImageSystem>();
+            var fidelity = server.System<DrydockFidelitySystem>();
+            var owner = server.System<DrydockCarryProbeSystem>();
+            var grid = map.Grid.Owner;
+
+            DrydockMigrationTable migrations;
+            using (var reader = new StringReader($"{Doomed}: null\n"))
+                migrations = DrydockMigrationTable.FromMappings(new[] { (MappingDataNode) DataNodeParser.ParseYamlStream(reader).Single().Root });
+
+            DrydockImage stored = default!;
+            DrydockLoadResult dropped = default!;
+            DrydockLoadResult control = default!;
+            var droppedLives = new List<int>();
+            var controlLives = new List<int>();
+            var droppedDirected = new List<EntityUid>();
+            var droppedHead = new List<EntityUid>();
+            var droppedSurvivor = EntityUid.Invalid;
+            await server.WaitPost(() =>
+            {
+                owner.Clear();
+                var root = SpawnProbe(entMan, grid, 1, prototype: Doomed);
+                SpawnProbe(entMan, root, 2, prototype: Doomed);
+                SpawnProbe(entMan, root, 3);
+                SpawnProbe(entMan, grid, 4);
+                stored = image.Store(grid).Image;
+                image.Despawn(grid);
+
+                dropped = image.Load(stored, map.MapUid, new DrydockLoadOptions { Migrations = migrations });
+                var survivors = Probes(entMan, fidelity, dropped.Grid);
+                droppedLives.AddRange(survivors.Select(probe => probe.Comp.Live));
+                droppedSurvivor = survivors.Single().Owner;
+                droppedDirected.AddRange(owner.Directed);
+                droppedHead.AddRange(owner.AtHead);
+                entMan.DeleteEntity(dropped.Grid);
+
+                owner.Clear();
+                control = image.Load(stored, map.MapUid);
+                controlLives.AddRange(Probes(entMan, fidelity, control.Grid).Select(probe => probe.Comp.Live).Order());
+            });
+
+            var rootId = stored.Entities
+                .Single(entity => entity.Prototype == Doomed
+                                  && JsonNode.Parse(entity.Rows["Transform"])!["parent"]!.GetValue<string>() == stored.GridId.ToString())
+                .Id;
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(dropped.DroppedRoots, Is.EqualTo(new[] { new DrydockDroppedRoot(rootId, Doomed, 3) }),
+                    "One root, under its stored prototype, with the flagged child and the ordinary one in its subtree.");
+                Assert.That(dropped.Ids, Has.Count.EqualTo(stored.Entities.Count - 3), "The dropped three are not among the loaded.");
+                Assert.That(droppedLives, Is.EqualTo(new[] { 4 }), "Only the survivor is on the grid, and its carried value came back.");
+                Assert.That(droppedDirected, Is.EqualTo(new[] { droppedSurvivor }), "The directed raise reached the survivor alone.");
+                Assert.That(droppedHead, Is.EqualTo(new[] { droppedSurvivor }), "So did the head.");
+
+                Assert.That(control.DroppedRoots, Is.Empty, "The control: with no mappings nothing is dropped.");
+                Assert.That(controlLives, Is.EqualTo(new[] { 1, 2, 3, 4 }), "And all four probes come back with their values.");
             });
 
             await pair.CleanReturnAsync();

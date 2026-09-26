@@ -30,7 +30,14 @@ namespace Content.Server._Triad.Drydock.Loader;
 /// engine resets net ticks at startup only for an entity whose data has a component list (<c>:995-996</c>).</item>
 /// <item><c>TryProcessData</c> and <c>CreateEntities</c> (<c>EntityDeserializer.cs:153</c>, <c>:183</c>): the
 /// engine allocates everyone and adds each prototype's components, and reads the tiles with its
-/// own chunk reader, tile-change and collision work suppressed. (<see cref="CreateEntities"/>.)</item>
+/// own chunk reader, tile-change and collision work suppressed. It applies the migration mappings
+/// (<see cref="DrydockLoadOptions.Migrations"/>) as it reads: a renamed prototype id loads as its target (<c>:345</c>),
+/// and an entity whose stored prototype is deleted is allocated without one and flagged (<c>:339-344</c>, <c>:525</c>).
+/// A flagged entity and everything under it take their rows as the engine loads data into every entity it allocated
+/// (<c>:570-588</c>), because a parent's container and the root checks at startup (<c>:1118-1137</c>) hold them to it;
+/// they get no carried values, no after-start members and no restore raise. Startup deletes them (<c>:1094</c>), and the
+/// result records each by root (<see cref="DrydockLoadResult.DroppedRoots"/>).
+/// (<see cref="CreateEntities"/>.)</item>
 /// <item>The rows, through <see cref="DrydockCodec"/> under its own context, whose references resolve through the
 /// engine's <c>UidMap</c> (<c>:93</c>). A component the entity already has, which the prototype put there, is
 /// read into a temporary and copied in, which is the engine's own path for one (<c>:693-694</c>); one it lacks is
@@ -74,6 +81,8 @@ public sealed class DrydockLoadSession
     private readonly Dictionary<string, int> _appearanceRefused = new(StringComparer.Ordinal);
     private readonly List<DrydockSentinel> _sentinels = new();
     private readonly List<(string Member, TimeSpan Value, Func<object?> Get, Action<object?> Set)> _collected = new();
+    private readonly HashSet<EntityUid> _dropped = new();
+    private readonly List<DrydockDroppedRoot> _droppedRoots = new();
 
     private EntityDeserializer? _deserializer;
     private DrydockCodec? _codec;
@@ -162,10 +171,13 @@ public sealed class DrydockLoadSession
 
         // The entity-system collection, not the root one: the deserializer injects systems (SharedMapSystem among
         // them), and MapLoaderSystem hands it its own injected collection, which is this one.
+        var migrations = _options.Migrations;
         var deserializer = new EntityDeserializer(
             _system.Entities.EntitySysManager.DependencyCollection,
             document,
-            new DeserializationOptions());
+            new DeserializationOptions(),
+            migrations == null ? null : new Dictionary<string, string>(migrations.Renamed),
+            migrations == null ? null : new HashSet<string>(migrations.Deleted));
         if (!deserializer.TryProcessData())
             throw new InvalidOperationException("Drydock load: the engine refused the skeleton document.");
 
@@ -174,6 +186,7 @@ public sealed class DrydockLoadSession
         deserializer.CreateEntities();
         _gridUid = deserializer.UidMap[(int) _image.GridId];
         _ids = deserializer.UidMap.ToDictionary(entry => entry.Value, entry => (long) entry.Key);
+        CollectDropped(deserializer);
 
         _codec = new DrydockCodec(
             _system.Serialization,
@@ -398,7 +411,8 @@ public sealed class DrydockLoadSession
         // pinpointer's target, through the pinpointer system.
         var cables = _system.Cables;
         var pinpointers = _system.Pinpointers;
-        foreach (var held in _manifest.Held.Where(h => h.Member.Moment == DrydockApplyMoment.AfterStart))
+        // A dropped entity is gone by now, with nothing missing that it could be counted against.
+        foreach (var held in _manifest.Held.Where(h => h.Member.Moment == DrydockApplyMoment.AfterStart && !_dropped.Contains(h.Uid)))
         {
             // A pinpointer's target through SetTarget, which sets the target's name with it and, when active, the direction.
             if (held.Member is { Component: "Pinpointer", Member: nameof(PinpointerComponent.Target) })
@@ -525,7 +539,7 @@ public sealed class DrydockLoadSession
         var result = new DrydockLoadResult
         {
             Grid = _gridUid,
-            Ids = ids,
+            Ids = _dropped.Count == 0 ? ids : ids.Where(entry => !_dropped.Contains(entry.Key)).ToDictionary(),
             Manifest = _manifest,
             Overwrote = _overwrote,
             OverwroteByType = _overwroteByType,
@@ -542,8 +556,9 @@ public sealed class DrydockLoadSession
             AppearanceStillDirty = stillDirty,
             UnresolvedPrototypes = _codec!.Unresolved.ToList(),
             Severed = _codec.Severed.ToList(),
-            Sentinels = _sentinels.ToList(),
+            Sentinels = _sentinels.Where(sentinel => !_dropped.Contains(sentinel.Entity)).ToList(),
             DroppedBatches = _codec.Context.DroppedBatches.ToList(),
+            DroppedRoots = _droppedRoots.ToList(),
             TilesStored = stored.Count,
             TilesRestored = restored.Count,
             TilesMissing = stored.Except(restored).Count(),
@@ -553,14 +568,19 @@ public sealed class DrydockLoadSession
         // After the last entity has started and the after-start members are set, in ascending stable id. Two distinct steps,
         // so that when this phase is sliced the head event completes whole before the first directed raise starts: a slice
         // boundary goes between them and between entities inside the second, never inside the first.
-        var inOrder = ids.OrderBy(entry => entry.Value).Select(entry => entry.Key).Where(entMan.EntityExists).ToList();
+        var inOrder = ids.OrderBy(entry => entry.Value)
+            .Select(entry => entry.Key)
+            .Where(uid => !_dropped.Contains(uid) && entMan.EntityExists(uid))
+            .ToList();
 
         // The carried values, for these raises only: closed after them, so a handler that keeps the lookup fails loudly.
+        // A dropped entity's row is left out, so it is never decoded and the lookup has nothing for it.
         var carriedRows = new Dictionary<EntityUid, (string?, MappingDataNode)>();
         foreach (var entity in _image.Entities)
         {
-            if (_rows[entity.Id].TryGetValue(DrydockImageSystem.CarriedRow, out var carriedRow))
-                carriedRows[deserializer.UidMap[(int) entity.Id]] = (entity.Prototype, carriedRow);
+            var uid = deserializer.UidMap[(int) entity.Id];
+            if (!_dropped.Contains(uid) && _rows[entity.Id].TryGetValue(DrydockImageSystem.CarriedRow, out var carriedRow))
+                carriedRows[uid] = (entity.Prototype, carriedRow);
         }
 
         var carried = new DrydockCarried(_codec!, carriedRows);
@@ -592,6 +612,59 @@ public sealed class DrydockLoadSession
 
         _phase = 4;
         return result;
+    }
+
+    /// <summary>
+    /// The entities the engine flagged for deletion as it read a deleted prototype (<c>EntityDeserializer.cs:525</c>), and
+    /// everything under each by the image's own parents, taken before startup deletes them (<c>:1094</c>), with one record
+    /// per flagged entity that has no flagged entity above it. The grid flagged would take the whole hull with it, so that
+    /// refuses the load.
+    /// </summary>
+    private void CollectDropped(EntityDeserializer deserializer)
+    {
+        if (deserializer.ToDelete.Count == 0)
+            return;
+
+        if (deserializer.ToDelete.Contains(_gridUid))
+        {
+            var gridProto = _image.Entities.First(e => e.Id == _image.GridId).Prototype;
+            throw new InvalidOperationException($"Drydock load: the grid's prototype {gridProto} is deleted by the migration mappings.");
+        }
+
+        var flagged = deserializer.ToDelete.Select(uid => _ids![uid]).ToHashSet();
+        var parents = new Dictionary<long, long>();
+        foreach (var entity in _image.Entities)
+        {
+            if (_rows[entity.Id].TryGetValue("Transform", out var transform)
+                && transform.TryGet<ValueDataNode>("parent", out var parent)
+                && parent.Value != DrydockCodecContext.InvalidReference)
+            {
+                parents[entity.Id] = long.Parse(parent.Value, System.Globalization.CultureInfo.InvariantCulture);
+            }
+        }
+
+        var subtrees = new Dictionary<long, int>();
+        foreach (var entity in _image.Entities)
+        {
+            long? root = null;
+            for (long? id = entity.Id; id is { } current; id = parents.TryGetValue(current, out var up) ? up : null)
+            {
+                if (flagged.Contains(current))
+                    root = current;
+            }
+
+            if (root is not { } dropped)
+                continue;
+
+            subtrees[dropped] = subtrees.GetValueOrDefault(dropped) + 1;
+            _dropped.Add(deserializer.UidMap[(int) entity.Id]);
+        }
+
+        foreach (var entity in _image.Entities)
+        {
+            if (subtrees.TryGetValue(entity.Id, out var count))
+                _droppedRoots.Add(new DrydockDroppedRoot(entity.Id, entity.Prototype ?? string.Empty, count));
+        }
     }
 
     /// <summary>

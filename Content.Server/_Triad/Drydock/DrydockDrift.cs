@@ -44,8 +44,9 @@ public sealed record DrydockDriftVerdict(
     /// <summary>
     /// The load would fail or misread: an id that resolves to nothing after the mappings, a component
     /// no registration has (the load resolves every row through the factory, <c>DrydockLoadSession.ApplyRows</c>),
-    /// or a format outside its reader's window. Renames and deletions alone are not a refusal, since the
-    /// loader heals both on its own.
+    /// or a format outside its reader's window. Renames and deletions alone are not a refusal: the load hands the
+    /// mappings to the engine's deserializer (<c>DrydockLoadOptions.Migrations</c>), so a renamed id loads as its target
+    /// and an entity whose prototype is deleted is deleted, with everything under it, after startup and recorded by root.
     /// </summary>
     public bool IsRefusal => Unresolved.Count > 0 || MissingComponents.Count > 0 || EngineFormatOutOfWindow || DrydockFormatOutOfWindow;
 }

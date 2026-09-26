@@ -63,7 +63,21 @@ public sealed class DrydockLoadOptions
     /// what a load does.
     /// </summary>
     public Func<DrydockManifestMember, bool>? HoldOff { get; init; }
+
+    /// <summary>
+    /// The migration mappings, handed to the engine's deserializer as <c>MapLoaderSystem</c> hands them
+    /// (<c>EntityDeserializer.cs:123-134</c>): a stored prototype id renamed loads as its target, and an entity whose
+    /// stored prototype is deleted loads without one and is deleted with everything under it after startup
+    /// (<c>:1094</c>), before any restore raise. Null applies none.
+    /// </summary>
+    public DrydockMigrationTable? Migrations { get; init; }
 }
+
+/// <summary>
+/// An entity whose stored prototype the migration mappings delete, with no such entity above it: its id in the image, the
+/// prototype id it was stored under, and how many entities went with it, itself included.
+/// </summary>
+public sealed record DrydockDroppedRoot(long Id, string Prototype, int Subtree);
 
 /// <summary>A manifest member decoded at the rows, or taken off its component there, held for its moment.</summary>
 public sealed record DrydockHeldMember(EntityUid Uid, DrydockManifestMember Member, object? Value);
@@ -171,6 +185,12 @@ public sealed class DrydockLoadResult
 
     /// <summary>Queued lathe batches left out for a recipe that no longer resolves, by recipe id.</summary>
     public IReadOnlyList<string> DroppedBatches { get; init; } = Array.Empty<string>();
+
+    /// <summary>
+    /// What the migration mappings deleted, by root (<see cref="DrydockDroppedRoot"/>): an entity deleted under another is
+    /// counted in that one's subtree and never listed on its own.
+    /// </summary>
+    public IReadOnlyList<DrydockDroppedRoot> DroppedRoots { get; init; } = Array.Empty<DrydockDroppedRoot>();
 
     public int TilesStored { get; init; }
     public int TilesRestored { get; init; }

@@ -581,7 +581,7 @@ public sealed partial class DrydockSystem
     private DrydockLoadResult? LoadOntoStagingMap(DrydockRetrieveContext ctx, IDrydockSlice slice, int revision, DrydockImage image)
     {
         ctx.StagingMap = CreateStagingMap(JobIdOf(slice), DrydockStagingKind.Retrieve, ctx.ShipId, mapInit: true);
-        var session = _image.BeginLoad(image, ctx.StagingMap.Value);
+        var session = _image.BeginLoad(image, ctx.StagingMap.Value, new DrydockLoadOptions { Migrations = MigrationTable });
         try
         {
             session.CreateEntities();
@@ -598,7 +598,8 @@ public sealed partial class DrydockSystem
             Log.Info($"Drydock: {ctx.ShipId} revision {revision} loaded {result.Ids.Count} entities; "
                      + $"severed {result.Severed.Count}, manifest missing {result.Manifest.Missing.Values.Sum()} and refused {result.Manifest.Refused.Values.Sum()}, "
                      + $"appearance refused {result.AppearanceRefused.Values.Sum()}, unresolved prototypes {result.UnresolvedPrototypes.Count}, "
-                     + $"dropped batches {result.DroppedBatches.Count}.");
+                     + $"dropped batches {result.DroppedBatches.Count}, "
+                     + $"dropped roots [{string.Join(", ", result.DroppedRoots.Select(r => $"{r.Prototype} ({r.Subtree})"))}].");
             return result;
         }
         catch (Exception e) when (e is not OperationCanceledException)
@@ -686,8 +687,8 @@ public sealed partial class DrydockSystem
 
     /// <summary>
     /// Every prototype id that no longer resolves and every component name nothing registers, then
-    /// whichever format sits outside its reader's window. Renames and deletions are left out: the loader
-    /// heals both.
+    /// whichever format sits outside its reader's window. Renames and deletions are left out: the load applies
+    /// both (<see cref="DrydockDriftVerdict.IsRefusal"/>).
     /// </summary>
     internal static string DescribeDriftRefusal(DrydockDriftVerdict verdict)
     {

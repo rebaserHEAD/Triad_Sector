@@ -180,6 +180,71 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
         }
 
         /// <summary>
+        /// A stored entity whose prototype id the real migration mappings delete passes the drift gate, which does not refuse
+        /// a deletion, and the retrieve hands the mappings to the load: the entity is dropped and the ship comes back
+        /// without it. The control is the image before the doctoring, which carries the item.
+        /// </summary>
+        [Test]
+        public async Task AStoredEntityWhosePrototypeIsDeletedIsDroppedAndTheShipComesBack()
+        {
+            await using var pair = await PoolManager.GetServerClient();
+            var server = pair.Server;
+            var entMan = server.EntMan;
+
+            var db = server.ResolveDependency<IServerDbManager>();
+            var store = server.ResolveDependency<DrydockStore>();
+            var drydock = server.System<DrydockSystem>();
+
+            var deleted = drydock.MigrationTable.Deleted.Order(StringComparer.Ordinal).First();
+
+            var owner = Guid.NewGuid();
+            await DrydockTestHelpers.InsertPlayer(db, owner);
+            await store.AddBerth(owner, ShipSizeClass.SuperCapital, DrydockBerthKind.Granted, 0, null, null);
+
+            var (station, shipGrid, _) = await DrydockRoundTripTest.BuildShipAndStation(pair);
+            await server.WaitPost(() => entMan.SpawnEntity(ItemProtoId, new EntityCoordinates(shipGrid, new Vector2(0.5f, 0.5f))));
+            await pair.RunTicksSync(2);
+
+            var (result, shipId) = await DrydockTestHelpers.RunOnServer(pair, () => drydock.TryStoreShip(shipGrid, owner, null));
+            Assert.That(result, Is.EqualTo(DrydockStoreResult.Success));
+            await pair.RunTicksSync(5);
+
+            var ship = shipId!.Value;
+            var revision = (await store.GetShipHeader(ship))!.CurrentRevision;
+            var original = await ReadImage(db, ship, revision);
+            Assert.That(original.Entities.Count(e => e.Prototype == ItemProtoId), Is.EqualTo(1), "Control: the item is one entity in the image.");
+
+            await WriteImage(db, ship, revision, Rename(original, ItemProtoId, deleted));
+
+            var retrieved = await DrydockTestHelpers.RunOnServer(pair, () => drydock.TryRetrieveShip(ship, owner, station, null));
+
+            var prototypes = new List<string?>();
+            await server.WaitPost(() =>
+            {
+                var stack = new Stack<EntityUid>();
+                stack.Push(retrieved.Grid!.Value);
+                while (stack.Count > 0)
+                {
+                    var current = stack.Pop();
+                    prototypes.Add(entMan.GetComponent<MetaDataComponent>(current).EntityPrototype?.ID);
+                    var children = entMan.GetComponent<TransformComponent>(current).ChildEnumerator;
+                    while (children.MoveNext(out var child))
+                        stack.Push(child);
+                }
+            });
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(retrieved.Result, Is.EqualTo(DrydockRetrieveResult.Success), $"A deleted prototype ({deleted}) is not a refusal.");
+                Assert.That(prototypes, Does.Not.Contain(ItemProtoId).And.Not.Contain(deleted), "The dropped entity is not on the ship.");
+                Assert.That(prototypes, Is.SupersetOf(original.Entities.Select(e => e.Prototype).Where(p => p != ItemProtoId).Distinct()),
+                    "Every other prototype the image held came back.");
+            });
+
+            await pair.CleanReturnAsync();
+        }
+
+        /// <summary>
         /// A current image that passes the drift gate and still will not load falls back to the
         /// revision before it, and is pinned so the stores that follow cannot prune the newer state.
         /// </summary>
