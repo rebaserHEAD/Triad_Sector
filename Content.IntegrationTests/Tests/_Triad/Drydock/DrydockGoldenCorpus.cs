@@ -3,16 +3,19 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.IO.Compression;
 using System.Linq;
 using System.Reflection;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
 using System.Threading.Tasks;
 using Content.IntegrationTests.Pair;
 using Content.Server._NF.Shipyard.Systems;
 using Content.Server._Triad.Drydock;
+using Content.Server._Triad.Drydock.Loader;
 using Content.Server.Database;
 using Content.Server.Station.Components;
 using Content.Server.Station.Systems;
@@ -29,10 +32,10 @@ using Robust.Shared.Prototypes;
 namespace Content.IntegrationTests.Tests._Triad.Drydock
 {
     /// <summary>
-    /// One frozen fixture: a compressed document exactly as the drydock filed it, and the sidecar that
-    /// carries the revision row a retrieve reads beside it. The pair lives under <c>GoldenCorpus/</c>
-    /// as <c>&lt;name&gt;.blob.zst</c> and <c>&lt;name&gt;.json</c>, embedded into the test assembly so
-    /// the gate finds them wherever the tests run.
+    /// One frozen fixture: a grid image exactly as the drydock filed it, and the sidecar that carries the
+    /// revision row a retrieve reads beside it. The pair lives under <c>GoldenCorpus/</c> as
+    /// <c>&lt;name&gt;.image.json.gz</c> (<see cref="GoldenCorpus.WriteImage"/>) and <c>&lt;name&gt;.json</c>,
+    /// embedded into the test assembly so the gate finds them wherever the tests run.
     /// </summary>
     public sealed class GoldenFixture
     {
@@ -58,12 +61,12 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
         [JsonPropertyName("generatedAtUtc")]
         public string GeneratedAtUtc { get; set; } = string.Empty;
 
-        /// <summary>SHA-256 of the compressed blob file, so a fixture that rotted on disk fails as that.</summary>
-        [JsonPropertyName("blobFileSha256")]
-        public string BlobFileSha256 { get; set; } = string.Empty;
+        /// <summary>SHA-256 of the image file, so a fixture that rotted on disk fails as that.</summary>
+        [JsonPropertyName("imageFileSha256")]
+        public string ImageFileSha256 { get; set; } = string.Empty;
 
-        [JsonPropertyName("blobFileBytes")]
-        public int BlobFileBytes { get; set; }
+        [JsonPropertyName("imageFileBytes")]
+        public int ImageFileBytes { get; set; }
 
         [JsonPropertyName("revision")]
         public GoldenRevision Revision { get; set; } = new();
@@ -72,14 +75,14 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
         [JsonPropertyName("probes")]
         public List<GoldenProbe> Probes { get; set; } = new();
 
-        /// <summary>The compressed document. Not in the sidecar; filled from the blob file.</summary>
+        /// <summary>The image file's bytes. Not in the sidecar; filled from the image file.</summary>
         [JsonIgnore]
-        public byte[] Blob { get; set; } = Array.Empty<byte>();
+        public byte[] ImageFile { get; set; } = Array.Empty<byte>();
 
         public GoldenFixture Clone()
         {
             var copy = JsonSerializer.Deserialize<GoldenFixture>(JsonSerializer.Serialize(this, GoldenCorpus.Json), GoldenCorpus.Json)!;
-            copy.Blob = (byte[]) Blob.Clone();
+            copy.ImageFile = (byte[]) ImageFile.Clone();
             return copy;
         }
     }
@@ -87,9 +90,6 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
     /// <summary>The <c>drydock_revision</c> columns a retrieve reads, as filed.</summary>
     public sealed class GoldenRevision
     {
-        [JsonPropertyName("checksum")]
-        public string Checksum { get; set; } = string.Empty;
-
         [JsonPropertyName("sizeBytes")]
         public int SizeBytes { get; set; }
 
@@ -101,9 +101,6 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
 
         [JsonPropertyName("protoFingerprint")]
         public string ProtoFingerprint { get; set; } = string.Empty;
-
-        [JsonPropertyName("capturedKeyHash")]
-        public string CapturedKeyHash { get; set; } = string.Empty;
 
         [JsonPropertyName("appraisedValue")]
         public int? AppraisedValue { get; set; }
@@ -248,7 +245,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                 var stem = resource[..^".json".Length];
                 var fixture = JsonSerializer.Deserialize<GoldenFixture>(ReadResource(assembly, resource), Json)
                               ?? throw new InvalidDataException($"{resource} is not a golden fixture sidecar.");
-                fixture.Blob = ReadResource(assembly, stem + ".blob.zst");
+                fixture.ImageFile = ReadResource(assembly, stem + ImageExtension);
                 fixtures.Add(fixture);
             }
 
@@ -258,10 +255,85 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
         private static byte[] ReadResource(Assembly assembly, string name)
         {
             using var stream = assembly.GetManifestResourceStream(name)
-                               ?? throw new FileNotFoundException($"Embedded golden corpus resource {name} is missing: a sidecar without its blob, or the reverse.");
+                               ?? throw new FileNotFoundException($"Embedded golden corpus resource {name} is missing: a sidecar without its image, or the reverse.");
             using var copy = new MemoryStream();
             stream.CopyTo(copy);
             return copy.ToArray();
+        }
+
+        /// <summary>The image file's extension, after the fixture's name.</summary>
+        public const string ImageExtension = ".image.json.gz";
+
+        /// <summary>
+        /// An image as a fixture file: one JSON object, the grid id, the unsaved count, the byte count, the tile table
+        /// and every entity in load order with its rows in the order the store wrote them, each row and the tile table
+        /// as a JSON value rather than a string so the file reads as JSON when unpacked, then gzipped.
+        /// <see cref="ReadImage"/> gives back rows equal as text to the ones written, since both sides are compact JSON.
+        /// </summary>
+        public static byte[] WriteImage(DrydockImage image)
+        {
+            var entities = new JsonArray();
+            foreach (var entity in image.Entities)
+            {
+                var rows = new JsonObject();
+                foreach (var (name, text) in entity.Rows)
+                    rows[name] = JsonNode.Parse(text);
+
+                entities.Add(new JsonObject
+                {
+                    ["id"] = entity.Id,
+                    ["prototype"] = entity.Prototype,
+                    ["mapInitialized"] = entity.MapInitialized,
+                    ["paused"] = entity.Paused,
+                    ["rows"] = rows,
+                });
+            }
+
+            var root = new JsonObject
+            {
+                ["gridId"] = image.GridId,
+                ["unsaved"] = image.Unsaved,
+                ["bytes"] = image.Bytes,
+                ["tiles"] = JsonNode.Parse(image.Tiles),
+                ["entities"] = entities,
+            };
+
+            using var output = new MemoryStream();
+            using (var gzip = new GZipStream(output, CompressionLevel.SmallestSize))
+                gzip.Write(Encoding.UTF8.GetBytes(root.ToJsonString()));
+
+            return output.ToArray();
+        }
+
+        /// <summary>The image a fixture file holds (<see cref="WriteImage"/>).</summary>
+        public static DrydockImage ReadImage(byte[] file)
+        {
+            using var input = new GZipStream(new MemoryStream(file), CompressionMode.Decompress);
+            using var document = JsonDocument.Parse(input);
+            var root = document.RootElement;
+
+            var entities = new List<DrydockImageEntity>();
+            foreach (var entity in root.GetProperty("entities").EnumerateArray())
+            {
+                var rows = new Dictionary<string, string>();
+                foreach (var row in entity.GetProperty("rows").EnumerateObject())
+                    rows[row.Name] = row.Value.GetRawText();
+
+                var prototype = entity.GetProperty("prototype");
+                entities.Add(new DrydockImageEntity(
+                    entity.GetProperty("id").GetInt64(),
+                    prototype.ValueKind == JsonValueKind.Null ? null : prototype.GetString(),
+                    entity.GetProperty("mapInitialized").GetBoolean(),
+                    entity.GetProperty("paused").GetBoolean(),
+                    rows));
+            }
+
+            return new DrydockImage(
+                root.GetProperty("gridId").GetInt64(),
+                entities,
+                root.GetProperty("tiles").GetRawText(),
+                root.GetProperty("unsaved").GetInt32(),
+                root.GetProperty("bytes").GetInt32());
         }
 
         /// <summary>
@@ -342,9 +414,20 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
 
             try
             {
-                if (Sha256(fixture.Blob) != fixture.BlobFileSha256)
+                if (Sha256(fixture.ImageFile) != fixture.ImageFileSha256)
                 {
-                    report.Load.Add("the blob file no longer hashes to the value its sidecar recorded: the fixture itself rotted or was edited");
+                    report.Load.Add("the image file no longer hashes to the value its sidecar recorded: the fixture itself rotted or was edited");
+                    return report;
+                }
+
+                DrydockImage image;
+                try
+                {
+                    image = ReadImage(fixture.ImageFile);
+                }
+                catch (Exception e) when (e is JsonException or InvalidDataException or KeyNotFoundException or InvalidOperationException)
+                {
+                    report.Load.Add($"the image file does not read as an image ({e.GetType().Name}: {e.Message})");
                     return report;
                 }
 
@@ -372,12 +455,10 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                     EngineFormatVer = fixture.Revision.EngineFormatVer,
                     DrydockFormatVer = fixture.Revision.DrydockFormatVer,
                     ProtoFingerprint = Convert.FromBase64String(fixture.Revision.ProtoFingerprint),
-                    CapturedKeyHash = Convert.FromBase64String(fixture.Revision.CapturedKeyHash),
-                    Checksum = Convert.FromBase64String(fixture.Revision.Checksum),
                     SizeBytes = fixture.Revision.SizeBytes,
                     AppraisedValue = fixture.Revision.AppraisedValue,
                     Manifest = fixture.Revision.Manifest,
-                }, fixture.Blob, keepBlobs: 0);
+                }, image, keepBlobs: 0);
 
                 if (filed.Outcome != DrydockBerthResult.Success)
                 {
@@ -410,7 +491,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                 CompareCensus(recorded, reborn, report.Census);
                 CompareValues(recorded, reborn, report.Values);
 
-                // The fresh store. The reborn grid still carries the id stamped into its document, which
+                // The fresh store. The reborn grid still carries the id its image was stored with, which
                 // names the hull the fixture was generated as; restamped to the hull this run filed, so
                 // the store lands a second revision on the same row the way a player's would.
                 await server.WaitPost(() => entMan.EnsureComponent<DrydockIdentityComponent>(grid).ShipId = shipId);
@@ -429,10 +510,10 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
 
                 await pair.RunTicksSync(1);
 
-                var current = await store.LoadCurrent(shipId);
+                var current = await store.LoadCurrentImage(shipId);
                 if (current == null || current.Revision.Revision != filed.Revision + 1)
                 {
-                    report.Restore.Add($"the fresh store filed no second revision (current {current?.Revision.Revision})");
+                    report.Restore.Add($"the fresh store filed no second revision with an image (current {current?.Revision.Revision})");
                     return report;
                 }
 
@@ -446,10 +527,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                 CompareManifests(expected, fresh, UnsavableIn(protoMan), report.Restore);
 
                 if (Convert.ToBase64String(current.Revision.ProtoFingerprint) != fixture.Revision.ProtoFingerprint)
-                    report.Restore.Add("the prototype fingerprint moved: the reborn document references a different prototype set");
-
-                if (Convert.ToBase64String(current.Revision.CapturedKeyHash) != fixture.Revision.CapturedKeyHash)
-                    report.Restore.Add("the captured-key hash moved: the fidelity capture wrote a different key set");
+                    report.Restore.Add("the prototype fingerprint moved: the reborn image names a different prototype set");
 
                 // Both format versions are the code's own constants at store time, so a newer build moving
                 // them is the bump working, not the fixture failing. Read and printed, never failed.
@@ -459,10 +537,11 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                 if (current.Revision.DrydockFormatVer != fixture.Revision.DrydockFormatVer)
                     report.Notes.Add($"drydock format {fixture.Revision.DrydockFormatVer} -> {current.Revision.DrydockFormatVer}");
 
-                // The document itself is not compared: it carries entity uids assigned at load and clock
-                // offsets taken at store, so two stores of one hull never agree byte for byte. The size
-                // is printed so a store that suddenly writes far more or less is visible.
-                report.Notes.Add($"document {fixture.Revision.SizeBytes} -> {current.Revision.SizeBytes} bytes uncompressed");
+                // The image itself is not compared row for row: it carries clock offsets taken at store, so two
+                // stores of one hull never agree on every value, and the manifest above is the tree compare. The
+                // sizes are printed so a store that suddenly writes far more or less is visible.
+                report.Notes.Add($"image {image.Entities.Count} -> {current.Image.Entities.Count} entities, "
+                                 + $"{fixture.Revision.SizeBytes} -> {current.Revision.SizeBytes} bytes");
 
                 if (!SameOrder(expected, fresh))
                     report.Notes.Add("manifest entry order differs (walk order follows the transform child set, which reload rebuilds); compared as a tree instead");
@@ -485,13 +564,10 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
         public static readonly TimeSpan OperationTimeout = TimeSpan.FromSeconds(120);
 
         /// <summary>One entity, in the terms a manifest can state and a reborn grid can be read in.</summary>
-        public readonly record struct GoldenRecord(string Path, string Proto, float Damage, int Stack, string Keys)
+        public readonly record struct GoldenRecord(string Path, string Proto, float Damage, int Stack)
         {
-            /// <summary>The (c) key: where the entity sits and what it carries.</summary>
+            /// <summary>The (c) and (d) key: where the entity sits and what it carries.</summary>
             public string ValueKey => $"{Path} damage={Damage:F2} stack={Stack}";
-
-            /// <summary>The (d) key: (c) plus the captured-state keys.</summary>
-            public string FullKey => Keys.Length == 0 ? ValueKey : $"{ValueKey} keys=[{Keys}]";
         }
 
         /// <summary>
@@ -532,12 +608,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
 
                 var path = parentPath == null ? entry.Proto : $"{parentPath}/{entry.Proto}";
                 paths[i] = path;
-
-                var keys = entry.CapturedKeys == null
-                    ? string.Empty
-                    : string.Join(",", entry.CapturedKeys.OrderBy(k => k, StringComparer.Ordinal));
-
-                records.Add(new GoldenRecord(path, entry.Proto, entry.Damage, entry.Stack, keys));
+                records.Add(new GoldenRecord(path, entry.Proto, entry.Damage, entry.Stack));
             }
 
             if (skipped > 0)
@@ -570,7 +641,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
 
                 var count = entMan.TryGetComponent<StackComponent>(uid, out var stackComp) ? stackComp.Count : 0;
 
-                records.Add(new GoldenRecord(path, proto, damage, count, string.Empty));
+                records.Add(new GoldenRecord(path, proto, damage, count));
 
                 var children = entMan.GetComponent<TransformComponent>(uid).ChildEnumerator;
                 while (children.MoveNext(out var child))
@@ -617,10 +688,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             if (want.Count != got.Count)
                 failures.Add($"manifest entry count: fixture {want.Count}, fresh store {got.Count}");
 
-            // Captured-state keys included: the key set is persisted and feeds the captured-key hash, so
-            // it has to be a function of the hull, and this is where a store that disagrees with itself
-            // shows up.
-            DiffMultiset(want.Select(r => r.FullKey), got.Select(r => r.FullKey), "manifest entry", failures);
+            DiffMultiset(want.Select(r => r.ValueKey), got.Select(r => r.ValueKey), "manifest entry", failures);
         }
 
         private static bool SameOrder(DrydockManifest a, DrydockManifest b)

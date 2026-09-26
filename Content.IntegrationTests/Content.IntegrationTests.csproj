@@ -19,7 +19,7 @@
   <!-- Triad: the drydock golden corpus, embedded so the gate reads it wherever the tests run.
        Written only by DrydockGoldenCorpusRefreshLocalTest; see DrydockGoldenCorpusTest. -->
   <ItemGroup>
-    <EmbeddedResource Include="Tests\_Triad\Drydock\GoldenCorpus\*.json;Tests\_Triad\Drydock\GoldenCorpus\*.blob.zst">
+    <EmbeddedResource Include="Tests\_Triad\Drydock\GoldenCorpus\*.json;Tests\_Triad\Drydock\GoldenCorpus\*.image.json.gz">
       <LogicalName>DrydockGoldenCorpus/%(Filename)%(Extension)</LogicalName>
     </EmbeddedResource>
   </ItemGroup>

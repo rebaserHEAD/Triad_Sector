@@ -42,13 +42,16 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
     ///
     /// <para>Each hull is loaded from its vessel's shuttle file, given what a purchase gives it, put
     /// through its named recipes, and stored through the real pipeline. What gets written is what the
-    /// store filed, read back from the database: the compressed blob as the blob row holds it, and the
-    /// revision row's columns in the sidecar. Every new fixture is then put through the gate's own
-    /// verification before the run is allowed to pass, so a refresh cannot commit a corpus the gate
-    /// would reject.</para>
+    /// store filed, read back from the database: the image as the image store holds it
+    /// (<see cref="GoldenCorpus.WriteImage"/>), and the revision row's columns in the sidecar. Every new
+    /// fixture is then put through the gate's own verification before the run is allowed to pass, so a
+    /// refresh cannot commit a corpus the gate would reject.</para>
     ///
-    /// <para>Run: <c>dotnet test Content.IntegrationTests --filter FullyQualifiedName~DrydockGoldenCorpusRefreshLocalTest</c>,
-    /// then rebuild before running the gate, since the fixtures are embedded resources.</para>
+    /// <para>The fixtures are written to <c>GoldenCorpus/</c> in the repository, or, when <c>LADDER_DUMP</c> is set,
+    /// to <c>golden-corpus/</c> under it, which is how a run on a hosted runner hands them back: dispatch the test
+    /// workflow with this test's name as the filter and <c>dump=true</c>, download the <c>ladder-dump</c> artifact,
+    /// copy its <c>golden-corpus/</c> files into <c>GoldenCorpus/</c>, and run the gate on the result. Either way,
+    /// review the diff this prints and the sidecar diff in git before committing.</para>
     /// </summary>
     [TestFixture]
     [Explicit("Rewrites the committed golden corpus. Run deliberately, review the diff, commit.")]
@@ -91,7 +94,9 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             var fidelity = server.System<DrydockFidelitySystem>();
             var mapLoader = server.System<MapLoaderSystem>();
 
-            var directory = Path.Combine(FindRepositoryRoot(), GoldenCorpus.SourceDirectory);
+            var committed = Path.Combine(FindRepositoryRoot(), GoldenCorpus.SourceDirectory);
+            var dump = Environment.GetEnvironmentVariable("LADDER_DUMP");
+            var directory = string.IsNullOrEmpty(dump) ? committed : Path.Combine(dump, "golden-corpus");
             Directory.CreateDirectory(directory);
             var commit = Git("rev-parse HEAD");
 
@@ -159,38 +164,37 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                 var (result, shipId) = await DrydockTestHelpers.RunOnServer(pair, () => drydock.TryStoreShip(grid, owner, null), GoldenCorpus.OperationTimeout);
                 Assert.That(result, Is.EqualTo(DrydockStoreResult.Success), $"{name}: the store refused ({result}).");
 
-                var filed = await store.LoadCurrent(shipId!.Value);
-                Assert.That(filed, Is.Not.Null, $"{name}: nothing was filed.");
+                var filed = await store.LoadCurrentImage(shipId!.Value);
+                Assert.That(filed, Is.Not.Null, $"{name}: no image was filed.");
 
+                var imageFile = GoldenCorpus.WriteImage(filed!.Image);
                 var fixture = new GoldenFixture
                 {
                     Name = name,
-                    VesselProto = filed!.Ship.VesselProto,
+                    VesselProto = filed.Ship.VesselProto,
                     ShipName = filed.Ship.ShipName,
                     SizeClass = filed.Ship.SizeClass,
                     Recipes = recipes.ToList(),
                     GeneratedAtCommit = commit,
                     GeneratedAtUtc = DateTime.UtcNow.ToString("O"),
-                    BlobFileSha256 = GoldenCorpus.Sha256(filed.Blob),
-                    BlobFileBytes = filed.Blob.Length,
-                    Blob = filed.Blob,
+                    ImageFileSha256 = GoldenCorpus.Sha256(imageFile),
+                    ImageFileBytes = imageFile.Length,
+                    ImageFile = imageFile,
                     Probes = probes,
                     Revision = new GoldenRevision
                     {
-                        Checksum = Convert.ToBase64String(filed.Revision.Checksum),
                         SizeBytes = filed.Revision.SizeBytes,
                         EngineFormatVer = filed.Revision.EngineFormatVer,
                         DrydockFormatVer = filed.Revision.DrydockFormatVer,
                         ProtoFingerprint = Convert.ToBase64String(filed.Revision.ProtoFingerprint),
-                        CapturedKeyHash = Convert.ToBase64String(filed.Revision.CapturedKeyHash),
                         AppraisedValue = filed.Revision.AppraisedValue,
                         Manifest = filed.Revision.Manifest,
                     },
                 };
 
-                await ReportAgainstCommitted(directory, fixture, protoMan);
+                await ReportAgainstCommitted(committed, fixture, protoMan);
 
-                await File.WriteAllBytesAsync(Path.Combine(directory, name + ".blob.zst"), fixture.Blob);
+                await File.WriteAllBytesAsync(Path.Combine(directory, name + GoldenCorpus.ImageExtension), fixture.ImageFile);
                 await File.WriteAllTextAsync(Path.Combine(directory, name + ".json"),
                     JsonSerializer.Serialize(fixture, GoldenCorpus.Json) + "\n");
 
@@ -207,8 +211,8 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                     .ToList();
 
                 await TestContext.Out.WriteLineAsync(
-                    $"[golden-refresh] {name}: {vesselId}, recipes {string.Join(", ", recipes)}; blob {fixture.BlobFileBytes} bytes "
-                    + $"compressed, {fixture.Revision.SizeBytes} uncompressed; {fixture.Probes.Count} probe(s)");
+                    $"[golden-refresh] {name}: {vesselId}, recipes {string.Join(", ", recipes)}; image {filed.Image.Entities.Count} entities, "
+                    + $"{fixture.ImageFileBytes} bytes gzipped, {fixture.Revision.SizeBytes} as stored; {fixture.Probes.Count} probe(s)");
                 await TestContext.Out.WriteLineAsync($"[golden-refresh] {report}");
                 await TestContext.Out.WriteLineAsync(
                     $"[golden-refresh] {name}: fidelity oracle, {drift.Count} unexpected field difference(s) across the round trip"
@@ -224,7 +228,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             {
                 var written = JsonSerializer.Deserialize<GoldenFixture>(
                     await File.ReadAllTextAsync(Path.Combine(directory, name + ".json")), GoldenCorpus.Json)!;
-                written.Blob = await File.ReadAllBytesAsync(Path.Combine(directory, name + ".blob.zst"));
+                written.ImageFile = await File.ReadAllBytesAsync(Path.Combine(directory, name + GoldenCorpus.ImageExtension));
 
                 var report = await GoldenCorpus.Verify(pair, written, owner, station);
                 reports.Add(report);
@@ -420,9 +424,6 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
 
             if (committed.Revision.ProtoFingerprint != fresh.Revision.ProtoFingerprint)
                 changes.Add("prototype fingerprint changed");
-
-            if (committed.Revision.CapturedKeyHash != fresh.Revision.CapturedKeyHash)
-                changes.Add("captured-key hash changed");
 
             await TestContext.Out.WriteLineAsync(
                 $"[golden-refresh] {fresh.Name}: against the committed fixture from {committed.GeneratedAtCommit}, "
