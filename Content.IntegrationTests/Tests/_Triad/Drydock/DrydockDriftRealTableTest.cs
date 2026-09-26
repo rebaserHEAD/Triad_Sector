@@ -95,5 +95,52 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
 
             await pair.CleanReturnAsync();
         }
+
+        /// <summary>
+        /// The live prototypes the table deletes on purpose: the faction purge of #504 (triad_migration.yml), whose
+        /// prototypes stay in upstream files. A map or a stored ship that carries one loses it on load, by design.
+        /// </summary>
+        private static readonly string[] DeliberatelyPurged =
+        {
+            "PiratePDA", "SeniorOfficerPDA", "SpawnPointSecurityCadet", "SpawnPointSecurityOfficer",
+        };
+
+        /// <summary>
+        /// A retrieve hands the table to the load (<c>DrydockLoadOptions.Migrations</c>), so a deletion of a live prototype
+        /// drops that entity and everything under it from every stored ship, as it does from every map. Every id the table
+        /// deletes is absent from the entity index but the named purge, and every rename target is present. Controls: the
+        /// purge is in the real table, and its ids are live, so the exception is not vacuous.
+        /// </summary>
+        [Test]
+        public async Task EveryDeletedIdIsGoneAndEveryRenameTargetIsLive()
+        {
+            await using var pair = await PoolManager.GetServerClient();
+            var server = pair.Server;
+            var resources = server.ResolveDependency<IResourceManager>();
+            var protoMan = server.ResolveDependency<IPrototypeManager>();
+
+            DrydockMigrationTable table = null!;
+            await server.WaitPost(() => table = DrydockMigrationTable.Load(resources));
+
+            bool Known(string id) => protoMan.HasIndex<EntityPrototype>(id);
+
+            var liveDeleted = table.Deleted.Where(Known).Order(StringComparer.Ordinal).ToList();
+            var missingTargets = table.Renamed
+                .Where(kv => !Known(kv.Value))
+                .Select(kv => $"{kv.Key} -> {kv.Value}")
+                .Order(StringComparer.Ordinal)
+                .ToList();
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(table.Deleted, Is.SupersetOf(DeliberatelyPurged), "The control: the purge is in the real table.");
+                Assert.That(DeliberatelyPurged.Where(id => !Known(id)), Is.Empty, "The control: the purged ids are live prototypes.");
+                Assert.That(liveDeleted, Is.EquivalentTo(DeliberatelyPurged),
+                    "The table deletes a live prototype, so every stored ship carrying one loses it and its subtree on retrieve.");
+                Assert.That(missingTargets, Is.Empty, "The table renames an id to one no prototype has.");
+            });
+
+            await pair.CleanReturnAsync();
+        }
     }
 }
