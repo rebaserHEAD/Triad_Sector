@@ -296,7 +296,6 @@ public sealed class DrydockCodecFieldPass
     internal static bool IsFlagSerializer(Type? serializer) =>
         serializer is { IsGenericType: true } && serializer.GetGenericTypeDefinition() == typeof(FlagSerializer<>);
 
-    /// <summary>The read half of <see cref="WriteTimeOffset"/>: one branch, against the clock at load.</summary>
     /// <summary>
     /// Every severed reference this pass met on the read side, by its path, and whether its member was nullable and so
     /// set to null. A count large in the nullable column is upstream code parking an invalid uid where the idiom reads
@@ -323,6 +322,90 @@ public sealed class DrydockCodecFieldPass
             entry.Set(owner, null);
     }
 
+    /// <summary>
+    /// Every time member of a live component holding a sentinel (<see cref="DrydockTimeOffsetAdapter.IsSentinel"/>), at any
+    /// depth the read walk reaches, with a getter and a setter bound to the object that holds it. Run on the component the
+    /// load keeps, after its row is in, because the read itself fills a temporary that is then copied in. A time inside a
+    /// struct nested in a collection is skipped: the walk only ever holds a boxed copy of it.
+    /// </summary>
+    public void CollectSentinels(IComponent component, List<(string Member, TimeSpan Value, Func<object?> Get, Action<object?> Set)> into)
+    {
+        var type = component.GetType();
+        var seen = new HashSet<object>(ReferenceEqualityComparer.Instance) { component };
+        foreach (var entry in EntriesFor(type))
+            CollectSentinels(entry, component, type.Name, into, seen);
+
+        foreach (var computed in ComputedFor(type))
+        {
+            if (computed.Case == FieldCase.TimeOffset
+                && GetValue(computed.Backing, component) is TimeSpan value
+                && DrydockTimeOffsetAdapter.IsSentinel(value))
+            {
+                into.Add(($"{type.Name}.{computed.Backing.Name}", value,
+                    () => GetValue(computed.Backing, component),
+                    set => SetValue(computed.Backing, component, set)));
+            }
+        }
+    }
+
+    private void CollectSentinels(Entry entry, object owner, string path, List<(string Member, TimeSpan Value, Func<object?> Get, Action<object?> Set)> into, HashSet<object> seen)
+    {
+        switch (entry.Case)
+        {
+            case FieldCase.TimeOffset:
+                if (entry.Get(owner) is TimeSpan value && DrydockTimeOffsetAdapter.IsSentinel(value))
+                    into.Add(($"{path}.{entry.Member.Name}", value, () => entry.Get(owner), set => entry.Set(owner, set)));
+                break;
+
+            case FieldCase.ReadOnly:
+            case FieldCase.Walk:
+            case FieldCase.ReferenceWalk:
+                if (entry.Asymmetric == null && entry.Get(owner) is { } nested)
+                    CollectSentinelsIn(nested, $"{path}.{entry.Member.Name}", into, seen);
+                break;
+        }
+    }
+
+    private void CollectSentinelsIn(object value, string path, List<(string Member, TimeSpan Value, Func<object?> Get, Action<object?> Set)> into, HashSet<object> seen)
+    {
+        var type = value.GetType();
+        if (value is string || type.IsValueType || !seen.Add(value))
+            return;
+
+        if (IsDataDefinition(type))
+        {
+            foreach (var member in NestedMembersFor(type))
+                CollectSentinels(member, value, path, into, seen);
+
+            return;
+        }
+
+        switch (value)
+        {
+            case IDictionary dictionary:
+                foreach (DictionaryEntry pair in dictionary)
+                {
+                    if (pair.Value is { } element)
+                        CollectSentinelsIn(element, $"{path}[{pair.Key}]", into, seen);
+                }
+
+                break;
+
+            case IEnumerable enumerable:
+                var index = 0;
+                foreach (var element in enumerable)
+                {
+                    if (element is not null)
+                        CollectSentinelsIn(element, $"{path}[{index}]", into, seen);
+
+                    index++;
+                }
+
+                break;
+        }
+    }
+
+    /// <summary>The read half of <see cref="WriteTimeOffset"/>: one branch, against the clock at load.</summary>
     private void ReadTimeOffset(Entry entry, object owner, MappingDataNode from)
     {
         if (!from.TryGet<ValueDataNode>(entry.Key, out var node) || node.IsNull)

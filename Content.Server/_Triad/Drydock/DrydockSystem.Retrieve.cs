@@ -357,7 +357,7 @@ public sealed partial class DrydockSystem
                 await slice.Begin(DrydockPhase.Load, 0);
                 GuardRetrieveResume(ctx);
 
-                if (LoadOntoStagingMap(ctx, slice, revision, stored.Image) == null)
+                if (LoadOntoStagingMap(ctx, slice, revision, stored.Image) is not { } loaded)
                 {
                     await PinSteppedPast(ctx, slice, revision, "its image would not load");
                     continue;
@@ -453,22 +453,27 @@ public sealed partial class DrydockSystem
                     // the same way the station is, so an imported hull docks where its class does.
                     var dockTag = PriorityDockTagFor(ResolveVesselProto(grid, stored.Ship));
 
-                    // TryFTLDock's own first guard, kept: a target with no valid map goes straight
-                    // to proximity, since the search reads the target's grid and transform bare.
-                    var config = Transform(dockTarget).MapUid is { } targetMap && targetMap.IsValid()
-                        ? _docking.GetDockingConfig(grid, dockTarget, dockTag, DockType.Airlock)
-                        : null;
-                    timer.Mark("dock_config");
+                    // The thaw, with every time the load restored as a sentinel held through it
+                    // (DrydockImageSystem.PreserveSentinels).
+                    _image.PreserveSentinels(loaded, () =>
+                    {
+                        // TryFTLDock's own first guard, kept: a target with no valid map goes straight
+                        // to proximity, since the search reads the target's grid and transform bare.
+                        var config = Transform(dockTarget).MapUid is { } targetMap && targetMap.IsValid()
+                            ? _docking.GetDockingConfig(grid, dockTarget, dockTag, DockType.Airlock)
+                            : null;
+                        timer.Mark("dock_config");
 
-                    if (config != null)
-                    {
-                        _shuttle.FTLDock((grid, Transform(grid)), config);
-                    }
-                    else
-                    {
-                        _shuttle.TryFTLProximity(grid, dockTarget);
-                        Log.Warning($"Drydock: {ctx.ShipId} found no docking config at {ToPrettyString(ctx.StationUid)}; presented by proximity.");
-                    }
+                        if (config != null)
+                        {
+                            _shuttle.FTLDock((grid, Transform(grid)), config);
+                        }
+                        else
+                        {
+                            _shuttle.TryFTLProximity(grid, dockTarget);
+                            Log.Warning($"Drydock: {ctx.ShipId} found no docking config at {ToPrettyString(ctx.StationUid)}; presented by proximity.");
+                        }
+                    });
 
                     timer.Mark("dock");
 

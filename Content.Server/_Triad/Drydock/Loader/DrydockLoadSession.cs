@@ -70,6 +70,8 @@ public sealed class DrydockLoadSession
     private readonly Dictionary<string, int> _overwroteByType = new(StringComparer.Ordinal);
     private readonly Dictionary<string, int> _removedByType = new(StringComparer.Ordinal);
     private readonly Dictionary<string, int> _appearanceRefused = new(StringComparer.Ordinal);
+    private readonly List<DrydockSentinel> _sentinels = new();
+    private readonly List<(string Member, TimeSpan Value, Func<object?> Get, Action<object?> Set)> _collected = new();
 
     private EntityDeserializer? _deserializer;
     private DrydockCodec? _codec;
@@ -207,6 +209,7 @@ public sealed class DrydockLoadSession
                 if (entMan.TryGetComponent(uid, registration.Type, out var existing))
                 {
                     serialization.CopyTo(read, ref existing, codec.Context, notNullableOverride: true);
+                    CollectSentinels(uid, existing);
                     _overwrote++;
                     _overwroteByType[name] = _overwroteByType.GetValueOrDefault(name) + 1;
                     continue;
@@ -217,10 +220,12 @@ public sealed class DrydockLoadSession
                     var fresh = factory.GetComponent(registration);
                     entMan.AddComponent(uid, fresh);
                     serialization.CopyTo(read, ref fresh, codec.Context, notNullableOverride: true);
+                    CollectSentinels(uid, fresh);
                 }
                 else
                 {
                     entMan.AddComponent(uid, read);
+                    CollectSentinels(uid, read);
                 }
 
                 _added++;
@@ -531,6 +536,7 @@ public sealed class DrydockLoadSession
             AppearanceStillDirty = stillDirty,
             UnresolvedPrototypes = _codec!.Unresolved.ToList(),
             Severed = _codec.Severed.ToList(),
+            Sentinels = _sentinels.ToList(),
             DroppedBatches = _codec.Context.DroppedBatches.ToList(),
             TilesStored = stored.Count,
             TilesRestored = restored.Count,
@@ -619,6 +625,22 @@ public sealed class DrydockLoadSession
 
         DrydockCodec.SetMember(component, member, value);
         _manifest.Count(member);
+
+        if (member.Kind == DrydockMemberKind.AbsoluteTime && value is TimeSpan time && DrydockTimeOffsetAdapter.IsSentinel(time))
+        {
+            _sentinels.Add(new DrydockSentinel(uid, component, member.Key, time,
+                () => DrydockCodec.GetMember(component, member),
+                set => DrydockCodec.SetMember(component, member, set)));
+        }
+    }
+
+    /// <summary>The sentinel times a live component holds once its row is in (<see cref="DrydockCodec.CollectSentinels"/>).</summary>
+    private void CollectSentinels(EntityUid uid, IComponent component)
+    {
+        _collected.Clear();
+        _codec!.CollectSentinels(component, _collected);
+        foreach (var (member, value, get, set) in _collected)
+            _sentinels.Add(new DrydockSentinel(uid, component, member, value, get, set));
     }
 
     /// <summary>

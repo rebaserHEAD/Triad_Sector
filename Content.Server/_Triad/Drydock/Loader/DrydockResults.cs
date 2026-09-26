@@ -48,6 +48,13 @@ public sealed record DrydockImageStoreResult(
     public bool Whole => Unwritable.Count == 0 && UnwritableCarried.Count == 0;
 }
 
+/// <summary>
+/// A time member the load set to a sentinel (<see cref="Codec.DrydockTimeOffsetAdapter.IsSentinel"/>): its entity, its component, its path,
+/// the value, and a getter and setter bound to the live object that holds it. <see cref="DrydockImageSystem.PreserveSentinels"/>
+/// holds these through a thaw.
+/// </summary>
+public sealed record DrydockSentinel(EntityUid Entity, IComponent Component, string Member, TimeSpan Value, Func<object?> Get, Action<object?> Set);
+
 /// <summary>What the caller may change about a load.</summary>
 public sealed class DrydockLoadOptions
 {
@@ -158,6 +165,9 @@ public sealed class DrydockLoadResult
     /// null, one that is not is left invalid.
     /// </summary>
     public IReadOnlyList<(string Member, bool Nullable)> Severed { get; init; } = Array.Empty<(string, bool)>();
+
+    /// <summary>Every time member the load set to a sentinel, as each entity's rows went in and as the manifest set its times.</summary>
+    public IReadOnlyList<DrydockSentinel> Sentinels { get; init; } = Array.Empty<DrydockSentinel>();
 
     /// <summary>Queued lathe batches left out for a recipe that no longer resolves, by recipe id.</summary>
     public IReadOnlyList<string> DroppedBatches { get; init; } = Array.Empty<string>();

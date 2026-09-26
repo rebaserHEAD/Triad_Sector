@@ -42,6 +42,10 @@ public sealed partial class DrydockCodec
     /// </summary>
     public IReadOnlyList<(string Member, bool Nullable)> Severed => _pass.Severed;
 
+    /// <inheritdoc cref="DrydockCodecFieldPass.CollectSentinels(IComponent, List{ValueTuple{string, TimeSpan, Func{object}, Action{object}}})"/>
+    public void CollectSentinels(IComponent component, List<(string Member, TimeSpan Value, Func<object?> Get, Action<object?> Set)> into) =>
+        _pass.CollectSentinels(component, into);
+
     /// <summary>
     /// The prototype manager a manifest's prototype-id member reads through, where the caller has one. A caller that
     /// does not passes none and the codec asks the entity manager's dependencies for it, which is what a test harness

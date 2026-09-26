@@ -174,6 +174,48 @@ public sealed partial class DrydockImageSystem : EntitySystem
         return session.Complete();
     }
 
+    /// <summary>
+    /// Runs <paramref name="thaw"/>, a move that unpauses a loaded hull, with every time the load set to a sentinel held.
+    /// An unpause adds the time spent paused to each paused time, in the generated handler
+    /// (<c>ComponentPauseGenerator.cs:182-186</c>) and in hand-written ones (<c>UseDelaySystem.OnUnpaused</c>), guarding
+    /// neither end: a zero, which means "never", becomes a deadline, and a maximum overflows and throws inside the thaw. So
+    /// every member still holding its sentinel is set to zero before the thaw, and set back to its sentinel after it,
+    /// thrown or not, with a networked component dirtied.
+    /// </summary>
+    public void PreserveSentinels(DrydockLoadResult result, Action thaw)
+    {
+        var held = new List<DrydockSentinel>();
+        foreach (var sentinel in result.Sentinels)
+        {
+            if (TerminatingOrDeleted(sentinel.Entity) || sentinel.Component.Deleted
+                || sentinel.Get() is not TimeSpan now || now != sentinel.Value)
+            {
+                continue;
+            }
+
+            held.Add(sentinel);
+            if (sentinel.Value != TimeSpan.Zero)
+                sentinel.Set(TimeSpan.Zero);
+        }
+
+        try
+        {
+            thaw();
+        }
+        finally
+        {
+            foreach (var sentinel in held)
+            {
+                if (TerminatingOrDeleted(sentinel.Entity) || sentinel.Component.Deleted)
+                    continue;
+
+                sentinel.Set(sentinel.Value);
+                if (ComponentFactory.GetRegistration(sentinel.Component).Networked)
+                    Dirty(sentinel.Entity, sentinel.Component);
+            }
+        }
+    }
+
     internal void RaiseStoring(EntityUid uid, ref GridStoringEvent ev) =>
         RaiseLocalEvent(uid, ref ev);
 

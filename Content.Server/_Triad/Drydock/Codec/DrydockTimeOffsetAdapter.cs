@@ -46,6 +46,10 @@ public static class DrydockTimeOffsetAdapter
 
     public const string MinToken = "~min";
 
+    /// <summary>Whether a time is one of the three sentinels <see cref="Write"/> stores as a token rather than as a distance.</summary>
+    public static bool IsSentinel(TimeSpan value) =>
+        value == TimeSpan.Zero || value == TimeSpan.MaxValue || value == TimeSpan.MinValue;
+
     /// <summary>
     /// What a live field stores. A sentinel stores its token. Otherwise the deadline's distance from the moment its
     /// entity paused, or from the clock if it is running, at any life stage.
