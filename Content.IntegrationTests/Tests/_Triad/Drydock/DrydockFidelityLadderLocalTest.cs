@@ -620,6 +620,34 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
         /// </summary>
         private static int CacheLinesExempted;
 
+        /// <summary>
+        /// Whether a line the registry classifies as derived is back at its stored value by the late snapshot, so the load
+        /// reset a cache and its owner refilled it and nothing accumulates, whatever the two trips' steps look like. That is
+        /// the one case the compounding rule gets wrong for a derived key: a float cache renders its last digit from noise, so
+        /// its reset on trip 2 misses "repeats" by that digit and reads as the same step taken again (a gas canister's
+        /// pressure cache, 2788.5298 -> 0 then 2788.529 -> 0 on rung 104). Equal as text, or as numbers within
+        /// <see cref="LiveFloor"/> or a millionth of the value, whichever is larger. Counted, so the exemption shows.
+        /// </summary>
+        private static bool RefilledByLate(StateClass stateClass, string key, RoundTripResult result)
+        {
+            if (stateClass != StateClass.Derived
+                || !result.Before.Values.TryGetValue(key, out var before)
+                || !result.Late.Values.TryGetValue(key, out var late))
+            {
+                return false;
+            }
+
+            var refilled = before == late
+                           || Number(before) is { } b && Number(late) is { } l && Math.Abs(l - b) <= Math.Max(LiveFloor, Math.Abs(b) * 1e-6);
+            if (refilled)
+                DerivedLinesRefilled++;
+
+            return refilled;
+        }
+
+        /// <summary>How many derived lines <see cref="RefilledByLate"/> kept classified since the last report, printed by <see cref="Report"/>.</summary>
+        private static int DerivedLinesRefilled;
+
         /// <summary>The family a line sorts into, and whether it was held back because it compounds (<see cref="Compounding"/>).</summary>
         private static (KnownFamily? Family, bool Compounds) FamilyFor(string line, string key, RoundTripResult result, RoundTripResult? previous) =>
             KnownFamilies.FirstOrDefault(f => f.Matches(line, key, result)) is { } family
@@ -1261,6 +1289,51 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                 Assert.That(Findings(first, null), Is.Zero, "The control: on round trip 1 the registry classifies the line.");
                 Assert.That(Findings(repeats, first), Is.Zero, "A line repeating round trip 1's change stays classified.");
                 Assert.That(Findings(grows, first), Is.EqualTo(1), "A line growing again on round trip 2 has to be a finding.");
+            });
+
+            await pair.CleanReturnAsync();
+        }
+
+        /// <summary>
+        /// The registry's refill exemption, through the report: a derived line that takes round trip 1's step again, as a
+        /// float cache reset at every load does, stays classified when the late snapshot has it back at its stored value,
+        /// and is still a finding when the late snapshot does not. The values are rung 104's gas canister.
+        /// </summary>
+        [Test]
+        public async Task ADerivedLineTheLateSnapshotRefilledIsNotHeldBackAndOneLeftEmptyIs()
+        {
+            await using var pair = await PoolManager.GetServerClient();
+            var protoMan = pair.Server.ResolveDependency<IPrototypeManager>();
+            const string key = "GasCanister@0,0|GasCanisterComponent.~LastPressure";
+
+            RoundTripResult Trip(string before, string after, string late)
+            {
+                var early = new DrydockStateSnapshot();
+                var stored = new DrydockStateSnapshot();
+                var loaded = new DrydockStateSnapshot();
+                var lateSnapshot = new DrydockStateSnapshot();
+                early.Values[key] = before;
+                stored.Values[key] = before;
+                loaded.Values[key] = after;
+                lateSnapshot.Values[key] = late;
+                return new RoundTripResult(early, stored, loaded, lateSnapshot, EntityUid.Invalid, 0, 0, 0, null);
+            }
+
+            int Findings(RoundTripResult result, RoundTripResult? previous) =>
+                Report(new StringBuilder(), 0, "control", previous == null ? 1 : 2, result, null,
+                    new List<(string Recipe, List<Vector2i> Tiles)>(), null, protoMan, new HashSet<string>(StringComparer.Ordinal), previous: previous);
+
+            var first = Trip("2788.5298", "0", "2788.529");
+            var refilled = Trip("2788.529", "0", "2788.5286");
+            var leftEmpty = Trip("2788.529", "0", "0");
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(Registry["GasCanisterComponent.~LastPressure"].Class, Is.EqualTo(StateClass.Derived), "The control's control: the key is a derived one.");
+                Assert.That(ShapeOf(key, first, refilled), Is.EqualTo(Compounds), "The control: the two resets read as the same step taken again.");
+                Assert.That(Findings(first, null), Is.Zero, "On round trip 1 the registry classifies the line.");
+                Assert.That(Findings(refilled, first), Is.Zero, "A derived line back at its stored value by the late snapshot stays classified.");
+                Assert.That(Findings(leftEmpty, first), Is.EqualTo(1), "One the late snapshot still has empty is held back as compounding.");
             });
 
             await pair.CleanReturnAsync();
@@ -1974,9 +2047,9 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                     recreatedLines.Add(line);
                 else if (key != null && PipeGasWithinResolution(key, result))
                     belowFloorLines.Add(line);
-                else if (key != null && Classify(key, result, recovery, out var belowFloor) is { } _)
+                else if (key != null && Classify(key, result, recovery, out var belowFloor) is { } stateClass)
                 {
-                    if (Compounding(line, key, result, previous))
+                    if (Compounding(line, key, result, previous) && !RefilledByLate(stateClass, key, result))
                     {
                         registryGrew++;
                         heldBack.Add(("registry", line));
@@ -2115,6 +2188,9 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                 sb.AppendLine($"[ladder] round trip {trip}: {CacheLinesExempted} BUI state cache line(s) ended smaller each store and were left with their family, "
                               + "which is bounded at empty and filled at the open (ruled 2026-09-19); growth would still have held them back.");
                 CacheLinesExempted = 0;
+                sb.AppendLine($"[ladder] round trip {trip}: {DerivedLinesRefilled} derived line(s) took round trip 1's step again and were back at "
+                              + "their stored value by the late snapshot, a cache the load reset and its owner refilled, so they stayed classified.");
+                DerivedLinesRefilled = 0;
             }
 
             // Every line the no-growth rule kept from an explanation, one per line so a run over many rungs can be grepped.
