@@ -642,10 +642,11 @@ public enum DrydockAuditAction
 
     /// <summary>
     /// Written by the retrieve's drift gate (<c>DrydockSystem.RefuseForDrift</c>): a retrieve refused
-    /// because the document references content that no longer resolves after the migration mappings
-    /// are applied, or a format outside its reader's window. The actor is the retrieving owner, the
-    /// revision is the one refused, and the reason lists up to ten unresolved ids and any format out
-    /// of window.
+    /// because the image names a prototype that no longer resolves after the migration mappings are
+    /// applied or a component nothing registers, or carries a format outside its reader's window. The
+    /// actor is the retrieving owner, the revision is the one refused, and the reason names every
+    /// unresolved prototype, every unregistered component and any format out of window
+    /// (<c>DrydockSystem.DescribeDriftRefusal</c>).
     /// </summary>
     DriftRefused = 35,
 }

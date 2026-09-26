@@ -2255,7 +2255,7 @@ public sealed partial class DrydockStore
 
     /// <summary>
     /// Excludes a revision's document from pruning, whatever keep-N and the floor say, until
-    /// <see cref="TryUnpinRevision"/> clears it. Meant for a checksum-valid document a retrieve had to
+    /// <see cref="TryUnpinRevision"/> clears it. Meant for a revision with an image that a retrieve had to
     /// step past, so that ordinary stores after a fallback cannot prune the newest state the player
     /// ever filed; also an admin's to set by hand. Refuses a revision whose document is already gone,
     /// since there is nothing left to protect.
