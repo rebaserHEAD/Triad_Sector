@@ -201,9 +201,8 @@ public sealed class DrydockImageRoundTripCommand : IConsoleCommand
         }
         catch (Exception e)
         {
-            // A half-built grid would make a retry a duplicate, so it goes; the image is what is kept.
-            if (session.Grid.IsValid() && entMan.EntityExists(session.Grid))
-                entMan.DeleteEntity(session.Grid);
+            // A half-built load would make a retry a duplicate, so all of it goes; the image is what is kept.
+            session.Abandon();
 
             shell.WriteError("THE LOAD FAILED AFTER THE DESPAWN: the original grid is GONE.");
             shell.WriteError($"  {e.GetType().Name}: {e.Message}");

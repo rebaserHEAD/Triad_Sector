@@ -605,10 +605,10 @@ public sealed partial class DrydockSystem
         {
             Log.Error($"Drydock: {ctx.ShipId} revision {revision} would not load: {e}");
 
-            // Before the grid is parented onto the map it is in null space, where the staging scrap
-            // below does not look for it.
-            if (session.Grid.IsValid() && Exists(session.Grid))
-                Del(session.Grid);
+            // Everything the load allocated, not the grid alone: an entity the rows had not reached is
+            // not under it, and before the grid is parented onto the map the staging scrap below does
+            // not look for either.
+            session.Abandon();
 
             ScrapRetrieveStaging(ctx);
             return null;

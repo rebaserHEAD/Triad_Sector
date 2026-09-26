@@ -20,7 +20,7 @@ namespace Content.Server._Triad.Drydock.Loader;
 
 /// <summary>
 /// One load, in phases, in order: <see cref="CreateEntities"/>, <see cref="ApplyRows"/>, <see cref="Start"/>,
-/// <see cref="Complete"/>. The engine's own deserializer allocates, adds each prototype's components and starts; the
+/// <see cref="Complete"/>, and <see cref="Abandon"/> when any of them throws. The engine's own deserializer allocates, adds each prototype's components and starts; the
 /// image's rows are applied between its component pass and its startup.
 /// <list type="number">
 /// <item>A skeleton document: every stored entity under its prototype, with its id in the image as the yaml uid, its
@@ -56,6 +56,7 @@ namespace Content.Server._Triad.Drydock.Loader;
 public sealed class DrydockLoadSession
 {
     private const string ItemSlotsName = "ItemSlots";
+    private const int AbandonedPhase = -1;
 
     private static readonly DrydockManifestMember[] ReapplyCarried =
         DrydockCodecManifestMembers.Members.Where(m => m.Kind == DrydockMemberKind.ReapplyCarried).ToArray();
@@ -168,8 +169,9 @@ public sealed class DrydockLoadSession
         if (!deserializer.TryProcessData())
             throw new InvalidOperationException("Drydock load: the engine refused the skeleton document.");
 
-        deserializer.CreateEntities();
+        // Held before the engine allocates, so an allocation that throws partway is still in reach of Abandon.
         _deserializer = deserializer;
+        deserializer.CreateEntities();
         _gridUid = deserializer.UidMap[(int) _image.GridId];
         _ids = deserializer.UidMap.ToDictionary(entry => entry.Value, entry => (long) entry.Key);
 
@@ -590,6 +592,34 @@ public sealed class DrydockLoadSession
 
         _phase = 4;
         return result;
+    }
+
+    /// <summary>
+    /// Deletes every entity this load allocated that still exists, for a caller whose load threw in any phase; the grid
+    /// alone is not enough. Before <see cref="Start"/> nothing is initialised, so the grid's child set is empty and its
+    /// delete takes nothing with it, and an entity the rows have not reached is in null space with its prototype's anchor.
+    /// The engine clears an uninitialised entity's anchor on delete only when it has a parent (<c>EntityManager.cs:602-617</c>)
+    /// and asserts on a parentless anchored one (<c>SharedTransformSystem.Component.cs:1712</c>), so that one is
+    /// unanchored first. No phase runs after it.
+    /// </summary>
+    public void Abandon()
+    {
+        _phase = AbandonedPhase;
+        if (_deserializer is not { } deserializer)
+            return;
+
+        var entMan = _system.Entities;
+        foreach (var uid in deserializer.UidMap.Values)
+        {
+            if (!entMan.TryGetComponent<MetaDataComponent>(uid, out var meta) || meta.EntityLifeStage >= EntityLifeStage.Terminating)
+                continue;
+
+            var xform = entMan.GetComponent<TransformComponent>(uid);
+            if (!xform.ParentUid.IsValid() && xform.LifeStage < ComponentLifeStage.Initialized)
+                _system.Xforms.Unanchor(uid, xform, setPhysics: false);
+
+            entMan.DeleteEntity(uid, meta, xform);
+        }
     }
 
     private void Expect(int phase)

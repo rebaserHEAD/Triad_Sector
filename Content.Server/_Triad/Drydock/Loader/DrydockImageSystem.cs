@@ -158,20 +158,28 @@ public sealed partial class DrydockImageSystem : EntitySystem
 
     /// <summary>
     /// Starts a load of <paramref name="image"/> onto <paramref name="mapUid"/>: call <see cref="DrydockLoadSession.CreateEntities"/>,
-    /// <see cref="DrydockLoadSession.ApplyRows"/>, <see cref="DrydockLoadSession.Start"/> and <see cref="DrydockLoadSession.Complete"/> in that order.
-    /// The rows are parsed here.
+    /// <see cref="DrydockLoadSession.ApplyRows"/>, <see cref="DrydockLoadSession.Start"/> and <see cref="DrydockLoadSession.Complete"/> in that order,
+    /// and <see cref="DrydockLoadSession.Abandon"/> when one throws. The rows are parsed here.
     /// </summary>
     public DrydockLoadSession BeginLoad(DrydockImage image, EntityUid mapUid, DrydockLoadOptions? options = null) =>
         new(this, image, mapUid, options ?? new DrydockLoadOptions());
 
-    /// <summary>The whole load in one call, for a caller that does not slice or time it.</summary>
+    /// <summary>The whole load in one call, for a caller that does not slice or time it. A load that throws is abandoned, then rethrown.</summary>
     public DrydockLoadResult Load(DrydockImage image, EntityUid mapUid, DrydockLoadOptions? options = null)
     {
         var session = BeginLoad(image, mapUid, options);
-        session.CreateEntities();
-        session.ApplyRows();
-        session.Start();
-        return session.Complete();
+        try
+        {
+            session.CreateEntities();
+            session.ApplyRows();
+            session.Start();
+            return session.Complete();
+        }
+        catch
+        {
+            session.Abandon();
+            throw;
+        }
     }
 
     /// <summary>

@@ -846,12 +846,23 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             var original = await ReadImage(db, shipId.Value);
             await WriteImages(db, shipId.Value, Unloadable(original));
 
+            HashSet<EntityUid> before = null!;
+            await server.WaitPost(() => before = entMan.GetEntities().ToHashSet());
+
             var failureLevel = pair.ServerLogHandler.FailureLevel;
             pair.ServerLogHandler.FailureLevel = LogLevel.Fatal;
             var refused = await DrydockTestHelpers.RunOnServer(pair, () => drydock.TryRetrieveShip(shipId.Value, owner, station, null));
             pair.ServerLogHandler.FailureLevel = failureLevel;
 
             Assert.That(refused.Result, Is.EqualTo(DrydockRetrieveResult.NoReadableRevision), "An image that will not load must not come back as a ship.");
+
+            // The load threw in its rows, before any entity started, while the rows' parents were not yet linked and the
+            // entities the rows had not reached were still in null space.
+            var leftBehind = new List<string>();
+            await server.WaitPost(() => leftBehind.AddRange(entMan.GetEntities()
+                .Where(uid => !before.Contains(uid))
+                .Select(uid => entMan.ToPrettyString(uid).ToString())));
+            Assert.That(leftBehind, Is.Empty, "A load that fails deletes everything it allocated, not the grid alone.");
 
             var afterRefusal = (await store.GetShipHeader(shipId.Value))!;
             Assert.Multiple(() =>
