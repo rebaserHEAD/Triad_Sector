@@ -517,13 +517,12 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
         }
 
         /// <summary>
-        /// The most catastrophic-if-wrong assertion in the drydock. A store now freezes the ship
-        /// onto a private paused map before it serializes anything, so every document filed from
-        /// that point on carries <c>paused: true</c> on every entity aboard, and a retrieve loads it
-        /// onto a paused map on purpose so it arrives frozen for free. The thaw is therefore load
-        /// bearing in a way it never was before: miss it, or terminate the walk early, and the
-        /// player gets back a ship that looks perfectly intact and does nothing at all. No door
-        /// opens, no gun fires, no atmos moves, and no error is logged anywhere.
+        /// The most catastrophic-if-wrong assertion in the drydock. A retrieve loads the ship onto a
+        /// private paused map of its own, and a load takes pause from the map it loads onto, so
+        /// every entity aboard comes up frozen and the dock's move onto the station's map is the
+        /// thaw. Miss it, or terminate the walk early, and the player gets back a ship that looks
+        /// perfectly intact and does nothing at all. No door opens, no gun fires, no atmos moves,
+        /// and no error is logged anywhere.
         ///
         /// <para>Three independent checks, because each one alone can pass while the ship is still
         /// dead. The per-entity flag catches a walk that stopped short. The map's own pause state
@@ -533,10 +532,11 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
         /// entities, so a shot that produces a projectile is the only proof that the engine's own
         /// enumerators agree with the flag we just read.</para>
         ///
-        /// <para>The image control is what stops this passing vacuously. If someone drops the
-        /// freeze, the filed image records no paused entities, the retrieved ship is trivially
-        /// unpaused, and every assertion below still passes while testing nothing. Reading the image
-        /// back and counting them is what ties the assertions to the thing they exist to guard.</para>
+        /// <para>The load control is what stops this passing vacuously. If the retrieve ever loaded
+        /// onto a running map, the retrieved ship would be trivially unpaused and every assertion
+        /// below would still pass while testing nothing. Reading the retrieve's own load before its
+        /// dock (<see cref="DrydockLoadPauseTest.PauseRecorderSystem"/>) and finding every entity
+        /// paused is what ties the assertions to the thing they exist to guard.</para>
         /// </summary>
         [Test]
         public async Task ARetrievedShipComesBackUnpausedOnAnUnpausedMap()
@@ -581,17 +581,25 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             Assert.That(result, Is.EqualTo(DrydockStoreResult.Success));
             await pair.RunTicksSync(5);
 
-            // The image control. A freeze that silently stopped happening would leave every
-            // assertion below passing on a ship that was never frozen in the first place.
-            var pausedEntities = (await ReadImage(db, shipId!.Value)).Entities.Count(e => e.Paused);
+            var recorder = server.System<DrydockLoadPauseTest.PauseRecorderSystem>();
+            await server.WaitPost(recorder.Loads.Clear);
 
-            Assert.That(pausedEntities, Is.GreaterThanOrEqualTo(savableBefore),
-                $"The filed image records {pausedEntities} paused entities against {savableBefore} savable entities aboard. "
-                + "The freeze pauses the grid and every descendant before the store walks the tree, so a shortfall means the store filed a ship that was never frozen.");
-
-            var retrieved = await DrydockTestHelpers.RunOnServer(pair, () => drydock.TryRetrieveShip(shipId.Value, owner, station, null));
+            var retrieved = await DrydockTestHelpers.RunOnServer(pair, () => drydock.TryRetrieveShip(shipId!.Value, owner, station, null));
             Assert.That(retrieved.Result, Is.EqualTo(DrydockRetrieveResult.Success));
             var grid = retrieved.Grid!.Value;
+
+            // The load control. A retrieve that loaded a running hull would leave every assertion
+            // below passing on a ship that was never frozen in the first place.
+            (EntityUid Grid, int Restored, int Paused, bool MapPaused) load = default;
+            await server.WaitPost(() => load = recorder.Loads.Single());
+            var (loadedGrid, restored, pausedAtLoad, mapPausedAtLoad) = load;
+            Assert.Multiple(() =>
+            {
+                Assert.That(loadedGrid, Is.EqualTo(grid), "The one load is the retrieve's.");
+                Assert.That(restored, Is.GreaterThan(savableBefore), "The load restored the grid and everything the walk counted aboard.");
+                Assert.That(mapPausedAtLoad, Is.True, "The retrieve loads onto a paused map.");
+                Assert.That(pausedAtLoad, Is.EqualTo(restored), $"{pausedAtLoad} of {restored} restored entities were paused before the dock.");
+            });
 
             // Nothing is nudged after the retrieve. The ship has to thaw itself.
             await pair.RunTicksSync(30);
@@ -1009,7 +1017,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             }
         }
 
-        private static async Task<DrydockImage> ReadImage(IServerDbManager db, Guid shipId)
+        internal static async Task<DrydockImage> ReadImage(IServerDbManager db, Guid shipId)
         {
             var load = await db.RunTriadDbCommand(async (context, token) =>
             {

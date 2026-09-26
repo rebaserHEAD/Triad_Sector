@@ -27,9 +27,10 @@ namespace Content.Server._Triad.Drydock;
 ///
 /// <para>The mechanism is the engine's own pause flag, applied by moving the grid onto a private
 /// map that was paused while it was still empty. Measured across sixteen roster hulls of 144 to 960
-/// entities: about three milliseconds total, and the only difference it makes to the written
-/// document is one <c>paused: true</c> per entity. A frozen ship then holds perfectly still, against
-/// a live-map control that drifts 46 to 240 lines over the same span.</para>
+/// entities: about three milliseconds total, and the only difference it makes to the engine's own
+/// serialized document is one <c>paused: true</c> per entity (<c>DrydockFreezeCostTest</c>), which the
+/// image does not keep. A frozen ship then holds perfectly still, against a live-map control that
+/// drifts 46 to 240 lines over the same span.</para>
 /// </summary>
 public sealed partial class DrydockSystem
 {

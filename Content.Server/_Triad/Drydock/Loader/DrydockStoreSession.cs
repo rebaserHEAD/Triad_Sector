@@ -129,7 +129,6 @@ public sealed class DrydockStoreSession
             _walk.Ids[uid],
             meta.EntityPrototype?.ID,
             meta.EntityLifeStage >= EntityLifeStage.MapInitialized,
-            meta.EntityPaused,
             rows));
     }
 

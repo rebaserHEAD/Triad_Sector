@@ -98,7 +98,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
         private static DrydockImage Image(int n)
         {
             var rows = new Dictionary<string, string> { ["Transform"] = $"{{\"pos\":\"{n},0\"}}" };
-            var entity = new DrydockImageEntity(1, "TestGrid", true, false, rows);
+            var entity = new DrydockImageEntity(1, "TestGrid", true, rows);
             return new DrydockImage(1, new[] { entity }, "{}", 0, rows["Transform"].Length + 2);
         }
 

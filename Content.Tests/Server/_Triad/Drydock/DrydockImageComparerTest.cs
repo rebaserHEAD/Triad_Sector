@@ -20,7 +20,7 @@ public sealed class DrydockImageComparerTest
         foreach (var (row, json) in rows)
             map[row] = json;
 
-        return new DrydockImageEntity(id, prototype, true, false, map);
+        return new DrydockImageEntity(id, prototype, true, map);
     }
 
     private static DrydockImage Image(params DrydockImageEntity[] entities) =>
@@ -96,17 +96,16 @@ public sealed class DrydockImageComparerTest
     [Test]
     public void MapInitialisationIsADifference()
     {
-        var started = new DrydockImageEntity(1, "Grid", false, false, Filed.Entities[0].Rows);
+        var started = new DrydockImageEntity(1, "Grid", false, Filed.Entities[0].Rows);
         var read = new DrydockImage(1, new[] { started, Filed.Entities[1] }, Filed.Tiles, 0, 0);
 
         Assert.That(DrydockImageComparer.Differences(Filed, read), Is.EqualTo(new[] { "entity 1: map-initialised True became False" }));
     }
 
     [Test]
-    public void BytesAndPauseAreNotCompared()
+    public void BytesAreNotCompared()
     {
-        var paused = new DrydockImageEntity(2, "Wall", true, true, Filed.Entities[1].Rows);
-        var read = new DrydockImage(1, new[] { Filed.Entities[0], paused }, Filed.Tiles, 0, 999);
+        var read = new DrydockImage(1, Filed.Entities, Filed.Tiles, 0, 999);
 
         Assert.That(DrydockImageComparer.Differences(Filed, read), Is.Empty);
     }

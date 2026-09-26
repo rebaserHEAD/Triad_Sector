@@ -27,8 +27,9 @@ namespace Content.Server._Triad.Drydock.Codec;
 /// <para>The two halves are deliberately not mirrors, and that asymmetry is the engine's.
 /// <see cref="Write"/> has a pause branch and <see cref="Read"/> does not, so an entity stored while
 /// paused comes back with its remaining time measured from the load clock. Its distance survives the
-/// rest of the way only if the loader restores the pause state, because the shift that pays it back
-/// is <c>[AutoPausedField]</c>'s, raised on unpause
+/// time the load then spends paused only if the load pauses it, as a load onto a paused map does
+/// (<see cref="Loader.DrydockLoadSession"/>), because the shift that pays it back is
+/// <c>[AutoPausedField]</c>'s, raised on unpause
 /// (<c>RobustToolbox/Robust.Serialization.Generator/ComponentPauseGenerator.cs:169</c>).</para>
 /// </summary>
 public static class DrydockTimeOffsetAdapter

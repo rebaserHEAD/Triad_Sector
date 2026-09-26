@@ -63,9 +63,8 @@ public interface IDrydockImageStore
 
     /// <summary>
     /// The image filed under <paramref name="key"/>, whole, with its entities in load order, or null when there is none,
-    /// which is also what a pruned revision reads. Needs no transaction. From the PostgreSQL store every entity reads as
-    /// unpaused, because it does not keep pause and the target map decides pause on a load, and as map-initialised or not
-    /// as it was filed; the memory store hands back the image it was given.
+    /// which is also what a pruned revision reads. Needs no transaction. The PostgreSQL store reads it back as filed, up
+    /// to what <see cref="DrydockImageComparer"/> leaves out; the memory store hands back the image it was given.
     /// </summary>
     Task<DrydockImage?> Get(ServerDbContext db, DrydockImageKey key, CancellationToken ct);
 

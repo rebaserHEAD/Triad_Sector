@@ -29,8 +29,7 @@ public sealed class DrydockImageMismatchException : Exception
 /// content (<c>DrydockNodeJson.cs:26-29</c>).
 ///
 /// <para>Not compared: <see cref="DrydockImage.Bytes"/>, which measures the text as written and a <c>jsonb</c> read
-/// spells differently; and <see cref="DrydockImageEntity.Paused"/>, which the store does not keep, because the target
-/// map decides pause on a load.</para>
+/// spells differently.</para>
 /// </summary>
 public static class DrydockImageComparer
 {

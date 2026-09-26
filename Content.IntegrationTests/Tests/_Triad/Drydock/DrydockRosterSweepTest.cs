@@ -249,10 +249,10 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                     // that into a failure here rather than somewhere unrelated later.
                     await pair.RunTicksSync(7);
 
-                    // The thaw, across the whole fleet. Every document filed since the store learned
-                    // to freeze carries a paused flag per entity, and the retrieve loads onto a
-                    // paused map on purpose, so the walk that clears those flags is the only thing
-                    // standing between a player and a ship that looks perfect and cannot act. The
+                    // The thaw, across the whole fleet. The retrieve loads onto a paused map on
+                    // purpose and a load takes pause from its map, so every entity comes up paused,
+                    // and the thaw that clears those flags is the only thing standing between a
+                    // player and a ship that looks perfect and cannot act. The
                     // hand-built fixture proves the walk works on nine entities; this proves it does
                     // not run out of patience on nine hundred. Collected as a failure line rather
                     // than asserted here, so one frozen hull does not end the sweep.

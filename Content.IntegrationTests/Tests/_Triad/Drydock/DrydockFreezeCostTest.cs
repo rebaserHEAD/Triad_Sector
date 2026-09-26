@@ -27,8 +27,8 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
     /// between slices. Pausing is the engine's own mechanism for that, but
     /// <see cref="SharedMapSystem.SetPaused"/> recurses into every descendant via
     /// <c>SetEntityPaused</c>, and <c>EntitySerializer</c> writes a <c>paused</c> key for any entity
-    /// carrying that flag. So the freeze is visible in the artifact we persist, and this test is the
-    /// evidence for exactly how visible.</para>
+    /// carrying that flag. So the freeze is visible in the engine's document, and this test is the
+    /// evidence for exactly how visible. The drydock's image keeps no pause.</para>
     ///
     /// <para>Reports rather than asserts on timing. The document comparison does assert: the only
     /// difference a freeze is allowed to make is the paused flag itself. Anything else means moving

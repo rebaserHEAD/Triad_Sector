@@ -23,8 +23,9 @@ namespace Content.Server._Triad.Drydock.Loader;
 /// <see cref="Complete"/>. The engine's own deserializer allocates, adds each prototype's components and starts; the
 /// image's rows are applied between its component pass and its startup.
 /// <list type="number">
-/// <item>A skeleton document: every stored entity under its prototype, with its stable id as the yaml uid and its
-/// recorded <c>mapInit</c> and <c>paused</c>, and the grid's own grid component carrying the tile table's chunks.
+/// <item>A skeleton document: every stored entity under its prototype, with its id in the image as the yaml uid, its
+/// recorded <c>mapInit</c>, the target map's pause state as <c>paused</c>, and the grid's own grid component carrying
+/// the tile table's chunks.
 /// Every other entity's component list is empty, since its components come from the image's rows, but present: the
 /// engine resets net ticks at startup only for an entity whose data has a component list (<c>:995-996</c>).</item>
 /// <item><c>TryProcessData</c> and <c>CreateEntities</c> (<c>EntityDeserializer.cs:153</c>, <c>:183</c>): the
@@ -110,6 +111,9 @@ public sealed class DrydockLoadSession
     {
         Expect(0);
 
+        // Pause is the target map's, as the engine's own merge onto a map takes it (MapLoaderSystem.LoadMap.cs:295).
+        var paused = _system.Maps.IsPaused(_mapUid) ? "true" : "false";
+
         var groups = new SortedDictionary<string, SequenceDataNode>(StringComparer.Ordinal);
         foreach (var entity in _image.Entities)
         {
@@ -117,7 +121,7 @@ public sealed class DrydockLoadSession
             {
                 ["uid"] = new ValueDataNode(entity.Id.ToString()),
                 ["mapInit"] = new ValueDataNode(entity.MapInitialized ? "true" : "false"),
-                ["paused"] = new ValueDataNode(entity.Paused ? "true" : "false"),
+                ["paused"] = new ValueDataNode(paused),
             };
 
             if (entity.Id == _image.GridId)

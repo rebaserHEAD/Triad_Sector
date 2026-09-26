@@ -461,7 +461,7 @@ public sealed class DrydockPostgresImageStore : IDrydockImageStore
                 await AddReserved(reader, 6, DrydockImageSystem.CarriedRow, entityRows, ct);
 
                 bytes += entityRows.Values.Sum(v => v.Length);
-                entities.Add(new DrydockImageEntity(id, prototype, mapInitialized, Paused: false, entityRows));
+                entities.Add(new DrydockImageEntity(id, prototype, mapInitialized, entityRows));
             }
         }
 

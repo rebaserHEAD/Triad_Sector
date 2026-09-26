@@ -29,7 +29,7 @@ public sealed class DrydockPostgresImageRowsTest
         foreach (var (row, json) in rows)
             map[row] = json;
 
-        return new DrydockImageEntity(id, $"Proto{id}", initialised, false, map);
+        return new DrydockImageEntity(id, $"Proto{id}", initialised, map);
     }
 
     private static DrydockImage Image(params DrydockImageEntity[] entities) => new(1, entities, "{}", 0, 0);
@@ -111,7 +111,7 @@ public sealed class DrydockPostgresImageRowsTest
     [Test]
     public void ATransformRowWithoutAParentIsRefused()
     {
-        var entity = new DrydockImageEntity(1, "Grid", true, false, new Dictionary<string, string> { ["Transform"] = "{\"pos\":\"0,0\"}" });
+        var entity = new DrydockImageEntity(1, "Grid", true, new Dictionary<string, string> { ["Transform"] = "{\"pos\":\"0,0\"}" });
 
         Assert.Throws<InvalidOperationException>(() => DrydockPostgresImageStore.EntityRows(Image(entity)));
     }

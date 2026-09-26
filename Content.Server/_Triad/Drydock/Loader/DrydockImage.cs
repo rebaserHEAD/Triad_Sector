@@ -4,15 +4,14 @@ using System.Linq;
 namespace Content.Server._Triad.Drydock.Loader;
 
 /// <summary>
-/// One stored entity: its stable id, its prototype, the life stage and pause state it is loaded into, and its rows.
-/// Rows are JSON text keyed by component name, plus the appearance and manifest rows, so an image is exactly what a
-/// database would hold.
+/// One stored entity: its id in the image, its prototype, the life stage it is loaded into, and its rows. Rows are JSON
+/// text keyed by component name, plus the appearance and manifest rows, so an image is exactly what a database would
+/// hold. Pause is not kept: a load takes it from the map it loads onto (<see cref="DrydockLoadSession"/>).
 /// </summary>
 public sealed record DrydockImageEntity(
     long Id,
     string? Prototype,
     bool MapInitialized,
-    bool Paused,
     IReadOnlyDictionary<string, string> Rows);
 
 /// <summary>
@@ -20,7 +19,7 @@ public sealed record DrydockImageEntity(
 /// parents before children, which the store's walk gives. The load cannot start on part of one, because the engine
 /// allocates every entity before any row is read.
 /// </summary>
-/// <param name="GridId">The stable id of the grid entity.</param>
+/// <param name="GridId">The grid entity's id in the image.</param>
 /// <param name="Tiles">The tile table (<see cref="Codec.DrydockTileTable"/>) as JSON text.</param>
 /// <param name="Unsaved">Entities the walk left out, with everything under them, because their prototype is not savable.</param>
 /// <param name="Bytes">The JSON text held, rows and tiles.</param>

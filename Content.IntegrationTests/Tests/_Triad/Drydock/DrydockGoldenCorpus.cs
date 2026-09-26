@@ -284,7 +284,6 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                     ["id"] = entity.Id,
                     ["prototype"] = entity.Prototype,
                     ["mapInitialized"] = entity.MapInitialized,
-                    ["paused"] = entity.Paused,
                     ["rows"] = rows,
                 });
             }
@@ -305,7 +304,10 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             return output.ToArray();
         }
 
-        /// <summary>The image a fixture file holds (<see cref="WriteImage"/>).</summary>
+        /// <summary>
+        /// The image a fixture file holds (<see cref="WriteImage"/>). A key the image no longer has, such as an older file's
+        /// <c>paused</c>, is not read.
+        /// </summary>
         public static DrydockImage ReadImage(byte[] file)
         {
             using var input = new GZipStream(new MemoryStream(file), CompressionMode.Decompress);
@@ -324,7 +326,6 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                     entity.GetProperty("id").GetInt64(),
                     prototype.ValueKind == JsonValueKind.Null ? null : prototype.GetString(),
                     entity.GetProperty("mapInitialized").GetBoolean(),
-                    entity.GetProperty("paused").GetBoolean(),
                     rows));
             }
 
