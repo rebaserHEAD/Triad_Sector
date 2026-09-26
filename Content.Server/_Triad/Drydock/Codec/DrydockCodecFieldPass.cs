@@ -135,10 +135,12 @@ public sealed class DrydockCodecFieldPass
                     break;
 
                 case FieldCase.GridChunks:
-                    // Tiles are stored apart, in DrydockTileTable under the image's own tile ids. The
-                    // engine's chunk serializer resolves tile ids through a tilemap only its own
-                    // loader and saver build, so the chunks written here would carry ids nothing
-                    // can resolve, and store the same tiles a second time.
+                    // Tiles are stored apart, in the image's tile table under the image's own ids
+                    // (DrydockTileTable, written by DrydockStoreSession.WriteTiles), which the loader
+                    // hands to the engine's own chunk reader. Outside the engine's saver the chunk
+                    // serializer writes this server's raw tile type ids, and outside its loader the
+                    // reader throws for want of a tilemap (MapChunkSerializer.cs:58-64, :133, :156),
+                    // so a chunk written here could not be read back and would store the tiles twice.
                     mapping.Remove(entry.Key);
                     break;
 

@@ -51,10 +51,9 @@ public sealed partial class DrydockCodec
     /// written as an explicit null, so the read sets it rather than leaving whatever non-null default the prototype gave
     /// the new component. A value no serializer can write is added to <paramref name="unwritable"/>, named, and left out.
     ///
-    /// <para>OWED at the store: leaving one out loses it, so the store is to refuse the whole hull instead, naming the
-    /// entity and the member, as it is to for a component write that throws and for an entity stored before its map
-    /// init. The build-time test writes a sample of every type <see cref="WrittenAs"/> gives, so this is the
-    /// backstop.</para>
+    /// <para>A member left out is lost, so every caller refuses a store whose <paramref name="unwritable"/> is not empty
+    /// (<c>DrydockImageStoreResult.Whole</c>), naming the entity and the member. The build-time test writes a sample of
+    /// every type <see cref="WrittenAs"/> gives, so the refusal is the backstop.</para>
     /// </summary>
     public MappingDataNode? WriteManifest(
         Entity<MetaDataComponent> entity,

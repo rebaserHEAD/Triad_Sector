@@ -105,8 +105,8 @@ public sealed record DrydockNotCarried(int Row, string Component, string Member,
 /// resolves every entry against its component and fails on a member that is gone, one that has become a data field while
 /// listed as carried by this manifest, or a component that is no longer registered.
 ///
-/// <para>Out by scope (the image carries no mobs): rows 316, 449, 450, 452, 454, 505 and 508. Out by verdict: rows 104,
-/// 399, 400, and 498 (a worn stethoscope goes ashore with its wearer), and row 507's music state, listed in
+/// <para>Out by scope (the image carries no mobs): rows 316, 449, 450, 452, 454, 505 and 508. Out by verdict: rows 399,
+/// 400 and 498 (a worn stethoscope goes ashore with its wearer), and row 507's music state, listed in
 /// <see cref="NotCarried"/>. Out as unreachable: row 506, whose console no prototype carries. Out with the fourth moment,
 /// after the first power solve, which was cut (ruled 2026-09-19): rows 204, 474, 475 and 476, a door's auto-close, a
 /// fryer's next fry, a disposal unit's flush and a cargo telepad's cycle, each of which the power edge re-arms to a full
