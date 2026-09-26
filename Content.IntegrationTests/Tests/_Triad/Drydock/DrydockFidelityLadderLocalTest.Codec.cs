@@ -60,7 +60,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
     {
         private static readonly bool CodecMode = Environment.GetEnvironmentVariable("LADDER_MODE") == "codec";
 
-        /// <summary>What the codec round trips measured, printed after the rung's report.</summary>
+        /// <summary>What the round trips measured (the codec's notes, and the drydock pipeline's meter), printed after the rung's report.</summary>
         private static readonly List<string> CodecNotes = new();
 
         /// <summary>The whole store of the last round trip: the walk, every component's write and its JSON, and the tiles.</summary>

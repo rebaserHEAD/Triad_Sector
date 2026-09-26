@@ -24,6 +24,7 @@ using Content.Server.VendingMachines;
 using Content.Server.Weapons.Ranged.Systems;
 using Content.Shared._Mono.Ships.Components;
 using Content.Shared._NF.Shipyard.Prototypes;
+using Content.Shared._Triad.CCVar;
 using Content.Shared.Damage;
 using Content.Shared.Atmos;
 using Content.Shared.Damage.Prototypes;
@@ -313,6 +314,11 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             LoopFailures.Clear();
             var (owner, station) = await GoldenCorpus.PrepareHarness(pair, 3);
             var map = await pair.CreateTestMap();
+
+            // The harness turns slicing off for verification (a budget of 0 runs no job); a drydock-mode rung measures the
+            // sliced pipeline the server runs, so it puts the budget back to the server's default, which the meter prints.
+            if (!EngineMode && !CodecMode)
+                await server.WaitPost(() => server.CfgMan.SetCVar(TriadCCVars.DrydockTickBudgetMs, TriadCCVars.DrydockTickBudgetMs.DefaultValue));
 
             // A sector map carries a space atmosphere; a test map does not, and a firelock on a hull presented
             // beside the harness station asks its map for one and logs an error when it is missing.
@@ -1798,6 +1804,9 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                     ? (await CodecRoundTrip(pair, grid), null, 0)
                     : await DrydockRoundTrip(pair, grid, owner, station);
 
+            if (CodecMode)
+                CodecNotes.Add("[meter] codec mode runs no pipeline job: its store and load are DrydockImageSystem's, called within one tick, so there is no meter; run the rung with LADDER_MODE unset for one");
+
             await pair.RunTicksSync(SettleTicks);
 
             DrydockStateSnapshot after = default!;
@@ -1832,20 +1841,53 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             var server = pair.Server;
             var timing = server.ResolveDependency<IGameTiming>();
             var drydock = server.System<DrydockSystem>();
+            var budgetMs = server.CfgMan.GetCVar(TriadCCVars.DrydockTickBudgetMs);
             var ran = new Dictionary<EntityUid, int>();
 
+            var run = 0;
+            await server.WaitPost(() => run = drydock.LastPhaseCostsRun);
             var (storeResult, shipId) = await PumpCountingGridTicks(pair,
                 () => drydock.TryStoreShip(grid, owner, null), ran);
             Assert.That(storeResult, Is.EqualTo(DrydockStoreResult.Success), "store refused.");
+            await server.WaitPost(() => AddMeterNotes(drydock, "store", run, budgetMs));
 
             await pair.RunTicksSync((int) Math.Ceiling(ClockGapSeconds / timing.TickPeriod.TotalSeconds));
 
+            await server.WaitPost(() => run = drydock.LastPhaseCostsRun);
             var retrieved = await PumpCountingGridTicks(pair,
                 () => drydock.TryRetrieveShip(shipId!.Value, owner, station, null), ran);
             Assert.That(retrieved.Succeeded, Is.True, $"retrieve failed with {retrieved.Result}.");
+            await server.WaitPost(() => AddMeterNotes(drydock, "retrieve", run, budgetMs));
 
             var shipTicks = ran.GetValueOrDefault(grid) + ran.GetValueOrDefault(retrieved.Grid!.Value);
             return (retrieved.Grid!.Value, server.System<DrydockFidelitySystem>().LastMapInitReport, shipTicks);
+        }
+
+        /// <summary>
+        /// What the store or the retrieve cost the main thread, phase by phase, from the meter the sliced pipeline records
+        /// when it ends (<see cref="DrydockSystem.LastPhaseCosts"/>), each line beside the tick budget it ran under.
+        /// WorstTickMs is the most main-thread time one tick paid, the figure the slicing is judged on; a budget of zero or
+        /// less runs the pipeline with no job, so there is no meter and the line says that instead of a total.
+        /// <paramref name="runBefore"/> is <see cref="DrydockSystem.LastPhaseCostsRun"/> before the call, so a table left
+        /// over from an earlier pipeline is never read as this one's.
+        /// </summary>
+        private static void AddMeterNotes(DrydockSystem drydock, string half, int runBefore, int budgetMs)
+        {
+            if (drydock.LastPhaseCostsRun == runBefore)
+            {
+                CodecNotes.Add($"[meter] {half} (budget {budgetMs} ms): no pipeline recorded a meter");
+                return;
+            }
+
+            if (drydock.LastPhaseCosts is not { } costs)
+            {
+                CodecNotes.Add($"[meter] {half} (budget {budgetMs} ms): ran with no job, so no meter");
+                return;
+            }
+
+            CodecNotes.Add($"[meter] {half} (budget {budgetMs} ms): worst tick {drydock.LastWorstTickMs:F2} ms across every phase");
+            foreach (var (phase, cost) in costs.OrderBy(entry => entry.Key))
+                CodecNotes.Add($"[meter] {half} (budget {budgetMs} ms) {phase}: WorstTickMs {cost.WorstTickMs:F2}, TotalMs {cost.TotalMs:F2}, ticks {cost.Ticks}");
         }
 
         /// <summary>
