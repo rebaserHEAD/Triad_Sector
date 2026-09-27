@@ -987,7 +987,7 @@ public sealed class DrydockCodecFieldPass
     /// Walked one declaring type at a time, because a base type's private and internal members are
     /// not returned by a query on the derived type, and <c>MapGridComponent.Chunks</c> is internal.
     /// </summary>
-    private static IEnumerable<(MemberInfo Member, DataFieldBaseAttribute Attribute)> DataMembers(Type type)
+    internal static IEnumerable<(MemberInfo Member, DataFieldBaseAttribute Attribute)> DataMembers(Type type)
     {
         for (var declaring = type; declaring != null && declaring != typeof(object); declaring = declaring.BaseType)
         {

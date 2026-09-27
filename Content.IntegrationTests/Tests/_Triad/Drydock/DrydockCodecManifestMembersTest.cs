@@ -166,7 +166,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             var factory = pair.Server.ResolveDependency<IComponentFactory>();
             var gravity = DrydockCodecManifestMembers.Members.Single(m => m.Component == "GravityGenerator");
             var reapplied = DrydockCodecManifestMembers.Members.Single(m => m.Kind == DrydockMemberKind.ReapplyCarried);
-            var cutWires = DrydockCodecManifestMembers.Members.Single(m => Equals(m.EntryKey, PowerWireActionKey.CutWires));
+            var pulsed = DrydockCodecManifestMembers.Members.Single(m => Equals(m.EntryKey, PowerWireActionKey.Pulsed));
 
             // The writability check pointed at the member a store found unwritable, which resolves, and at collections one
             // level down, whose empty sample writes whatever they hold.
@@ -200,8 +200,8 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                 Assert.That(Wrong(factory, gravity with { Kind = DrydockMemberKind.AbsoluteTime }), Is.Not.Null,
                     "A time that is not a TimeSpan went unreported.");
 
-                Assert.That(Wrong(factory, cutWires), Is.Null, "The control's control: the real dictionary entry resolves.");
-                Assert.That(Wrong(factory, cutWires with { EntryKey = null }), Is.Not.Null,
+                Assert.That(Wrong(factory, pulsed), Is.Null, "The control's control: the real dictionary entry resolves.");
+                Assert.That(Wrong(factory, pulsed with { EntryKey = null }), Is.Not.Null,
                     "A dictionary entry without its key went unreported.");
                 Assert.That(Wrong(factory, gravity with { Kind = DrydockMemberKind.Entry, EntryKey = PowerWireActionKey.CutWires, EntryType = typeof(int) }), Is.Not.Null,
                     "An entry of a member that is not a dictionary went unreported.");

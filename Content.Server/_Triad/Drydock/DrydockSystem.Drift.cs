@@ -1,3 +1,4 @@
+using Content.Server._Triad.Drydock.Codec;
 using Robust.Shared.ContentPack;
 using Robust.Shared.Prototypes;
 
@@ -5,7 +6,7 @@ namespace Content.Server._Triad.Drydock;
 
 /// <summary>
 /// The production inputs to <see cref="DrydockDrift.Detect"/>: the migration mappings this server
-/// ships, the prototypes it has loaded and the components it has registered. Kept apart from the
+/// ships, the prototypes it has loaded, the components it has registered and the ones it has retired. Kept apart from the
 /// detector so the detector stays a pure function a test can hand anything.
 /// </summary>
 public sealed partial class DrydockSystem
@@ -37,6 +38,7 @@ public sealed partial class DrydockSystem
             engineFormatVer,
             DrydockDrift.EngineWindow,
             drydockFormatVer,
-            DrydockDrift.DrydockWindow);
+            DrydockDrift.DrydockWindow,
+            name => DrydockRetiredKeys.Find(DrydockRetiredKind.Component, name) != null);
     }
 }

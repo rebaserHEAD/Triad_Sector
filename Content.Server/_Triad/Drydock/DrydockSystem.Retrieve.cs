@@ -597,8 +597,13 @@ public sealed partial class DrydockSystem
             Log.Info($"Drydock: {ctx.ShipId} revision {revision} loaded {result.Ids.Count} entities; "
                      + $"severed {result.Severed.Count}, manifest missing {result.Manifest.Missing.Values.Sum()} and refused {result.Manifest.Refused.Values.Sum()}, "
                      + $"appearance refused {result.AppearanceRefused.Values.Sum()}, unresolved prototypes {result.UnresolvedPrototypes.Count}, "
-                     + $"dropped batches {result.DroppedBatches.Count}, "
+                     + $"dropped batches {result.DroppedBatches.Count}, retired keys dropped {result.RetiredDropped.Values.Sum()}, "
                      + $"dropped roots [{string.Join(", ", result.DroppedRoots.Select(r => $"{r.Prototype} ({r.Subtree})"))}].");
+
+            // A warning, not an error: a retired key is dropped on purpose, and each one says why dropping it loses nothing.
+            foreach (var (retired, count) in result.RetiredDropped)
+                Log.Warning($"Drydock: {ctx.ShipId} revision {revision} dropped retired {retired.Kind} {retired.Key} from {count} row(s): {retired.Reason}.");
+
             return result;
         }
         catch (DrydockAbortedException)

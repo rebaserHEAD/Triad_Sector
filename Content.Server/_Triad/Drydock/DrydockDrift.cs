@@ -17,7 +17,7 @@ public readonly record struct DrydockRename(string From, string To);
 /// What <see cref="DrydockDrift.Detect"/> found about one stored image. Each list is ordinal
 /// sorted and free of duplicates.
 /// </summary>
-/// <param name="MissingComponents">Component names the document carries that no registration has now.</param>
+/// <param name="MissingComponents">Component names the document carries that no registration has now and nothing retires.</param>
 public sealed record DrydockDriftVerdict(
     IReadOnlyList<string> Unresolved,
     IReadOnlyList<DrydockRename> Renamed,
@@ -43,7 +43,8 @@ public sealed record DrydockDriftVerdict(
 
     /// <summary>
     /// The load would fail or misread: an id that resolves to nothing after the mappings, a component
-    /// no registration has (the load resolves every row through the factory, <c>DrydockLoadSession.ApplyRows</c>),
+    /// no registration has and nothing retires (the load resolves every other row through the factory,
+    /// <c>DrydockLoadSession.ApplyRows</c>),
     /// or a format outside its reader's window. Renames and deletions alone are not a refusal: the load hands the
     /// mappings to the engine's deserializer (<c>DrydockLoadOptions.Migrations</c>), so a renamed id loads as its target
     /// and an entity whose prototype is deleted is deleted, with everything under it, after startup and recorded by root.
@@ -81,6 +82,8 @@ public static class DrydockDrift
     /// <param name="components">The image's component names (<see cref="DrydockImagePreflight.ComponentNames"/>). A
     /// name starting <c>~</c> is a reserved row the load reads itself, not a component, and is skipped as the load skips it.</param>
     /// <param name="isKnownComponent">Whether a name has a component registration now.</param>
+    /// <param name="isRetiredComponent">Whether a name is a retired component, whose rows the load drops and counts
+    /// (<see cref="Codec.DrydockRetiredKeys"/>). Null retires none.</param>
     /// <remarks>
     /// Mirrors <c>EntityDeserializer</c>, which reads the mappings twice and not quite the same way
     /// both times. <c>ValidatePrototypes</c>, the pass that can fail the whole load, renames first and
@@ -99,7 +102,8 @@ public static class DrydockDrift
         int engineFormatVer,
         DrydockFormatWindow engineWindow,
         int drydockFormatVer,
-        DrydockFormatWindow drydockWindow)
+        DrydockFormatWindow drydockWindow,
+        Func<string, bool>? isRetiredComponent = null)
     {
         var unresolved = new SortedSet<string>(StringComparer.Ordinal);
         var renamed = new SortedDictionary<string, string>(StringComparer.Ordinal);
@@ -108,7 +112,7 @@ public static class DrydockDrift
 
         foreach (var name in components)
         {
-            if (!name.StartsWith('~') && !isKnownComponent(name))
+            if (!name.StartsWith('~') && !isKnownComponent(name) && isRetiredComponent?.Invoke(name) != true)
                 missingComponents.Add(name);
         }
 

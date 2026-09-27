@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Collections.Immutable;
 using Content.Server._Triad.Drydock.Codec;
 using Robust.Shared.GameObjects;
 
@@ -80,6 +81,12 @@ public sealed class DrydockLoadOptions
     /// <c>allocate</c>, <c>populate</c> and <c>dropped</c>, then <c>rows</c> and <c>reparent</c>. Null marks nothing.
     /// </summary>
     public Action<string>? Mark { get; init; }
+
+    /// <summary>
+    /// The retirements the load honours (<see cref="DrydockCodec.Retirements"/>): <see cref="DrydockRetiredKeys.All"/>,
+    /// unless the caller names others, as a control does.
+    /// </summary>
+    public ImmutableArray<DrydockRetiredKey> Retirements { get; init; } = DrydockRetiredKeys.All;
 }
 
 /// <summary>
@@ -200,6 +207,12 @@ public sealed class DrydockLoadResult
     /// counted in that one's subtree and never listed on its own.
     /// </summary>
     public IReadOnlyList<DrydockDroppedRoot> DroppedRoots { get; init; } = Array.Empty<DrydockDroppedRoot>();
+
+    /// <summary>
+    /// Every retired key the load dropped (<see cref="DrydockRetiredKeys"/>), with how many rows carried it: a manifest
+    /// member, a component row, or a data field in one.
+    /// </summary>
+    public IReadOnlyDictionary<DrydockRetiredKey, int> RetiredDropped { get; init; } = new Dictionary<DrydockRetiredKey, int>();
 
     public int TilesStored { get; init; }
     public int TilesRestored { get; init; }

@@ -24,7 +24,8 @@ namespace Content.Server._Triad.Wires;
 /// set, and the power wire's <c>Cut</c> adds to its counter on every call. That counter,
 /// <see cref="PowerWireActionKey.CutWires"/>, is the number of cut power wires, as the live cut path keeps it (a wire is
 /// marked cut only when its action's <c>Cut</c> returns true, <c>WiresSystem.UpdateWires</c>), so it is set from the wires
-/// once they are cut, and a carried count that disagrees is logged and replaced.</para>
+/// once they are cut. The list's rebuild has set it to zero by then (<c>PowerWireAction.AddWire</c>), so it is never
+/// carried, and an image that still holds it has it dropped (<see cref="Drydock.Codec.DrydockRetiredKeys"/>).</para>
 ///
 /// <para>A running wire timer (<see cref="WiresSystem.StartWireAction"/>, the revert a pulse arms) travels as its wire's
 /// name, its key, its expiry method and the seconds it had left, and runs again for exactly those seconds. The expiry is a
@@ -96,8 +97,6 @@ public sealed partial class WiresCarrySystem : EntitySystem
 
     private void OnRestored(Entity<WiresComponent> ent, ref GridRestoredEvent args)
     {
-        int? carriedCount = _wires.TryGetData<int?>(ent, PowerWireActionKey.CutWires, out var count, ent.Comp) ? count : null;
-
         if (ent.Comp.WiresList.Count == 0 && !string.IsNullOrEmpty(ent.Comp.LayoutId))
             _wires.SetOrCreateWireLayout(ent, ent.Comp);
 
@@ -120,9 +119,6 @@ public sealed partial class WiresCarrySystem : EntitySystem
         if (_wires.HasData(ent, PowerWireActionKey.CutWires, ent.Comp))
         {
             var cutPower = ent.Comp.WiresList.Count(wire => wire.IsCut && wire.Action is PowerWireAction);
-            if (carriedCount is { } carried && carried != cutPower)
-                Log.Warning($"{ToPrettyString(ent)}: carried {carried} cut power wires and {cutPower} came back cut; the count is set to {cutPower}.");
-
             _wires.SetData(ent, PowerWireActionKey.CutWires, cutPower, ent.Comp);
         }
 

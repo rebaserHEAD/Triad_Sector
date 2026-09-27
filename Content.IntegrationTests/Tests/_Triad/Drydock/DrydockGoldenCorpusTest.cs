@@ -8,6 +8,7 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Threading.Tasks;
 using Content.Server._Triad.Drydock;
+using Content.Server._Triad.Drydock.Codec;
 using Content.Server._Triad.Drydock.Loader;
 
 namespace Content.IntegrationTests.Tests._Triad.Drydock
@@ -121,6 +122,68 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             });
 
             await pair.CleanReturnAsync();
+        }
+
+        /// <summary>
+        /// The gate tells a retired key from an unknown one: a manifest key nothing lists and a component row key its
+        /// component does not declare each turn (a) red, since the load refuses what it cannot account for; a retired key
+        /// passes, and the report's notes name it.
+        /// </summary>
+        [Test]
+        public async Task TheGateRefusesAnUnknownKeyAndPassesARetiredOne()
+        {
+            var fixtures = GoldenCorpus.Discover();
+            var basis = fixtures
+                .Where(f => f.Recipes.Contains("cargo-into-locker"))
+                .OrderBy(f => f.Revision.SizeBytes)
+                .First();
+            var retired = DrydockRetiredKeys.All.First(k => k.Kind == DrydockRetiredKind.ManifestMember);
+
+            await using var pair = await PoolManager.GetServerClient();
+            var (owner, station) = await GoldenCorpus.PrepareHarness(pair, 4);
+
+            // The two refused loads log the refusal as an error, so they run with the pair's failure level lowered.
+            var unlisted = Corrupt(basis, image => AddKey(image, "SheetSteel", DrydockCodec.ManifestRow, "GoldenCorpusControl.NoSuchMember"));
+            var unlistedReport = await DrydockTestHelpers.Quietly(pair, () => GoldenCorpus.Verify(pair, unlisted, owner, station));
+            await TestContext.Out.WriteLineAsync($"[golden-control] unlisted manifest key: {unlistedReport}");
+
+            var undeclared = Corrupt(basis, image => AddKey(image, "SheetSteel", "Stack", "goldenCorpusControlNoSuchField"));
+            var undeclaredReport = await DrydockTestHelpers.Quietly(pair, () => GoldenCorpus.Verify(pair, undeclared, owner, station));
+            await TestContext.Out.WriteLineAsync($"[golden-control] undeclared data field: {undeclaredReport}");
+
+            var old = Corrupt(basis, image => AddKey(image, "SheetSteel", DrydockCodec.ManifestRow, retired.Key));
+            var oldReport = await GoldenCorpus.Verify(pair, old, owner, station);
+            await TestContext.Out.WriteLineAsync($"[golden-control] retired manifest key: {oldReport}");
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(unlistedReport.Load, Is.Not.Empty, "(a) must go red on a manifest key nothing lists or retires.");
+                Assert.That(undeclaredReport.Load, Is.Not.Empty, "(a) must go red on a row key its component does not declare and nothing retires.");
+                Assert.That(oldReport.Passed, Is.True, "A retired key is dropped, so the fixture still passes.");
+                Assert.That(oldReport.Notes, Has.Some.Contains(retired.Key), "And the report's notes name it.");
+            });
+
+            await pair.CleanReturnAsync();
+        }
+
+        /// <summary>
+        /// Adds <paramref name="key"/> to row <paramref name="row"/> of the first entity of <paramref name="proto"/> that has
+        /// one, or to the first of <paramref name="proto"/> at all for a manifest row, which is made when it is missing.
+        /// </summary>
+        private static DrydockImage AddKey(DrydockImage image, string proto, string row, string key)
+        {
+            var entities = image.Entities.ToList();
+            var index = entities.FindIndex(e => e.Prototype == proto && (row == DrydockCodec.ManifestRow || e.Rows.ContainsKey(row)));
+            Assert.That(index, Is.GreaterThanOrEqualTo(0), $"No {proto} with a {row} row.");
+
+            var rows = entities[index].Rows.ToDictionary(p => p.Key, p => p.Value);
+            var node = rows.TryGetValue(row, out var json) ? JsonNode.Parse(json)!.AsObject() : new JsonObject();
+            Assert.That(node.ContainsKey(key), Is.False, $"The {proto}'s {row} row holds {key} already.");
+            node[key] = "1";
+            rows[row] = node.ToJsonString();
+
+            entities[index] = entities[index] with { Rows = rows };
+            return image with { Entities = entities };
         }
 
         /// <summary>A copy of <paramref name="basis"/> whose image has been edited, with its file, hash and size recomputed.</summary>

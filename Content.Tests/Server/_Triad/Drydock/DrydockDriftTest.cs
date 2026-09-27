@@ -211,6 +211,26 @@ public sealed class DrydockDriftTest
         });
     }
 
+    [Test]
+    public void ARetiredComponentIsNoRefusalAndAnUnretiredOneStillIs()
+    {
+        var registry = new HashSet<string> { "Physics" };
+        var retired = new HashSet<string> { "Gone" };
+        DrydockDriftVerdict Components(params string[] names) =>
+            DrydockDrift.Detect(Array.Empty<string>(), DrydockMigrationTable.Empty, _ => true, names, registry.Contains, 7, Engine, 2, Ours, retired.Contains);
+
+        var onlyRetired = Components("Physics", "Gone");
+        var both = Components("Physics", "Gone", "Absent");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(onlyRetired.MissingComponents, Is.Empty, "A retired component's rows are dropped by the load, so it is not missing.");
+            Assert.That(onlyRetired.IsRefusal, Is.False);
+            Assert.That(both.MissingComponents, Is.EqualTo(new[] { "Absent" }), "The control: an unregistered component nothing retires is still missing.");
+            Assert.That(both.IsRefusal, Is.True);
+        });
+    }
+
     [TestCase(2, true)]
     [TestCase(3, false)]
     [TestCase(7, false)]

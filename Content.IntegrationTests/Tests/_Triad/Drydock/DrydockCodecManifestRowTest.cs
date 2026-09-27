@@ -142,20 +142,21 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
         }
 
         /// <summary>
-        /// A power wire's cut count and its pulse each travel as an entry of the wires' state data, before init: the wires'
-        /// restore checks the count against the cut power wires, and re-arms the timer that ends the pulse.
+        /// A power wire's pulse travels as an entry of the wires' state data, before init, where the wires' restore re-arms
+        /// the timer that ends it. Its cut count does not: the restore sets it from the cut power wires, and the key it used
+        /// to travel under is retired (<see cref="DrydockRetiredKeys"/>).
         /// </summary>
         [Test]
-        public async Task APowerWiresCutCountAndPulseTravel()
+        public async Task APowerWiresPulseTravelsAndItsCutCountDoesNot()
         {
             await using var pair = await PoolManager.GetServerClient();
             var server = pair.Server;
             var entMan = server.EntMan;
             var factory = server.ResolveDependency<IComponentFactory>();
             var map = await pair.CreateTestMap();
+            var retiredCut = DrydockRetiredKeys.All.Single(k => k.Key == "Wires.StateData[PowerWireActionKey.CutWires]");
 
-            bool hadCut = false, hadPulse = false;
-            (bool Found, object? Value) cut = default;
+            bool hadCut = false, hadPulse = false, cutWritten = true;
             (bool Found, object? Value) pulse = default;
             object? setBack = null;
             var unwritable = new List<DrydockUnwritableMember>();
@@ -171,27 +172,25 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
 
                 var codec = Codec(server.ResolveDependency<ISerializationManager>(), entMan, server.ResolveDependency<IGameTiming>(), airlock);
                 var row = Manifest(entMan, factory, codec, airlock, unwritable);
-                var cutMember = DrydockCodecManifestMembers.Members.Single(m => Equals(m.EntryKey, PowerWireActionKey.CutWires));
                 var pulseMember = DrydockCodecManifestMembers.Members.Single(m => Equals(m.EntryKey, PowerWireActionKey.Pulsed));
                 pulse = ReadAt(codec, factory, row, DrydockApplyMoment.BeforeInit, pulseMember.Key);
-                cut = ReadAt(codec, factory, row, DrydockApplyMoment.BeforeInit, cutMember.Key);
+                cutWritten = row?.Has(retiredCut.Key) == true;
 
                 // Set back onto the airlock's own state data with the entry taken out first, as a fresh component holds none.
                 var wires = entMan.GetComponent<WiresComponent>(airlock);
-                wiresSystem.RemoveData(airlock, PowerWireActionKey.CutWires, wires);
-                DrydockCodec.SetMember(wires, cutMember, cut.Value);
-                setBack = wiresSystem.TryGetData<int?>(airlock, PowerWireActionKey.CutWires, out var after, wires) ? after : null;
+                wiresSystem.RemoveData(airlock, PowerWireActionKey.Pulsed, wires);
+                DrydockCodec.SetMember(wires, pulseMember, pulse.Value);
+                setBack = wiresSystem.TryGetData<bool>(airlock, PowerWireActionKey.Pulsed, out var after, wires) ? after : null;
             });
 
             Assert.Multiple(() =>
             {
                 Assert.That(hadCut && hadPulse, Is.True, "The control: the airlock has to hold both entries before the write.");
                 Assert.That(unwritable, Is.Empty, "Nothing on the airlock may be left out as unwritable.");
-                Assert.That(cut.Found, Is.True, "The cut count has to be in the row and read before init.");
-                Assert.That(cut.Value, Is.EqualTo(2), "And read as the count it was.");
-                Assert.That(setBack, Is.EqualTo(2), "Setting it back has to put it under its own key, where the power wire reads it.");
+                Assert.That(cutWritten, Is.False, "The cut count is set from the cut wires at restore, so it must not be written.");
                 Assert.That(pulse.Found, Is.True, "The pulse has to be in the row and read before init.");
                 Assert.That(pulse.Value, Is.EqualTo(true), "And read as the pulse it was.");
+                Assert.That(setBack, Is.EqualTo(true), "Setting it back has to put it under its own key, where the power wire reads it.");
             });
 
             await pair.CleanReturnAsync();

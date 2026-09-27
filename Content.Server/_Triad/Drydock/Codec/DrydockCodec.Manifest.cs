@@ -185,14 +185,24 @@ public sealed partial class DrydockCodec
     /// the image, a game time against the clock at load, an explicit null to null. A network id comes back as the loaded
     /// entity's own, or null when it named nothing on the image. A member set through its system (a receiver's provider, a
     /// pinpointer's target) comes back as the entity, for the loader to hand to that system. A prototype id comes back as
-    /// the registered prototype, or null when it no longer resolves (<see cref="Unresolved"/>).
+    /// the registered prototype, or null when it no longer resolves (<see cref="Unresolved"/>). A retired key
+    /// (<see cref="Retirements"/>) is skipped and counted once, on the <see cref="DrydockApplyMoment.BeforeInit"/>
+    /// read, since a row is read once per moment; any other key the manifest does not list throws.
     /// </summary>
     public IEnumerable<(DrydockManifestMember Member, object? Value)> ReadManifest(MappingDataNode row, DrydockApplyMoment moment, IComponentFactory factory)
     {
         foreach (var (key, node) in row)
         {
             if (!MembersByKey.TryGetValue(key, out var member))
-                throw new FormatException($"Drydock codec: a manifest row carries '{key}', which the manifest does not list.");
+            {
+                if (FindRetired(DrydockRetiredKind.ManifestMember, key) is not { } retired)
+                    throw new FormatException($"Drydock codec: a manifest row carries '{key}', which the manifest does not list and no retirement names.");
+
+                if (moment == DrydockApplyMoment.BeforeInit)
+                    CountRetired(retired);
+
+                continue;
+            }
 
             if (member.Moment != moment)
                 continue;

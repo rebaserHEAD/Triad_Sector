@@ -105,10 +105,13 @@ public sealed partial class DrydockCodec
     }
 
     /// <summary>
-    /// The component a stored mapping describes, not yet attached to anything.
+    /// The component a stored mapping describes, not yet attached to anything. The mapping is held to the keys the
+    /// component declares first (<see cref="HoldToDeclared"/>): a retired data field is dropped and counted, and any other
+    /// key the component does not declare throws <see cref="FormatException"/>.
     /// </summary>
     public IComponent Read(Type componentType, MappingDataNode mapping)
     {
+        mapping = HoldToDeclared(componentType, mapping);
         var component = (IComponent) _serialization.Read(
             componentType, mapping, context: Context, notNullableOverride: true)!;
 

@@ -231,7 +231,10 @@ public sealed class DrydockLoadSession
             _ => throw new InvalidOperationException("The load writes no reference, so it asks no entity for its id in the image."),
             id => deserializer.UidMap.TryGetValue((int) id, out var uid)
                 ? uid
-                : throw new FormatException($"Drydock load: a row names id {id}, which the image does not hold."));
+                : throw new FormatException($"Drydock load: a row names id {id}, which the image does not hold."))
+        {
+            Retirements = _options.Retirements,
+        };
 
         mark?.Invoke("dropped");
         _phase = 1;
@@ -258,8 +261,19 @@ public sealed class DrydockLoadSession
                 if ((uid == _gridUid && name == "MapGrid") || name.StartsWith('~'))
                     continue;
 
+                // A retired component has no registration to read its row through, and the drift gate lets it past for
+                // that reason (DrydockSystem.DetectDrift): the row is dropped and counted.
+                if (codec.FindRetired(DrydockRetiredKind.Component, name) is { } retired)
+                {
+                    codec.CountRetired(retired);
+                    continue;
+                }
+
                 var registration = factory.GetRegistration(name);
-                var read = codec.Read(registration.Type, name == ItemSlotsName ? HoldBackSlots(uid, row) : row);
+
+                // The slots row is read twice, whole and then filtered, so it is held to its keys once first, and a
+                // retired key in it is counted once.
+                var read = codec.Read(registration.Type, name == ItemSlotsName ? HoldBackSlots(uid, codec.HoldToDeclared(registration.Type, row)) : row);
 
                 if (entMan.TryGetComponent(uid, registration.Type, out var existing))
                 {
@@ -660,6 +674,7 @@ public sealed class DrydockLoadSession
             Times = _times.Where(time => !_dropped.Contains(time.Entity)).ToList(),
             DroppedBatches = _codec.Context.DroppedBatches.ToList(),
             DroppedRoots = _droppedRoots.ToList(),
+            RetiredDropped = _codec.RetiredDropped.ToDictionary(),
             TilesStored = stored.Count,
             TilesRestored = restored.Count,
             TilesMissing = stored.Except(restored).Count(),

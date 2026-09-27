@@ -2,9 +2,11 @@
 
 using System.Collections.Generic;
 using System.Linq;
+using System.Text.Json.Nodes;
 using System.Threading.Tasks;
 using Content.IntegrationTests.Pair;
 using Content.Server._Triad.Drydock;
+using Content.Server._Triad.Drydock.Codec;
 using Content.Server._Triad.Drydock.Loader;
 using Content.Server._Triad.Wires;
 using Content.Server.Wires;
@@ -331,11 +333,12 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
         }
 
         /// <summary>
-        /// Test 6: a carried power wire count that disagrees with the carried cut wires gives way to them, since the wires are
-        /// what a player sees and mends; a count left above them would keep a power wire that nobody can mend counted as cut.
+        /// Test 6: an image stored while the power wire count still travelled holds it under a key that is now retired. It
+        /// loads, the key is dropped and counted, and the count comes from the cut wires, since the wires are what a player
+        /// sees and mends; a stored count above them would keep a power wire that nobody can mend counted as cut.
         /// </summary>
         [Test]
-        public async Task ACarriedCountThatDisagreesWithTheCutWiresGivesWayToThem()
+        public async Task AnImageStillCarryingTheCountLoadsWithTheCountFromTheCutWires()
         {
             await using var pair = await PoolManager.GetServerClient(new PoolSettings { Dirty = true });
             var server = pair.Server;
@@ -345,20 +348,31 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             var fidelity = server.System<DrydockFidelitySystem>();
             var wiresSystem = server.System<WiresSystem>();
             var grid = map.Grid.Owner;
+            var retired = DrydockRetiredKeys.All.Single(k => k.Key == "Wires.StateData[PowerWireActionKey.CutWires]");
 
             DrydockLoadResult result = default!;
-            int? countStored = null;
+            var writtenByStore = true;
             await server.WaitPost(() =>
             {
                 var airlock = Spawn(entMan, grid, "Airlock");
                 var wires = entMan.GetComponent<WiresComponent>(airlock);
                 CutWire(wires, "PowerWireAction", 0);
-                wiresSystem.SetData(airlock, PowerWireActionKey.CutWires, 2, wires);
-                countStored = CutPowerWires(wiresSystem, airlock);
+                wiresSystem.SetData(airlock, PowerWireActionKey.CutWires, 1, wires);
 
                 var stored = image.Store(grid);
                 image.Despawn(grid);
-                result = image.Load(stored.Image, map.MapUid);
+
+                // The old store's row: the count under its old key, and two where one wire is cut.
+                var entities = stored.Image.Entities.ToList();
+                var index = entities.FindIndex(e => e.Prototype == "Airlock");
+                var rows = entities[index].Rows.ToDictionary(p => p.Key, p => p.Value);
+                var manifest = rows.TryGetValue(DrydockCodec.ManifestRow, out var row) ? JsonNode.Parse(row)!.AsObject() : new JsonObject();
+                writtenByStore = manifest.ContainsKey(retired.Key);
+                manifest[retired.Key] = "2";
+                rows[DrydockCodec.ManifestRow] = manifest.ToJsonString();
+                entities[index] = entities[index] with { Rows = rows };
+
+                result = image.Load(stored.Image with { Entities = entities }, map.MapUid);
             });
 
             await server.WaitAssertion(() =>
@@ -367,9 +381,10 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
 
                 Assert.Multiple(() =>
                 {
-                    Assert.That(countStored, Is.EqualTo(2), "The control: the count carried is two, over one cut power wire.");
+                    Assert.That(writtenByStore, Is.False, "The control: today's store writes no count.");
+                    Assert.That(result.RetiredDropped.GetValueOrDefault(retired), Is.EqualTo(1), "The old key is dropped and counted.");
                     Assert.That(CutNames(entMan.GetComponent<WiresComponent>(airlock)), Is.EqualTo(new[] { "PowerWireAction#0" }));
-                    Assert.That(CutPowerWires(wiresSystem, airlock), Is.EqualTo(1), "The count is the one cut power wire.");
+                    Assert.That(CutPowerWires(wiresSystem, airlock), Is.EqualTo(1), "The count is the one cut power wire, not the two stored.");
                 });
             });
 

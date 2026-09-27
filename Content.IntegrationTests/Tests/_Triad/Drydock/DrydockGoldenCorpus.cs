@@ -15,6 +15,7 @@ using System.Threading.Tasks;
 using Content.IntegrationTests.Pair;
 using Content.Server._NF.Shipyard.Systems;
 using Content.Server._Triad.Drydock;
+using Content.Server._Triad.Drydock.Codec;
 using Content.Server._Triad.Drydock.Loader;
 using Content.Server.Database;
 using Content.Server.Station.Components;
@@ -409,6 +410,42 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
         }
 
         /// <summary>
+        /// The retired keys an image carries (<see cref="DrydockRetiredKeys"/>), one note per key with the rows that carry it,
+        /// counted as the load counts its drops. A fixture stored before a retirement holds the key, and passing the gate
+        /// is what proves the load drops it rather than refusing the image.
+        /// </summary>
+        public static void NoteRetired(DrydockImage image, List<string> notes)
+        {
+            var counts = new Dictionary<DrydockRetiredKey, int>();
+            foreach (var entity in image.Entities)
+            {
+                foreach (var (name, json) in entity.Rows)
+                {
+                    if (DrydockRetiredKeys.Find(DrydockRetiredKind.Component, name) is { } component)
+                    {
+                        counts[component] = counts.GetValueOrDefault(component) + 1;
+                        continue;
+                    }
+
+                    if ((name.StartsWith('~') && name != DrydockCodec.ManifestRow) || JsonNode.Parse(json) is not JsonObject row)
+                        continue;
+
+                    foreach (var (key, _) in row)
+                    {
+                        var retired = name == DrydockCodec.ManifestRow
+                            ? DrydockRetiredKeys.Find(DrydockRetiredKind.ManifestMember, key)
+                            : DrydockRetiredKeys.Find(DrydockRetiredKind.DataField, $"{name}.{key}");
+                        if (retired != null)
+                            counts[retired] = counts.GetValueOrDefault(retired) + 1;
+                    }
+                }
+            }
+
+            foreach (var (retired, count) in counts.OrderBy(entry => entry.Key.Key, StringComparer.Ordinal))
+                notes.Add($"carries retired {retired.Kind} {retired.Key} in {count} row(s)");
+        }
+
+        /// <summary>
         /// Files <paramref name="fixture"/> as a fresh hull, retrieves it through the real pipeline,
         /// compares the reborn grid with the fixture's own record, then stores the reborn grid again and
         /// compares the manifest that store writes. Never asserts on what it compares: it reports, so the
@@ -459,6 +496,8 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                     report.Load.Add($"the image file does not read as an image ({e.GetType().Name}: {e.Message})");
                     return report;
                 }
+
+                NoteRetired(image, report.Notes);
 
                 var expected = DrydockManifest.Deserialize(fixture.Revision.Manifest);
                 if (expected == null || expected.Entries.Count == 0)

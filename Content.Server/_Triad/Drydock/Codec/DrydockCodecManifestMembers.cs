@@ -21,7 +21,7 @@ public enum DrydockApplyMoment
 public enum DrydockMemberKind
 {
     /// <summary>Written through the serializer under the codec's context and set back as the value; an entity reference
-    /// becomes a stable id on the way, as every reference in a row does.</summary>
+    /// becomes the entity's id in the image on the way, as every reference in a row does.</summary>
     Field,
 
     /// <summary>An absolute game time, carried through the time-offset adapter the field pass uses.</summary>
@@ -36,7 +36,7 @@ public enum DrydockMemberKind
     ViaSystem,
 
     /// <summary>A <see cref="NetEntity"/> kept on a component, carried as the entity it names: written as that entity's
-    /// stable id and set back as the loaded entity's NetEntity, or null when it names nothing on the image.</summary>
+    /// id in the image and set back as the loaded entity's NetEntity, or null when it names nothing on the image.</summary>
     Reference,
 
     /// <summary>Not carried: the loader works it out again from the loaded entity at its moment (a scuttle device's
@@ -259,10 +259,6 @@ public static class DrydockCodecManifestMembers
         new DrydockManifestMember(432, "Wieldable", "OldInhandPrefix", Before, Field),
         new DrydockManifestMember(433, "Wires", "SerialNumber", Before, Field),
         new DrydockManifestMember(433, "Wires", "WireSeed", Before, Field),
-        // Before init, so the wires' restore reads it before the layout rebuild seeds a missing one (PowerWireAction.cs:180-182)
-        // and checks it against the cut power wires, which set it (WiresCarrySystem).
-        new DrydockManifestMember(435, "Wires", "StateData", Before, DrydockMemberKind.Entry,
-            EntryKey: PowerWireActionKey.CutWires, EntryType: typeof(int)),
         // A pulse is cleared only by its timer (PowerWireAction.cs:269), which travels on the wires' carried row and runs
         // again for the seconds it had left (WiresCarrySystem), so the two come back together.
         new DrydockManifestMember(435, "Wires", "StateData", Before, DrydockMemberKind.Entry,
@@ -303,7 +299,8 @@ public static class DrydockCodecManifestMembers
         new DrydockNotCarried(507, "ScuttleDevice", "NukeSongLength", MusicState, SortsAsNotCarried: true),
         new DrydockNotCarried(507, "ScuttleDevice", "PlayedNukeSong", MusicState, SortsAsNotCarried: true),
         new DrydockNotCarried(435, "Wires", "StateData",
-            "boxed values, most of them live CancellationTokenSources, which the wires' carried timers start again; PowerWireActionKey.CutWires and .Pulsed travel as entries of their own"));
+            "boxed values, most of them live CancellationTokenSources, which the wires' carried timers start again; PowerWireActionKey.Pulsed travels as an entry of its own, "
+            + "and .CutWires is set again from the cut wires at restore (WiresCarrySystem), its old entry retired (DrydockRetiredKeys)"));
 
     /// <summary>
     /// Components the store strips, by registration name, with the reason: each is either tied to the round's station or
