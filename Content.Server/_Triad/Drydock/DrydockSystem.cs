@@ -498,6 +498,16 @@ public sealed partial class DrydockSystem : EntitySystem
                 // strand the job the way an unwrapped suspending await would.
                 filed = await fileTask;
             }
+            catch (DrydockImageMismatchException e)
+            {
+                // The store read the image back and it differed from the one written, so the filing
+                // transaction rolled back and nothing was filed (IDrydockImageStore.Put); the unwind
+                // below hands the ship back.
+                DrydockMetrics.ValidationMismatches.Inc();
+                Log.Error($"Drydock: {shipId} image did not read back as written, nothing filed: {string.Join("; ", e.Differences)}");
+                GuardStoreResume(ctx);
+                return new DrydockStoreOutcome(DrydockStoreResult.ValidationFailed, null);
+            }
 
             MarkPhase(DrydockPhase.Commit);
 

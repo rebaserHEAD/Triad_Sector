@@ -28,8 +28,9 @@ public enum DrydockStoreResult : byte
     HazardAboard,
 
     /// <summary>
-    /// The written document disagrees with the live grid. Aborts before any revision is filed, so a
-    /// serializer regression cannot half-commit a ship.
+    /// The store read the image back and it differed from the one written (<see cref="DrydockImageComparer"/>): the
+    /// filing transaction rolled back, so nothing was filed, and the ship is handed back. Counted in
+    /// <see cref="DrydockMetrics.ValidationMismatches"/>.
     /// </summary>
     ValidationFailed,
 
