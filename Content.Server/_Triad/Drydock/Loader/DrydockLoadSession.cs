@@ -1,7 +1,6 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
-using System.Text.Json.Nodes;
 using System.Threading.Tasks;
 using Content.Server._Mono.ScuttleDevice;
 using Content.Server._Triad.Drydock.Codec;
@@ -105,19 +104,14 @@ public sealed class DrydockLoadSession
     private int _appearances;
     private int _appearanceStillDirty;
 
-    internal DrydockLoadSession(DrydockImageSystem system, DrydockImage image, EntityUid mapUid, DrydockLoadOptions options)
+    internal DrydockLoadSession(DrydockImageSystem system, DrydockImage image, DrydockDecodedImage decoded, EntityUid mapUid, DrydockLoadOptions options)
     {
         _system = system;
         _image = image;
         _mapUid = mapUid;
         _options = options;
-
-        _tileTable = (MappingDataNode) DrydockNodeJson.Decode(JsonNode.Parse(image.Tiles)!);
-        _rows = image.Entities.ToDictionary(
-            entity => entity.Id,
-            entity => entity.Rows.ToDictionary(
-                row => row.Key,
-                row => (MappingDataNode) DrydockNodeJson.Decode(JsonNode.Parse(row.Value)!)));
+        _tileTable = decoded.Tiles;
+        _rows = decoded.Rows;
     }
 
     /// <summary>The grid, once <see cref="CreateEntities"/> has allocated it.</summary>

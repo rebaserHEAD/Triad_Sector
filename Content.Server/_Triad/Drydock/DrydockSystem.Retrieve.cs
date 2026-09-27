@@ -257,6 +257,12 @@ public sealed partial class DrydockSystem
     /// it (<see cref="LoadOntoStagingMap"/>); only its restore after that goes one item per step
     /// (<see cref="DrydockPhase.Restore"/>).</para>
     ///
+    /// <para>Each revision's rows decode on the thread pool after its drift gate and before the Load
+    /// phase opens (<see cref="DrydockDecodedImage.Decode"/>), and the job parks on the decode as on a
+    /// database read: the resume guard runs after it as after every other await, and a decode that
+    /// completes after an abort has its result dropped. A decode that throws is a failed load of that
+    /// revision, before any staging map exists.</para>
+    ///
     /// <para>The database claim is neither taken nor released here. The wrapper owns it, because a
     /// job that observes its cancellation can never finish another await, and the release is the one
     /// step that has to happen even then.</para>
@@ -281,9 +287,10 @@ public sealed partial class DrydockSystem
             // The newest revision the drift gate refused, for the refusal when the ladder runs out.
             (int Revision, DrydockDriftVerdict Verdict)? driftRefused = null;
 
-            // A load that fails has already spent the tick's whole-hull core (LoadOntoStagingMap), so the walk ends at
-            // the second: no older revision is fetched, and the retrieve refuses with the ship stored. A revision the
-            // drift gate steps past loads nothing and does not count.
+            // A revision whose rows would not decode or whose load fails is a failed load, and a load that fails has
+            // already spent the tick's whole-hull core (LoadOntoStagingMap), so the walk ends at the second: no older
+            // revision is fetched, and the retrieve refuses with the ship stored. A revision the drift gate steps past
+            // loads nothing and does not count.
             const int maxFailedLoads = 2;
             var failedLoads = new List<int>();
 
@@ -334,12 +341,39 @@ public sealed partial class DrydockSystem
                     continue;
                 }
 
+                // The rows decode on the thread pool, parked on like a database read.
+                var decodeTask = Task.Run(() => DrydockDecodedImage.Decode(stored.Image));
+                DrydockDecodedImage decoded;
+                try
+                {
+                    decoded = await slice.Await(decodeTask);
+                }
+                catch (Exception e) when (e is not (OperationCanceledException or DrydockAbortedException))
+                {
+                    var where = e switch
+                    {
+                        DrydockDecodeException { Entity: { } entity } decode => $"entity {entity} row {decode.Row}",
+                        DrydockDecodeException decode => $"its {decode.Row}",
+                        _ => "its image",
+                    };
+
+                    Log.Error($"Drydock: {ctx.ShipId} revision {revision} would not decode at {where}, stepped past: {e.Message}");
+                    failedLoads.Add(revision);
+                    if (failedLoads.Count == maxFailedLoads)
+                        break;
+
+                    continue;
+                }
+
+                GuardRetrieveResume(ctx);
+                timer.Mark("decode");
+
                 // A retrieve's cost per tick is the budget, except in the tick this phase opens: create,
                 // rows and start run whole there, and only the restore after them is sliced.
                 await slice.Begin(DrydockPhase.Load, 0);
                 GuardRetrieveResume(ctx);
 
-                if (await LoadOntoStagingMap(ctx, slice, revision, stored.Image) is not { } loaded)
+                if (await LoadOntoStagingMap(ctx, slice, revision, stored.Image, decoded) is not { } loaded)
                 {
                     failedLoads.Add(revision);
                     if (failedLoads.Count == maxFailedLoads)
@@ -553,10 +587,10 @@ public sealed partial class DrydockSystem
     }
 
     /// <summary>
-    /// Loads one revision's image onto a private, paused map of its own. The allocation, the rows and the engine's
-    /// startup run inside one tick, since nothing may tick between allocating a tree and starting it
-    /// (<see cref="DrydockLoadSession.StartEngine"/>); the timing line marks the staging map, the decode, each step
-    /// inside creation and the rows (<see cref="DrydockLoadOptions.Mark"/>), and the start. The rest runs
+    /// Loads one revision's image, its rows <paramref name="decoded"/> already, onto a private, paused map of its own.
+    /// The allocation, the rows and the engine's startup run inside one tick, since nothing may tick between allocating
+    /// a tree and starting it (<see cref="DrydockLoadSession.StartEngine"/>); the timing line marks the staging map,
+    /// each step inside creation and the rows (<see cref="DrydockLoadOptions.Mark"/>), and the start. The rest runs
     /// against the tick budget on started, paused entities: the after-start members and the re-dirty
     /// (<see cref="DrydockPhase.Restore"/>), the strip rule and the research reset, then the restore events, so they see
     /// the population that stays, marked complete. Null when the image would not load, with whatever the load made
@@ -571,15 +605,16 @@ public sealed partial class DrydockSystem
     /// a tick they shared. Residency is measured in seconds now, which is precisely the case that
     /// spacing could not have covered, and a private map has nothing to overlap with.</para>
     /// </summary>
-    private async Task<DrydockLoadResult?> LoadOntoStagingMap(DrydockRetrieveContext ctx, IDrydockSlice slice, int revision, DrydockImage image)
+    private async Task<DrydockLoadResult?> LoadOntoStagingMap(
+        DrydockRetrieveContext ctx, IDrydockSlice slice, int revision, DrydockImage image, DrydockDecodedImage decoded)
     {
         var timer = ctx.Timer;
         ctx.StagingMap = CreateStagingMap(JobIdOf(slice), DrydockStagingKind.Retrieve, ctx.ShipId, mapInit: true);
         timer.Mark("staging");
 
         // The session marks the steps inside creation and the rows (DrydockLoadOptions.Mark).
-        var session = _image.BeginLoad(image, ctx.StagingMap.Value, new DrydockLoadOptions { Migrations = MigrationTable, Mark = timer.Mark });
-        timer.Mark("decode");
+        var session = _image.BeginLoad(image, decoded, ctx.StagingMap.Value,
+            new DrydockLoadOptions { Migrations = MigrationTable, Mark = timer.Mark });
         try
         {
             session.CreateEntities();

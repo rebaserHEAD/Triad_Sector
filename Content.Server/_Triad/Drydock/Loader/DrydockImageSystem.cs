@@ -160,10 +160,15 @@ public sealed partial class DrydockImageSystem : EntitySystem
     /// <summary>
     /// Starts a load of <paramref name="image"/> onto <paramref name="mapUid"/>: call <see cref="DrydockLoadSession.CreateEntities"/>,
     /// <see cref="DrydockLoadSession.ApplyRows"/>, <see cref="DrydockLoadSession.Start"/> and <see cref="DrydockLoadSession.Complete"/> in that order,
-    /// and <see cref="DrydockLoadSession.Abandon"/> when one throws. The rows are parsed here.
+    /// and <see cref="DrydockLoadSession.Abandon"/> when one throws. The rows are decoded here, inline
+    /// (<see cref="DrydockDecodedImage.Decode"/>), and a decode that fails throws before anything is allocated.
     /// </summary>
     public DrydockLoadSession BeginLoad(DrydockImage image, EntityUid mapUid, DrydockLoadOptions? options = null) =>
-        new(this, image, mapUid, options ?? new DrydockLoadOptions());
+        BeginLoad(image, DrydockDecodedImage.Decode(image), mapUid, options);
+
+    /// <summary>The same, on rows <paramref name="decoded"/> ahead of it, off the calling thread if the caller chose.</summary>
+    public DrydockLoadSession BeginLoad(DrydockImage image, DrydockDecodedImage decoded, EntityUid mapUid, DrydockLoadOptions? options = null) =>
+        new(this, image, decoded, mapUid, options ?? new DrydockLoadOptions());
 
     /// <summary>The whole load in one call, for a caller that does not slice or time it. A load that throws is abandoned, then rethrown.</summary>
     public DrydockLoadResult Load(DrydockImage image, EntityUid mapUid, DrydockLoadOptions? options = null)

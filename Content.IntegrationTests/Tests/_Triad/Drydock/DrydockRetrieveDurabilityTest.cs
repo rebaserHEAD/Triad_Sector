@@ -14,6 +14,7 @@ using Content.Shared._Triad.ShipSize;
 using Microsoft.EntityFrameworkCore;
 using Robust.Shared.GameObjects;
 using Robust.Shared.Map;
+using Robust.Shared.Map.Components;
 
 namespace Content.IntegrationTests.Tests._Triad.Drydock
 {
@@ -326,6 +327,59 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
         }
 
         /// <summary>
+        /// A current image holding a row that is not the image's encoding is a failed load before anything is allocated:
+        /// the retrieve falls back to the revision before it with a fallback row, nothing escapes, and no map is left
+        /// behind, staging or otherwise. Control: the older revision comes back as a ship.
+        /// </summary>
+        [Test]
+        public async Task ACurrentImageThatWillNotDecodeFallsBackWithNoMapLeft()
+        {
+            await using var pair = await PoolManager.GetServerClient();
+            var server = pair.Server;
+            var entMan = server.EntMan;
+
+            var db = server.ResolveDependency<IServerDbManager>();
+            var store = server.ResolveDependency<DrydockStore>();
+            var drydock = server.System<DrydockSystem>();
+
+            var owner = Guid.NewGuid();
+            await DrydockTestHelpers.InsertPlayer(db, owner);
+            await store.AddBerth(owner, ShipSizeClass.SuperCapital, DrydockBerthKind.Granted, 0, null, null);
+
+            var (station, shipGrid, _) = await DrydockRoundTripTest.BuildShipAndStation(pair);
+            var (current, older, ship) = await StoreTwice(pair, drydock, store, shipGrid, owner, station);
+
+            await WriteImage(db, ship, current, Undecodable(await ReadImage(db, ship, current)));
+
+            var mapsBefore = 0;
+            await server.WaitPost(() => mapsBefore = CountMaps(entMan));
+
+            var retrieved = await DrydockTestHelpers.Quietly(pair, () => DrydockTestHelpers.RunOnServer(pair, () => drydock.TryRetrieveShip(ship, owner, station, null)));
+            await pair.RunTicksSync(5);
+
+            var mapsAfter = 0;
+            var staging = -1;
+            await server.WaitPost(() =>
+            {
+                mapsAfter = CountMaps(entMan);
+                staging = DrydockRoundTripTest.CountStagingMaps(entMan);
+            });
+
+            var fallback = (await store.GetAudit(ship)).Where(a => a.Action == DrydockAuditAction.Fallback).ToList();
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(retrieved.Result, Is.EqualTo(DrydockRetrieveResult.Success), "The older revision is a ship.");
+                Assert.That(fallback, Has.Count.EqualTo(1));
+                Assert.That(fallback.Single().Revision, Is.EqualTo(older), "The fallback row names the revision that came back.");
+                Assert.That(staging, Is.Zero, "No staging map is left.");
+                Assert.That(mapsAfter, Is.EqualTo(mapsBefore), "No map is left behind by the revision that would not decode.");
+            });
+
+            await pair.CleanReturnAsync();
+        }
+
+        /// <summary>
         /// An older image reached only because the current one will not load, and refused for drift,
         /// is stepped past rather than ending the walk; when nothing older loads either, the refusal
         /// names drift, not an unreadable ship, and no revision is pinned.
@@ -511,6 +565,29 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             return db.RunTriadDbCommand(
                 (context, token) => db.DrydockImages.Put(context, new DrydockImageKey(ship, revision), image, token),
                 CancellationToken.None);
+        }
+
+        /// <summary>The image with its grid's Transform row replaced by text that is not JSON.</summary>
+        private static DrydockImage Undecodable(DrydockImage image)
+        {
+            return image with
+            {
+                Entities = image.Entities
+                    .Select(e => e.Id == image.GridId
+                        ? e with { Rows = new Dictionary<string, string>(e.Rows) { ["Transform"] = "{ this is not json" } }
+                        : e)
+                    .ToList(),
+            };
+        }
+
+        private static int CountMaps(IEntityManager entMan)
+        {
+            var count = 0;
+            var query = entMan.AllEntityQueryEnumerator<MapComponent>();
+            while (query.MoveNext(out _))
+                count++;
+
+            return count;
         }
 
         /// <summary>The image with every entity of prototype <paramref name="from"/> recorded under <paramref name="to"/> instead.</summary>

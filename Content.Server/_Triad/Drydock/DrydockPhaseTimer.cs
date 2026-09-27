@@ -17,11 +17,10 @@ namespace Content.Server._Triad.Drydock;
 /// players felt anything is the worst single slice, which the five-argument
 /// <see cref="Format(string,Guid,int,double,int)"/> puts on the same line.</para>
 ///
-/// <para>The flat <c>phase=Nms</c> line Loki pattern-matches also gained keys beyond the original
-/// phase roster - <c>freeze</c>, <c>purge</c>, <c>strip</c> and <c>unwind</c> from the slicing
-/// change, and <c>validate_parse</c> from splitting the store's validate reload into an off-thread
-/// parse and an atomic build-and-compare - so anything matching the old key set exactly will see
-/// them.</para>
+/// <para>The flat <c>phase=Nms</c> line is what Loki pattern-matches. Its keys are the boundaries the
+/// pipeline marks, in execution order, each naming the span that ends at it. A span the job spent
+/// parked on other threads (a database read, the retrieve's row decode on the thread pool) is wall
+/// clock the main thread did not spend.</para>
 ///
 /// <para>Emitted at Info: a store or retrieve is a rare deliberate player action, so one line each
 /// costs nothing and reaches the server log without anyone enabling debug first.</para>
