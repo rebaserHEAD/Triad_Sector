@@ -226,6 +226,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             ["HandheldLightComponent.~Level"] = (StateClass.Derived, "light level appearance cache"),
             ["GridPathfindingComponent.~Chunks"] = (StateClass.Derived, "pathfinding graph, rebuilt after load"),
             ["GasCanisterComponent.~LastPressure"] = (StateClass.Derived, "canister UI and appearance cache"),
+            ["RatKingRummageableComponent.~LastLooted"] = (StateClass.Derived, "rummage cooldown stamped at init (SharedRatKingSystem.cs:112-116), so a load restarts it at full duration: rummaging waits, never repeats (census F24, join row 358)"),
             ["Appearance.ApcVisuals.ChargeState"] = (StateClass.Derived, "follows the APC's charge state, which the load recomputes from the battery once the power net has synced it"),
             ["PowerNetworkBatteryComponent.~NetworkBattery"] = (StateClass.Derived, "the power solver's battery record, rebuilt with the net"),
             ["PowerSupplierComponent.~NetworkSupply"] = (StateClass.Derived, "the power solver's supplier record, rebuilt with the net"),
