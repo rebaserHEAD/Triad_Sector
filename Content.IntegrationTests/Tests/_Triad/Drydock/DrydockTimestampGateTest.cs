@@ -70,7 +70,6 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             ["TechAnomalyComponent.NextTimer"] = "an anomaly, never aboard",
             ["GravityWellComponent.NextPulseTime"] = "singularity equipment, not sold on a ship",
             ["LightningArcShooterComponent.NextShootTime"] = "tesla equipment, not sold on a ship",
-            ["SpookySpeakerComponent.NextSpeakTime"] = "a spooky speaker, round event dressing",
         };
 
         [Test]
