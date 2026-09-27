@@ -24,7 +24,7 @@ on:
       mode:
         description: "LADDER_MODE"
         type: choice
-        options: [ codec, engine ]
+        options: [ codec, engine, drydock ]
         default: codec
       control:
         description: "LADDER_CONTROL, set only when not empty"
