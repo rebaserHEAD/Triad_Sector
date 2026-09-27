@@ -163,3 +163,4 @@ drydock-admin-action-RevisionPromoted = Revision promoted
 drydock-admin-action-RevisionPinned = Revision pinned
 drydock-admin-action-RevisionUnpinned = Revision unpinned
 drydock-admin-action-DriftRefused = Retrieve refused, content missing
+drydock-admin-action-LoadRefused = Retrieve refused, would not load

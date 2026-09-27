@@ -37,7 +37,10 @@ public enum DrydockRetrieveResult : byte
     /// <summary>The row read as stored, then the claim lost to another retrieve of the same ship.</summary>
     NotStored,
 
-    /// <summary>Every kept revision's image failed to load. An admin can look at the timeline.</summary>
+    /// <summary>
+    /// No kept revision's image loaded: two failed, which ends the walk and writes a <c>LoadRefused</c> row naming both,
+    /// or fewer were left to try.
+    /// </summary>
     NoReadableRevision,
 
     /// <summary>The station's grid died while the ship was being loaded. The claim was released.</summary>

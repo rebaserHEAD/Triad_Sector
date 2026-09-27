@@ -649,6 +649,13 @@ public enum DrydockAuditAction
     /// (<c>DrydockSystem.DescribeDriftRefusal</c>).
     /// </summary>
     DriftRefused = 35,
+
+    /// <summary>
+    /// Written by the retrieve (<c>DrydockSystem.RefuseUnloadable</c>) when two revisions' images failed to load, which
+    /// ends its walk: no older revision is tried and the ship stays stored. The actor is the retrieving owner, the
+    /// revision is the newer of the two, and the reason names both.
+    /// </summary>
+    LoadRefused = 36,
 }
 
 /// <summary>

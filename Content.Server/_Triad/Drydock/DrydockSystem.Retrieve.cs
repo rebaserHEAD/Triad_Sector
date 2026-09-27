@@ -281,6 +281,12 @@ public sealed partial class DrydockSystem
             // The newest revision the drift gate refused, for the refusal when the ladder runs out.
             (int Revision, DrydockDriftVerdict Verdict)? driftRefused = null;
 
+            // A load that fails has already spent the tick's whole-hull core (LoadOntoStagingMap), so the walk ends at
+            // the second: no older revision is fetched, and the retrieve refuses with the ship stored. A revision the
+            // drift gate steps past loads nothing and does not count.
+            const int maxFailedLoads = 2;
+            var failedLoads = new List<int>();
+
             foreach (var revision in revisions)
             {
                 var isCurrent = revision == current.Ship.CurrentRevision;
@@ -322,11 +328,9 @@ public sealed partial class DrydockSystem
                     if (isCurrent)
                         return await RefuseForDrift(ctx, slice, current.Ship, revision, driftReason);
 
-                    // An older image reached only because newer ones would not load. Stepped past
-                    // like one that would not load, and pinned the same way: it is a newer state than
-                    // whatever this ladder ends up handing out.
+                    // An older image reached only because newer ones would not load: stepped past like
+                    // one that would not load.
                     driftRefused ??= (revision, verdict);
-                    await PinSteppedPast(ctx, slice, revision, "references content that no longer exists");
                     continue;
                 }
 
@@ -337,7 +341,10 @@ public sealed partial class DrydockSystem
 
                 if (await LoadOntoStagingMap(ctx, slice, revision, stored.Image) is not { } loaded)
                 {
-                    await PinSteppedPast(ctx, slice, revision, "its image would not load");
+                    failedLoads.Add(revision);
+                    if (failedLoads.Count == maxFailedLoads)
+                        break;
+
                     continue;
                 }
 
@@ -357,7 +364,10 @@ public sealed partial class DrydockSystem
                 {
                     ScrapRetrieveStaging(ctx);
                     Log.Error($"Drydock: {ctx.ShipId} revision {revision} has no shuttle component, falling back.");
-                    await PinSteppedPast(ctx, slice, revision, "it loaded with no shuttle component");
+                    failedLoads.Add(revision);
+                    if (failedLoads.Count == maxFailedLoads)
+                        break;
+
                     continue;
                 }
 
@@ -511,6 +521,9 @@ public sealed partial class DrydockSystem
 
                 return new DrydockRetrieveOutcome(new DrydockRetrieve(DrydockRetrieveResult.Success, grid));
             }
+
+            if (failedLoads.Count == maxFailedLoads)
+                return await RefuseUnloadable(ctx, slice, current.Ship, failedLoads);
 
             // A ladder that ran out having refused an image for drift says so, since content that no
             // longer exists is a different remedy from an image that will not load.
@@ -701,26 +714,28 @@ public sealed partial class DrydockSystem
     }
 
     /// <summary>
-    /// Pins a revision with an image that the ladder stepped past, so ordinary stores after this retrieve
-    /// cannot prune a newer state than the one it hands out. A pin that does not land is logged and
-    /// never refuses the retrieve; a cancellation still travels.
+    /// Refuses the whole retrieve at the walk's bound: one <see cref="DrydockAuditAction.LoadRefused"/> row on the newer
+    /// of the two revisions whose image failed to load, naming both. The claim is released by the wrapper, as for every
+    /// other refusal, so the ship stays stored.
     /// </summary>
-    private async Task PinSteppedPast(DrydockRetrieveContext ctx, IDrydockSlice slice, int revision, string why)
+    private async Task<DrydockRetrieveOutcome> RefuseUnloadable(
+        DrydockRetrieveContext ctx, IDrydockSlice slice, DrydockShip ship, IReadOnlyList<int> failed)
     {
-        try
+        var reason = $"revisions {failed[0]} and {failed[1]} would not load; no older revision was tried";
+        Log.Error($"Drydock: {ctx.ShipId} retrieve refused: {reason}.");
+        await slice.Await(_store.WriteAudit(new DrydockAudit
         {
-            var pinned = await slice.Await(_store.TryPinRevision(ctx.ShipId, revision, null, ctx.RoundId,
-                $"a retrieve stepped past it: {why}"));
+            ShipGuid = ctx.ShipId,
+            ShipName = ship.ShipName,
+            BerthId = ship.BerthId,
+            Action = DrydockAuditAction.LoadRefused,
+            ActorUserId = ctx.OwnerUserId,
+            Revision = failed[0],
+            RoundId = ctx.RoundId,
+            Reason = reason,
+        }));
 
-            if (pinned is not (DrydockPinResult.Success or DrydockPinResult.AlreadyInState))
-                Log.Error($"Drydock: {ctx.ShipId} revision {revision} was stepped past and could not be pinned: {pinned}.");
-        }
-        catch (Exception e) when (e is not OperationCanceledException)
-        {
-            Log.Error($"Drydock: {ctx.ShipId} revision {revision} was stepped past and could not be pinned: {e.Message}");
-        }
-
-        GuardRetrieveResume(ctx);
+        return new DrydockRetrieveOutcome(DrydockRetrieve.Refused(DrydockRetrieveResult.NoReadableRevision));
     }
 
     /// <summary>
