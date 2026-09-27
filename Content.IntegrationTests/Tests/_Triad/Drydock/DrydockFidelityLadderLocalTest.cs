@@ -655,8 +655,9 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
         private static int DerivedLinesRefilled;
 
         /// <summary>The family a line sorts into, and whether it was held back because it compounds (<see cref="Compounding"/>).</summary>
-        private static (KnownFamily? Family, bool Compounds) FamilyFor(string line, string key, RoundTripResult result, RoundTripResult? previous) =>
-            KnownFamilies.FirstOrDefault(f => f.Matches(line, key, result)) is { } family
+        private static (KnownFamily? Family, bool Compounds) FamilyFor(string line, string key, RoundTripResult result, RoundTripResult? previous,
+            IEnumerable<KnownFamily>? families = null) =>
+            (families ?? KnownFamilies).FirstOrDefault(f => f.Matches(line, key, result)) is { } family
                 ? (family, Compounding(line, key, result, previous, family))
                 : (null, false);
 
@@ -822,6 +823,16 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                 + "reads them. Sorted only on an entity that draws a new order at every build, where nothing in its state data "
                 + "moved but MainWire.",
                 (line, key, result) => line.StartsWith("CHANGED", StringComparison.Ordinal) && Reshuffled(key, result)),
+
+            // Ruled 2026-09-27: drydock mode only, since only its retrieve loads the ship paused and unpauses it at the dock.
+            new(UnpauseShiftedZeroFamily,
+                "Accepted: a time the image does not carry loads at zero, which means \"never\", and the engine's unpause "
+                + "handlers add the time the entity spent paused to it with no zero guard (for example "
+                + "SharedEntityStorageSystem.cs:60-62, and the generated handlers the same way), so after the dock's unpause it "
+                + "reads as that span, a moment already past. Sorted only in drydock mode, where the round trip records the "
+                + "span the engine handed the handlers (EntityUnpausedEvent.PausedTime on the retrieved grid), and only where "
+                + "the time was exactly zero before and is that span after, within one tick.",
+                (line, key, result) => line.StartsWith("CHANGED", StringComparison.Ordinal) && ZeroShiftedByUnpause(key, result)),
 
             // What the manifest's fourth moment, after the first power solve, set back before it was cut (ruled 2026-09-19).
             new("re-armed by the power edge",
@@ -1248,6 +1259,40 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
         }
 
         /// <summary>
+        /// The unpause family's control, with no server, on the render rung 111 printed for a borg charger's storage: a zero
+        /// that comes back as exactly the retrieve's paused span sorts; the same zero back as the span plus two ticks, a
+        /// non-zero before, and any line with no recorded span (codec and engine mode) stay findings.
+        /// </summary>
+        [Test]
+        public void AFamilyNeverAbsorbsAZeroTheUnpauseDidNotShift()
+        {
+            const string key = "BorgCharger@-1,25|EntityStorageComponent.~NextInternalOpenAttempt" + DrydockFidelitySystem.TimeSuffix;
+            const double tick = 1d / 30;
+            var span = TimeSpan.FromSeconds(37 * tick);
+
+            string? Sorted(string before, string after, TimeSpan? pausedSpan)
+            {
+                var result = new RoundTripResult(new DrydockStateSnapshot(), new DrydockStateSnapshot(), new DrydockStateSnapshot(),
+                    new DrydockStateSnapshot(), EntityUid.Invalid, 0, 0, tick, null, pausedSpan);
+                result.Before.Values[key] = before;
+                result.After.Values[key] = after;
+                return FamilyFor($"CHANGED  {key}: {before} -> {after}", key, result, null, DrydockFamilies).Family?.Name;
+            }
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(Sorted("0.000|-29.033", "1.233|-45.200", span), Is.EqualTo(UnpauseShiftedZeroFamily),
+                    "A zero back as exactly the paused span is the unpause's shift of \"never\".");
+                Assert.That(Sorted("0.000|-29.033", "1.300|-45.133", span), Is.Null,
+                    "The same zero back as the span plus two ticks is not what the unpause adds, and stays a finding.");
+                Assert.That(Sorted("0.500|-28.533", "1.733|-44.700", span), Is.Null,
+                    "A time that was not zero before never enters the family, whatever it moved by.");
+                Assert.That(Sorted("0.000|-29.033", "1.233|-45.200", null), Is.Null,
+                    "With no paused span recorded, as in codec and engine mode, nothing sorts.");
+            });
+        }
+
+        /// <summary>
         /// The reshuffle family's control, with no server, on the renders rung 111 printed for a camera: state data where only
         /// MainWire moved sorts on an entity that draws a new wire order at every build; the same move on one that does not,
         /// and a move of the cut count on one that does, stay findings.
@@ -1402,6 +1447,24 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
 
         /// <summary>The family for a wire list rebuilt in another order, by name.</summary>
         private const string ReshuffledFamily = "wire list rebuilt in another order";
+
+        /// <summary>The family for an unset time the unpause shifted, by name.</summary>
+        private const string UnpauseShiftedZeroFamily = "zero shifted by the unpause";
+
+        /// <summary>The families a drydock-mode round trip sorts by: those whose cause is its paused retrieve.</summary>
+        private static readonly KnownFamily[] DrydockFamilies = KnownFamilies.Where(f => f.Name == UnpauseShiftedZeroFamily).ToArray();
+
+        /// <summary>
+        /// Whether a time line is an unset time the unpause shifted: zero before, and after the span the retrieved grid spent
+        /// paused, within one tick. The span is the engine's own, so the tick is only the slack for an entity stamped paused
+        /// a tick apart from its grid.
+        /// </summary>
+        private static bool ZeroShiftedByUnpause(string key, RoundTripResult result) =>
+            result.PausedSpan is { } span
+            && key.EndsWith(DrydockFidelitySystem.TimeSuffix, StringComparison.Ordinal)
+            && RawTime(result.Before.Values.GetValueOrDefault(key)) is 0d
+            && RawTime(result.After.Values.GetValueOrDefault(key)) is { } after
+            && Math.Abs(after - span.TotalSeconds) <= result.TickSeconds + 1e-6;
 
         /// <summary>
         /// Whether a wire line is an entity rebuilt in another order: its wires draw a new order at every build
@@ -1765,6 +1828,9 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
         /// <param name="ShipSeconds">The clock the ship ran between the before and after snapshots: the ticks its grid
         /// ended unpaused, the old grid through the store and the new one through the retrieve and the settle.</param>
         /// <param name="TickSeconds">One tick, the slack for the tick a grid was unpaused partway through.</param>
+        /// <param name="PausedSpan">In drydock mode, the time the retrieved grid spent paused, from its load on the staging
+        /// map to the dock's unpause: the engine's own <see cref="EntityUnpausedEvent.PausedTime"/>, which is what every
+        /// unpause handler adds. Null in codec and engine mode, whose loads land unpaused.</param>
         private sealed record RoundTripResult(
             DrydockStateSnapshot Early,
             DrydockStateSnapshot Before,
@@ -1774,7 +1840,30 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             double ElapsedSeconds,
             double ShipSeconds,
             double TickSeconds,
-            DrydockMapInitReport? MapInit);
+            DrydockMapInitReport? MapInit,
+            TimeSpan? PausedSpan = null);
+
+        /// <summary>
+        /// The time a grid spent paused, as the engine hands it to every unpause handler, recorded while a drydock-mode round
+        /// trip is retrieving.
+        /// </summary>
+        private sealed class DrydockLadderUnpauseRecorderSystem : EntitySystem
+        {
+            public readonly Dictionary<EntityUid, TimeSpan> PausedTime = new();
+            public bool Recording;
+
+            public override void Initialize()
+            {
+                base.Initialize();
+                SubscribeLocalEvent<MapGridComponent, EntityUnpausedEvent>(OnUnpaused);
+            }
+
+            private void OnUnpaused(Entity<MapGridComponent> ent, ref EntityUnpausedEvent args)
+            {
+                if (Recording)
+                    PausedTime[ent.Owner] = args.PausedTime;
+            }
+        }
 
         /// <param name="lightAtClaim">A match lit in the tick the store is claimed, so its whole 10 s burn is ahead of
         /// the store: lighting it any earlier burns it out before the snapshot, since the settle is longer than that.</param>
@@ -1798,10 +1887,10 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             });
 
             var clockBefore = timing.CurTime;
-            var (retrieved, mapInit, shipTicks) = EngineMode
-                ? (await EngineRoundTrip(pair, grid), null, 0)
+            var (retrieved, mapInit, shipTicks, pausedSpan) = EngineMode
+                ? (await EngineRoundTrip(pair, grid), null, 0, null)
                 : CodecMode
-                    ? (await CodecRoundTrip(pair, grid), null, 0)
+                    ? (await CodecRoundTrip(pair, grid), null, 0, null)
                     : await DrydockRoundTrip(pair, grid, owner, station);
 
             if (CodecMode)
@@ -1827,12 +1916,12 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             DrydockStateSnapshot late = default!;
             await server.WaitPost(() => late = fidelity.DeepSnapshotGrid(retrieved, TieBreakAfter()));
 
-            return new RoundTripResult(early, before, after, late, retrieved, elapsed, shipSeconds, tickSeconds, mapInit);
+            return new RoundTripResult(early, before, after, late, retrieved, elapsed, shipSeconds, tickSeconds, mapInit, pausedSpan);
         }
 
-        /// <returns>The retrieved grid, the map-init report, and the ticks the ship's grid ended unpaused
-        /// during the store and the retrieve.</returns>
-        private static async Task<(EntityUid Grid, DrydockMapInitReport? MapInit, int ShipTicks)> DrydockRoundTrip(
+        /// <returns>The retrieved grid, the map-init report, the ticks the ship's grid ended unpaused during the store and the
+        /// retrieve, and the time the retrieved grid spent paused before the dock unpaused it.</returns>
+        private static async Task<(EntityUid Grid, DrydockMapInitReport? MapInit, int ShipTicks, TimeSpan? PausedSpan)> DrydockRoundTrip(
             TestPair pair,
             EntityUid grid,
             Guid owner,
@@ -1853,14 +1942,27 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
 
             await pair.RunTicksSync((int) Math.Ceiling(ClockGapSeconds / timing.TickPeriod.TotalSeconds));
 
-            await server.WaitPost(() => run = drydock.LastPhaseCostsRun);
+            var recorder = server.System<DrydockLadderUnpauseRecorderSystem>();
+            await server.WaitPost(() =>
+            {
+                run = drydock.LastPhaseCostsRun;
+                recorder.PausedTime.Clear();
+                recorder.Recording = true;
+            });
             var retrieved = await PumpCountingGridTicks(pair,
                 () => drydock.TryRetrieveShip(shipId!.Value, owner, station, null), ran);
             Assert.That(retrieved.Succeeded, Is.True, $"retrieve failed with {retrieved.Result}.");
-            await server.WaitPost(() => AddMeterNotes(drydock, "retrieve", run, budgetMs));
+            TimeSpan? pausedSpan = null;
+            await server.WaitPost(() =>
+            {
+                AddMeterNotes(drydock, "retrieve", run, budgetMs);
+                recorder.Recording = false;
+                if (recorder.PausedTime.TryGetValue(retrieved.Grid!.Value, out var span))
+                    pausedSpan = span;
+            });
 
             var shipTicks = ran.GetValueOrDefault(grid) + ran.GetValueOrDefault(retrieved.Grid!.Value);
-            return (retrieved.Grid!.Value, server.System<DrydockFidelitySystem>().LastMapInitReport, shipTicks);
+            return (retrieved.Grid!.Value, server.System<DrydockFidelitySystem>().LastMapInitReport, shipTicks, pausedSpan);
         }
 
         /// <summary>
@@ -2066,6 +2168,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             var diff = DrydockStateSnapshot.Diff(result.Before, result.After);
             var moved = MovedLines(diff);
             var consequences = PolicyConsequences(diff, result.Before, protoMan);
+            var familyPool = CodecMode ? KnownFamilies : EngineMode ? null : DrydockFamilies;
 
             foreach (var line in diff)
             {
@@ -2095,8 +2198,9 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                 }
 
                 // A family whose cause is read in code, which would otherwise bury the new ones by its volume; never one that
-                // compounds across the two trips, which stays a finding.
-                if (CodecMode && key != null && FamilyFor(line, key, result, previous) is ({ } family, var grew))
+                // compounds across the two trips, which stays a finding. Drydock mode sorts only by the families of its paused
+                // retrieve; codec mode by all of them.
+                if (familyPool != null && key != null && FamilyFor(line, key, result, previous, familyPool) is ({ } family, var grew))
                 {
                     if (grew)
                     {
@@ -2262,6 +2366,20 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                     var lines = familyLines.GetValueOrDefault(family) ?? new List<string>();
                     var grew = familyGrew.GetValueOrDefault(family);
                     sb.AppendLine($"[ladder] family {family.Name}: {lines.Count} line(s)"
+                                  + (grew > 0 ? $", and {grew} it matched that compound across the trips, left as findings" : "")
+                                  + $". {family.Receipt}");
+                }
+            }
+            else if (!EngineMode)
+            {
+                foreach (var family in DrydockFamilies)
+                {
+                    var lines = familyLines.GetValueOrDefault(family) ?? new List<string>();
+                    var grew = familyGrew.GetValueOrDefault(family);
+                    var members = lines.Select(KeyOf).OfType<string>().Select(SnapshotMember).Distinct().OrderBy(m => m, StringComparer.Ordinal);
+                    sb.AppendLine($"[ladder] family {family.Name}: {lines.Count} line(s)"
+                                  + (lines.Count > 0 ? $" on {string.Join(", ", members)}" : "")
+                                  + $", paused span {(result.PausedSpan is { } span ? $"{span.TotalSeconds:F3}s" : "not recorded")}"
                                   + (grew > 0 ? $", and {grew} it matched that compound across the trips, left as findings" : "")
                                   + $". {family.Receipt}");
                 }
