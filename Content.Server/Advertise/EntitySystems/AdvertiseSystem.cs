@@ -65,6 +65,13 @@ public sealed partial class AdvertiseSystem : EntitySystem
         _advertQueue.Enqueue(uid, advert.NextAdvertisementTime);
     }
 
+    // Triad: the queue is filled only at MapInit and after an advert, so an advertiser that comes back already past
+    // MapInit (a drydock retrieve) is put in it at the deadline it carries.
+    public void Enqueue(Entity<AdvertiseComponent> ent)
+    {
+        _advertQueue.Enqueue(ent.Owner, ent.Comp.NextAdvertisementTime);
+    }
+
     // Mono
     private void OnProtoReload(PrototypesReloadedEventArgs ev)
     {
