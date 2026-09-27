@@ -253,8 +253,9 @@ public sealed partial class DrydockSystem
     /// through.
     ///
     /// <para>The inbound leg has a harder floor than the outbound one. The store writes one entity
-    /// per step, but the load's four phases run inside one tick (<see cref="LoadOntoStagingMap"/>),
-    /// and the slicing starts at the revive epilogue after it.</para>
+    /// per step, but the load creates, fills and starts the whole hull inside the tick that allocates
+    /// it (<see cref="LoadOntoStagingMap"/>); only its restore after that goes one item per step
+    /// (<see cref="DrydockPhase.Restore"/>).</para>
     ///
     /// <para>The database claim is neither taken nor released here. The wrapper owns it, because a
     /// job that observes its cancellation can never finish another await, and the release is the one
@@ -329,7 +330,8 @@ public sealed partial class DrydockSystem
                     continue;
                 }
 
-                // The honest per-tick claim for a retrieve is the budget plus this one load.
+                // A retrieve's cost per tick is the budget, except in the tick this phase opens: create,
+                // rows and start run whole there, and only the restore after them is sliced.
                 await slice.Begin(DrydockPhase.Load, 0);
                 GuardRetrieveResume(ctx);
 
@@ -540,7 +542,8 @@ public sealed partial class DrydockSystem
     /// <summary>
     /// Loads one revision's image onto a private, paused map of its own. The allocation, the rows and the engine's
     /// startup run inside one tick, since nothing may tick between allocating a tree and starting it
-    /// (<see cref="DrydockLoadSession.StartEngine"/>); the timing line marks them create, rows and start. The rest runs
+    /// (<see cref="DrydockLoadSession.StartEngine"/>); the timing line marks the staging map, the decode, each step
+    /// inside creation and the rows (<see cref="DrydockLoadOptions.Mark"/>), and the start. The rest runs
     /// against the tick budget on started, paused entities: the after-start members and the re-dirty
     /// (<see cref="DrydockPhase.Restore"/>), the strip rule and the research reset, then the restore events, so they see
     /// the population that stays, marked complete. Null when the image would not load, with whatever the load made
@@ -559,14 +562,16 @@ public sealed partial class DrydockSystem
     {
         var timer = ctx.Timer;
         ctx.StagingMap = CreateStagingMap(JobIdOf(slice), DrydockStagingKind.Retrieve, ctx.ShipId, mapInit: true);
-        var session = _image.BeginLoad(image, ctx.StagingMap.Value, new DrydockLoadOptions { Migrations = MigrationTable });
+        timer.Mark("staging");
+
+        // The session marks the steps inside creation and the rows (DrydockLoadOptions.Mark).
+        var session = _image.BeginLoad(image, ctx.StagingMap.Value, new DrydockLoadOptions { Migrations = MigrationTable, Mark = timer.Mark });
+        timer.Mark("decode");
         try
         {
             session.CreateEntities();
             ctx.Grid = session.Grid;
-            timer.Mark("create");
             session.ApplyRows();
-            timer.Mark("rows");
             session.StartEngine();
             timer.Mark("start");
 

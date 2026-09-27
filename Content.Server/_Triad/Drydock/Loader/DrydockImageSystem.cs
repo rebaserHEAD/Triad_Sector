@@ -30,7 +30,8 @@ public readonly record struct DrydockWalk(
 ///
 /// <para>Both halves are sessions of separate phase calls (<see cref="BeginStore"/>, <see cref="BeginLoad"/>), so a caller
 /// can time them or, later, slice between them. Nothing here reads the environment or measures anything: a caller that
-/// wants a time wraps a call, and a caller that wants a write's cost passes an <see cref="IDrydockStoreProbe"/>. A
+/// wants a time wraps a call or passes <see cref="DrydockLoadOptions.Mark"/> for the steps inside one, and a caller that
+/// wants a write's cost passes an <see cref="IDrydockStoreProbe"/>. A
 /// manifest member is always applied unless the caller's <see cref="DrydockLoadOptions.HoldOff"/> says otherwise.</para>
 /// </summary>
 public sealed partial class DrydockImageSystem : EntitySystem

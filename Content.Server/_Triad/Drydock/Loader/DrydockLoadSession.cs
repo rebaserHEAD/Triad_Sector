@@ -176,6 +176,9 @@ public sealed class DrydockLoadSession
             ["entities"] = entityGroups,
         };
 
+        var mark = _options.Mark;
+        mark?.Invoke("skeleton");
+
         // The entity-system collection, not the root one: the deserializer injects systems (SharedMapSystem among
         // them), and MapLoaderSystem hands it its own injected collection, which is this one.
         var migrations = _options.Migrations;
@@ -188,9 +191,34 @@ public sealed class DrydockLoadSession
         if (!deserializer.TryProcessData())
             throw new InvalidOperationException("Drydock load: the engine refused the skeleton document.");
 
+        mark?.Invoke("process");
+
+        // The engine's allocation and its component pass are one call with private halves (EntityDeserializer.cs:183-193),
+        // and it allocates one entity per skeleton node, each raising EntityAdded (EntityManager.cs:968), so the last of
+        // those is the boundary between the two.
+        var toAllocate = _image.Entities.Count;
+        void OnAllocated(Entity<MetaDataComponent> _)
+        {
+            if (--toAllocate == 0)
+                mark!("allocate");
+        }
+
         // Held before the engine allocates, so an allocation that throws partway is still in reach of Abandon.
         _deserializer = deserializer;
-        deserializer.CreateEntities();
+        if (mark != null)
+            _system.Entities.EntityAdded += OnAllocated;
+
+        try
+        {
+            deserializer.CreateEntities();
+        }
+        finally
+        {
+            if (mark != null)
+                _system.Entities.EntityAdded -= OnAllocated;
+        }
+
+        mark?.Invoke("populate");
         _gridUid = deserializer.UidMap[(int) _image.GridId];
         _ids = deserializer.UidMap.ToDictionary(entry => entry.Value, entry => (long) entry.Key);
         CollectDropped(deserializer);
@@ -205,6 +233,7 @@ public sealed class DrydockLoadSession
                 ? uid
                 : throw new FormatException($"Drydock load: a row names stable id {id}, which the image does not hold."));
 
+        mark?.Invoke("dropped");
         _phase = 1;
     }
 
@@ -308,6 +337,8 @@ public sealed class DrydockLoadSession
             }
         }
 
+        _options.Mark?.Invoke("rows");
+
         // Onto the map, as the engine's merge does in the same gap.
         var gridXform = entMan.GetComponent<TransformComponent>(_gridUid);
         _system.Xforms.SetCoordinates(
@@ -317,6 +348,7 @@ public sealed class DrydockLoadSession
             newParent: entMan.GetComponent<TransformComponent>(_mapUid));
         deserializer.Result.Orphans.Clear();
 
+        _options.Mark?.Invoke("reparent");
         _phase = 2;
     }
 

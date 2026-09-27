@@ -73,6 +73,13 @@ public sealed class DrydockLoadOptions
     /// (<c>:1094</c>), before any restore raise. Null applies none.
     /// </summary>
     public DrydockMigrationTable? Migrations { get; init; }
+
+    /// <summary>
+    /// Called with a step's name as each step inside <see cref="DrydockLoadSession.CreateEntities"/> and
+    /// <see cref="DrydockLoadSession.ApplyRows"/> ends, for a caller timing them: <c>skeleton</c>, <c>process</c>,
+    /// <c>allocate</c>, <c>populate</c> and <c>dropped</c>, then <c>rows</c> and <c>reparent</c>. Null marks nothing.
+    /// </summary>
+    public Action<string>? Mark { get; init; }
 }
 
 /// <summary>
