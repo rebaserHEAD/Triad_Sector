@@ -57,7 +57,7 @@ public sealed class DrydockStoreSession
     /// <summary>The entities to write, in load order.</summary>
     public IReadOnlyList<EntityUid> Aboard => _walk.Aboard;
 
-    /// <summary>The stable id each entity aboard will be stored under, from the store's walk.</summary>
+    /// <summary>The id in the image each entity aboard will be stored under, from the store's walk.</summary>
     public IReadOnlyDictionary<EntityUid, long> Ids => _walk.Ids;
 
     public void WriteEntity(EntityUid uid)

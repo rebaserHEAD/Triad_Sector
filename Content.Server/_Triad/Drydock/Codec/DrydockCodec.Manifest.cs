@@ -129,9 +129,9 @@ public sealed partial class DrydockCodec
 
         return _serialization.WriteValue(type, value switch
         {
-            // A receiver's provider is kept as the provider entity, so it travels as a stable id like every reference.
+            // A receiver's provider is kept as the provider entity, so it travels as an id in the image like every reference.
             Entity<ExtensionCableProviderComponent> provider => provider.Owner,
-            // A network id means nothing in another round, so the entity it names travels, as a stable id.
+            // A network id means nothing in another round, so the entity it names travels, as its id in the image.
             NetEntity net when member.Kind == DrydockMemberKind.Reference => _entMan.GetEntity(net),
             // A registered prototype travels as its id, never as its definition.
             IPrototype prototype when member.Kind == DrydockMemberKind.PrototypeId => prototype.ID,
@@ -181,8 +181,8 @@ public sealed partial class DrydockCodec
         member.EntryType ?? DrydockCodecManifestMembers.MemberType(info);
 
     /// <summary>
-    /// The members of <paramref name="moment"/> a manifest row holds, decoded: a reference resolves through the load's
-    /// stable ids, a game time against the clock at load, an explicit null to null. A network id comes back as the loaded
+    /// The members of <paramref name="moment"/> a manifest row holds, decoded: a reference resolves through the ids in
+    /// the image, a game time against the clock at load, an explicit null to null. A network id comes back as the loaded
     /// entity's own, or null when it named nothing on the image. A member set through its system (a receiver's provider, a
     /// pinpointer's target) comes back as the entity, for the loader to hand to that system. A prototype id comes back as
     /// the registered prototype, or null when it no longer resolves (<see cref="Unresolved"/>).

@@ -16,7 +16,7 @@ namespace Content.Server._Triad.Drydock.Codec;
 ///
 /// <para>The engine does the work. A component is written by its own generated whole-component
 /// writer and read by its own generated reader, both under <see cref="DrydockCodecContext"/>, which
-/// swaps the document-local entity number for a stable id and changes nothing else. Then one pass
+/// swaps the document-local entity number for the entity's id in the image and changes nothing else. Then one pass
 /// over the component's data fields fixes the short list of fields whose engine serializer answers
 /// for a map file rather than for a row (<see cref="DrydockCodecFieldPass"/>). No serializer is
 /// written from scratch.</para>
@@ -68,7 +68,7 @@ public sealed partial class DrydockCodec
     }
 
     /// <param name="idOf">See <see cref="DrydockCodecContext"/>: the entity's id in the image.</param>
-    /// <param name="resolve">See <see cref="DrydockCodecContext"/>: the entity a stable id names.</param>
+    /// <param name="resolve">See <see cref="DrydockCodecContext"/>: the entity an id in the image names.</param>
     public DrydockCodec(
         ISerializationManager serialization,
         IEntityManager entMan,

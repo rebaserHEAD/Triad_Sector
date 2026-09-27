@@ -140,12 +140,12 @@ public sealed class DrydockManifestApply
     internal void SeamOn(string key) => SeamByPrototype[key] = SeamByPrototype.GetValueOrDefault(key) + 1;
 }
 
-/// <summary>What a load did: the grid, every entity by the stable id it was loaded under, and counts of what it changed, missed or refused.</summary>
+/// <summary>What a load did: the grid, every entity by its id in the image, and counts of what it changed, missed or refused.</summary>
 public sealed class DrydockLoadResult
 {
     public required EntityUid Grid { get; init; }
 
-    /// <summary>The loaded entities by the stable id each was loaded under.</summary>
+    /// <summary>The loaded entities by their ids in the image.</summary>
     public required IReadOnlyDictionary<EntityUid, long> Ids { get; init; }
 
     public required DrydockManifestApply Manifest { get; init; }

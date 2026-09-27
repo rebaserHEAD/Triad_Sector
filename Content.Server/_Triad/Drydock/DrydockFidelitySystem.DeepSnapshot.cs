@@ -203,7 +203,7 @@ public sealed partial class DrydockFidelitySystem
 
     /// <param name="tieBreak">
     /// An identity that survives the round trip, used only to order siblings that tie on everything a path is built
-    /// from; null leaves them in walk order. The codec ladder passes the image's stable id, because two anchored pipes
+    /// from; null leaves them in walk order. The codec ladder passes each entity's id in the image, because two anchored pipes
     /// on one tile tie, and a load walks them in a different order and swaps their states.
     /// </param>
     public DrydockStateSnapshot DeepSnapshotGrid(EntityUid grid, Func<EntityUid, long?>? tieBreak = null)

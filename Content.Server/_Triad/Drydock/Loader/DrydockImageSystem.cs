@@ -12,7 +12,7 @@ using Robust.Shared.Timing;
 namespace Content.Server._Triad.Drydock.Loader;
 
 /// <summary>
-/// The store's walk: every savable entity from the grid down in walk order, and the stable id each is given.
+/// The store's walk: every savable entity from the grid down in walk order, and the id in the image each is given.
 /// <paramref name="UnsavedByPrototype"/> counts the entities the walk stopped at because their prototype is not savable, by
 /// prototype, and <paramref name="DroppedByPrototype"/> counts everything under them, which is left out with them.
 /// </summary>
@@ -59,7 +59,7 @@ public sealed partial class DrydockImageSystem : EntitySystem
     internal IEntityManager Entities => EntityManager;
 
     /// <summary>
-    /// The store's walk and its id pass: every savable entity from the grid down, each given its stable id in walk order,
+    /// The store's walk and its id pass: every savable entity from the grid down, each given its id in the image in walk order,
     /// parents before children. An entity that is not <see cref="IsStored"/> is left out with everything under it.
     /// </summary>
     public DrydockWalk Walk(EntityUid grid)

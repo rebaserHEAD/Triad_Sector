@@ -96,7 +96,7 @@ internal static class DrydockCapturedKeys
 ///
 /// <para><see cref="LatheRecipeBatch.Actor"/> is a <see cref="NetEntity"/>, which means nothing in
 /// the next round. It is written as the entity it names, through the context's own entity writer, so
-/// it becomes a stable id like every other reference in the image and comes back resolved through
+/// it becomes an id in the image like every other reference there and comes back resolved through
 /// the same pair.</para>
 ///
 /// <para>A recipe no prototype has any more fails this reader, which has to return a batch. The queue's

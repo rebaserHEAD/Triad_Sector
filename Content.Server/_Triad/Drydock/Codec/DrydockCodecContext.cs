@@ -32,7 +32,7 @@ namespace Content.Server._Triad.Drydock.Codec;
 /// Carrying only the first left a component holding a <see cref="NetEntity"/> unwritable, and a store
 /// refused outright rather than one that lost a field: finding F28, where a device-linked analysis
 /// console could not be stored at all. A network id means nothing next round, so the half here goes
-/// through the <see cref="EntityUid"/> one and stores the same stable id, as the engine's own reader
+/// through the <see cref="EntityUid"/> one and stores the same id in the image, as the engine's own reader
 /// goes through its <see cref="EntityUid"/> reader and converts back
 /// (<c>EntityDeserializer.cs:1224-1239</c>).</para>
 ///
@@ -127,7 +127,7 @@ public sealed class DrydockCodecContext :
 
         return long.TryParse(node.Value, NumberStyles.Integer, CultureInfo.InvariantCulture, out _)
             ? new ValidatedValueNode(node)
-            : new ErrorNode(node, "Not a drydock stable id");
+            : new ErrorNode(node, "Not an entity's id in a drydock image");
     }
 
     public DataNode Write(
@@ -137,10 +137,10 @@ public sealed class DrydockCodecContext :
         bool alwaysWrite = false,
         ISerializationContext? context = null)
     {
-        if (!value.IsValid() || _idOf(value) is not { } stableId)
+        if (!value.IsValid() || _idOf(value) is not { } imageId)
             return new ValueDataNode(InvalidReference);
 
-        return new ValueDataNode(stableId.ToString(CultureInfo.InvariantCulture));
+        return new ValueDataNode(imageId.ToString(CultureInfo.InvariantCulture));
     }
 
     public EntityUid Read(
@@ -156,10 +156,10 @@ public sealed class DrydockCodecContext :
 
         // A row that is not a number is corruption, not a missing entity, and the two must not read
         // the same: a load that silently turns garbage into Invalid restores a ship with holes in it.
-        if (!long.TryParse(node.Value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var stableId))
-            throw new FormatException($"Drydock codec: an entity reference held '{node.Value}', which is neither a stable id nor '{InvalidReference}'.");
+        if (!long.TryParse(node.Value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var imageId))
+            throw new FormatException($"Drydock codec: an entity reference held '{node.Value}', which is neither an id in the image nor '{InvalidReference}'.");
 
-        return _resolve(stableId);
+        return _resolve(imageId);
     }
 
     // The NetEntity half. Explicit, because its three members share their parameter lists with the
@@ -181,7 +181,7 @@ public sealed class DrydockCodecContext :
         bool alwaysWrite,
         ISerializationContext? context)
     {
-        // The entity the network id names, then the same stable id its own row carries. A network id
+        // The entity the network id names, then the same id in the image its own row carries. A network id
         // stored as itself would name nothing, or the wrong thing, in the round that reads it back.
         var uid = value.IsValid() ? _entMan.GetEntity(value) : EntityUid.Invalid;
         return Write(serializationManager, uid, dependencies, alwaysWrite, context);

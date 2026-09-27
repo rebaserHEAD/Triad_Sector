@@ -231,7 +231,7 @@ public sealed class DrydockLoadSession
             _ => throw new InvalidOperationException("The load writes no reference, so it asks no entity for its id in the image."),
             id => deserializer.UidMap.TryGetValue((int) id, out var uid)
                 ? uid
-                : throw new FormatException($"Drydock load: a row names stable id {id}, which the image does not hold."));
+                : throw new FormatException($"Drydock load: a row names id {id}, which the image does not hold."));
 
         mark?.Invoke("dropped");
         _phase = 1;
@@ -666,7 +666,7 @@ public sealed class DrydockLoadSession
             TilesExtra = restored.Except(stored).Count(),
         };
 
-        // After the last entity has started and the after-start members are set, in ascending stable id. Two distinct steps,
+        // After the last entity has started and the after-start members are set, in ascending id in the image. Two distinct steps,
         // so that when this phase is sliced the head event completes whole before the first directed raise starts: a slice
         // boundary goes between them and between entities inside the second, never inside the first.
         var inOrder = ids.OrderBy(entry => entry.Value)
