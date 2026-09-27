@@ -9,6 +9,7 @@ using Content.IntegrationTests.Pair;
 using Content.Server._NF.Trade;
 using Content.Server._Triad.Drydock;
 using Content.Server._Triad.Drydock.Codec;
+using Content.Server._Triad.Drydock.Loader;
 using Content.Server.Atmos;
 using Content.Server.Atmos.Components;
 using Content.Server.Atmos.EntitySystems;
@@ -1920,6 +1921,17 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             return new RoundTripResult(early, before, after, late, retrieved, elapsed, shipSeconds, tickSeconds, mapInit, pausedSpan);
         }
 
+        /// <summary>
+        /// Every rung's hull sits on an initialised map, loaded from a map file or built there, so everything on it was
+        /// map-initialised as it loaded or spawned, and a load puts each entity back at its stored stage: its image lists
+        /// nothing in <see cref="DrydockImage.BelowMapInit"/>. An entity listed there would come back never map-initialised.
+        /// </summary>
+        private static void AssertNothingBelowMapInit(DrydockImage image)
+        {
+            Assert.That(image.BelowMapInit.Select(entity => $"{entity.Prototype ?? "(no prototype)"} ({entity.Id})"), Is.Empty,
+                "The hull's image holds an entity below MapInitialized.");
+        }
+
         /// <returns>The retrieved grid, the map-init report, the ticks the ship's grid ended unpaused during the store and the
         /// retrieve, and the time the retrieved grid spent paused before the dock unpaused it.</returns>
         private static async Task<(EntityUid Grid, DrydockMapInitReport? MapInit, int ShipTicks, TimeSpan? PausedSpan)> DrydockRoundTrip(
@@ -1940,6 +1952,9 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                 () => drydock.TryStoreShip(grid, owner, null), ran);
             Assert.That(storeResult, Is.EqualTo(DrydockStoreResult.Success), "store refused.");
             await server.WaitPost(() => AddMeterNotes(drydock, "store", run, budgetMs));
+
+            var filed = await server.ResolveDependency<DrydockStore>().LoadCurrentImage(shipId!.Value);
+            AssertNothingBelowMapInit(filed!.Image);
 
             await pair.RunTicksSync((int) Math.Ceiling(ClockGapSeconds / timing.TickPeriod.TotalSeconds));
 

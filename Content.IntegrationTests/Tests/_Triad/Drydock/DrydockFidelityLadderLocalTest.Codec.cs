@@ -461,6 +461,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                 despawn = Despawn(pair, grid);
             });
 
+            AssertNothingBelowMapInit(stored.Image);
             await pair.RunTicksSync((int) Math.Ceiling(ClockGapSeconds / timing.TickPeriod.TotalSeconds));
 
             // Before the load, so nothing it brings in is taken for a leftover.
