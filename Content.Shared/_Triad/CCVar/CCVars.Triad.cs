@@ -72,8 +72,8 @@ public sealed class TriadCCVars
     /// only bounds the images, and the current revision is never pruned regardless of this value.
     /// Zero or less prunes nothing at all, which is the safe direction to misconfigure.
     /// </summary>
-    public static readonly CVarDef<int> DrydockKeepBlobs =
-        CVarDef.Create("triad.drydock.keep_blobs", 3, CVar.SERVERONLY);
+    public static readonly CVarDef<int> DrydockKeepImages =
+        CVarDef.Create("triad.drydock.keep_images", 3, CVar.SERVERONLY);
 
     /// <summary>
     /// The fraction of what was paid for a berth that selling it returns. A grant was paid nothing

@@ -47,7 +47,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             var secondImage = DrydockTestHelpers.SeedImage(2);
 
             // Keep two images, so the third store below is what proves pruning happens at all.
-            var first = await store.FileRevision(Request(shipId, owner, "Kestrel"), firstImage, keepBlobs: 2);
+            var first = await store.FileRevision(Request(shipId, owner, "Kestrel"), firstImage, keepImages: 2);
             Assert.That(first.Outcome, Is.EqualTo(DrydockBerthResult.Success));
             Assert.That(first.Revision, Is.EqualTo(1), "The first revision of a ship is 1.");
 
@@ -63,7 +63,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             });
 
             // A second store lands as a new revision on the same hull rather than a second hull.
-            var second = await store.FileRevision(Request(shipId, owner, "Kestrel II"), secondImage, keepBlobs: 2);
+            var second = await store.FileRevision(Request(shipId, owner, "Kestrel II"), secondImage, keepImages: 2);
             Assert.That(second.Revision, Is.EqualTo(2));
 
             loaded = await store.LoadCurrentImage(shipId);
@@ -77,13 +77,13 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             // The ownership rule: a store never moves the ship to whoever filed it.
             var otherOwner = Guid.NewGuid();
             await DrydockTestHelpers.InsertPlayer(db, otherOwner);
-            await store.FileRevision(Request(shipId, otherOwner, "Kestrel III"), secondImage, keepBlobs: 2);
+            await store.FileRevision(Request(shipId, otherOwner, "Kestrel III"), secondImage, keepImages: 2);
 
             loaded = await store.LoadCurrentImage(shipId);
             Assert.That(loaded!.Ship.OwnerUserId, Is.EqualTo(owner),
                 "A store must not transfer the ship. Ownership moves through a transfer, with its own audit row.");
 
-            // Three revisions filed with keepBlobs 2, so revision 1's image is gone and its history
+            // Three revisions filed with keepImages 2, so revision 1's image is gone and its history
             // is not. This is the guarantee that lets the design promise a hull's whole history.
             var (revisionCount, imageRevisions) = await ReadRevisionShape(db, shipId);
             Assert.Multiple(() =>
@@ -96,7 +96,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             // so the one a retrieve is about to read stays along with one step back to fall to. The
             // case where an off-by-one would delete the live image. The floor's own tests, with
             // controls, are in DrydockDurabilityStoreTest.
-            await store.FileRevision(Request(shipId, owner, "Kestrel IV"), firstImage, keepBlobs: 1);
+            await store.FileRevision(Request(shipId, owner, "Kestrel IV"), firstImage, keepImages: 1);
             loaded = await store.LoadCurrentImage(shipId);
             Assert.That(loaded, Is.Not.Null, "Pruning must never take the image the current revision points at.");
             Assert.That(loaded!.Image, Is.SameAs(firstImage));
@@ -106,7 +106,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
 
             // Zero or less means no pruning at all rather than keep nothing, which is the only
             // reading that is safe to misconfigure: the wrong guess costs disk, not ships.
-            await store.FileRevision(Request(shipId, owner, "Kestrel V"), secondImage, keepBlobs: 0);
+            await store.FileRevision(Request(shipId, owner, "Kestrel V"), secondImage, keepImages: 0);
             var (_, afterNoPrune) = await ReadRevisionShape(db, shipId);
             Assert.That(afterNoPrune, Is.EquivalentTo(new[] { 3, 4, 5 }), "A keep count of zero prunes nothing.");
 
@@ -133,7 +133,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             var shipId = Guid.NewGuid();
             await DrydockTestHelpers.InsertPlayer(db, owner);
             await store.AddBerth(owner, ShipSizeClass.Cutter, DrydockBerthKind.Granted, 0, null, null);
-            await store.FileRevision(Request(shipId, owner, "Harrier"), DrydockTestHelpers.SeedImage(), keepBlobs: 2);
+            await store.FileRevision(Request(shipId, owner, "Harrier"), DrydockTestHelpers.SeedImage(), keepImages: 2);
 
             // The retrieve gate: only a stored ship can be checked out, and the check and the move
             // are one statement so two of them cannot both win.
@@ -201,7 +201,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             var doc = DrydockTestHelpers.SeedImage();
 
             var resting = Guid.NewGuid();
-            var filed = await store.FileRevision(Request(resting, owner, "Kestrel"), doc, keepBlobs: 2);
+            var filed = await store.FileRevision(Request(resting, owner, "Kestrel"), doc, keepImages: 2);
             Assert.That(filed.Outcome, Is.EqualTo(DrydockBerthResult.Success));
             var seated = filed.BerthId!.Value;
 
@@ -210,7 +210,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             // own rather than the one the impound is about to vacate, since a store seats into the
             // lowest free berth that fits.
             var flying = Guid.NewGuid();
-            await store.FileRevision(Request(flying, owner, "Harrier"), doc, keepBlobs: 2);
+            await store.FileRevision(Request(flying, owner, "Harrier"), doc, keepImages: 2);
             Assert.That(await store.TrySetState(flying, DrydockShipState.Stored, DrydockShipState.CheckedOut, DrydockAuditAction.Retrieve, owner, round, null), Is.True);
 
             var terms = new DrydockImpound(25, "ticket #94", Redeemable: false, ActorUserId: admin);
@@ -287,7 +287,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             // With its last berth taken, the release picks another that fits.
             Assert.That((await store.TryImpoundStored(resting, terms, round)).Outcome, Is.EqualTo(DrydockBerthResult.Success));
             var squatter = Guid.NewGuid();
-            var squat = await store.FileRevision(Request(squatter, owner, "Pelican", berthId: seated), doc, keepBlobs: 2);
+            var squat = await store.FileRevision(Request(squatter, owner, "Pelican", berthId: seated), doc, keepImages: 2);
             Assert.That(squat.BerthId, Is.EqualTo(seated), "Control: the vacated berth was free to take.");
 
             var (again, elsewhere) = await store.TryReleaseImpound(resting, null, admin, round, "cleared");
@@ -301,7 +301,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             // becoming a stored ship with nowhere to be.
             Assert.That((await store.TryImpoundStored(resting, terms, round)).Outcome, Is.EqualTo(DrydockBerthResult.Success));
             var fourth = Guid.NewGuid();
-            var filler = await store.FileRevision(Request(fourth, owner, "Osprey"), doc, keepBlobs: 2);
+            var filler = await store.FileRevision(Request(fourth, owner, "Osprey"), doc, keepImages: 2);
             Assert.That(filler.BerthId, Is.EqualTo(elsewhere), "Control: the berth the release used is free again and the store takes it.");
 
             var (refused, nowhere) = await store.TryReleaseImpound(resting, null, admin, round, "cleared");
@@ -338,7 +338,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
 
             // Stored first, so there is a berth to lose.
             var shipId = Guid.NewGuid();
-            var filed = await store.FileRevision(Request(shipId, owner, "Kestrel"), DrydockTestHelpers.SeedImage(), keepBlobs: 2);
+            var filed = await store.FileRevision(Request(shipId, owner, "Kestrel"), DrydockTestHelpers.SeedImage(), keepImages: 2);
             Assert.That(filed.Outcome, Is.EqualTo(DrydockBerthResult.Success));
             Assert.That(filed.BerthId, Is.Not.Null, "A control: the ordinary store seats the hull.");
             var seated = filed.BerthId!.Value;
@@ -349,7 +349,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             var impound = new DrydockImpound(50, "left in the world at round end", Redeemable: true, ActorUserId: null);
             var taken = await store.FileRevision(
                 Request(shipId, owner, "Kestrel", markStored: false, impound: impound, evicted: 2),
-                DrydockTestHelpers.SeedImage(2), keepBlobs: 2);
+                DrydockTestHelpers.SeedImage(2), keepImages: 2);
 
             Assert.That(taken.Outcome, Is.EqualTo(DrydockBerthResult.Success));
             Assert.That(await store.MarkImpounded(shipId), Is.True);
@@ -426,7 +426,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             var round = await db.AddNewRound(await db.AddOrGetServer("drydock-test"));
 
             var shipId = Guid.NewGuid();
-            var filed = await store.FileRevision(Request(shipId, owner, "Kestrel", berthId: home), DrydockTestHelpers.SeedImage(), keepBlobs: 2);
+            var filed = await store.FileRevision(Request(shipId, owner, "Kestrel", berthId: home), DrydockTestHelpers.SeedImage(), keepImages: 2);
             Assert.That(filed.BerthId, Is.EqualTo(home));
 
             var (offered, transfer) = await store.TryOfferTransfer(shipId, owner, recipient, TimeSpan.FromMinutes(30), round);
@@ -495,7 +495,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             var doc = DrydockTestHelpers.SeedImage();
 
             var shipId = Guid.NewGuid();
-            var filed = await store.FileRevision(Request(shipId, owner, "Kestrel", berthId: home), doc, keepBlobs: 2);
+            var filed = await store.FileRevision(Request(shipId, owner, "Kestrel", berthId: home), doc, keepImages: 2);
             Assert.That(filed.BerthId, Is.EqualTo(home));
 
             // Into the lot at half its $24,000 appraisal, with the owner free to act on it.
@@ -514,7 +514,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                 "The fee paid has to be the fee on the row: a re-impound on new terms between the read and the press is not honoured at the old price.");
 
             var squatter = Guid.NewGuid();
-            var squat = await store.FileRevision(Request(squatter, owner, "Pelican", berthId: home), doc, keepBlobs: 2);
+            var squat = await store.FileRevision(Request(squatter, owner, "Pelican", berthId: home), doc, keepImages: 2);
             Assert.That(squat.BerthId, Is.EqualTo(home), "Control: the vacated berth was free to take.");
             Assert.That(await store.TryRedeemImpound(shipId, owner, home, 12000, round), Is.EqualTo(DrydockBerthResult.BerthOccupied));
 
@@ -614,7 +614,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             var round = await db.AddNewRound(await db.AddOrGetServer("drydock-test"));
 
             var shipId = Guid.NewGuid();
-            var filed = await store.FileRevision(Request(shipId, owner, "Kestrel"), DrydockTestHelpers.SeedImage(), keepBlobs: 2);
+            var filed = await store.FileRevision(Request(shipId, owner, "Kestrel"), DrydockTestHelpers.SeedImage(), keepImages: 2);
             Assert.That(filed.Outcome, Is.EqualTo(DrydockBerthResult.Success));
 
             // Control: a stored ship is scrapped by the stored sale, never by the live one.

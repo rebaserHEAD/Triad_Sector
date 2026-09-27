@@ -39,8 +39,8 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
 
             var pinnedShip = Guid.NewGuid();
             var control = Guid.NewGuid();
-            await store.FileRevision(Request(pinnedShip, owner, "Kestrel"), Image(1), keepBlobs: 2);
-            await store.FileRevision(Request(control, owner, "Harrier"), Image(1), keepBlobs: 2);
+            await store.FileRevision(Request(pinnedShip, owner, "Kestrel"), Image(1), keepImages: 2);
+            await store.FileRevision(Request(control, owner, "Harrier"), Image(1), keepImages: 2);
 
             Assert.That(await store.TryPinRevision(pinnedShip, 1, admin, null, "stepped past by a fallback"), Is.EqualTo(DrydockPinResult.Success));
             Assert.That(await store.TryPinRevision(pinnedShip, 1, admin, null, "again"), Is.EqualTo(DrydockPinResult.AlreadyInState),
@@ -60,8 +60,8 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             // Five stores past it with keep-2: revisions 2 to 6.
             for (var i = 2; i <= 6; i++)
             {
-                await store.FileRevision(Request(pinnedShip, owner, "Kestrel"), Image(i), keepBlobs: 2);
-                await store.FileRevision(Request(control, owner, "Harrier"), Image(i), keepBlobs: 2);
+                await store.FileRevision(Request(pinnedShip, owner, "Kestrel"), Image(i), keepImages: 2);
+                await store.FileRevision(Request(control, owner, "Harrier"), Image(i), keepImages: 2);
             }
 
             var pinnedImages = await ImageRevisions(db, pinnedShip);
@@ -95,7 +95,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
 
             Assert.That(await ImageRevisions(db, pinnedShip), Is.EqualTo(new[] { 1, 5, 6 }), "Unpinning deletes nothing by itself.");
 
-            await store.FileRevision(Request(pinnedShip, owner, "Kestrel"), Image(7), keepBlobs: 2);
+            await store.FileRevision(Request(pinnedShip, owner, "Kestrel"), Image(7), keepImages: 2);
             Assert.That(await ImageRevisions(db, pinnedShip), Is.EqualTo(new[] { 6, 7 }), "The next store after the unpin prunes it.");
 
             // The refusals, none of which writes a row.
@@ -126,20 +126,20 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             await store.AddBerth(owner, ShipSizeClass.Cutter, DrydockBerthKind.Granted, 0, null, null);
 
             var ship = Guid.NewGuid();
-            await store.FileRevision(Request(ship, owner, "Kestrel"), Image(1), keepBlobs: 1);
+            await store.FileRevision(Request(ship, owner, "Kestrel"), Image(1), keepImages: 1);
             Assert.That(await ImageRevisions(db, ship), Is.EqualTo(new[] { 1 }));
 
-            await store.FileRevision(Request(ship, owner, "Kestrel"), Image(2), keepBlobs: 1);
+            await store.FileRevision(Request(ship, owner, "Kestrel"), Image(2), keepImages: 1);
             Assert.That(await ImageRevisions(db, ship), Is.EqualTo(new[] { 1, 2 }), "Two exist, so two stay.");
 
-            await store.FileRevision(Request(ship, owner, "Kestrel"), Image(3), keepBlobs: 1);
-            await store.FileRevision(Request(ship, owner, "Kestrel"), Image(4), keepBlobs: 1);
+            await store.FileRevision(Request(ship, owner, "Kestrel"), Image(3), keepImages: 1);
+            await store.FileRevision(Request(ship, owner, "Kestrel"), Image(4), keepImages: 1);
             Assert.That(await ImageRevisions(db, ship), Is.EqualTo(new[] { 3, 4 }), "Pruning still runs; it stops at two.");
             Assert.That(await store.ListRetrievableRevisions(ship), Is.EqualTo(new[] { 4, 3 }));
 
             // Keep three is unaffected by the floor: control that the floor raises only, never lowers.
-            await store.FileRevision(Request(ship, owner, "Kestrel"), Image(5), keepBlobs: 3);
-            await store.FileRevision(Request(ship, owner, "Kestrel"), Image(6), keepBlobs: 3);
+            await store.FileRevision(Request(ship, owner, "Kestrel"), Image(5), keepImages: 3);
+            await store.FileRevision(Request(ship, owner, "Kestrel"), Image(6), keepImages: 3);
             Assert.That(await ImageRevisions(db, ship), Is.EqualTo(new[] { 4, 5, 6 }));
 
             await pair.CleanReturnAsync();
@@ -163,14 +163,14 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
 
             var ship = Guid.NewGuid();
             for (var i = 1; i <= 3; i++)
-                await store.FileRevision(Request(ship, owner, "Kestrel"), Image(i), keepBlobs: 0);
+                await store.FileRevision(Request(ship, owner, "Kestrel"), Image(i), keepImages: 0);
 
             // Take revisions 1 and 2's images directly, leaving revision 3's as the only one.
             var images = db.DrydockImages;
             await db.RunTriadDbCommand((context, token) => images.Delete(context, ship, new[] { 1, 2 }, token), CancellationToken.None);
             Assert.That(await ImageRevisions(db, ship), Is.EqualTo(new[] { 3 }), "Control: the ship is down to one document.");
 
-            await store.FileRevision(Request(ship, owner, "Kestrel"), Image(4), keepBlobs: 1);
+            await store.FileRevision(Request(ship, owner, "Kestrel"), Image(4), keepImages: 1);
             Assert.That(await ImageRevisions(db, ship), Is.EqualTo(new[] { 3, 4 }),
                 "The only document the ship had is kept alongside the new one.");
 
@@ -193,10 +193,10 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             await store.AddBerth(owner, ShipSizeClass.Cutter, DrydockBerthKind.Granted, 0, null, null);
 
             var ship = Guid.NewGuid();
-            await store.FileRevision(Request(ship, owner, "Kestrel"), Image(1), keepBlobs: 3);
-            await store.FileRevision(Request(ship, owner, "Kestrel", appraisal: 5000), Image(2), keepBlobs: 3);
+            await store.FileRevision(Request(ship, owner, "Kestrel"), Image(1), keepImages: 3);
+            await store.FileRevision(Request(ship, owner, "Kestrel", appraisal: 5000), Image(2), keepImages: 3);
 
-            var (outcome, promoted) = await store.TryPromoteRevision(ship, 1, null, null, null, keepBlobs: 3);
+            var (outcome, promoted) = await store.TryPromoteRevision(ship, 1, null, null, null, keepImages: 3);
             Assert.That(outcome, Is.EqualTo(DrydockBerthResult.Success));
 
             var current = await store.LoadCurrentImage(ship);

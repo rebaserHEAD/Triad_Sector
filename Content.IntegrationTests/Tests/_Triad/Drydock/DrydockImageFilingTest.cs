@@ -38,7 +38,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
 
             var images = Enumerable.Range(1, 4).Select(Image).ToList();
 
-            var first = await store.FileRevision(Request(ship, owner), images[0], keepBlobs: 2);
+            var first = await store.FileRevision(Request(ship, owner), images[0], keepImages: 2);
             Assert.That(first.Outcome, Is.EqualTo(DrydockBerthResult.Success));
 
             var loaded = await store.LoadCurrentImage(ship);
@@ -49,8 +49,8 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                 Assert.That(loaded.Image, Is.SameAs(images[0]));
             });
 
-            await store.FileRevision(Request(ship, owner), images[1], keepBlobs: 2);
-            await store.FileRevision(Request(ship, owner), images[2], keepBlobs: 2);
+            await store.FileRevision(Request(ship, owner), images[1], keepImages: 2);
+            await store.FileRevision(Request(ship, owner), images[2], keepImages: 2);
 
             var retrievable = await store.ListRetrievableRevisions(ship);
             var pruned = await store.LoadRevisionImage(ship, 1);
@@ -77,10 +77,10 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                 Assert.That(pinKept, Is.EqualTo(DrydockPinResult.Success));
             });
 
-            await store.FileRevision(Request(ship, owner), images[3], keepBlobs: 2);
+            await store.FileRevision(Request(ship, owner), images[3], keepImages: 2);
             Assert.That(await store.ListRetrievableRevisions(ship), Is.EqualTo(new[] { 4, 3, 2 }), "The pinned image survives outside the window.");
 
-            var (outcome, promoted) = await store.TryPromoteRevision(ship, 2, owner, null, null, keepBlobs: 2);
+            var (outcome, promoted) = await store.TryPromoteRevision(ship, 2, owner, null, null, keepImages: 2);
             Assert.That(outcome, Is.EqualTo(DrydockBerthResult.Success));
 
             var current = await store.LoadCurrentImage(ship);

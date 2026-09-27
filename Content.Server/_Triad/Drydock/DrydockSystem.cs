@@ -484,7 +484,7 @@ public sealed partial class DrydockSystem : EntitySystem
             // (RobustToolbox Job.cs:92-107), which Job.Run cancels when the job is cancelled.
             // Reading the result off the task is what stops a round restart landing in that gap from
             // throwing out of a store whose revision is already durable.
-            var fileTask = _store.FileRevision(request, stored.Image, _cfg.GetCVar(TriadCCVars.DrydockKeepBlobs));
+            var fileTask = _store.FileRevision(request, stored.Image, _cfg.GetCVar(TriadCCVars.DrydockKeepImages));
 
             DrydockFileResult filed;
             try

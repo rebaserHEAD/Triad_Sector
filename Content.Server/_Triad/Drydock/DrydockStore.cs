@@ -92,9 +92,9 @@ public sealed partial class DrydockStore
     /// before an image goes:
     ///
     /// <list type="bullet">
-    /// <item>Keep-N: the newest <paramref name="keepBlobs"/> images stay, counting <paramref name="keptRevision"/>, the
+    /// <item>Keep-N: the newest <paramref name="keepImages"/> images stay, counting <paramref name="keptRevision"/>, the
     /// one just filed or promoted, which is always the newest.</item>
-    /// <item>The floor: never fewer than <see cref="MinimumKeptImages"/>, so <paramref name="keepBlobs"/> of 1 behaves
+    /// <item>The floor: never fewer than <see cref="MinimumKeptImages"/>, so <paramref name="keepImages"/> of 1 behaves
     /// exactly as 2, and a ship holding only its new image prunes nothing.</item>
     /// <item>Pins: a <see cref="DrydockRevision.Pinned"/> revision's image is never deleted, however far outside the
     /// window it falls. A pinned image inside the window still counts toward it.</item>
@@ -113,14 +113,14 @@ public sealed partial class DrydockStore
     /// arriving second waits for this commit and then sees what it left, refusing an image it deleted rather than
     /// reporting success on it. Reasoned from read-committed row locking, not exercised by a test.</para>
     /// </summary>
-    private static async Task PruneImages(ServerDbContext db, IDrydockImageStore images, Guid shipGuid, int keptRevision, int keepBlobs, CancellationToken token)
+    private static async Task PruneImages(ServerDbContext db, IDrydockImageStore images, Guid shipGuid, int keptRevision, int keepImages, CancellationToken token)
     {
-        if (keepBlobs <= 0)
+        if (keepImages <= 0)
             return;
 
         await LockShipRow(db, shipGuid, token);
 
-        var keep = Math.Max(keepBlobs, MinimumKeptImages);
+        var keep = Math.Max(keepImages, MinimumKeptImages);
         var below = (await images.Revisions(db, shipGuid, token)).Where(r => r < keptRevision).OrderByDescending(r => r).ToList();
 
         // The oldest image that stays is the (keep - 1)th newest below the one just filed; fewer than that and the floor
@@ -213,13 +213,13 @@ public sealed partial class DrydockStore
     /// key on (ship_guid, revision) makes the second transaction fail loudly rather than overwrite.
     /// Failing loudly is the point: the caller still holds a live grid and can refuse.</para>
     /// </summary>
-    /// <param name="keepBlobs">
+    /// <param name="keepImages">
     /// How many revisions keep their image, never fewer than two once two exist, plus any that
     /// are pinned. Zero or less prunes nothing. The revision just filed is never pruned, whatever
     /// this says. See <see cref="PruneImages"/>.
     /// </param>
     /// <returns>The outcome, the revision number filed, and the berth the ship now sits in.</returns>
-    public Task<DrydockFileResult> FileRevision(DrydockRevisionRequest request, DrydockImage image, int keepBlobs, CancellationToken ct = default)
+    public Task<DrydockFileResult> FileRevision(DrydockRevisionRequest request, DrydockImage image, int keepImages, CancellationToken ct = default)
     {
         var images = _db.DrydockImages;
         return _db.RunTriadDbCommand(async (db, token) =>
@@ -236,7 +236,7 @@ public sealed partial class DrydockStore
                 int? picked = null;
                 try
                 {
-                    return await FileRevisionOnce(db, images, request, image, keepBlobs, excluded, id => picked = id, token);
+                    return await FileRevisionOnce(db, images, request, image, keepImages, excluded, id => picked = id, token);
                 }
                 catch (DbUpdateException e) when (picked is { } lost && IsBerthUniqueViolation(e))
                 {
@@ -672,7 +672,7 @@ public sealed partial class DrydockStore
         IDrydockImageStore images,
         DrydockRevisionRequest request,
         DrydockImage image,
-        int keepBlobs,
+        int keepImages,
         HashSet<int> excludedBerths,
         Action<int> berthPicked,
         CancellationToken token)
@@ -774,8 +774,8 @@ public sealed partial class DrydockStore
         await images.Put(db, new DrydockImageKey(request.ShipGuid, revision), image, token);
 
         // Prune images, never revisions. The revision we just filed is the one a retrieve reads, so it survives
-        // whatever keepBlobs says; the prune carries the floor and the pin exclusion.
-        await PruneImages(db, images, request.ShipGuid, revision, keepBlobs, token);
+        // whatever keepImages says; the prune carries the floor and the pin exclusion.
+        await PruneImages(db, images, request.ShipGuid, revision, keepImages, token);
 
         // An impound's row says which berth was vacated, who took the hull and from whom, and what
         // it cost; a store's says where the hull was seated and who put it there.
@@ -2182,7 +2182,7 @@ public sealed partial class DrydockStore
         Guid? actorUserId,
         int? roundId,
         string? reason,
-        int keepBlobs,
+        int keepImages,
         CancellationToken ct = default)
     {
         var images = _db.DrydockImages;
@@ -2235,7 +2235,7 @@ public sealed partial class DrydockStore
             await LockShipRow(db, shipGuid, token);
             await db.SaveChangesAsync(token);
             await images.Copy(db, sourceImage, new DrydockImageKey(shipGuid, next), token);
-            await PruneImages(db, images, shipGuid, next, keepBlobs, token);
+            await PruneImages(db, images, shipGuid, next, keepImages, token);
 
             AddAudit(db, DrydockAuditAction.RevisionPromoted, now,
                 shipGuid: shipGuid,
@@ -2364,7 +2364,7 @@ public sealed partial class DrydockStore
     /// <summary>
     /// The revisions of a ship that still hold an image, newest first, whether retention or a pin kept them. Revision
     /// numbers only, from the image store (<see cref="IDrydockImageStore.Revisions"/>), without reading an image. This is
-    /// the honest lower bound for a retrieve's fallback walk: counting down <c>keepBlobs</c> from the current revision
+    /// the honest lower bound for a retrieve's fallback walk: counting down <c>keepImages</c> from the current revision
     /// misses pinned images below the window, and walks revisions whose images are already gone. Empty for an unknown ship.
     /// </summary>
     public Task<List<int>> ListRetrievableRevisions(Guid shipGuid, CancellationToken ct = default)

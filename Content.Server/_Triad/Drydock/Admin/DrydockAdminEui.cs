@@ -262,7 +262,7 @@ public sealed partial class DrydockAdminEui : BaseEui
             case DrydockAdminPromoteRevisionMessage promote:
                 _ = Act(async () =>
                 {
-                    var keep = _cfg.GetCVar(TriadCCVars.DrydockKeepBlobs);
+                    var keep = _cfg.GetCVar(TriadCCVars.DrydockKeepImages);
                     var (outcome, revision) = await _store.TryPromoteRevision(promote.ShipGuid, promote.Revision, AdminId, RoundForAudit(), Clean(promote.Reason), keep);
                     return outcome == DrydockBerthResult.Success
                         ? $"Revision {promote.Revision} promoted as revision {revision}."

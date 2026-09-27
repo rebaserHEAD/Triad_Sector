@@ -227,7 +227,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             "Content.Shared._Common.Consent.PlayerConsentSettings",
             "Content.Shared.Alert.AlertKey",
 
-            // sector-level records that live off-grid and never ride a blob.
+            // sector-level records that live off-grid and never ride an image.
             "Content.Shared._NF.BountyContracts.BountyContract",
             "Content.Shared._NF.ShuttleRecords.ShuttleRecord",
             "Content.Shared.MassMedia.Systems.NewsArticle",

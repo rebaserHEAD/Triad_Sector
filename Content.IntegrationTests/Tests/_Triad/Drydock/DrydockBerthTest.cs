@@ -45,8 +45,8 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             var first = Guid.NewGuid();
             var second = Guid.NewGuid();
 
-            var filedFirst = await store.FileRevision(Request(first, owner, "First", ShipSizeClass.Cutter), Image(), keepBlobs: 2);
-            var filedSecond = await store.FileRevision(Request(second, owner, "Second", ShipSizeClass.Cutter), Image(), keepBlobs: 2);
+            var filedFirst = await store.FileRevision(Request(first, owner, "First", ShipSizeClass.Cutter), Image(), keepImages: 2);
+            var filedSecond = await store.FileRevision(Request(second, owner, "Second", ShipSizeClass.Cutter), Image(), keepImages: 2);
 
             Assert.Multiple(() =>
             {
@@ -63,12 +63,12 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             var slotsAfterVacate = await store.GetBerths(owner);
             Assert.That(slotsAfterVacate.Select(s => s.Occupant), Is.All.Null, "A vacated berth is empty as far as the owner can see.");
 
-            var secondAgain = await store.FileRevision(Request(second, owner, "Second", ShipSizeClass.Cutter), Image(), keepBlobs: 2);
+            var secondAgain = await store.FileRevision(Request(second, owner, "Second", ShipSizeClass.Cutter), Image(), keepImages: 2);
             Assert.That(secondAgain.BerthId, Is.EqualTo(cutterB), "A ship goes back to the slot it came out of when that slot is still free.");
 
             // A cruiser fits nothing here, but a corvette fits the frigate slot and nothing else.
             var corvette = Guid.NewGuid();
-            var filedCorvette = await store.FileRevision(Request(corvette, owner, "Corvette", ShipSizeClass.Corvette), Image(), keepBlobs: 2);
+            var filedCorvette = await store.FileRevision(Request(corvette, owner, "Corvette", ShipSizeClass.Corvette), Image(), keepImages: 2);
             Assert.That(filedCorvette.BerthId, Is.EqualTo(frigate));
 
             var slots = await store.GetBerths(owner);
@@ -89,11 +89,11 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             await store.AddBerth(owner, ShipSizeClass.Cutter, DrydockBerthKind.Granted, 0, null, null);
 
             var occupant = Guid.NewGuid();
-            await store.FileRevision(Request(occupant, owner, "Occupant", ShipSizeClass.Cutter), Image(), keepBlobs: 2);
+            await store.FileRevision(Request(occupant, owner, "Occupant", ShipSizeClass.Cutter), Image(), keepImages: 2);
 
             // The only slot is taken: no free berth at all.
             var crowded = Guid.NewGuid();
-            var refusedFull = await store.FileRevision(Request(crowded, owner, "Crowded", ShipSizeClass.Cutter), Image(), keepBlobs: 2);
+            var refusedFull = await store.FileRevision(Request(crowded, owner, "Crowded", ShipSizeClass.Cutter), Image(), keepImages: 2);
             Assert.That(refusedFull.Outcome, Is.EqualTo(DrydockBerthResult.NoBerth));
             Assert.That(await store.LoadCurrentImage(crowded), Is.Null, "A refused store files no hull row and no revision.");
 
@@ -101,7 +101,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             await store.VacateBerth(occupant);
 
             var big = Guid.NewGuid();
-            var refusedSize = await store.FileRevision(Request(big, owner, "Big", ShipSizeClass.Frigate), Image(), keepBlobs: 2);
+            var refusedSize = await store.FileRevision(Request(big, owner, "Big", ShipSizeClass.Frigate), Image(), keepImages: 2);
             Assert.That(refusedSize.Outcome, Is.EqualTo(DrydockBerthResult.BerthTooSmall),
                 "Too-small is its own answer because its fix is different from no-berth.");
             Assert.That(await store.LoadCurrentImage(big), Is.Null);
@@ -131,9 +131,9 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
 
             var seated = Guid.NewGuid();
             var other = Guid.NewGuid();
-            var filed = await store.FileRevision(Request(seated, owner, "Seated", ShipSizeClass.Cutter), Image(), keepBlobs: 2);
+            var filed = await store.FileRevision(Request(seated, owner, "Seated", ShipSizeClass.Cutter), Image(), keepImages: 2);
             Assert.That(filed.BerthId, Is.EqualTo(ownBerth));
-            await store.FileRevision(Request(other, owner, "Other", ShipSizeClass.Cutter), Image(), keepBlobs: 2);
+            await store.FileRevision(Request(other, owner, "Other", ShipSizeClass.Cutter), Image(), keepImages: 2);
 
             // Both faults below are provoked by writing the row directly, past every check in the
             // store, so what refuses can only be the schema. The database logs the failed command
@@ -184,7 +184,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             var buyersBerth = await store.AddBerth(buyer, ShipSizeClass.Corvette, DrydockBerthKind.Granted, 0, null, null);
 
             var ship = Guid.NewGuid();
-            await store.FileRevision(Request(ship, seller, "Sold", ShipSizeClass.Cutter), Image(), keepBlobs: 2);
+            await store.FileRevision(Request(ship, seller, "Sold", ShipSizeClass.Cutter), Image(), keepImages: 2);
 
             // Nowhere to put it on the recipient's side is the same refusal a store gives, and it
             // comes at the offer, before anyone has waited thirty minutes to hear it.
@@ -257,7 +257,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             var bought = await store.AddBerth(owner, ShipSizeClass.Cutter, DrydockBerthKind.Purchased, 500, owner, null);
 
             var ship = Guid.NewGuid();
-            var filed = await store.FileRevision(Request(ship, owner, "Parked", ShipSizeClass.Cutter), Image(), keepBlobs: 2);
+            var filed = await store.FileRevision(Request(ship, owner, "Parked", ShipSizeClass.Cutter), Image(), keepImages: 2);
             Assert.That(filed.BerthId, Is.EqualTo(granted), "Lowest-numbered fitting slot first.");
 
             var (occupied, _) = await store.TryRemoveBerth(granted, owner, DrydockAuditAction.BerthSale, owner, null);
@@ -308,7 +308,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             var cutterSlot = await store.AddBerth(owner, ShipSizeClass.Cutter, DrydockBerthKind.Granted, 0, null, null);
 
             var ship = Guid.NewGuid();
-            var filed = await store.FileRevision(Request(ship, owner, "Lost", ShipSizeClass.Corvette), Image(), keepBlobs: 2);
+            var filed = await store.FileRevision(Request(ship, owner, "Lost", ShipSizeClass.Corvette), Image(), keepImages: 2);
             Assert.That(filed.BerthId, Is.EqualTo(corvetteSlot));
 
             Assert.That(await store.TryRestoreShip(ship, corvetteSlot, admin, null, "already home"), Is.EqualTo(DrydockBerthResult.WrongState),

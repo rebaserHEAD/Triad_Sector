@@ -200,7 +200,7 @@ public sealed class DrydockShip
 
     /// <summary>
     /// Display cache for the stored-ship list, refreshed on every store so the list can be drawn
-    /// without materializing a blob.
+    /// without materializing an image.
     /// </summary>
     public string ShipName { get; set; } = default!;
 
@@ -358,7 +358,7 @@ public enum DrydockShipState
 
     /// <summary>
     /// Scrapped by its owner for credits, and the berth is freed. Terminal, and pruning only runs
-    /// inside a store or a promote, so a terminal ship's remaining blobs are frozen rather than
+    /// inside a store or a promote, so a terminal ship's remaining images are frozen rather than
     /// decaying: an admin can undo a sale made in anger for as long as the row exists.
     /// </summary>
     Sold = 4,
@@ -382,7 +382,7 @@ public enum DrydockShipState
 
 /// <summary>
 /// One row per revision, kept indefinitely. This is the hull's history, and it deliberately does
-/// not require a blob to exist: pruning takes blobs, never history.
+/// not require an image to exist: pruning takes images, never history.
 /// </summary>
 public sealed class DrydockRevision
 {

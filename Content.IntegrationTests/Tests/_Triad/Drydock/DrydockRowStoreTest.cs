@@ -52,7 +52,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             var image = await StoreSmallGrid(pair, gridName: "Kestrel Ærø");
             var (ship, owner) = await NewShip(db, store);
 
-            var filed = await store.FileRevision(Request(ship, owner, image), image, keepBlobs: 2);
+            var filed = await store.FileRevision(Request(ship, owner, image), image, keepImages: 2);
             var loaded = await store.LoadCurrentImage(ship);
             Assert.That(loaded, Is.Not.Null);
 
@@ -94,7 +94,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             var image = await StoreSmallGrid(pair);
             var (ship, owner) = await NewShip(db, store);
             for (var i = 0; i < 4; i++)
-                await store.FileRevision(Request(ship, owner, image), image, keepBlobs: 0);
+                await store.FileRevision(Request(ship, owner, image), image, keepImages: 0);
 
             await Execute(db, "DELETE FROM drydock_entity WHERE image_id = @id AND entity_id = (SELECT max(entity_id) FROM drydock_entity WHERE image_id = @id)",
                 await ImageIdOf(db, ship, 2));
@@ -131,7 +131,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
 
             var image = await StoreSmallGrid(pair);
             var (ship, owner) = await NewShip(db, store);
-            await store.FileRevision(Request(ship, owner, image), image, keepBlobs: 0);
+            await store.FileRevision(Request(ship, owner, image), image, keepImages: 0);
             var rows = DrydockPostgresImageStore.EntityRows(image);
 
             async Task<(long Inside, string How, long After)> Copy(bool complete, int revision)
@@ -222,12 +222,12 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
 
             var image = await StoreSmallGrid(pair);
             var (ship, owner) = await NewShip(db, store);
-            await store.FileRevision(Request(ship, owner, image), image, keepBlobs: 2);
+            await store.FileRevision(Request(ship, owner, image), image, keepImages: 2);
             var first = await ImageIdOf(db, ship, 1);
             var before = await EntityRows(db, first);
 
-            await store.FileRevision(Request(ship, owner, image), image, keepBlobs: 2);
-            await store.FileRevision(Request(ship, owner, image), image, keepBlobs: 2);
+            await store.FileRevision(Request(ship, owner, image), image, keepImages: 2);
+            await store.FileRevision(Request(ship, owner, image), image, keepImages: 2);
 
             var after = await EntityRows(db, first);
             var revisions = await db.RunTriadDbCommand(async (context, token) =>
@@ -259,8 +259,8 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
 
             var image = await StoreSmallGrid(pair);
             var (ship, owner) = await NewShip(db, store);
-            await store.FileRevision(Request(ship, owner, image), image, keepBlobs: 0);
-            await store.FileRevision(Request(ship, owner, image), image, keepBlobs: 0);
+            await store.FileRevision(Request(ship, owner, image), image, keepImages: 0);
+            await store.FileRevision(Request(ship, owner, image), image, keepImages: 0);
 
             var one = new DrydockImageKey(ship, 1);
             var copied = new DrydockImageKey(ship, 3);
@@ -324,7 +324,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
 
             var image = await StoreSmallGrid(pair);
             var (ship, owner) = await NewShip(db, store);
-            await store.FileRevision(Request(ship, owner, image), image, keepBlobs: 0);
+            await store.FileRevision(Request(ship, owner, image), image, keepImages: 0);
 
             var result = await db.RunTriadDbCommand(async (context, token) => (
                 Filed: await images.Preflight(context, new DrydockImageKey(ship, 1), token),

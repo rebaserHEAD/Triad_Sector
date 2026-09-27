@@ -487,7 +487,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                     SizeBytes = fixture.Revision.SizeBytes,
                     AppraisedValue = fixture.Revision.AppraisedValue,
                     Manifest = fixture.Revision.Manifest,
-                }, image, keepBlobs: 0);
+                }, image, keepImages: 0);
 
                 if (filed.Outcome != DrydockBerthResult.Success)
                 {

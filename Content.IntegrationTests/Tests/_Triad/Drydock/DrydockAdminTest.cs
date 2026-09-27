@@ -38,10 +38,10 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             var good = DrydockTestHelpers.SeedImage(1);
             var bad = DrydockTestHelpers.SeedImage(2);
 
-            await store.FileRevision(Request(ship, owner, "Phoenix"), good, keepBlobs: 3);
-            await store.FileRevision(Request(ship, owner, "Phoenix"), bad, keepBlobs: 3);
+            await store.FileRevision(Request(ship, owner, "Phoenix"), good, keepImages: 3);
+            await store.FileRevision(Request(ship, owner, "Phoenix"), bad, keepImages: 3);
 
-            var (outcome, promoted) = await store.TryPromoteRevision(ship, 1, admin, null, "revision 2 is corrupt", keepBlobs: 3);
+            var (outcome, promoted) = await store.TryPromoteRevision(ship, 1, admin, null, "revision 2 is corrupt", keepImages: 3);
             Assert.Multiple(() =>
             {
                 Assert.That(outcome, Is.EqualTo(DrydockBerthResult.Success));
@@ -61,7 +61,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             var detail = await store.GetShipDetail(ship);
             Assert.That(detail!.Revisions.Select(r => r.Revision), Is.EqualTo(new[] { 3, 2, 1 }), "History is complete and newest first.");
 
-            var (pruned, _) = await store.TryPromoteRevision(ship, 99, admin, null, "no such revision", keepBlobs: 3);
+            var (pruned, _) = await store.TryPromoteRevision(ship, 99, admin, null, "no such revision", keepImages: 3);
             Assert.That(pruned, Is.EqualTo(DrydockBerthResult.NotFound));
 
             var audit = await store.GetAudit(ship);
@@ -95,7 +95,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             var berth = await store.AddBerth(owner, ShipSizeClass.Cutter, DrydockBerthKind.Granted, 0, null, null);
 
             var ship = Guid.NewGuid();
-            await store.FileRevision(Request(ship, owner, "Regretted"), DrydockTestHelpers.SeedImage(), keepBlobs: 3);
+            await store.FileRevision(Request(ship, owner, "Regretted"), DrydockTestHelpers.SeedImage(), keepImages: 3);
 
             var (sold, soldName) = await store.TrySellShip(ship, owner, price: 800, appraisal: 1000, roundId: null);
             Assert.Multiple(() =>
@@ -137,7 +137,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             var berth = await store.AddBerth(owner, ShipSizeClass.Cutter, DrydockBerthKind.Granted, 0, null, null);
 
             var ship = Guid.NewGuid();
-            await store.FileRevision(Request(ship, owner, "Doomed"), DrydockTestHelpers.SeedImage(), keepBlobs: 3);
+            await store.FileRevision(Request(ship, owner, "Doomed"), DrydockTestHelpers.SeedImage(), keepImages: 3);
 
             Assert.That(await store.TryDeleteShip(ship, admin, null, "abandoned by owner"), Is.EqualTo(DrydockBerthResult.Success));
             Assert.That(await store.LoadCurrentImage(ship), Is.Null, "The record and its revisions are gone.");
@@ -175,8 +175,8 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
 
             var home = Guid.NewGuid();
             var lost = Guid.NewGuid();
-            await store.FileRevision(Request(home, owner, "Home"), DrydockTestHelpers.SeedImage(), keepBlobs: 3);
-            await store.FileRevision(Request(lost, owner, "Lost"), DrydockTestHelpers.SeedImage(), keepBlobs: 3);
+            await store.FileRevision(Request(home, owner, "Home"), DrydockTestHelpers.SeedImage(), keepImages: 3);
+            await store.FileRevision(Request(lost, owner, "Lost"), DrydockTestHelpers.SeedImage(), keepImages: 3);
 
             // Out with no round to point at: that is the stranded shape a past round leaves behind.
             await store.TrySetState(lost, DrydockShipState.Stored, DrydockShipState.CheckedOut, DrydockAuditAction.Retrieve, owner, null, null);
@@ -224,7 +224,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             await store.AddBerth(recipient, ShipSizeClass.Cutter, DrydockBerthKind.Granted, 0, null, null);
 
             var ship = Guid.NewGuid();
-            await store.FileRevision(Request(ship, owner, "Contested"), DrydockTestHelpers.SeedImage(), keepBlobs: 3);
+            await store.FileRevision(Request(ship, owner, "Contested"), DrydockTestHelpers.SeedImage(), keepImages: 3);
 
             var (offered, transfer) = await store.TryOfferTransfer(ship, owner, recipient, TimeSpan.FromMinutes(30), null);
             Assert.Multiple(() =>
@@ -284,7 +284,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             var newName = $"Vagrant{token}";
 
             var ship = Guid.NewGuid();
-            await store.FileRevision(Request(ship, owner, oldName), DrydockTestHelpers.SeedImage(), keepBlobs: 3);
+            await store.FileRevision(Request(ship, owner, oldName), DrydockTestHelpers.SeedImage(), keepImages: 3);
             Assert.That(await store.TryRenameShip(ship, owner, newName, null), Is.EqualTo(DrydockBerthResult.Success));
 
             var byOldName = await store.QueryShips(Search(oldName), 0, 50);
@@ -332,8 +332,8 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
 
             var ship = Guid.NewGuid();
             var other = Guid.NewGuid();
-            await store.FileRevision(Request(ship, owner, "Kestrel"), DrydockTestHelpers.SeedImage(), keepBlobs: 3);
-            await store.FileRevision(Request(other, stranger, "Harrier"), DrydockTestHelpers.SeedImage(), keepBlobs: 3);
+            await store.FileRevision(Request(ship, owner, "Kestrel"), DrydockTestHelpers.SeedImage(), keepImages: 3);
+            await store.FileRevision(Request(other, stranger, "Harrier"), DrydockTestHelpers.SeedImage(), keepImages: 3);
 
             var bySelected = await store.QueryShips(Search($"voss{token}"), 0, 50);
             var byAlt = await store.QueryShips(Search($"VARGA{token}"), 0, 50);
