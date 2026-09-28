@@ -13,16 +13,16 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
 {
     /// <summary>
     /// <see cref="DrydockStore"/>'s grid-image surface on a pooled SQLite pair, where the images live in the memory store:
-    /// a filed image reads back, keep-N and the floor prune images and never revisions, a pin protects an image and is
-    /// refused once the image is gone, a promote copies an image forward, and the admin detail and the retrieve's fallback
-    /// list see image revisions. The image is a stand-in; the store does not read inside one.
+    /// a filed image reads back, keep-N and the floor prune images and never revisions, a promote copies an image forward
+    /// and is refused once the image is gone, and the admin detail and the retrieve's fallback list see image revisions.
+    /// The image is a stand-in; the store does not read inside one.
     /// </summary>
     [TestFixture]
     [TestOf(typeof(DrydockStore))]
     public sealed class DrydockImageFilingTest
     {
         [Test]
-        public async Task ImagesAreFiledPrunedPinnedAndPromoted()
+        public async Task ImagesAreFiledPrunedAndPromoted()
         {
             await using var pair = await PoolManager.GetServerClient();
             var server = pair.Server;
@@ -69,18 +69,13 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                 Assert.That(detail.RevisionsWithImage, Is.EquivalentTo(new[] { 2, 3 }), "The panel marks the revisions that hold an image.");
             });
 
-            var pinPruned = await store.TryPinRevision(ship, 1, owner, null, null);
-            var pinKept = await store.TryPinRevision(ship, 2, owner, null, null);
-            Assert.Multiple(() =>
-            {
-                Assert.That(pinPruned, Is.EqualTo(DrydockPinResult.NotFound), "Nothing left to protect.");
-                Assert.That(pinKept, Is.EqualTo(DrydockPinResult.Success));
-            });
-
             await store.FileRevision(Request(ship, owner), images[3], keepImages: 2);
-            Assert.That(await store.ListRetrievableRevisions(ship), Is.EqualTo(new[] { 4, 3, 2 }), "The pinned image survives outside the window.");
+            Assert.That(await store.ListRetrievableRevisions(ship), Is.EqualTo(new[] { 4, 3 }), "Keep two again: revision 2's image is pruned.");
 
-            var (outcome, promoted) = await store.TryPromoteRevision(ship, 2, owner, null, null, keepImages: 2);
+            var (prunedOutcome, _) = await store.TryPromoteRevision(ship, 1, owner, null, null, keepImages: 2);
+            Assert.That(prunedOutcome, Is.EqualTo(DrydockBerthResult.NotFound), "A revision whose image is pruned has nothing to promote.");
+
+            var (outcome, promoted) = await store.TryPromoteRevision(ship, 3, owner, null, null, keepImages: 2);
             Assert.That(outcome, Is.EqualTo(DrydockBerthResult.Success));
 
             var current = await store.LoadCurrentImage(ship);
@@ -88,8 +83,8 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             Assert.Multiple(() =>
             {
                 Assert.That(current!.Revision.Revision, Is.EqualTo(promoted));
-                Assert.That(current.Image, Is.SameAs(images[1]), "A promote copies the chosen image forward.");
-                Assert.That(afterPromote, Is.EqualTo(new[] { promoted, 4, 2 }), "Revision 3 falls out; the pin still holds 2.");
+                Assert.That(current.Image, Is.SameAs(images[2]), "A promote copies the chosen image forward.");
+                Assert.That(afterPromote, Is.EqualTo(new[] { promoted, 4 }), "Revision 3 falls out of the window; its copy is current.");
             });
 
             await pair.CleanReturnAsync();

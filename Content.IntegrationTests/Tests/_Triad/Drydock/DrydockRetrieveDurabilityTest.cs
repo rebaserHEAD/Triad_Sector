@@ -129,7 +129,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                 Assert.That(driftRows.Single().Revision, Is.EqualTo(revision), "The current revision is the one refused.");
                 Assert.That(driftRows.Single().ActorUserId, Is.EqualTo(owner));
                 Assert.That(driftRows.Single().Reason, Does.Contain(PhantomProtoId), "The row names the id that did not resolve.");
-                Assert.That(audit.Any(a => a.Action is DrydockAuditAction.Fallback or DrydockAuditAction.RevisionPinned), Is.False,
+                Assert.That(audit.Any(a => a.Action == DrydockAuditAction.Fallback), Is.False,
                     "A drifted current image is never answered with an older one.");
                 Assert.That(DrydockMetrics.DriftRefusals.Value, Is.GreaterThan(refusalsBefore));
             });
@@ -282,8 +282,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
 
         /// <summary>
         /// A current image that passes the drift gate and still will not load falls back to the
-        /// revision before it, with a fallback row naming the revision that came back and no revision
-        /// pinned.
+        /// revision before it, with a fallback row naming the revision that came back.
         /// </summary>
         [Test]
         public async Task ACurrentImageThatWillNotLoadFallsBackToTheOlderOne()
@@ -308,16 +307,12 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             var retrieved = await DrydockTestHelpers.Quietly(pair, () => DrydockTestHelpers.RunOnServer(pair, () => drydock.TryRetrieveShip(ship, owner, station, null)));
             await pair.RunTicksSync(5);
 
-            var pinned = await PinnedRevisions(db, ship);
             var audit = await store.GetAudit(ship);
             var fallback = audit.Where(a => a.Action == DrydockAuditAction.Fallback).ToList();
-            var pinRows = audit.Where(a => a.Action == DrydockAuditAction.RevisionPinned).ToList();
 
             Assert.Multiple(() =>
             {
                 Assert.That(retrieved.Result, Is.EqualTo(DrydockRetrieveResult.Success), "The older revision is a ship.");
-                Assert.That(pinned, Is.Empty, "The retrieve pins nothing.");
-                Assert.That(pinRows, Is.Empty, "The retrieve pins nothing.");
                 Assert.That(fallback, Has.Count.EqualTo(1));
                 Assert.That(fallback.Single().Revision, Is.EqualTo(older), "The fallback row names the revision that came back.");
                 Assert.That(DrydockMetrics.RetrieveFallbacks.Value, Is.GreaterThan(fallbacksBefore));
@@ -382,7 +377,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
         /// <summary>
         /// An older image reached only because the current one will not load, and refused for drift,
         /// is stepped past rather than ending the walk; when nothing older loads either, the refusal
-        /// names drift, not an unreadable ship, and no revision is pinned.
+        /// names drift, not an unreadable ship.
         /// </summary>
         [Test]
         public async Task ALadderThatRunsOutOnADriftedOlderImageRefusesForDrift()
@@ -425,15 +420,13 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                 Assert.That(driftRows.Single().Reason, Does.Contain(PhantomProtoId));
             });
 
-            Assert.That(await PinnedRevisions(db, ship), Is.Empty, "The retrieve pins nothing.");
-
             await pair.CleanReturnAsync();
         }
 
         /// <summary>
         /// Three revisions whose images all fail in a restore handler, after the whole-tick core: the walk stops at the second
-        /// failed load, never loads the third, and refuses with one row naming both, the ship stored, no copy left and no
-        /// revision pinned. Controls: all three revisions hold images, and the probe threw once per load.
+        /// failed load, never loads the third, and refuses with one row naming both, the ship stored and no copy left.
+        /// Controls: all three revisions hold images, and the probe threw once per load.
         /// </summary>
         [Test]
         public async Task TheWalkStopsAtTheSecondFailedLoad()
@@ -470,7 +463,6 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             }
 
             var header = await store.GetShipHeader(ship);
-            var pinned = await PinnedRevisions(db, ship);
             var refusals = (await store.GetAudit(ship)).Where(a => a.Action == DrydockAuditAction.LoadRefused).ToList();
             var copies = -1;
             await server.WaitPost(() => copies = CountLiveCopies(entMan, ship));
@@ -484,7 +476,6 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                 Assert.That(refusals.Single().Revision, Is.EqualTo(newest[0]), "The row sits on the newer of the two.");
                 Assert.That(refusals.Single().Reason, Does.Contain($"revisions {newest[0]} and {newest[1]}"), "The row names both.");
                 Assert.That(refusals.Single().ActorUserId, Is.EqualTo(owner), "The retrieving owner is the actor.");
-                Assert.That(pinned, Is.Empty, "The retrieve pins nothing.");
                 Assert.That(header!.State, Is.EqualTo(DrydockShipState.Stored), "The claim went back; the ship is still stored.");
                 Assert.That(copies, Is.Zero, "No copy of the hull is left.");
             });
@@ -597,15 +588,6 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             {
                 Entities = image.Entities.Select(e => e.Prototype == from ? e with { Prototype = to } : e).ToList(),
             };
-        }
-
-        private static Task<int[]> PinnedRevisions(IServerDbManager db, Guid ship)
-        {
-            return db.RunTriadDbCommand(async (context, token) => await context.DrydockRevision.AsNoTracking()
-                .Where(r => r.ShipGuid == ship && r.Pinned)
-                .Select(r => r.Revision)
-                .OrderBy(r => r)
-                .ToArrayAsync(token), CancellationToken.None);
         }
     }
 

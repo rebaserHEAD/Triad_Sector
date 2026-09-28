@@ -1243,10 +1243,6 @@ namespace Content.Server.Database.Migrations.Postgres
                         .HasColumnType("text")
                         .HasColumnName("manifest");
 
-                    b.Property<bool>("Pinned")
-                        .HasColumnType("boolean")
-                        .HasColumnName("pinned");
-
                     b.Property<byte[]>("ProtoFingerprint")
                         .IsRequired()
                         .HasColumnType("bytea")

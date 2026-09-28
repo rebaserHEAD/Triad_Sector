@@ -279,8 +279,8 @@ public sealed partial class DrydockSystem
             if (current == null)
                 return new DrydockRetrieveOutcome(DrydockRetrieve.Refused(DrydockRetrieveResult.NotFound));
 
-            // The ladder walks the images that exist, newest first, so a pinned image below the keep-N
-            // window stays reachable and a pruned revision is never asked for.
+            // The ladder walks the images that exist, newest first, so a pruned revision is never asked
+            // for (DrydockStore.ListRetrievableRevisions).
             var revisions = await slice.Await(_store.ListRetrievableRevisions(ctx.ShipId));
             GuardRetrieveResume(ctx);
 

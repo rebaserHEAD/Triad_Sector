@@ -29,8 +29,8 @@ public sealed record DrydockImagePreflight(IReadOnlyList<string> PrototypeIds, I
 /// has open on that context, and commits or rolls back with it. The caller opens the transaction, and the caller
 /// commits it; the store does neither. A write with no transaction open is refused by the PostgreSQL store.</item>
 /// <item>The ship row is taken first (<c>DrydockStore.LockShipRow</c>), before any revision row or image is written,
-/// because a pin and a prune of the same ship take it in that order and only one order can hold without a
-/// deadlock.</item>
+/// because every writer of one ship's revisions and images takes it in that order and only one order can hold
+/// without a deadlock.</item>
 /// <item>A write that names a revision (<see cref="Put"/>, the target of <see cref="Copy"/>) needs that revision row
 /// flushed in the same transaction first, with <c>SaveChangesAsync</c>: the image row refers to it by a foreign key,
 /// and an unflushed row is not there to refer to.</item>
@@ -42,8 +42,8 @@ public sealed record DrydockImagePreflight(IReadOnlyList<string> PrototypeIds, I
 /// </list>
 ///
 /// <para><b>Retention lives in <see cref="DrydockStore"/>, not here.</b> Which images a prune deletes depends on
-/// keep-N, the floor and the pins, and the pins are revision rows, so <c>DrydockStore.PruneImages</c> decides and
-/// hands this store one set of revisions to <see cref="Delete"/>.</para>
+/// keep-N, which the caller passes, and the floor, so <c>DrydockStore.PruneImages</c> decides and hands this store one
+/// set of revisions to <see cref="Delete"/>.</para>
 ///
 /// <para><b>Under SQLite the store is not transactional</b>: <see cref="DrydockMemoryImageStore"/> ignores the context,
 /// and what it writes stays whether the transaction commits or not. Its own summary says where that matters.</para>

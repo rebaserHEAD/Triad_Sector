@@ -401,15 +401,6 @@ public sealed class DrydockRevision
     public int? DerivedFromRevision { get; set; }
 
     /// <summary>
-    /// Excluded from image pruning while set: keep-N and the two-image floor both step around a pinned
-    /// revision's image, however far behind the current revision it falls. Set and cleared only
-    /// through <c>DrydockStore.TryPinRevision</c> and <c>TryUnpinRevision</c>, each of which writes a
-    /// timeline row. A pin protects the image, never a promise that it still loads: content can
-    /// have moved since.
-    /// </summary>
-    public bool Pinned { get; set; }
-
-    /// <summary>
     /// Who stored it, null for the system. Owners change hands, so this is what makes a year-old
     /// history still read correctly after a transfer.
     /// </summary>
@@ -517,6 +508,11 @@ public sealed class DrydockAudit
     public DateTime CreatedAt { get; set; }
 }
 
+/// <summary>
+/// What a timeline row records. Stored as its number, so every value is explicit, and a value that goes leaves its
+/// number unused for good: a stored number is never reinterpreted, the rule the drydock's retired keys follow for a
+/// stored key.
+/// </summary>
 public enum DrydockAuditAction
 {
     Store = 0,
@@ -627,18 +623,6 @@ public enum DrydockAuditAction
     /// document a retrieve reads, never where the hull is.
     /// </summary>
     RevisionPromoted = 32,
-
-    /// <summary>
-    /// A revision's document was excluded from pruning. The revision is the one pinned, the actor
-    /// is whoever pinned it (null for the system), and the reason says why.
-    /// </summary>
-    RevisionPinned = 33,
-
-    /// <summary>
-    /// A pin was cleared, typically once the document has been judged unrecoverable. The next store
-    /// or promote prunes the document if keep-N and the floor no longer cover it.
-    /// </summary>
-    RevisionUnpinned = 34,
 
     /// <summary>
     /// Written by the retrieve's drift gate (<c>DrydockSystem.RefuseForDrift</c>): a retrieve refused

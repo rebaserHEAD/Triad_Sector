@@ -1073,10 +1073,6 @@ namespace Content.Server.Database.Migrations.Sqlite
                         .HasColumnType("TEXT")
                         .HasColumnName("manifest");
 
-                    b.Property<bool>("Pinned")
-                        .HasColumnType("INTEGER")
-                        .HasColumnName("pinned");
-
                     b.Property<byte[]>("ProtoFingerprint")
                         .IsRequired()
                         .HasColumnType("BLOB")

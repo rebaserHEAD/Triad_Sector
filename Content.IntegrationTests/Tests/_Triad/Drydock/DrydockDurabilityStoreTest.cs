@@ -12,105 +12,13 @@ using Content.Shared._Triad.ShipSize;
 namespace Content.IntegrationTests.Tests._Triad.Drydock
 {
     /// <summary>
-    /// The durability layer's store half against a real database: what a pin protects from pruning,
-    /// the two-document floor under keep-N, and what a promote carries. Every ship and player is
-    /// freshly minted, so assertions are on this test's own ids and never on table-wide counts.
+    /// The durability layer's store half against a real database: the two-document floor under
+    /// keep-N, and what a promote carries. Every ship and player is freshly minted, so assertions are
+    /// on this test's own ids and never on table-wide counts.
     /// </summary>
     [TestFixture]
     public sealed class DrydockDurabilityStoreTest
     {
-        /// <summary>
-        /// A pinned document survives any number of stores past keep-N, the pin and its clearing each
-        /// write one timeline row, and once cleared the next store prunes it. A sibling ship filed the
-        /// same way without a pin is the control that pruning ran at all.
-        /// </summary>
-        [Test]
-        public async Task APinnedDocumentOutlivesKeepNUntilItIsUnpinned()
-        {
-            await using var pair = await PoolManager.GetServerClient();
-            var store = pair.Server.ResolveDependency<DrydockStore>();
-            var db = pair.Server.ResolveDependency<IServerDbManager>();
-
-            var owner = Guid.NewGuid();
-            var admin = Guid.NewGuid();
-            await DrydockTestHelpers.InsertPlayer(db, owner);
-            await store.AddBerth(owner, ShipSizeClass.Cutter, DrydockBerthKind.Granted, 0, null, null);
-            await store.AddBerth(owner, ShipSizeClass.Cutter, DrydockBerthKind.Granted, 0, null, null);
-
-            var pinnedShip = Guid.NewGuid();
-            var control = Guid.NewGuid();
-            await store.FileRevision(Request(pinnedShip, owner, "Kestrel"), Image(1), keepImages: 2);
-            await store.FileRevision(Request(control, owner, "Harrier"), Image(1), keepImages: 2);
-
-            Assert.That(await store.TryPinRevision(pinnedShip, 1, admin, null, "stepped past by a fallback"), Is.EqualTo(DrydockPinResult.Success));
-            Assert.That(await store.TryPinRevision(pinnedShip, 1, admin, null, "again"), Is.EqualTo(DrydockPinResult.AlreadyInState),
-                "Pinning a pinned revision is not a change and must not log one.");
-
-            var pinRows = (await store.GetAudit(pinnedShip)).Where(a => a.Action == DrydockAuditAction.RevisionPinned).ToList();
-            Assert.That(pinRows, Has.Count.EqualTo(1));
-            Assert.Multiple(() =>
-            {
-                Assert.That(pinRows[0].Revision, Is.EqualTo(1));
-                Assert.That(pinRows[0].ActorUserId, Is.EqualTo(admin));
-                Assert.That(pinRows[0].SubjectUserId, Is.EqualTo(owner));
-                Assert.That(pinRows[0].ShipName, Is.EqualTo("Kestrel"));
-                Assert.That(pinRows[0].Reason, Is.EqualTo("pinned revision 1: stepped past by a fallback"));
-            });
-
-            // Five stores past it with keep-2: revisions 2 to 6.
-            for (var i = 2; i <= 6; i++)
-            {
-                await store.FileRevision(Request(pinnedShip, owner, "Kestrel"), Image(i), keepImages: 2);
-                await store.FileRevision(Request(control, owner, "Harrier"), Image(i), keepImages: 2);
-            }
-
-            var pinnedImages = await ImageRevisions(db, pinnedShip);
-            var controlImages = await ImageRevisions(db, control);
-            var retrievable = await store.ListRetrievableRevisions(pinnedShip);
-            Assert.Multiple(() =>
-            {
-                Assert.That(pinnedImages, Is.EqualTo(new[] { 1, 5, 6 }),
-                    "Keep-N took everything between the pin and the window, and never the pin.");
-                Assert.That(controlImages, Is.EqualTo(new[] { 5, 6 }),
-                    "Control: the same five stores without a pin prune revision 1.");
-                Assert.That(retrievable, Is.EqualTo(new[] { 6, 5, 1 }),
-                    "What a retrieve can fall back to is every document that exists, newest first, the pin included.");
-            });
-
-            var pinnedLoad = await store.LoadRevisionImage(pinnedShip, 1);
-            Assert.That(pinnedLoad, Is.Not.Null);
-            Assert.That(DrydockImageComparer.Differences(Image(1), pinnedLoad!.Image), Is.Empty, "The pinned image is intact, not just present.");
-
-            Assert.That(await store.TryUnpinRevision(pinnedShip, 1, admin, null, "re-baked"), Is.EqualTo(DrydockPinResult.Success));
-            Assert.That(await store.TryUnpinRevision(pinnedShip, 1, admin, null, "again"), Is.EqualTo(DrydockPinResult.AlreadyInState));
-
-            var unpinRows = (await store.GetAudit(pinnedShip)).Where(a => a.Action == DrydockAuditAction.RevisionUnpinned).ToList();
-            Assert.That(unpinRows, Has.Count.EqualTo(1));
-            Assert.Multiple(() =>
-            {
-                Assert.That(unpinRows[0].Revision, Is.EqualTo(1));
-                Assert.That(unpinRows[0].ActorUserId, Is.EqualTo(admin));
-                Assert.That(unpinRows[0].Reason, Is.EqualTo("unpinned revision 1: re-baked"));
-            });
-
-            Assert.That(await ImageRevisions(db, pinnedShip), Is.EqualTo(new[] { 1, 5, 6 }), "Unpinning deletes nothing by itself.");
-
-            await store.FileRevision(Request(pinnedShip, owner, "Kestrel"), Image(7), keepImages: 2);
-            Assert.That(await ImageRevisions(db, pinnedShip), Is.EqualTo(new[] { 6, 7 }), "The next store after the unpin prunes it.");
-
-            // The refusals, none of which writes a row.
-            Assert.That(await store.TryPinRevision(pinnedShip, 1, admin, null, null), Is.EqualTo(DrydockPinResult.NotFound),
-                "A revision whose document is gone has nothing left to protect.");
-            Assert.That(await store.TryPinRevision(pinnedShip, 99, admin, null, null), Is.EqualTo(DrydockPinResult.NotFound));
-            Assert.That(await store.TryPinRevision(Guid.NewGuid(), 1, admin, null, null), Is.EqualTo(DrydockPinResult.NotFound));
-            Assert.That(await store.TryUnpinRevision(pinnedShip, 99, admin, null, null), Is.EqualTo(DrydockPinResult.NotFound));
-
-            Assert.That((await store.GetAudit(pinnedShip)).Count(a => a.Action is DrydockAuditAction.RevisionPinned or DrydockAuditAction.RevisionUnpinned),
-                Is.EqualTo(2), "One pin and one unpin, and no row for any refusal.");
-
-            await pair.CleanReturnAsync();
-        }
-
         /// <summary>
         /// Keep one is floored at two: the current document and one step back for the retrieve ladder.
         /// </summary>

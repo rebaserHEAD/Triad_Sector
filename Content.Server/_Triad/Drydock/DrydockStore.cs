@@ -82,13 +82,13 @@ public sealed partial class DrydockStore
 
     /// <summary>
     /// The fewest images a prune ever leaves a ship holding, counting the one just filed: the current revision and one
-    /// step back for the retrieve ladder to fall to. A floor rather than a pin, because it promises only that a second
-    /// image exists, not that it still loads.
+    /// step back for the retrieve ladder to fall to. It promises only that a second image exists, not that it still
+    /// loads.
     /// </summary>
     private const int MinimumKeptImages = 2;
 
     /// <summary>
-    /// Deletes this ship's images that fall outside retention, never revisions. Three rules, all of which have to agree
+    /// Deletes this ship's images that fall outside retention, never revisions. Two rules, both of which have to agree
     /// before an image goes:
     ///
     /// <list type="bullet">
@@ -96,8 +96,6 @@ public sealed partial class DrydockStore
     /// one just filed or promoted, which is always the newest.</item>
     /// <item>The floor: never fewer than <see cref="MinimumKeptImages"/>, so <paramref name="keepImages"/> of 1 behaves
     /// exactly as 2, and a ship holding only its new image prunes nothing.</item>
-    /// <item>Pins: a <see cref="DrydockRevision.Pinned"/> revision's image is never deleted, however far outside the
-    /// window it falls. A pinned image inside the window still counts toward it.</item>
     /// </list>
     ///
     /// <para>Zero or less prunes nothing, rather than keeping nothing: of the two readings, only this one costs disk when
@@ -105,13 +103,11 @@ public sealed partial class DrydockStore
     ///
     /// <para>The window is counted over the images that exist below <paramref name="keptRevision"/>, with one place
     /// reserved for it, rather than by revision arithmetic, so a gap in a ship's images (a prune under a smaller window)
-    /// cannot pull the edge past the only one left. The rule lives here because the pins are revision rows; the image
-    /// store is handed only the revisions to delete, as one set.</para>
+    /// cannot pull the edge past the only one left. The image store is handed only the revisions to delete, as one
+    /// set.</para>
     ///
-    /// <para>Takes the ship row first (<see cref="LockShipRow"/>), the same row a pin takes before it moves the flag, so
-    /// on PostgreSQL a pin and a prune of the same ship serialize: a pin committed first is seen by the prune, and a pin
-    /// arriving second waits for this commit and then sees what it left, refusing an image it deleted rather than
-    /// reporting success on it. Reasoned from read-committed row locking, not exercised by a test.</para>
+    /// <para>Takes the ship row first (<see cref="LockShipRow"/>), so a prune keeps the one lock order every writer of a
+    /// ship's revisions and images follows.</para>
     /// </summary>
     private static async Task PruneImages(ServerDbContext db, IDrydockImageStore images, Guid shipGuid, int keptRevision, int keepImages, CancellationToken token)
     {
@@ -129,22 +125,17 @@ public sealed partial class DrydockStore
             return;
 
         var edge = below[keep - 2];
-        var pinned = await db.DrydockRevision.AsNoTracking()
-            .Where(r => r.ShipGuid == shipGuid && r.Pinned)
-            .Select(r => r.Revision)
-            .ToListAsync(token);
-
-        var doomed = below.Where(r => r < edge).Except(pinned).ToList();
+        var doomed = below.Where(r => r < edge).ToList();
         if (doomed.Count > 0)
             await images.Delete(db, shipGuid, doomed, token);
     }
 
     /// <summary>
     /// Takes the ship row's write lock for the rest of the transaction without changing anything, by
-    /// assigning a column to itself. The ordering point between a prune and a pin of the same ship;
-    /// SQLite serializes writers anyway, so this matters on Postgres. Every caller reaches it before
-    /// writing any revision row or image, so ship-then-revision is the one lock order and a pin and a
-    /// prune cannot deadlock each other.
+    /// assigning a column to itself. The ordering point between two writers of one ship's revisions and
+    /// images; SQLite serializes writers anyway, so this matters on Postgres. Every caller reaches it
+    /// before writing any revision row or image, so ship-then-revision is the one lock order and no two
+    /// of them can deadlock each other.
     /// </summary>
     /// <returns>The number of rows matched: zero means the ship does not exist (yet, for a first store).</returns>
     private static Task<int> LockShipRow(ServerDbContext db, Guid shipGuid, CancellationToken token)
@@ -214,9 +205,9 @@ public sealed partial class DrydockStore
     /// Failing loudly is the point: the caller still holds a live grid and can refuse.</para>
     /// </summary>
     /// <param name="keepImages">
-    /// How many revisions keep their image, never fewer than two once two exist, plus any that
-    /// are pinned. Zero or less prunes nothing. The revision just filed is never pruned, whatever
-    /// this says. See <see cref="PruneImages"/>.
+    /// How many revisions keep their image, never fewer than two once two exist. Zero or less
+    /// prunes nothing. The revision just filed is never pruned, whatever this says. See
+    /// <see cref="PruneImages"/>.
     /// </param>
     /// <returns>The outcome, the revision number filed, and the berth the ship now sits in.</returns>
     public Task<DrydockFileResult> FileRevision(DrydockRevisionRequest request, DrydockImage image, int keepImages, CancellationToken ct = default)
@@ -774,7 +765,7 @@ public sealed partial class DrydockStore
         await images.Put(db, new DrydockImageKey(request.ShipGuid, revision), image, token);
 
         // Prune images, never revisions. The revision we just filed is the one a retrieve reads, so it survives
-        // whatever keepImages says; the prune carries the floor and the pin exclusion.
+        // whatever keepImages says; the prune carries the floor.
         await PruneImages(db, images, request.ShipGuid, revision, keepImages, token);
 
         // An impound's row says which berth was vacated, who took the hull and from whom, and what
@@ -2254,118 +2245,11 @@ public sealed partial class DrydockStore
     }
 
     /// <summary>
-    /// Excludes a revision's document from pruning, whatever keep-N and the floor say, until
-    /// <see cref="TryUnpinRevision"/> clears it. Meant for a revision with an image that a retrieve had to
-    /// step past, so that ordinary stores after a fallback cannot prune the newest state the player
-    /// ever filed; also an admin's to set by hand. Refuses a revision whose document is already gone,
-    /// since there is nothing left to protect.
-    ///
-    /// <para>One conditional update on the flag as it was read (and, for a pin, on the document still
-    /// existing) plus a <see cref="DrydockAuditAction.RevisionPinned"/> row, in one transaction. The
-    /// ship row is locked first, so the pin serializes with any prune of the same ship; see
-    /// <see cref="PruneImages"/>.</para>
-    /// </summary>
-    /// <param name="actorUserId">Who pinned it; null for the system.</param>
-    /// <param name="reason">Why, for the timeline. Appended to "pinned revision N" when given.</param>
-    public Task<DrydockPinResult> TryPinRevision(
-        Guid shipGuid,
-        int revision,
-        Guid? actorUserId,
-        int? roundId,
-        string? reason,
-        CancellationToken ct = default)
-    {
-        return SetRevisionPinned(shipGuid, revision, pinned: true, actorUserId, roundId, reason, ct);
-    }
-
-    /// <summary>
-    /// Clears a pin, handing the document back to ordinary retention: the next store or promote
-    /// prunes it if keep-N and the floor no longer cover it. Works on a revision whose document
-    /// is already gone, so a stale flag can always be cleared. One conditional update plus a
-    /// <see cref="DrydockAuditAction.RevisionUnpinned"/> row, in one transaction.
-    /// </summary>
-    /// <param name="actorUserId">Who unpinned it; null for the system.</param>
-    /// <param name="reason">Why, for the timeline. Appended to "unpinned revision N" when given.</param>
-    public Task<DrydockPinResult> TryUnpinRevision(
-        Guid shipGuid,
-        int revision,
-        Guid? actorUserId,
-        int? roundId,
-        string? reason,
-        CancellationToken ct = default)
-    {
-        return SetRevisionPinned(shipGuid, revision, pinned: false, actorUserId, roundId, reason, ct);
-    }
-
-    private Task<DrydockPinResult> SetRevisionPinned(
-        Guid shipGuid,
-        int revision,
-        bool pinned,
-        Guid? actorUserId,
-        int? roundId,
-        string? reason,
-        CancellationToken ct)
-    {
-        var images = _db.DrydockImages;
-        return _db.RunTriadDbCommand(async (db, token) =>
-        {
-            await using var tx = await db.Database.BeginTransactionAsync(token);
-
-            // The ship row before the revision row, the order a prune takes them in.
-            if (await LockShipRow(db, shipGuid, token) == 0)
-                return DrydockPinResult.NotFound;
-
-            var ship = await db.DrydockShip.AsNoTracking()
-                .Where(s => s.ShipGuid == shipGuid)
-                .Select(s => new { s.ShipName, s.BerthId, s.OwnerUserId })
-                .SingleAsync(token);
-
-            var query = db.DrydockRevision
-                .Where(r => r.ShipGuid == shipGuid && r.Revision == revision && r.Pinned != pinned);
-
-            // The image is read before the update rather than inside it, which holds only because a prune takes the
-            // same ship row first and so cannot delete the image between the read and the update.
-            if (pinned)
-            {
-                var hasImage = await images.Has(db, new DrydockImageKey(shipGuid, revision), token);
-                query = query.Where(r => hasImage);
-            }
-
-            var moved = await query.ExecuteUpdateAsync(set => set.SetProperty(r => r.Pinned, pinned), token);
-
-            if (moved == 0)
-            {
-                // Classification only; nothing is written on this branch.
-                var current = await db.DrydockRevision.AsNoTracking()
-                    .Where(r => r.ShipGuid == shipGuid && r.Revision == revision)
-                    .Select(r => (bool?) r.Pinned)
-                    .SingleOrDefaultAsync(token);
-
-                return current == pinned ? DrydockPinResult.AlreadyInState : DrydockPinResult.NotFound;
-            }
-
-            var verb = pinned ? "pinned" : "unpinned";
-            AddAudit(db, pinned ? DrydockAuditAction.RevisionPinned : DrydockAuditAction.RevisionUnpinned, DateTime.UtcNow,
-                shipGuid: shipGuid,
-                berthId: ship.BerthId,
-                shipName: ship.ShipName,
-                actorUserId: actorUserId,
-                subjectUserId: ship.OwnerUserId,
-                revision: revision,
-                roundId: roundId,
-                reason: string.IsNullOrWhiteSpace(reason) ? $"{verb} revision {revision}" : $"{verb} revision {revision}: {reason}");
-
-            await db.SaveChangesAsync(token);
-            await tx.CommitAsync(token);
-            return DrydockPinResult.Success;
-        }, ct);
-    }
-
-    /// <summary>
-    /// The revisions of a ship that still hold an image, newest first, whether retention or a pin kept them. Revision
-    /// numbers only, from the image store (<see cref="IDrydockImageStore.Revisions"/>), without reading an image. This is
-    /// the honest lower bound for a retrieve's fallback walk: counting down <c>keepImages</c> from the current revision
-    /// misses pinned images below the window, and walks revisions whose images are already gone. Empty for an unknown ship.
+    /// The revisions of a ship that still hold an image, newest first. Revision numbers only, from the image store
+    /// (<see cref="IDrydockImageStore.Revisions"/>), without reading an image. This is the honest bound for a
+    /// retrieve's fallback walk: counting down <c>keepImages</c> from the current revision walks revisions whose images
+    /// are already gone, and misses images a larger window kept before the setting was lowered, which the next prune
+    /// has not reached yet. Empty for an unknown ship.
     /// </summary>
     public Task<List<int>> ListRetrievableRevisions(Guid shipGuid, CancellationToken ct = default)
     {
