@@ -247,6 +247,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             ["GridPathfindingComponent.~NextUpdate"] = (StateClass.Volatile, "graph update gate, set when a chunk is dirtied (PathfindingSystem.Grid.cs:329-330, :344-345)"),
             ["SmesComponent.~LastChargeLevelTime"] = (StateClass.Volatile, "SMES visual throttle; a restored zero passes the delay test (SmesSystem.cs:41)"),
             ["SmesComponent.~LastChargeStateTime"] = (StateClass.Volatile, "SMES visual throttle; a restored zero passes the delay test (SmesSystem.cs:50)"),
+            ["SalvageMobRestrictionsGridComponent.MobsToKill"] = (StateClass.Derived, "a listed mob the store evicts to the impound drop-off (DrydockSystem.Mobs.cs:25-46) is off the image, and a reference off the image is written as invalid (DrydockCodecContext.cs:140-141)"),
         };
 
         /// <summary>
@@ -333,7 +334,13 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                     if (!entMan.HasComponent<MapAtmosphereComponent>(mapUid))
                         atmos.SetMapAtmosphere(mapUid, space: true, new GasMixture());
                 }
+
+                // The impound's drop-off for round trip 1, which stores the hull from this map: a spawn point on the map the
+                // hull was on (DrydockSystem.Impound.cs, FindImpoundDropOff). Round trip 2 stores from the harness station's
+                // map, where the retrieve presents the hull, and PrepareHarness puts one there.
+                entMan.SpawnEntity("SpawnPointLatejoin", map.GridCoords);
             });
+            await pair.MakeCleanupImmune(map.Grid.Owner);
 
             Assert.That(protoMan.TryIndex<VesselPrototype>(vesselId, out var vessel), Is.True,
                 $"Rung {rung}: vessel {vesselId} no longer exists; regenerate the ladder.");

@@ -368,7 +368,9 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
 
         /// <summary>
         /// The pair-wide setup every verification needs: the drydock switched on with slicing off, the
-        /// shipyard stood up, and a station on a test grid to dock at, made immune to the janitor.
+        /// shipyard stood up, and a station on a test grid to dock at, made immune to the janitor. The
+        /// station's grid carries a late-join spawn point, the impound's drop-off for a hull stored from
+        /// this map (<c>DrydockSystem.Impound.cs</c>, <c>FindImpoundDropOff</c>).
         /// </summary>
         public static async Task<(Guid Owner, EntityUid Station)> PrepareHarness(TestPair pair, int berths)
         {
@@ -401,6 +403,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                 station = entMan.Spawn();
                 entMan.AddComponent<StationDataComponent>(station);
                 server.System<StationSystem>().AddGridToStation(station, map.Grid.Owner);
+                entMan.SpawnEntity("SpawnPointLatejoin", map.GridCoords);
             });
 
             await pair.MakeCleanupImmune(map.Grid.Owner);

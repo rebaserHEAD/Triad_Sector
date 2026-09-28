@@ -41,7 +41,7 @@ public sealed partial class DrydockSystem
             _xform.SetCoordinates(uid, drop);
         }
 
-        Log.Info($"Drydock: moved {leftOut.Count} creature(s) or bod(y/ies) off {ToPrettyString(ctx.GridUid)}, which the store would have left out: "
+        Log.Info($"Drydock: moved {leftOut.Count} creature(s) or bod(y/ies) off {ToPrettyString(ctx.GridUid)} to {ToPrettyString(drop.EntityId)}, which the store would have left out: "
                  + string.Join(", ", leftOut.Select(uid => MetaData(uid).EntityPrototype?.ID ?? "(no prototype)")));
         return leftOut.Count;
     }
