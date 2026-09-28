@@ -868,14 +868,16 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
 
             // Ruled 2026-09-28: the sun tracker works in world space, and the dock chooses the hull's heading.
             new(SolarFamily,
-                "Accepted: the sun tracker sets every panel's world rotation to its grid's target each update "
-                + "(PowerSolarSystem.cs:96-116) and its supply to its maximum times its coverage, which is that world rotation "
-                + "against the sun and an occlusion ray (PowerSolarSystem.cs:122-180), so a hull presented at another heading, "
-                + "beside another grid, comes back with other panel rotations and supplies. Sorted only on an entity carrying a "
-                + "solar panel, and only its rotation and maximum supply.",
+                "Accepted: the sun tracker sets every panel's world rotation to its grid's target on each full pass "
+                + "(NFPowerSolarSystem.cs:110-120), a grid's target starts at the sun when its tracking component is made "
+                + "(:86-91), and a panel's supply is its maximum times its coverage, which is that world rotation against the "
+                + "sun, a roof and an occlusion ray (:151-221). A hull loaded and presented at another heading, beside another "
+                + "grid, comes back with other panel rotations and supplies. Sorted only on an entity carrying a solar panel, "
+                + "Frontier's or upstream's, and only its rotation and maximum supply.",
                 (line, key, result) => line.StartsWith("CHANGED", StringComparison.Ordinal)
                                        && SnapshotMember(key) is RotationMember or SolarSupplyMember
-                                       && result.Before.Values.ContainsKey(key[..key.IndexOf('|')] + "|SolarPanelComponent.<present>")),
+                                       && (result.Before.Values.ContainsKey(key[..key.IndexOf('|')] + "|NFSolarPanelComponent.<present>")
+                                           || result.Before.Values.ContainsKey(key[..key.IndexOf('|')] + "|SolarPanelComponent.<present>"))),
 
             // Ruled 2026-09-28: the rest of what the store's emptying of a vacant core changes on the core itself.
             new(EmptiedCoreFamily,
@@ -1448,23 +1450,24 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             const string panel = "SolarPanel@7,4";
             const string window = "WindowReinforcedDirectional@-1,-1#0";
 
-            string? Sorted(string path, string member, bool hasPanel)
+            string? Sorted(string path, string member, string? panelComponent)
             {
                 var key = $"{path}|{member}";
                 var result = new RoundTripResult(new DrydockStateSnapshot(), new DrydockStateSnapshot(), new DrydockStateSnapshot(),
                     new DrydockStateSnapshot(), EntityUid.Invalid, 0, 0, 0, null);
-                if (hasPanel)
-                    result.Before.Values[path + "|SolarPanelComponent.<present>"] = "1";
+                if (panelComponent != null)
+                    result.Before.Values[$"{path}|{panelComponent}.<present>"] = "1";
 
-                return FamilyFor($"CHANGED  {key}: 0.0 -> -130.4", key, result, null, DrydockFamilies).Family?.Name;
+                return FamilyFor($"CHANGED  {key}: 0.0 -> 23.8", key, result, null, DrydockFamilies).Family?.Name;
             }
 
             Assert.Multiple(() =>
             {
-                Assert.That(Sorted(panel, RotationMember, true), Is.EqualTo(SolarFamily), "A panel the tracker turned sorts.");
-                Assert.That(Sorted(panel, SolarSupplyMember, true), Is.EqualTo(SolarFamily), "Its supply, which follows the turn, sorts.");
-                Assert.That(Sorted(window, RotationMember, false), Is.Null, "A window's rotation is no panel's, and stays a finding.");
-                Assert.That(Sorted(panel, "SolarPanelComponent.Coverage", true), Is.Null, "Another member of the panel stays a finding.");
+                Assert.That(Sorted(panel, RotationMember, "NFSolarPanelComponent"), Is.EqualTo(SolarFamily), "A Frontier panel the tracker turned sorts.");
+                Assert.That(Sorted(panel, SolarSupplyMember, "NFSolarPanelComponent"), Is.EqualTo(SolarFamily), "Its supply, which follows the turn, sorts.");
+                Assert.That(Sorted(panel, RotationMember, "SolarPanelComponent"), Is.EqualTo(SolarFamily), "An upstream panel sorts the same way.");
+                Assert.That(Sorted(window, RotationMember, null), Is.Null, "A window's rotation is no panel's, and stays a finding.");
+                Assert.That(Sorted(panel, "NFSolarPanelComponent.Coverage", "NFSolarPanelComponent"), Is.Null, "Another member of the panel stays a finding.");
             });
         }
 
@@ -1536,26 +1539,40 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
         }
 
         /// <summary>
-        /// The sum check's discount, with no server, on rung 35's extension-cable providers: a receiver the store removed by
-        /// rule leaves the stored sum, with anything inside it; one that is not named as removed stays in it.
+        /// The sum check's discount, with no server, on rung 35's providers: a linked receiver the store removed by rule
+        /// leaves the stored sum, with a receiver inside it, at both provider lists, the APC one rendering its receivers as
+        /// components; an unlinked receiver, one at a longer path, and one not removed stay as they were.
         /// </summary>
         [Test]
         public void OnlyAReceiverRemovedByRuleLeavesTheSum()
         {
-            const string member = "ExtensionCableProviderComponent.~LinkedReceivers";
+            const string apc = "ApcPowerProviderComponent.~LinkedReceivers";
+            const string cable = "ExtensionCableProviderComponent.~LinkedReceivers";
             var snapshot = new DrydockStateSnapshot();
-            snapshot.Values[$"CableApcExtension@1,2|{member}"] = "count=3 [ComputerComms@1,2, AirlockGlass@1,1, ComputerShuttle@0,0]";
-            snapshot.Values[$"CableApcExtension@4,4|{member}"] = "count=2 [FactionLathe@4,4/board/Part, ComputerComms@1,23]";
+            snapshot.Values[$"CableApcExtension@1,2|{apc}"] = "count=4 [<ApcPowerReceiverComponent>, <ApcPowerReceiverComponent>, <ApcPowerReceiverComponent>, <ApcPowerReceiverComponent>]";
+            snapshot.Values[$"CableApcExtension@1,2|{cable}"] = "count=4 [ComputerComms@1,2, AirlockGlass@1,1, FactionLathe@4,4/board/Part, ComputerComms@1,23]";
+            snapshot.Values["ComputerComms@1,2|ApcPowerReceiverComponent.~Provider"] = "<ApcPowerProviderComponent>";
+            snapshot.Values["ComputerComms@1,2|ExtensionCableReceiverComponent.~Provider"] = "CableApcExtension@1,2";
+            snapshot.Values["ComputerComms@1,23|ApcPowerReceiverComponent.~Provider"] = "<ApcPowerProviderComponent>";
+            snapshot.Values["ComputerComms@1,23|ExtensionCableReceiverComponent.~Provider"] = "CableApcExtension@1,2";
+            snapshot.Values["AirlockGlass@1,1|ApcPowerReceiverComponent.~Provider"] = "<ApcPowerProviderComponent>";
+            snapshot.Values["AirlockGlass@1,1|ExtensionCableReceiverComponent.~Provider"] = "CableApcExtension@1,2";
+            snapshot.Values["FactionLathe@4,4/board/Part|ApcPowerReceiverComponent.~Provider"] = "<ApcPowerProviderComponent>";
+            snapshot.Values["FactionLathe@4,4/board/Part|ExtensionCableReceiverComponent.~Provider"] = "CableApcExtension@1,2";
+            snapshot.Values["FactionLathe@4,4|ApcPowerReceiverComponent.~Provider"] = "null";
+
+            double Less(string member, params string[] removed) => TotalLessRemoved(snapshot, member, removed.ToList());
 
             Assert.Multiple(() =>
             {
-                Assert.That(TotalLessRemoved(snapshot, member, new List<string>()), Is.EqualTo(5), "The control: with nothing removed the sum is the total.");
-                Assert.That(TotalLessRemoved(snapshot, member, new List<string> { "ComputerComms@1,2" }), Is.EqualTo(4),
-                    "The removed comms console leaves the sum, and ComputerComms@1,23, a longer path, does not.");
-                Assert.That(TotalLessRemoved(snapshot, member, new List<string> { "FactionLathe@4,4" }), Is.EqualTo(4),
-                    "Something inside a removed entity leaves with it.");
-                Assert.That(TotalLessRemoved(snapshot, member, new List<string> { "AirlockGlass@1,1#0" }), Is.EqualTo(5),
-                    "A receiver not named as removed stays in the sum.");
+                Assert.That(Less(apc), Is.EqualTo(4), "The control: with nothing removed the APC sum is the total.");
+                Assert.That(Less(cable), Is.EqualTo(4), "The control: with nothing removed the cable sum is the total.");
+                Assert.That(Less(apc, "ComputerComms@1,2"), Is.EqualTo(3),
+                    "The removed comms console leaves the APC sum, though its list names no entity, and ComputerComms@1,23 does not.");
+                Assert.That(Less(cable, "ComputerComms@1,2"), Is.EqualTo(3), "It leaves the cable sum the same way.");
+                Assert.That(Less(apc, "FactionLathe@4,4"), Is.EqualTo(3),
+                    "A linked receiver inside a removed entity leaves with it, and the unlinked lathe itself counts for nothing.");
+                Assert.That(Less(apc, "AirlockGlass@1,1#0"), Is.EqualTo(4), "A receiver not named as removed stays in the sum.");
             });
         }
 
@@ -3018,31 +3035,35 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                 .Sum(kv => Number(kv.Value) ?? 0);
         }
 
+        /// <summary>The receiver member at the other end of each provider list in <see cref="TotalChecked"/>.</summary>
+        private static readonly Dictionary<string, string> ReceiverEnd = new(StringComparer.Ordinal)
+        {
+            ["ApcPowerProviderComponent.~LinkedReceivers"] = "ApcPowerReceiverComponent.~Provider",
+            ["ExtensionCableProviderComponent.~LinkedReceivers"] = "ExtensionCableReceiverComponent.~Provider",
+        };
+
         /// <summary>
-        /// <see cref="Total"/> less every entry that names an entity the store removed by rule, or something inside one: a
-        /// receiver the purge or the strip took leaves each provider's list with it, which is the rule and not a lost
-        /// pairing (rung 35: a comms console; rung 109: a gunnery server and a faction lathe). An entry naming anything else
-        /// counts, so a receiver lost without a removal still moves the sum.
+        /// <see cref="Total"/> less every linked receiver the store removed by rule, or one inside such an entity: a
+        /// receiver the purge or the strip took leaves its provider's list with it, which is the rule and not a lost
+        /// pairing (rung 35: a comms console; rung 109: a gunnery server and a faction lathe). Counted from the receiver's
+        /// end, whose provider member is set while it is linked, because an APC provider's list renders its receivers as
+        /// components and names no entity. A receiver lost without a removal still moves the sum.
         /// </summary>
         private static double TotalLessRemoved(DrydockStateSnapshot snapshot, string member, IReadOnlyCollection<string> removed)
         {
             var total = Total(snapshot, member);
-            if (removed.Count == 0)
+            if (removed.Count == 0 || !ReceiverEnd.TryGetValue(member, out var receiver))
                 return total;
 
-            var suffix = "|" + member;
+            var suffix = "|" + receiver;
             foreach (var (key, value) in snapshot.Values)
             {
-                var open = value.IndexOf('[');
-                var close = value.LastIndexOf(']');
-                if (!key.EndsWith(suffix, StringComparison.Ordinal) || open < 0 || close <= open)
+                if (!key.EndsWith(suffix, StringComparison.Ordinal) || value is "null" or "invalid" or "")
                     continue;
 
-                foreach (var entry in value[(open + 1)..close].Split(", ", StringSplitOptions.RemoveEmptyEntries))
-                {
-                    if (removed.Any(path => Names(entry, path)))
-                        total--;
-                }
+                var path = key[..^suffix.Length];
+                if (removed.Any(gone => path == gone || path.StartsWith(gone + "/", StringComparison.Ordinal)))
+                    total--;
             }
 
             return total;
