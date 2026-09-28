@@ -84,7 +84,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             {
                 Assert.That(current!.Revision.Revision, Is.EqualTo(promoted));
                 Assert.That(current.Image, Is.SameAs(images[2]), "A promote copies the chosen image forward.");
-                Assert.That(afterPromote, Is.EqualTo(new[] { promoted, 4 }), "Revision 3 falls out of the window; its copy is current.");
+                Assert.That(afterPromote, Is.EqualTo(new[] { promoted, 4, 3 }), "A promote takes no place in the window, so both saves stay.");
             });
 
             await pair.CleanReturnAsync();

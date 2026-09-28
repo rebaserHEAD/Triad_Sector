@@ -13,8 +13,9 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
 {
     /// <summary>
     /// The durability layer's store half against a real database: the two-document floor under
-    /// keep-N, and what a promote carries. Every ship and player is freshly minted, so assertions are
-    /// on this test's own ids and never on table-wide counts.
+    /// keep-N, retention counting saves and not promotes, and what a promote carries. Every ship and
+    /// player is freshly minted, so assertions are on this test's own ids and never on table-wide
+    /// counts.
     /// </summary>
     [TestFixture]
     public sealed class DrydockDurabilityStoreTest
@@ -81,6 +82,46 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             await store.FileRevision(Request(ship, owner, "Kestrel"), Image(4), keepImages: 1);
             Assert.That(await ImageRevisions(db, ship), Is.EqualTo(new[] { 3, 4 }),
                 "The only document the ship had is kept alongside the new one.");
+
+            await pair.CleanReturnAsync();
+        }
+
+        /// <summary>
+        /// Retention counts saves, not the revisions derived from them: a promote takes no place in keep-N, so it never
+        /// prunes a save, and it lives as long as the save under it. Three saves at keep three, then a promote, keep all
+        /// four images; the next store is a save, and prunes save 1 alone.
+        /// </summary>
+        [Test]
+        public async Task APromoteNeverPrunesASave()
+        {
+            await using var pair = await PoolManager.GetServerClient();
+            var store = pair.Server.ResolveDependency<DrydockStore>();
+            var db = pair.Server.ResolveDependency<IServerDbManager>();
+
+            var owner = Guid.NewGuid();
+            await DrydockTestHelpers.InsertPlayer(db, owner);
+            await store.AddBerth(owner, ShipSizeClass.Cutter, DrydockBerthKind.Granted, 0, null, null);
+
+            var ship = Guid.NewGuid();
+            for (var i = 1; i <= 3; i++)
+                await store.FileRevision(Request(ship, owner, "Kestrel"), Image(i), keepImages: 3);
+            var saved = await ImageRevisions(db, ship);
+
+            var (outcome, promoted) = await store.TryPromoteRevision(ship, 2, null, null, null, keepImages: 3);
+            var afterPromote = await ImageRevisions(db, ship);
+
+            await store.FileRevision(Request(ship, owner, "Kestrel"), Image(5), keepImages: 3);
+            var afterStore = await ImageRevisions(db, ship);
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(saved, Is.EqualTo(new[] { 1, 2, 3 }), "The control: three saves, all inside the window.");
+                Assert.That(outcome, Is.EqualTo(DrydockBerthResult.Success));
+                Assert.That(promoted, Is.EqualTo(4));
+                Assert.That(afterPromote, Is.EqualTo(new[] { 1, 2, 3, 4 }), "The promote prunes no save.");
+                Assert.That(afterStore, Is.EqualTo(new[] { 2, 3, 4, 5 }),
+                    "The next save prunes save 1 alone: the promote rides with the saves under it.");
+            });
 
             await pair.CleanReturnAsync();
         }

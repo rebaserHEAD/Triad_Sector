@@ -68,9 +68,11 @@ public sealed class TriadCCVars
         CVarDef.Create("triad.drydock.read_only", false, CVar.SERVERONLY);
 
     /// <summary>
-    /// How many revisions keep their grid image. Revision history itself is kept indefinitely; this
-    /// only bounds the images, and the current revision is never pruned regardless of this value.
-    /// Zero or less prunes nothing at all, which is the safe direction to misconfigure.
+    /// How many saves, the ship's stores and imports, keep their grid image. A revision derived from a
+    /// save, such as an admin's promote, keeps its image as long as the save under it does. Revision
+    /// history itself is kept indefinitely; this only bounds the images, and the current revision is
+    /// never pruned regardless of this value. Zero or less prunes nothing at all, which is the safe
+    /// direction to misconfigure.
     /// </summary>
     public static readonly CVarDef<int> DrydockKeepImages =
         CVarDef.Create("triad.drydock.keep_images", 3, CVar.SERVERONLY);

@@ -81,30 +81,41 @@ public sealed partial class DrydockStore
     }
 
     /// <summary>
-    /// The fewest images a prune ever leaves a ship holding, counting the one just filed: the current revision and one
-    /// step back for the retrieve ladder to fall to. It promises only that a second image exists, not that it still
-    /// loads.
+    /// The fewest saves (<see cref="IsSave"/>) whose images a prune ever leaves a ship holding: the newest and one step
+    /// back for the retrieve ladder to fall to. It promises only that a second image exists, not that it still loads.
     /// </summary>
     private const int MinimumKeptImages = 2;
 
     /// <summary>
-    /// Deletes this ship's images that fall outside retention, never revisions. Two rules, both of which have to agree
-    /// before an image goes:
+    /// Whether a revision is a save: the ship going in, by a store or an import. Retention counts only saves
+    /// (<see cref="PruneImages"/>). Every other kind is derived from a save, as a promote is, and rides with the save
+    /// under it, because the saves are the states the ship was actually in, and a derived revision is a change made
+    /// afterwards that could fail at any point.
+    /// </summary>
+    internal static bool IsSave(DrydockRevisionKind kind) =>
+        kind is DrydockRevisionKind.PlayerStore or DrydockRevisionKind.LegacyImport;
+
+    /// <summary>
+    /// Deletes this ship's images that fall outside retention, never revisions. Retention counts saves
+    /// (<see cref="IsSave"/>), never derived revisions:
     ///
     /// <list type="bullet">
-    /// <item>Keep-N: the newest <paramref name="keepImages"/> images stay, counting <paramref name="keptRevision"/>, the
-    /// one just filed or promoted, which is always the newest.</item>
-    /// <item>The floor: never fewer than <see cref="MinimumKeptImages"/>, so <paramref name="keepImages"/> of 1 behaves
-    /// exactly as 2, and a ship holding only its new image prunes nothing.</item>
+    /// <item>Keep-N: the newest <paramref name="keepImages"/> saves that hold an image stay, and so does every image newer
+    /// than the oldest of them, which is where a promote sits. A derived revision lives as long as the save under it
+    /// and goes with it, so a promote never prunes a save.</item>
+    /// <item>The floor: never fewer than <see cref="MinimumKeptImages"/> saves, so <paramref name="keepImages"/> of 1
+    /// behaves exactly as 2, and a ship holding fewer saves than the window prunes nothing.</item>
+    /// <item><paramref name="keptRevision"/>, the revision just filed or promoted and so the newest, is never
+    /// pruned.</item>
     /// </list>
     ///
     /// <para>Zero or less prunes nothing, rather than keeping nothing: of the two readings, only this one costs disk when
     /// it is misconfigured.</para>
     ///
-    /// <para>The window is counted over the images that exist below <paramref name="keptRevision"/>, with one place
-    /// reserved for it, rather than by revision arithmetic, so a gap in a ship's images (a prune under a smaller window)
-    /// cannot pull the edge past the only one left. The image store is handed only the revisions to delete, as one
-    /// set.</para>
+    /// <para>The window is counted over the saves whose images exist, rather than by revision arithmetic, so a gap in a
+    /// ship's images (a prune under a smaller window) cannot pull the edge past the only one left. The image store is
+    /// handed only the revisions to delete, as one set, and the revision rows it reads kinds from are flushed by every
+    /// caller first.</para>
     ///
     /// <para>Takes the ship row first (<see cref="LockShipRow"/>), so a prune keeps the one lock order every writer of a
     /// ship's revisions and images follows.</para>
@@ -117,15 +128,23 @@ public sealed partial class DrydockStore
         await LockShipRow(db, shipGuid, token);
 
         var keep = Math.Max(keepImages, MinimumKeptImages);
-        var below = (await images.Revisions(db, shipGuid, token)).Where(r => r < keptRevision).OrderByDescending(r => r).ToList();
+        var held = (await images.Revisions(db, shipGuid, token)).ToHashSet();
+        var saves = (await db.DrydockRevision.AsNoTracking()
+                .Where(r => r.ShipGuid == shipGuid)
+                .Select(r => new { r.Revision, r.Kind })
+                .ToListAsync(token))
+            .Where(r => held.Contains(r.Revision) && IsSave(r.Kind))
+            .Select(r => r.Revision)
+            .OrderByDescending(r => r)
+            .ToList();
 
-        // The oldest image that stays is the (keep - 1)th newest below the one just filed; fewer than that and the floor
+        // The oldest image that stays is the oldest of the newest keep saves; fewer saves than that and the floor
         // refuses to prune at all.
-        if (below.Count < keep - 1)
+        if (saves.Count < keep)
             return;
 
-        var edge = below[keep - 2];
-        var doomed = below.Where(r => r < edge).ToList();
+        var edge = saves[keep - 1];
+        var doomed = held.Where(r => r < edge && r != keptRevision).ToList();
         if (doomed.Count > 0)
             await images.Delete(db, shipGuid, doomed, token);
     }
@@ -205,9 +224,9 @@ public sealed partial class DrydockStore
     /// Failing loudly is the point: the caller still holds a live grid and can refuse.</para>
     /// </summary>
     /// <param name="keepImages">
-    /// How many revisions keep their image, never fewer than two once two exist. Zero or less
-    /// prunes nothing. The revision just filed is never pruned, whatever this says. See
-    /// <see cref="PruneImages"/>.
+    /// How many saves keep their image, never fewer than two once two exist; a promote rides with
+    /// the save under it. Zero or less prunes nothing. The revision just filed is never pruned,
+    /// whatever this says. See <see cref="PruneImages"/>.
     /// </param>
     /// <returns>The outcome, the revision number filed, and the berth the ship now sits in.</returns>
     public Task<DrydockFileResult> FileRevision(DrydockRevisionRequest request, DrydockImage image, int keepImages, CancellationToken ct = default)
@@ -2165,7 +2184,8 @@ public sealed partial class DrydockStore
     /// Admin: promotes an older revision to current by filing it again as a new one, kind
     /// AdminRestore, derived from the original. History stays append-only; the promoted image
     /// is copied, never moved, along with the source's appraisal, and the usual pruning
-    /// (<see cref="PruneImages"/>) runs around the new revision.
+    /// (<see cref="PruneImages"/>) runs around the new revision, in which a promote takes no place in
+    /// keep-N and so never prunes a save.
     /// </summary>
     public Task<(DrydockBerthResult Outcome, int Revision)> TryPromoteRevision(
         Guid shipGuid,
