@@ -362,7 +362,28 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             EntityUid? litMatch = null;
             await server.WaitPost(() => recipes = ApplyLivedIn(pair, grid, rung, out doorPath, out litMatch));
 
-            await pair.RunTicksSync(PreSettleTicks);
+            var probe = new List<string>();
+            if (RegistrationProbe)
+            {
+                var last = string.Empty;
+                for (var tick = 0; tick <= PreSettleTicks; tick++)
+                {
+                    if (tick > 0)
+                        await pair.RunTicksSync(1);
+
+                    var now = string.Empty;
+                    await server.WaitPost(() => now = RegistrationState(entMan, grid));
+                    if (now != last)
+                        probe.Add($"[probe] first load, tick {tick}: {now}");
+                    last = now;
+                }
+
+                await server.WaitPost(() => probe.AddRange(RegistrationDetail(entMan, grid, "first load settled")));
+            }
+            else
+            {
+                await pair.RunTicksSync(PreSettleTicks);
+            }
 
             // Rooms are the tiles air flows between, which atmos sets (TileAtmosphere.AdjacentBits) only once it has
             // processed the hull, so the gas recipes wait for the settle and then settle on their own.
@@ -371,8 +392,18 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             recipes.AddRange(gasRooms.Select(room => room.Recipe));
             await pair.RunTicksSync((int) Math.Ceiling(AtmosSettleSeconds / server.ResolveDependency<IGameTiming>().TickPeriod.TotalSeconds));
 
+            if (RegistrationProbe)
+                await server.WaitPost(() => probe.AddRange(RegistrationDetail(entMan, grid, "before store 1")));
+
             var first = await RoundTrip(pair, grid, owner, station, litMatch);
+            if (RegistrationProbe)
+                await server.WaitPost(() => probe.AddRange(RegistrationDetail(entMan, first.Retrieved, "after retrieve 1, late")));
+
             var second = await RoundTrip(pair, first.Retrieved, owner, station, null);
+            if (RegistrationProbe)
+                await server.WaitPost(() => probe.AddRange(RegistrationDetail(entMan, second.Retrieved, "after retrieve 2, late")));
+
+            CodecNotes.AddRange(probe);
 
             var sb = new StringBuilder();
             sb.AppendLine($"[ladder] rung {rung} {vesselId} through {(EngineMode ? "the engine serializer" : CodecMode ? "the grid image" : "the drydock")}");
