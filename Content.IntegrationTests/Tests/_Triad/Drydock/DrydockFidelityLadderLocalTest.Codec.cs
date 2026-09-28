@@ -828,15 +828,17 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
         }
 
         /// <summary>
-        /// The deep snapshot's tie-break in codec mode (DrydockFidelitySystem.DeepSnapshot.cs, DeepPaths): before a
-        /// store, the id the store's walk will give; after a load, the id the image carried, from the deserializer's
-        /// map. Two anchored pipes on one tile tie on everything a path is built from, and without this a load that
-        /// walks them the other way swaps their states (112 of 112 such pairs were permutations on their tile,
-        /// 2026-09-18). Null outside codec mode, which leaves the walk order as it was.
+        /// The deep snapshot's tie-break in codec and drydock mode (DrydockFidelitySystem.DeepSnapshot.cs, DeepPaths):
+        /// before a store, the id the store's walk will give; after a load, the id the image carried, from the codec
+        /// load's map or the retrieve's (<see cref="DrydockSystem.LastRetrieveIds"/>). Two anchored pipes on one tile tie
+        /// on everything a path is built from, and without this a load that walks them the other way swaps their states
+        /// (112 of 112 such pairs were permutations on their tile, 2026-09-18). The walk's ids order the entities the
+        /// store keeps as its own walk will, since a removal before the store drops an entry from a transform's children
+        /// without reordering the rest. Null in engine mode, which leaves the walk order as it was.
         /// </summary>
         private static Func<EntityUid, long?>? TieBreakBefore(IEntityManager entMan, EntityUid grid)
         {
-            if (!CodecMode)
+            if (EngineMode)
                 return null;
 
             var ids = entMan.System<DrydockImageSystem>().Walk(grid).Ids;
@@ -845,14 +847,20 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
 
         private static Func<EntityUid, long?>? TieBreakAfter()
         {
-            if (!CodecMode || LastLoadIds is not { } ids)
+            if (EngineMode || LastLoadIds is not { } ids)
                 return null;
 
             return uid => ids.TryGetValue(uid, out var id) ? id : null;
         }
 
-        /// <summary>The last load's entities by the stable id each was loaded under.</summary>
+        /// <summary>
+        /// The last load's entities by the stable id each was loaded under. <c>LADDER_CONTROL=tiebreak-reversed</c> negates
+        /// every id a drydock-mode retrieve hands over, which orders each tied group backwards after the load, so its pair
+        /// swaps come back: the control that the tie-break, not the walk, is what pairs them.
+        /// </summary>
         private static Dictionary<EntityUid, long>? LastLoadIds;
+
+        private static bool TieBreakReversed => Environment.GetEnvironmentVariable("LADDER_CONTROL") == "tiebreak-reversed";
 
         private static string Top(IReadOnlyDictionary<string, int> counts) =>
             counts.Count == 0

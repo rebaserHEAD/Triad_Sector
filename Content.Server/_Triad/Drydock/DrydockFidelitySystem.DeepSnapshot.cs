@@ -604,6 +604,26 @@ public sealed partial class DrydockFidelitySystem
     }
 
     /// <summary>
+    /// A rotation in degrees folded into one turn, (-180, 180], to one decimal: a turn more or less is the same facing, and
+    /// the engine keeps whatever turn count a rotation was set with (<c>Angle.Reduce</c> truncates toward zero, so -180 and
+    /// 180 stay apart). A value that rounds onto -180 renders as 180, and a negative zero as zero.
+    /// </summary>
+    public static string RenderDegrees(Angle angle)
+    {
+        var degrees = angle.Degrees % 360;
+        if (degrees > 180)
+            degrees -= 360;
+        else if (degrees <= -180)
+            degrees += 360;
+
+        degrees = Math.Round(degrees, 1);
+        if (degrees <= -180)
+            degrees += 360;
+
+        return (degrees + 0d).ToString("F1", CultureInfo.InvariantCulture);
+    }
+
+    /// <summary>
     /// The player-visible state of a component the loader rebuilds by design. The grid's own transform
     /// is its placement in the world, which the retrieve chooses, so only its anchoring is kept.
     /// </summary>
@@ -623,7 +643,7 @@ public sealed partial class DrydockFidelitySystem
                 snapshot.Values[prefix + "anchored"] = Bool(xform.Anchored);
                 if (path != "grid")
                 {
-                    snapshot.Values[prefix + "rotation"] = xform.LocalRotation.Degrees.ToString("F1", CultureInfo.InvariantCulture);
+                    snapshot.Values[prefix + "rotation"] = RenderDegrees(xform.LocalRotation);
                     snapshot.Values[prefix + "parent"] = RefPath(xform.ParentUid, pathOf);
                 }
                 break;

@@ -65,6 +65,9 @@ public sealed partial class DrydockSystem
     [Dependency] private ShuttleConsoleLockSystem _consoleLock = default!;
     [Dependency] private SharedArtifactAnalyzerSystem _artifactAnalyzer = default!;
 
+    /// <summary>The last retrieve's entities by the id each was loaded under in its image, for tests. Overwritten per load.</summary>
+    public IReadOnlyDictionary<EntityUid, long>? LastRetrieveIds;
+
     /// <summary>
     /// Retrieves a stored ship and presents it at <paramref name="stationUid"/>.
     ///
@@ -629,6 +632,7 @@ public sealed partial class DrydockSystem
 
             var result = await session.Complete(slice);
             timer.Mark("complete");
+            LastRetrieveIds = result.Ids;
             Log.Info($"Drydock: {ctx.ShipId} revision {revision} loaded {result.Ids.Count} entities; "
                      + $"severed {result.Severed.Count}, manifest missing {result.Manifest.Missing.Values.Sum()} and refused {result.Manifest.Refused.Values.Sum()}, "
                      + $"appearance refused {result.AppearanceRefused.Values.Sum()}, unresolved prototypes {result.UnresolvedPrototypes.Count}, "

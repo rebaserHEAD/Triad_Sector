@@ -636,16 +636,18 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
         private static int CacheLinesExempted;
 
         /// <summary>
-        /// Whether a line the registry classifies as derived is back at its stored value by the late snapshot, so the load
-        /// reset a cache and its owner refilled it and nothing accumulates, whatever the two trips' steps look like. That is
-        /// the one case the compounding rule gets wrong for a derived key: a float cache renders its last digit from noise, so
-        /// its reset on trip 2 misses "repeats" by that digit and reads as the same step taken again (a gas canister's
-        /// pressure cache, 2788.5298 -> 0 then 2788.529 -> 0 on rung 104). Equal as text, or as numbers within
-        /// <see cref="LiveFloor"/> or a millionth of the value, whichever is larger. Counted, so the exemption shows.
+        /// Whether a line the registry classifies as derived or volatile is back at its stored value by the late snapshot, so
+        /// the load reset it, its owner recomputed it and nothing accumulates, whatever the two trips' steps look like. That is
+        /// the one case the compounding rule gets wrong for a key rebuilt after a load: a float renders its last digit from
+        /// noise, so its reset on trip 2 misses "repeats" by that digit and reads as the same step taken again (a gas
+        /// canister's pressure cache, 2788.5298 -> 0 then 2788.529 -> 0 on rung 104; a radiation collector's reading,
+        /// 7.928932 -> 0 then 7.9289284 -> 0 on rung 107). A live key is not exempt: it moves on its own, so being back where
+        /// it was is chance. Equal as text, or as numbers within <see cref="LiveFloor"/> or a millionth of the value,
+        /// whichever is larger. Counted, so the exemption shows.
         /// </summary>
         private static bool RefilledByLate(StateClass stateClass, string key, RoundTripResult result)
         {
-            if (stateClass != StateClass.Derived
+            if (stateClass is not (StateClass.Derived or StateClass.Volatile)
                 || !result.Before.Values.TryGetValue(key, out var before)
                 || !result.Late.Values.TryGetValue(key, out var late))
             {
@@ -655,13 +657,13 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             var refilled = before == late
                            || Number(before) is { } b && Number(late) is { } l && Math.Abs(l - b) <= Math.Max(LiveFloor, Math.Abs(b) * 1e-6);
             if (refilled)
-                DerivedLinesRefilled++;
+                RebuiltLinesRefilled++;
 
             return refilled;
         }
 
-        /// <summary>How many derived lines <see cref="RefilledByLate"/> kept classified since the last report, printed by <see cref="Report"/>.</summary>
-        private static int DerivedLinesRefilled;
+        /// <summary>How many derived or volatile lines <see cref="RefilledByLate"/> kept classified since the last report, printed by <see cref="Report"/>.</summary>
+        private static int RebuiltLinesRefilled;
 
         /// <summary>The family a line sorts into, and whether it was held back because it compounds (<see cref="Compounding"/>).</summary>
         private static (KnownFamily? Family, bool Compounds) FamilyFor(string line, string key, RoundTripResult result, RoundTripResult? previous,
@@ -744,6 +746,31 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
         }
 
         /// <summary>
+        /// A loose entity's rotation that moved less than a degree across the round trip: an item left on a deck settles
+        /// against the jolts of the store and the dock, and a turn that small is below what a player reads from a sprite.
+        /// Loose before and after, so an anchored entity's turn of any size stays a finding. The render is folded into one
+        /// turn (<see cref="DrydockFidelitySystem.RenderDegrees"/>), and the difference is taken across the fold, so 179.9
+        /// against -179.9 is two tenths.
+        /// </summary>
+        private static bool LooseTurnUnderADegree(string line, string key, RoundTripResult result)
+        {
+            if (!line.StartsWith("CHANGED", StringComparison.Ordinal) || SnapshotMember(key) != RotationMember)
+                return false;
+
+            var path = key[..key.IndexOf('|')];
+            if (result.Before.Values.GetValueOrDefault(path + "|TransformComponent.anchored") != "false"
+                || result.After.Values.GetValueOrDefault(path + "|TransformComponent.anchored") != "false"
+                || Number(result.Before.Values.GetValueOrDefault(key)) is not { } before
+                || Number(result.After.Values.GetValueOrDefault(key)) is not { } after)
+            {
+                return false;
+            }
+
+            var turn = Math.Abs(after - before) % 360;
+            return Math.Min(turn, 360 - turn) < 1;
+        }
+
+        /// <summary>
         /// A pipe-net gas key's value as a number, or null for any other key. A gas the render leaves out holds under
         /// 0.005 mol, so it reads as zero; a missing temperature is a net holding no gas, and has no value.
         /// </summary>
@@ -787,9 +814,10 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
         }
 
         /// <summary>
-        /// A codec-mode family: lines whose cause is read in code and cited, sorted apart so that a rung's findings are
-        /// what nobody has explained. A line sorts only when its predicate holds; anything near it that does not stays
-        /// a finding, and so does a line that compounds across the two trips, whatever its predicate (<see cref="FamilyFor"/>).
+        /// A family: lines whose cause is read in code and cited, sorted apart so that a rung's findings are what nobody has
+        /// explained. Codec mode sorts by all of them, drydock mode by <see cref="DrydockFamilies"/>. A line sorts only when
+        /// its predicate holds; anything near it that does not stays a finding, and so does a line that compounds across the
+        /// two trips, whatever its predicate (<see cref="FamilyFor"/>).
         /// </summary>
         private sealed record KnownFamily(string Name, string Receipt, Func<string, string, RoundTripResult, bool> Matches);
 
@@ -837,6 +865,30 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                 + "span the engine handed the handlers (EntityUnpausedEvent.PausedTime on the retrieved grid), and only where "
                 + "the time was exactly zero before and is that span after, within one tick.",
                 (line, key, result) => line.StartsWith("CHANGED", StringComparison.Ordinal) && ZeroShiftedByUnpause(key, result)),
+
+            // Ruled 2026-09-28: the sun tracker works in world space, and the dock chooses the hull's heading.
+            new(SolarFamily,
+                "Accepted: the sun tracker sets every panel's world rotation to its grid's target each update "
+                + "(PowerSolarSystem.cs:96-116) and its supply to its maximum times its coverage, which is that world rotation "
+                + "against the sun and an occlusion ray (PowerSolarSystem.cs:122-180), so a hull presented at another heading, "
+                + "beside another grid, comes back with other panel rotations and supplies. Sorted only on an entity carrying a "
+                + "solar panel, and only its rotation and maximum supply.",
+                (line, key, result) => line.StartsWith("CHANGED", StringComparison.Ordinal)
+                                       && SnapshotMember(key) is RotationMember or SolarSupplyMember
+                                       && result.Before.Values.ContainsKey(key[..key.IndexOf('|')] + "|SolarPanelComponent.<present>")),
+
+            // Ruled 2026-09-28: the rest of what the store's emptying of a vacant core changes on the core itself.
+            new(EmptiedCoreFamily,
+                "Accepted: the store deletes a vacant station AI core's brain (DrydockSystem.StationAi.cs:29-62), which the "
+                + "policy bucket sorts with its slot, and the core's own face follows the empty slot: its visual state goes to "
+                + "Empty, its telephone ends the call its brain held, and it takes back the core's name from the brain's. Sorted "
+                + "only on those three members of an entity whose mind slot held one entity before and none after.",
+                (line, key, result) => (line.StartsWith("CHANGED", StringComparison.Ordinal) || line.StartsWith("APPEARED", StringComparison.Ordinal))
+                                       && EmptiedCoreMembers.Contains(SnapshotMember(key))
+                                       && result.Before.Values.GetValueOrDefault(key[..key.IndexOf('|')] + MindSlotMember) is { } held
+                                       && held.EndsWith(" count=1", StringComparison.Ordinal)
+                                       && result.After.Values.GetValueOrDefault(key[..key.IndexOf('|')] + MindSlotMember) is { } emptied
+                                       && emptied.EndsWith(" count=0", StringComparison.Ordinal)),
 
             // What the manifest's fourth moment, after the first power solve, set back before it was cut (ruled 2026-09-19).
             new("re-armed by the power edge",
@@ -894,7 +946,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                 (line, key, result) => line.StartsWith("CHANGED", StringComparison.Ordinal) && CacheWaitsOn(key, result) == "H21"),
 
             // Ruled 2026-09-19, deliberately narrow: it may never absorb the state the load gets wrong.
-            new("charge state caught up with a live battery",
+            new(ChargeStateFamily,
                 "Accepted: an APC recomputes its charge state at most once a second (ApcSystem.cs:151), so a battery that "
                 + "crossed the 0.9 threshold in the last second before the store is stored a window behind itself, and the load "
                 + "computes it fresh from the same battery, whose charge the registry already treats as live "
@@ -1058,7 +1110,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             const string apc = "APCBasic@1,-10";
             const string state = $"{apc}|ApcComponent.~LastChargeState";
 
-            string? Sorted(string after, string late, float charge)
+            string? Sorted(string after, string late, float charge, IEnumerable<KnownFamily>? pool = null)
             {
                 var result = new RoundTripResult(new DrydockStateSnapshot(), new DrydockStateSnapshot(), new DrydockStateSnapshot(),
                     new DrydockStateSnapshot(), EntityUid.Invalid, 0, 0, 0, null);
@@ -1066,13 +1118,17 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                 result.Late.Values[state] = late;
                 result.After.Values[$"{apc}|BatteryComponent.CurrentCharge"] = charge.ToString(System.Globalization.CultureInfo.InvariantCulture);
                 result.After.Values[$"{apc}|BatteryComponent.MaxCharge"] = "50000";
-                return FamilyFor($"CHANGED  {state}: Charging -> {after}", state, result, null).Family?.Name;
+                return FamilyFor($"CHANGED  {state}: Charging -> {after}", state, result, null, pool).Family?.Name;
             }
 
             Assert.Multiple(() =>
             {
-                Assert.That(Sorted("Full", "Full", 50000), Is.EqualTo("charge state caught up with a live battery"),
+                Assert.That(Sorted("Full", "Full", 50000), Is.EqualTo(ChargeStateFamily),
                     "A state that settled on the Full the loaded battery gives has to sort.");
+                Assert.That(Sorted("Full", "Full", 50000, DrydockFamilies), Is.EqualTo(ChargeStateFamily),
+                    "It sorts in drydock mode by the same predicate.");
+                Assert.That(Sorted("Full", "Full", 25000, DrydockFamilies), Is.Null,
+                    "In drydock mode too, a Full the battery's own charge does not give stays a finding.");
                 Assert.That(Sorted("Lack", "Lack", 50000), Is.Null,
                     "The Lack of a battery not yet synced has to stay a finding, whatever the battery holds.");
                 Assert.That(Sorted("Full", "Full", 25000), Is.Null,
@@ -1330,6 +1386,180 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
         }
 
         /// <summary>
+        /// The rotation render's fold, with no server, on the renders the 2026-09-27 acceptance printed: a turn more or less
+        /// renders the same, and a quarter turn, or a tenth of a degree, still renders differently.
+        /// </summary>
+        [Test]
+        public void OnlyAWholeTurnRendersTheSame()
+        {
+            static string Render(double degrees) => DrydockFidelitySystem.RenderDegrees(Angle.FromDegrees(degrees));
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(Render(-360), Is.EqualTo(Render(0)), "A cigarette at -360 faces where it did at 0.");
+                Assert.That(Render(-180), Is.EqualTo(Render(180)), "A chair at -180 faces where it did at 180.");
+                Assert.That(Render(-179.96), Is.EqualTo(Render(179.96)), "Two sides of the fold that round onto it render once.");
+                Assert.That(Render(270), Is.EqualTo(Render(-90)), "Snack chips at 270 face where they did at -90.");
+                Assert.That(Render(-0.04), Is.EqualTo("0.0"), "A negative zero renders as zero.");
+                Assert.That(Render(90), Is.Not.EqualTo(Render(-90)), "A directional window turned half round is a different facing.");
+                Assert.That(Render(0.1), Is.Not.EqualTo(Render(0)), "The render keeps its tenth of a degree.");
+            });
+        }
+
+        /// <summary>
+        /// The loose-turn floor's control, with no server: a loose item that turned under a degree, across the fold as well,
+        /// is below the floor; the same turn on an anchored entity, a loose one that turned a degree, and one that was
+        /// anchored at either end stay findings.
+        /// </summary>
+        [Test]
+        public void OnlyALooseTurnUnderADegreeIsBelowTheFloor()
+        {
+            const string path = "Matchstick@1,2#2";
+            const string key = path + "|TransformComponent.rotation";
+
+            bool Below(string anchoredBefore, string anchoredAfter, string before, string after)
+            {
+                var result = new RoundTripResult(new DrydockStateSnapshot(), new DrydockStateSnapshot(), new DrydockStateSnapshot(),
+                    new DrydockStateSnapshot(), EntityUid.Invalid, 0, 0, 0, null);
+                result.Before.Values[path + "|TransformComponent.anchored"] = anchoredBefore;
+                result.After.Values[path + "|TransformComponent.anchored"] = anchoredAfter;
+                result.Before.Values[key] = before;
+                result.After.Values[key] = after;
+                return LooseTurnUnderADegree($"CHANGED  {key}: {before} -> {after}", key, result);
+            }
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(Below("false", "false", "0.3", "0.2"), Is.True, "A loose match that settled a tenth of a degree is below the floor.");
+                Assert.That(Below("false", "false", "179.9", "-179.9"), Is.True, "A loose item two tenths apart across the fold is below the floor.");
+                Assert.That(Below("true", "true", "0.3", "0.2"), Is.False, "An anchored entity's turn of any size stays a finding.");
+                Assert.That(Below("false", "false", "0.0", "1.0"), Is.False, "A loose item that turned a whole degree stays a finding.");
+                Assert.That(Below("true", "false", "0.3", "0.2"), Is.False, "An entity that came loose stays a finding.");
+            });
+        }
+
+        /// <summary>
+        /// The solar family's control, with no server, on rung 43's panel: a solar panel's rotation and maximum supply sort in
+        /// drydock mode; the same members on an entity with no panel, and another member of the panel, stay findings.
+        /// </summary>
+        [Test]
+        public void OnlyASolarPanelsTurnAndSupplySort()
+        {
+            const string panel = "SolarPanel@7,4";
+            const string window = "WindowReinforcedDirectional@-1,-1#0";
+
+            string? Sorted(string path, string member, bool hasPanel)
+            {
+                var key = $"{path}|{member}";
+                var result = new RoundTripResult(new DrydockStateSnapshot(), new DrydockStateSnapshot(), new DrydockStateSnapshot(),
+                    new DrydockStateSnapshot(), EntityUid.Invalid, 0, 0, 0, null);
+                if (hasPanel)
+                    result.Before.Values[path + "|SolarPanelComponent.<present>"] = "1";
+
+                return FamilyFor($"CHANGED  {key}: 0.0 -> -130.4", key, result, null, DrydockFamilies).Family?.Name;
+            }
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(Sorted(panel, RotationMember, true), Is.EqualTo(SolarFamily), "A panel the tracker turned sorts.");
+                Assert.That(Sorted(panel, SolarSupplyMember, true), Is.EqualTo(SolarFamily), "Its supply, which follows the turn, sorts.");
+                Assert.That(Sorted(window, RotationMember, false), Is.Null, "A window's rotation is no panel's, and stays a finding.");
+                Assert.That(Sorted(panel, "SolarPanelComponent.Coverage", true), Is.Null, "Another member of the panel stays a finding.");
+            });
+        }
+
+        /// <summary>
+        /// The emptied-core family's control, with no server, on rung 76's core: its visual state, telephone key and name sort
+        /// where the store emptied its mind slot; the same visual state on a core whose slot still holds its brain, and a
+        /// member outside the three on an emptied core, stay findings.
+        /// </summary>
+        [Test]
+        public void OnlyTheFaceOfACoreTheStoreEmptiedSorts()
+        {
+            const string core = "PlayerStationAiVessel@7,11";
+
+            string? Sorted(string verb, string member, string slotAfter)
+            {
+                var key = $"{core}|{member}";
+                var result = new RoundTripResult(new DrydockStateSnapshot(), new DrydockStateSnapshot(), new DrydockStateSnapshot(),
+                    new DrydockStateSnapshot(), EntityUid.Invalid, 0, 0, 0, null);
+                result.Before.Values[core + MindSlotMember] = "ContainerSlot occludes=true show=true count=1";
+                result.After.Values[core + MindSlotMember] = $"ContainerSlot occludes=true show=true {slotAfter}";
+                var line = verb == "APPEARED" ? $"APPEARED {key} (now EndingCall)" : $"CHANGED  {key}: Occupied -> Empty";
+                return FamilyFor(line, key, result, null, DrydockFamilies).Family?.Name;
+            }
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(Sorted("CHANGED", "Appearance.StationAiVisualState.Key", "count=0"), Is.EqualTo(EmptiedCoreFamily),
+                    "An emptied core's visual state sorts.");
+                Assert.That(Sorted("APPEARED", "Appearance.TelephoneVisuals.Key", "count=0"), Is.EqualTo(EmptiedCoreFamily),
+                    "Its telephone ending the brain's call sorts.");
+                Assert.That(Sorted("CHANGED", "MetaDataComponent.name", "count=0"), Is.EqualTo(EmptiedCoreFamily),
+                    "Its name back from the brain's sorts.");
+                Assert.That(Sorted("CHANGED", "Appearance.StationAiVisualState.Key", "count=1"), Is.Null,
+                    "A core that still holds its brain and changed face stays a finding.");
+                Assert.That(Sorted("CHANGED", "StationAiCoreComponent.RemoteEntity", "count=0"), Is.Null,
+                    "A member outside the three stays a finding on an emptied core.");
+            });
+        }
+
+        /// <summary>
+        /// The refill exemption's reach, with no server, on rung 107's radiation collector: a derived or volatile line back at
+        /// its stored value by the late snapshot is exempt; one the late snapshot still has at zero is not, and neither is a
+        /// live line back where it was, which is chance.
+        /// </summary>
+        [Test]
+        public void OnlyARebuiltLineTheLateSnapshotRefilledIsExempt()
+        {
+            const string key = "RadiationCollectorFullTank@-10,6|RadiationReceiverComponent.~CurrentRadiation";
+
+            bool Exempt(StateClass stateClass, string late)
+            {
+                var result = new RoundTripResult(new DrydockStateSnapshot(), new DrydockStateSnapshot(), new DrydockStateSnapshot(),
+                    new DrydockStateSnapshot(), EntityUid.Invalid, 0, 0, 0, null);
+                result.Before.Values[key] = "7.9289284";
+                result.After.Values[key] = "0";
+                result.Late.Values[key] = late;
+                return RefilledByLate(stateClass, key, result);
+            }
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(Registry["RadiationReceiverComponent.~CurrentRadiation"].Class, Is.EqualTo(StateClass.Volatile),
+                    "The control's control: the collector's reading is a volatile key.");
+                Assert.That(Exempt(StateClass.Volatile, "7.9289346"), Is.True, "A volatile reading back by the late snapshot is exempt.");
+                Assert.That(Exempt(StateClass.Derived, "7.9289346"), Is.True, "So is a derived one, as the canister's cache was.");
+                Assert.That(Exempt(StateClass.Volatile, "0"), Is.False, "One the late snapshot still has at zero is held back.");
+                Assert.That(Exempt(StateClass.Live, "7.9289346"), Is.False, "A live key back where it was is chance, and is held back.");
+            });
+        }
+
+        /// <summary>
+        /// The sum check's discount, with no server, on rung 35's extension-cable providers: a receiver the store removed by
+        /// rule leaves the stored sum, with anything inside it; one that is not named as removed stays in it.
+        /// </summary>
+        [Test]
+        public void OnlyAReceiverRemovedByRuleLeavesTheSum()
+        {
+            const string member = "ExtensionCableProviderComponent.~LinkedReceivers";
+            var snapshot = new DrydockStateSnapshot();
+            snapshot.Values[$"CableApcExtension@1,2|{member}"] = "count=3 [ComputerComms@1,2, AirlockGlass@1,1, ComputerShuttle@0,0]";
+            snapshot.Values[$"CableApcExtension@4,4|{member}"] = "count=2 [FactionLathe@4,4/board/Part, ComputerComms@1,23]";
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(TotalLessRemoved(snapshot, member, new List<string>()), Is.EqualTo(5), "The control: with nothing removed the sum is the total.");
+                Assert.That(TotalLessRemoved(snapshot, member, new List<string> { "ComputerComms@1,2" }), Is.EqualTo(4),
+                    "The removed comms console leaves the sum, and ComputerComms@1,23, a longer path, does not.");
+                Assert.That(TotalLessRemoved(snapshot, member, new List<string> { "FactionLathe@4,4" }), Is.EqualTo(4),
+                    "Something inside a removed entity leaves with it.");
+                Assert.That(TotalLessRemoved(snapshot, member, new List<string> { "AirlockGlass@1,1#0" }), Is.EqualTo(5),
+                    "A receiver not named as removed stays in the sum.");
+            });
+        }
+
+        /// <summary>
         /// The no-growth guard on the registry, through the report itself: a line the registry classifies as derived (a gas
         /// canister's pressure cache) stays classified on round trip 1 and when it repeats, and is a finding when it grows
         /// again on round trip 2. The server is only for the prototypes the report reads.
@@ -1455,8 +1685,34 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
         /// <summary>The family for an unset time the unpause shifted, by name.</summary>
         private const string UnpauseShiftedZeroFamily = "zero shifted by the unpause";
 
-        /// <summary>The families a drydock-mode round trip sorts by: those whose cause is its paused retrieve.</summary>
-        private static readonly KnownFamily[] DrydockFamilies = KnownFamilies.Where(f => f.Name == UnpauseShiftedZeroFamily).ToArray();
+        /// <summary>The family for a solar panel the sun tracker turned, by name.</summary>
+        private const string SolarFamily = "solar panel turned by the sun tracker";
+
+        private const string RotationMember = "TransformComponent.rotation";
+        private const string SolarSupplyMember = "PowerSupplierComponent.MaxSupply";
+
+        /// <summary>The family for a station AI core the store emptied, by name.</summary>
+        private const string EmptiedCoreFamily = "station AI core the store emptied";
+
+        private const string MindSlotMember = "|ContainerManagerComponent.container.station_ai_mind_slot";
+
+        private static readonly HashSet<string> EmptiedCoreMembers = new(StringComparer.Ordinal)
+        {
+            "Appearance.StationAiVisualState.Key",
+            "Appearance.TelephoneVisuals.Key",
+            "MetaDataComponent.name",
+        };
+
+        /// <summary>The family for an APC state that caught up with its battery, by name.</summary>
+        private const string ChargeStateFamily = "charge state caught up with a live battery";
+
+        /// <summary>
+        /// The families a drydock-mode round trip sorts by: those whose cause is its paused retrieve, its placement at the dock,
+        /// or its store, and the charge state, whose predicate reads only the snapshots and so holds in any mode.
+        /// </summary>
+        private static readonly KnownFamily[] DrydockFamilies = KnownFamilies
+            .Where(f => f.Name is UnpauseShiftedZeroFamily or SolarFamily or EmptiedCoreFamily or ChargeStateFamily)
+            .ToArray();
 
         /// <summary>
         /// Whether a time line is an unset time the unpause shifted: zero before, and after the span the retrieved grid spent
@@ -1966,6 +2222,9 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                 recorder.Recording = false;
                 if (recorder.PausedTime.TryGetValue(retrieved.Grid!.Value, out var span))
                     pausedSpan = span;
+
+                Assert.That(drydock.LastRetrieveIds, Is.Not.Null.And.Not.Empty, "The retrieve handed over no id map for the tie-break.");
+                LastLoadIds = drydock.LastRetrieveIds!.ToDictionary(entry => entry.Key, entry => TieBreakReversed ? -entry.Value : entry.Value);
             });
 
             var shipTicks = ran.GetValueOrDefault(grid) + ran.GetValueOrDefault(retrieved.Grid!.Value);
@@ -2174,7 +2433,8 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
 
             var diff = DrydockStateSnapshot.Diff(result.Before, result.After);
             var moved = MovedLines(diff);
-            var consequences = PolicyConsequences(diff, result.Before, protoMan);
+            var removedByRule = RemovedByRule(diff, protoMan);
+            var consequences = PolicyConsequences(removedByRule, result.Before);
             var familyPool = CodecMode ? KnownFamilies : EngineMode ? null : DrydockFamilies;
 
             foreach (var line in diff)
@@ -2205,8 +2465,8 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                 }
 
                 // A family whose cause is read in code, which would otherwise bury the new ones by its volume; never one that
-                // compounds across the two trips, which stays a finding. Drydock mode sorts only by the families of its paused
-                // retrieve; codec mode by all of them.
+                // compounds across the two trips, which stays a finding. Drydock mode sorts only by DrydockFamilies; codec mode
+                // by all of them.
                 if (familyPool != null && key != null && FamilyFor(line, key, result, previous, familyPool) is ({ } family, var grew))
                 {
                     if (grew)
@@ -2241,7 +2501,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                 }
                 else if (RecreatedTransient(line, key, result, protoMan) != null)
                     recreatedLines.Add(line);
-                else if (key != null && PipeGasWithinResolution(key, result))
+                else if (key != null && (PipeGasWithinResolution(key, result) || LooseTurnUnderADegree(line, key, result)))
                     belowFloorLines.Add(line);
                 else if (key != null && Classify(key, result, recovery, out var belowFloor) is { } stateClass)
                 {
@@ -2266,7 +2526,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
 
             foreach (var member in TotalChecked)
             {
-                var before = Total(result.Before, member);
+                var before = TotalLessRemoved(result.Before, member, removedByRule);
                 var after = Total(result.After, member);
                 if (before != after)
                     findings.Add($"CHANGED  grid|{member}#total: {before} -> {after}");
@@ -2398,9 +2658,9 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                 sb.AppendLine($"[ladder] round trip {trip}: {CacheLinesExempted} BUI state cache line(s) ended smaller each store and were left with their family, "
                               + "which is bounded at empty and filled at the open (ruled 2026-09-19); growth would still have held them back.");
                 CacheLinesExempted = 0;
-                sb.AppendLine($"[ladder] round trip {trip}: {DerivedLinesRefilled} derived line(s) took round trip 1's step again and were back at "
-                              + "their stored value by the late snapshot, a cache the load reset and its owner refilled, so they stayed classified.");
-                DerivedLinesRefilled = 0;
+                sb.AppendLine($"[ladder] round trip {trip}: {RebuiltLinesRefilled} derived or volatile line(s) took round trip 1's step again and were back at "
+                              + "their stored value by the late snapshot, a value the load reset and its owner recomputed, so they stayed classified.");
+                RebuiltLinesRefilled = 0;
             }
 
             // Every line the no-growth rule kept from an explanation, one per line so a run over many rungs can be grepped.
@@ -2523,18 +2783,9 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
         /// <c>SharedMoverController.OnRelayShutdown</c> strips when the brain that sourced it goes.
         /// </summary>
         private static (HashSet<string> Containers, HashSet<string> Components) PolicyConsequences(
-            List<string> diff,
-            DrydockStateSnapshot before,
-            IPrototypeManager protoMan)
+            List<string> removed,
+            DrydockStateSnapshot before)
         {
-            var removed = new List<string>();
-            foreach (var line in diff)
-            {
-                var key = KeyOf(line);
-                if (key != null && key.Contains("|<entity:") && IsRemovedByRule(line, key, protoMan))
-                    removed.Add(key[..key.IndexOf('|')]);
-            }
-
             var containers = new HashSet<string>(StringComparer.Ordinal);
             var components = new HashSet<string>(StringComparer.Ordinal);
             if (removed.Count == 0)
@@ -2559,6 +2810,20 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             }
 
             return (containers, components);
+        }
+
+        /// <summary>The path of every whole entity the diff has gone that was removed by rule (<see cref="IsRemovedByRule"/>).</summary>
+        private static List<string> RemovedByRule(List<string> diff, IPrototypeManager protoMan)
+        {
+            var removed = new List<string>();
+            foreach (var line in diff)
+            {
+                var key = KeyOf(line);
+                if (key != null && key.Contains("|<entity:") && IsRemovedByRule(line, key, protoMan))
+                    removed.Add(key[..key.IndexOf('|')]);
+            }
+
+            return removed;
         }
 
         private static bool IsPolicyConsequence(string? key, (HashSet<string> Containers, HashSet<string> Components) consequences)
@@ -2751,6 +3016,36 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             return snapshot.Values
                 .Where(kv => kv.Key.EndsWith(suffix, StringComparison.Ordinal))
                 .Sum(kv => Number(kv.Value) ?? 0);
+        }
+
+        /// <summary>
+        /// <see cref="Total"/> less every entry that names an entity the store removed by rule, or something inside one: a
+        /// receiver the purge or the strip took leaves each provider's list with it, which is the rule and not a lost
+        /// pairing (rung 35: a comms console; rung 109: a gunnery server and a faction lathe). An entry naming anything else
+        /// counts, so a receiver lost without a removal still moves the sum.
+        /// </summary>
+        private static double TotalLessRemoved(DrydockStateSnapshot snapshot, string member, IReadOnlyCollection<string> removed)
+        {
+            var total = Total(snapshot, member);
+            if (removed.Count == 0)
+                return total;
+
+            var suffix = "|" + member;
+            foreach (var (key, value) in snapshot.Values)
+            {
+                var open = value.IndexOf('[');
+                var close = value.LastIndexOf(']');
+                if (!key.EndsWith(suffix, StringComparison.Ordinal) || open < 0 || close <= open)
+                    continue;
+
+                foreach (var entry in value[(open + 1)..close].Split(", ", StringSplitOptions.RemoveEmptyEntries))
+                {
+                    if (removed.Any(path => Names(entry, path)))
+                        total--;
+                }
+            }
+
+            return total;
         }
 
         /// <summary>
