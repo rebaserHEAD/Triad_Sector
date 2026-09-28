@@ -65,6 +65,7 @@ public sealed partial class ShuttleConsoleLockSystem : SharedShuttleConsoleLockS
             gridLock.Locked = !string.IsNullOrEmpty(component.ShuttleId); // Lock if it has a shuttle ID
             gridLock.ShuttleId = component.ShuttleId;
             Dirty(gridUid, gridLock);
+            UpdateGridAppearance(gridUid); // Triad: the lock datum follows the lock, not the startup
             Log.Debug("Created grid lock component for grid {0} with shuttle ID {1}", gridUid, component.ShuttleId);
         }
 
@@ -87,6 +88,7 @@ public sealed partial class ShuttleConsoleLockSystem : SharedShuttleConsoleLockS
             {
                 gridLock.Locked = false;
                 Dirty(gridUid, gridLock);
+                UpdateGridAppearance(gridUid); // Triad: the lock datum follows the lock, not the startup
             }
         }
     }
@@ -346,6 +348,7 @@ public sealed partial class ShuttleConsoleLockSystem : SharedShuttleConsoleLockS
         {
             // Lock individual console
             lockComp.Locked = true;
+            UpdateAppearance(console, lockComp); // Triad: the lock datum follows the lock, not the startup
         }
 
         _audio.PlayPvs(idComp.SwipeSound, console);
@@ -398,6 +401,7 @@ public sealed partial class ShuttleConsoleLockSystem : SharedShuttleConsoleLockS
             else
             {
                 lockComp.Locked = false;
+                UpdateAppearance(console, lockComp); // Triad: the lock datum follows the lock, not the startup
             }
             return true;
         }
@@ -442,6 +446,7 @@ public sealed partial class ShuttleConsoleLockSystem : SharedShuttleConsoleLockS
         {
             // Unlock individual console
             lockComp.Locked = false;
+            UpdateAppearance(console, lockComp); // Triad: the lock datum follows the lock, not the startup
         }
 
         _audio.PlayPvs(new SoundPathSpecifier("/Audio/Machines/id_swipe.ogg"), console);
@@ -517,6 +522,7 @@ public sealed partial class ShuttleConsoleLockSystem : SharedShuttleConsoleLockS
         {
             // Lock individual console
             lockComp.Locked = true;
+            UpdateAppearance(console, lockComp); // Triad: the lock datum follows the lock, not the startup
         }
 
         _audio.PlayPvs(new SoundPathSpecifier("/Audio/Machines/id_swipe.ogg"), console);
@@ -617,6 +623,7 @@ public sealed partial class ShuttleConsoleLockSystem : SharedShuttleConsoleLockS
             else
             {
                 lockComp.Locked = false;
+                UpdateAppearance(console, lockComp); // Triad: the lock datum follows the lock, not the startup
             }
             return true;
         }
@@ -693,6 +700,7 @@ public sealed partial class ShuttleConsoleLockSystem : SharedShuttleConsoleLockS
         {
             // Unlock individual console
             lockComp.Locked = false;
+            UpdateAppearance(console, lockComp); // Triad: the lock datum follows the lock, not the startup
         }
 
         _audio.PlayPvs(idComp.SwipeSound, console);
@@ -722,11 +730,13 @@ public sealed partial class ShuttleConsoleLockSystem : SharedShuttleConsoleLockS
             gridLock.ShuttleId = shuttleId;
             gridLock.Locked = shouldLock;
             Dirty(gridUid.Value, gridLock);
+            UpdateGridAppearance(gridUid.Value); // Triad: the lock datum follows the lock, not the startup
         }
         else
         {
             // Fallback to individual console lock
             lockComp.Locked = shouldLock;
+            UpdateAppearance(console, lockComp); // Triad: the lock datum follows the lock, not the startup
         }
 
         // Remove any pilots when locking the console

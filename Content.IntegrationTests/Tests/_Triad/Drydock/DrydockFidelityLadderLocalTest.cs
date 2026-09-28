@@ -154,6 +154,7 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
             "WarpPointComponent.Location",
             "ShipGridLockComponent",
             "ShuttleConsoleLockComponent",
+            "Appearance.ShuttleConsoleLockVisuals.Locked",
             "ShipActivityComponent",
             "NFHolopadShip*:LabelComponent",
             "NFHolopadShip*:NameModifierComponent",

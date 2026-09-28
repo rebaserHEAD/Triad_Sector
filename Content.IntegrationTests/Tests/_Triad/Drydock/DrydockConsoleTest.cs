@@ -28,6 +28,7 @@ using Content.Shared._NF.Shipyard.Prototypes;
 using Content.Shared._Triad.CCVar;
 using Content.Shared._Triad.Shipyard.Save;
 using Content.Shared._Triad.ShipSize;
+using Content.Shared.Access.Components;
 using Content.Shared.Containers.ItemSlots;
 using Content.Shared.Shuttles.Components;
 using Content.Shared.Station.Components;
@@ -183,6 +184,86 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                 Assert.That(retrievedLock, Is.Not.Null, "The locked helm has to come back with the ship.");
                 Assert.That(retrievedLock!.ShuttleId, Is.EqualTo(retrieved.Value.ToString()),
                     "A console lock holds the ship's uid as a string; retrieve has to re-key it to the reborn grid or the deed never opens it.");
+            });
+
+            await pair.CleanReturnAsync();
+        }
+
+        /// <summary>
+        /// A retrieve locks the ship as a purchase does (<c>DrydockSystem.Retrieve.cs:1009-1014</c>), and a console's
+        /// <see cref="ShuttleConsoleLockVisuals.Locked"/> datum is a projection of that lock. A helm its captain unlocked
+        /// comes back locked, so the datum reads locked, not the unlocked state its startup read from the loaded grid lock.
+        /// </summary>
+        [Test]
+        public async Task AHelmStoredUnlockedComesBackLockedAndItsAppearanceSaysSo()
+        {
+            await using var pair = await PoolManager.GetServerClient(new PoolSettings { Connected = true });
+            using var _ = ExpectDockJointLog(pair);
+            var server = pair.Server;
+            var entMan = server.EntMan;
+
+            var playerMan = server.ResolveDependency<IPlayerManager>();
+            var shipyard = server.System<ShipyardSystem>();
+            var consoleLock = server.System<ShuttleConsoleLockSystem>();
+            var appearance = server.System<SharedAppearanceSystem>();
+
+            var session = playerMan.Sessions.First();
+            var (_, _, ship, console, consoleComp, card, operatorEnt) = await BuildConsoleAndShip(pair, session.UserId);
+
+            // Locked to the ship as a purchase leaves it, then swiped open with the deed card as a captain does. The card
+            // is an id card only for the swipe: the fixture builds it without one, and the console's store reads the card.
+            EntityUid helm = default;
+            var unlocked = false;
+            await server.WaitPost(() =>
+            {
+                helm = entMan.SpawnEntity(null, new EntityCoordinates(ship, new Vector2(1.5f, 1.5f)));
+                entMan.EnsureComponent<AppearanceComponent>(helm);
+                var lockComp = entMan.EnsureComponent<ShuttleConsoleLockComponent>(helm);
+                consoleLock.SetShuttleId(helm, ship.ToString(), lockComp);
+
+                var idComp = entMan.EnsureComponent<IdCardComponent>(card);
+                unlocked = consoleLock.TryUnlock(helm, card, lockComp, idComp);
+                entMan.RemoveComponent<IdCardComponent>(card);
+            });
+
+            // The controls: the swipe opened the helm and its datum reads open, so "reads locked" below is a change.
+            await server.WaitAssertion(() =>
+            {
+                Assert.That(unlocked, Is.True, "The deed card for this ship opens its helm.");
+                Assert.That(consoleLock.GetEffectiveLockState(helm, entMan.GetComponent<ShuttleConsoleLockComponent>(helm)), Is.False);
+                Assert.That(appearance.TryGetData<bool>(helm, ShuttleConsoleLockVisuals.Locked, out var before), Is.True);
+                Assert.That(before, Is.False, "A swipe moves the lock, and the datum follows it.");
+            });
+
+            var stored = await DrydockTestHelpers.RunOnServer(pair,
+                () => shipyard.TryDrydockStore(console, consoleComp, operatorEnt, ShipyardConsoleUiKey.Shipyard));
+            Assert.That(stored?.Result, Is.EqualTo(DrydockStoreResult.Success));
+            await pair.RunTicksSync(5);
+
+            var retrieved = await DrydockTestHelpers.RunOnServer(pair,
+                () => shipyard.TryDrydockRetrieve(console, consoleComp, operatorEnt, stored!.Value.ShipId!.Value, ShipyardConsoleUiKey.Shipyard));
+            Assert.That(retrieved, Is.Not.Null, "The owner takes back the ship they just put away.");
+            await pair.RunTicksSync(5);
+
+            await server.WaitAssertion(() =>
+            {
+                EntityUid? retrievedHelm = null;
+                ShuttleConsoleLockComponent? lockComp = null;
+                var locks = entMan.AllEntityQueryEnumerator<ShuttleConsoleLockComponent, TransformComponent>();
+                while (locks.MoveNext(out var lockUid, out var lockHere, out var xform))
+                {
+                    if (xform.GridUid != retrieved!.Value)
+                        continue;
+
+                    retrievedHelm = lockUid;
+                    lockComp = lockHere;
+                }
+
+                Assert.That(retrievedHelm, Is.Not.Null, "The helm comes back with the ship.");
+                Assert.That(consoleLock.GetEffectiveLockState(retrievedHelm!.Value, lockComp!), Is.True,
+                    "A retrieve locks the ship, as a purchase does.");
+                Assert.That(appearance.TryGetData<bool>(retrievedHelm.Value, ShuttleConsoleLockVisuals.Locked, out var after), Is.True);
+                Assert.That(after, Is.True, "The datum follows the retrieve's relock, not the unlocked grid lock its startup read at load.");
             });
 
             await pair.CleanReturnAsync();

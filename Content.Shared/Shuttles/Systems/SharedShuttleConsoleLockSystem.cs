@@ -83,6 +83,20 @@ public abstract partial class SharedShuttleConsoleLockSystem : EntitySystem
         Appearance.SetData(uid, ShuttleConsoleLockVisuals.Locked, effectiveLocked, appearance);
     }
 
+    // Triad: ShuttleConsoleLockVisuals.Locked follows the lock, not the startup, so it is re-derived wherever the lock
+    // changes. A grid lock is the effective state of every console on its grid (GetEffectiveLockState), so a change to it
+    // refreshes them all. A console not yet started is skipped, since its own startup computes it (OnStartup). A hull
+    // carries a few of these consoles, so a query over them costs less than a walk of the hull's tree.
+    protected void UpdateGridAppearance(EntityUid gridUid)
+    {
+        var query = AllEntityQuery<ShuttleConsoleLockComponent, TransformComponent>();
+        while (query.MoveNext(out var uid, out var comp, out var xform))
+        {
+            if (xform.GridUid == gridUid && comp.Running)
+                UpdateAppearance(uid, comp);
+        }
+    }
+
     /// <summary>
     /// Sets the lock state for a ship grid
     /// </summary>
@@ -99,6 +113,7 @@ public abstract partial class SharedShuttleConsoleLockSystem : EntitySystem
             gridLock.ShuttleId = shuttleId;
 
         Dirty(gridUid, gridLock);
+        UpdateGridAppearance(gridUid); // Triad: the lock datum follows the lock, not the startup
     }
 
 
@@ -119,6 +134,7 @@ public abstract partial class SharedShuttleConsoleLockSystem : EntitySystem
             gridLock.Locked = true; // Ships start locked by default
             gridLock.ShuttleId = shuttleId ?? deed.ShuttleUid?.ToString();
             Dirty(gridUid, gridLock);
+            UpdateGridAppearance(gridUid); // Triad: the lock datum follows the lock, not the startup
         }
     }
 
