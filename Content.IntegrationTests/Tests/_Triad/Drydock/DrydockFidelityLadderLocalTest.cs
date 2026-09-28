@@ -806,11 +806,6 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                                        && result.Before.Values.TryGetValue(key, out var before)
                                        && result.After.Values.TryGetValue(key, out var after)
                                        && SameVertexSet(before, after)),
-            new("F23-trade-crate",
-                "OWED, not explained: a trade crate's init re-draws its destination, re-sets its icon, relabels it and restarts "
-                + "its express deadline (CargoSystem.TradeCrates.cs:53-81); the loader is to store the destination by prototype.",
-                (_, key, result) => TradeCrateMembers.Contains(key[(key.IndexOf('|') + 1)..])
-                                    && result.Before.Values.ContainsKey(key[..key.IndexOf('|')] + "|TradeCrateComponent.<present>")),
 
             new("F20-collection-master",
                 "Same collection, other master: startup's anchor event and every node-group rebuild re-run "
@@ -1498,17 +1493,6 @@ namespace Content.IntegrationTests.Tests._Triad.Drydock
                        .ToHashSet(StringComparer.Ordinal)
                        .SetEquals(entriesAfter.Where(e => !e.StartsWith("MainWire=", StringComparison.Ordinal)));
         }
-
-        /// <summary>What <c>OnTradeCrateInit</c> rewrites (CargoSystem.TradeCrates.cs:58-80), as deep-snapshot members.</summary>
-        private static readonly HashSet<string> TradeCrateMembers = new(StringComparer.Ordinal)
-        {
-            "TradeCrateComponent.~DestinationStation",
-            $"TradeCrateComponent.~ExpressDeliveryTime{DrydockFidelitySystem.TimeSuffix}",
-            "Appearance.TradeCrateVisuals.DestinationIcon",
-            "Appearance.TradeCrateVisuals.IsPriority",
-            "LabelComponent.CurrentLabel",
-            "MetaDataComponent.name",
-        };
 
         /// <summary>Two polygon renders (one <c>- x,y</c> per vertex) holding the same vertices in any order.</summary>
         private static bool SameVertexSet(string before, string after)
