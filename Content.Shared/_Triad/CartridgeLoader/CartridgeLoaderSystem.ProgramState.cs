@@ -101,6 +101,11 @@ public sealed partial class CartridgeLoaderSystem
     /// </summary>
     private void OnProgramStateGetAttempt(Entity<CartridgeUiStateComponent> ent, ref ComponentGetStateAttemptEvent args)
     {
+        // A cleared state goes to everyone: it tells nothing, and the client that held the old one has to drop it
+        // even though the cartridge is off its loader by now.
+        if (ent.Comp.State is null)
+            return;
+
         args.Cancelled = args.Player?.AttachedEntity is not { } viewer
                          || !TryComp(ent, out CartridgeComponent? cartridge)
                          || cartridge.LoaderUid is not { } loaderUid

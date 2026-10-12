@@ -23,6 +23,8 @@ public sealed partial class NFLedgerCartridgeSystem : EntitySystem
     private void OnUiReady(Entity<NFLedgerCartridgeComponent> ent, ref CartridgeUiReadyEvent args)
     {
         // Triad: published onto the cartridge, and cleared when there is no ledger so no old one stays up
+        // if (GetUIState(out var uiState))
+        //     UpdateUI(args.Loader, uiState);
         if (GetUIState(out var uiState))
             UpdateUI(ent, uiState);
         else
@@ -75,6 +77,6 @@ public sealed partial class NFLedgerCartridgeSystem : EntitySystem
 
     private void UpdateUI(EntityUid cartridge, NFLedgerState state) // Triad: loader<cartridge
     {
-        _cartridgeLoader.UpdateCartridgeUiState(cartridge, state);
+        _cartridgeLoader.UpdateCartridgeUiState(cartridge, state); // Triad: loader<cartridge
     }
 }

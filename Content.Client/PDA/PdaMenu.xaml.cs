@@ -396,7 +396,7 @@ namespace Content.Client.PDA
         }
 
         // Triad: the balance shown is the viewer's own bank account. That component is networked to its owner, so the
-        // figure follows the money live and no shared BUI state carries one player's balance to another.
+        // figure follows the money live, and the PDA's shared ui state carries no balance (PdaSystem.UpdatePdaUi).
         private void UpdateBalance()
         {
             var balance = _entMan.TryGetComponent(_player.LocalEntity, out BankAccountComponent? bank) ? bank.Balance : 0;

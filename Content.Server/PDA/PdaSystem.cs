@@ -245,8 +245,11 @@ namespace Content.Server.PDA
             var programs = GetNetEntityList(_cartridgeLoader.GetAllPrograms(uid).ToList());
             var id = CompOrNull<IdCardComponent>(pda.ContainedId);
             var balance = 0; // frontier
-            if (actor_uid != null && TryComp<BankAccountComponent>(actor_uid, out var account)) // frontier
-                balance = account.Balance; // frontier
+            // Triad: removed, this state reaches every client with the PDA in view. The client reads the viewer's
+            // own bank account (PdaMenu.UpdateBalance) and nothing reads this field.
+            // if (actor_uid != null && TryComp<BankAccountComponent>(actor_uid, out var account)) // frontier
+            //     balance = account.Balance; // frontier
+            // End Triad
             var ownedShipName = ""; // Frontier
             if (TryComp<ShuttleDeedComponent>(pda.ContainedId, out var shuttleDeedComp)) // Frontier
                 ownedShipName = ShipyardSystem.GetFullName(shuttleDeedComp); // Frontier

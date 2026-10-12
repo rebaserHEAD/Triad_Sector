@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using Content.Server.CartridgeLoader.Cartridges;
 using Content.Server.PDA;
 using Content.Shared._Triad.CartridgeLoader;
 using Content.Shared.CartridgeLoader;
@@ -6,6 +7,7 @@ using Content.Shared.CartridgeLoader.Cartridges;
 using Content.Shared.Containers;
 using Content.Shared.Containers.ItemSlots;
 using Content.Shared.EntityTable.EntitySelectors;
+using Content.Shared.Interaction;
 using Content.Shared.PDA;
 using Robust.Server.GameObjects;
 using Robust.Shared.GameObjects;
@@ -22,6 +24,7 @@ namespace Content.IntegrationTests.Tests._Triad.CartridgeLoader;
 public sealed class CartridgeUiStateTest
 {
     private const string Pda = "PassengerPDA";
+    private const string ManyProgramPda = "NFAdminPDA";
     private const string LooseCartridge = "TriadTestLooseCartridge";
     private const string SelfInstallingCartridge = "TriadTestSelfInstallingCartridge";
 
@@ -69,19 +72,25 @@ public sealed class CartridgeUiStateTest
             var firstState = new NotekeeperUiState(new List<string> { "first" });
             var secondState = new NetProbeUiState(new List<ProbedNetworkDevice>());
 
-            // The shell, two programs and the loader itself, all written inside one tick.
+            // The shell and two programs, all written inside one tick.
             pdaSystem.UpdatePdaUi(pda);
+            ui.TryGetUiState<BoundUserInterfaceState>(pda, PdaUiKey.Key, out var shell);
+
             loader.UpdateCartridgeUiState(first, firstState);
             loader.UpdateCartridgeUiState(second, secondState);
-            loader.UpdateUiState(pda);
+            ui.TryGetUiState<BoundUserInterfaceState>(pda, PdaUiKey.Key, out var afterPrograms);
 
-            ui.TryGetUiState<BoundUserInterfaceState>(pda, PdaUiKey.Key, out var slot);
+            // Then the loader's own update, which the PDA answers with a fresh shell state.
+            loader.UpdateUiState(pda);
+            ui.TryGetUiState<BoundUserInterfaceState>(pda, PdaUiKey.Key, out var afterLoader);
 
             Assert.Multiple(() =>
             {
                 Assert.That(entMan.GetComponent<CartridgeUiStateComponent>(first).State, Is.SameAs(firstState));
                 Assert.That(entMan.GetComponent<CartridgeUiStateComponent>(second).State, Is.SameAs(secondState));
-                Assert.That(slot, Is.InstanceOf<PdaUpdateState>(), "the PDA's BUI slot still holds the shell state");
+                Assert.That(shell, Is.InstanceOf<PdaUpdateState>());
+                Assert.That(afterPrograms, Is.SameAs(shell), "a program publishing leaves the PDA's BUI slot alone");
+                Assert.That(afterLoader, Is.InstanceOf<PdaUpdateState>(), "a loader update puts a shell state in the slot, not a bare loader state");
             });
 
             entMan.DeleteEntity(pda);
@@ -188,8 +197,124 @@ public sealed class CartridgeUiStateTest
     }
 
     /// <summary>
-    /// Every loader ends up holding each program its prototype's fill names. A fill that names a missing container or
-    /// an entity that will not go in leaves a PDA short of programs with no error at spawn.
+    /// The uid in a loader ui message comes from the client. Install acts only on the cartridge in this loader's
+    /// slot, and Uninstall only on a program that can be uninstalled.
+    /// </summary>
+    [Test]
+    public async Task UiMessagesActOnlyOnWhatTheLoaderAllows()
+    {
+        await using var pair = await PoolManager.GetServerClient();
+        var server = pair.Server;
+        var entMan = server.ResolveDependency<IEntityManager>();
+        var loader = entMan.System<CartridgeLoaderSystem>();
+        var slots = entMan.System<ItemSlotsSystem>();
+        var map = await pair.CreateTestMap();
+
+        EntityUid pda = default;
+        EntityUid stray = default;
+        EntityUid slotted = default;
+        var preinstalled = 0;
+
+        void Send(EntityUid target, CartridgeUiMessageAction action)
+        {
+            // Raised the way the engine raises a BUI message: directed at the ui's owner, typed by its runtime type.
+            object message = new CartridgeLoaderUiMessage(entMan.GetNetEntity(target), action) { Actor = pda };
+            entMan.EventBus.RaiseLocalEvent(pda, message);
+        }
+
+        await server.WaitAssertion(() =>
+        {
+            pda = entMan.SpawnEntity(Pda, map.MapCoords);
+            stray = entMan.SpawnEntity(LooseCartridge, map.MapCoords);
+            preinstalled = loader.GetPreinstalledPrograms(pda).Count;
+
+            // A preinstalled program, and a cartridge that is not in this PDA.
+            Send(loader.GetPreinstalledPrograms(pda)[0], CartridgeUiMessageAction.Uninstall);
+            Send(stray, CartridgeUiMessageAction.Install);
+        });
+
+        await server.WaitRunTicks(2);
+
+        await server.WaitAssertion(() =>
+        {
+            Assert.Multiple(() =>
+            {
+                Assert.That(loader.GetPreinstalledPrograms(pda), Has.Count.EqualTo(preinstalled), "a preinstalled program is not uninstalled");
+                Assert.That(loader.GetRemovablePrograms(pda), Is.Empty, "a cartridge outside the slot is not installed");
+                Assert.That(entMan.Deleted(stray), Is.False);
+            });
+
+            // The same two messages for what the loader does allow, so the refusals above are not the message going nowhere.
+            slotted = entMan.SpawnEntity(LooseCartridge, map.MapCoords);
+            var loaderComp = entMan.GetComponent<CartridgeLoaderComponent>(pda);
+            Assert.That(slots.TryInsert(pda, loaderComp.CartridgeSlot, slotted, null), Is.True);
+
+            Send(slotted, CartridgeUiMessageAction.Install);
+            Assert.That(loader.GetRemovablePrograms(pda), Has.Count.EqualTo(1));
+
+            Send(loader.GetRemovablePrograms(pda)[0], CartridgeUiMessageAction.Uninstall);
+        });
+
+        await server.WaitRunTicks(2);
+
+        await server.WaitAssertion(() =>
+        {
+            Assert.That(loader.GetRemovablePrograms(pda), Is.Empty);
+
+            entMan.DeleteEntity(stray);
+            entMan.DeleteEntity(pda);
+        });
+
+        await pair.CleanReturnAsync();
+    }
+
+    /// <summary>
+    /// A click with the PDA is relayed to the open program only. The admin PDA carries several programs that act on
+    /// a click.
+    /// </summary>
+    [Test]
+    public async Task AClickReachesOnlyTheOpenProgram()
+    {
+        await using var pair = await PoolManager.GetServerClient();
+        var server = pair.Server;
+        var entMan = server.ResolveDependency<IEntityManager>();
+        var loader = entMan.System<CartridgeLoaderSystem>();
+        var map = await pair.CreateTestMap();
+
+        await server.WaitAssertion(() =>
+        {
+            var pda = entMan.SpawnEntity(ManyProgramPda, map.MapCoords);
+            // Another PDA: it is a network device for NetProbe, and anything has a price for Appraisal.
+            var target = entMan.SpawnEntity(Pda, map.MapCoords);
+            var loaderComp = entMan.GetComponent<CartridgeLoaderComponent>(pda);
+
+            var netProbe = loader.TryGetProgram<NetProbeCartridgeComponent>(pda);
+            var appraisal = loader.TryGetProgram<AppraisalCartridgeComponent>(pda);
+            Assert.That(netProbe, Is.Not.Null, $"{ManyProgramPda} carries NetProbe");
+            Assert.That(appraisal, Is.Not.Null, $"{ManyProgramPda} carries Appraisal");
+
+            loader.ActivateProgram((pda, loaderComp), netProbe.Value);
+
+            var click = new AfterInteractEvent(target, pda, target, entMan.GetComponent<TransformComponent>(target).Coordinates, true);
+            entMan.EventBus.RaiseLocalEvent(pda, click);
+
+            var probed = netProbe.Value.Comp.ProbedDevices;
+            var appraised = appraisal.Value.Comp.AppraisedItems;
+            Assert.Multiple(() =>
+            {
+                Assert.That(probed, Has.Count.EqualTo(1), "the open program takes the click");
+                Assert.That(appraised, Is.Empty, "a program that is installed but not open does not");
+            });
+
+            entMan.DeleteEntity(target);
+            entMan.DeleteEntity(pda);
+        });
+
+        await pair.CleanReturnAsync();
+    }
+
+    /// <summary>
+    /// Every loader holds as many preinstalled programs as its prototype's fill names.
     /// </summary>
     [Test]
     public async Task EveryLoaderHoldsItsWholeFill()

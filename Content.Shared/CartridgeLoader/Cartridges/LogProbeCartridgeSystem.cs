@@ -60,7 +60,10 @@ public sealed partial class LogProbeCartridgeSystem : EntitySystem // Triad: mad
             return;
 
         //Play scanning sound with slightly randomized pitch
-        _audio.PlayPredicted(ent.Comp.SoundScan, target, args.Args.User);
+        // Triad: only the user hears a scan, PlayPredicted would play it to everyone in range
+        // _audio.PlayPredicted(ent.Comp.SoundScan, target, args.Args.User);
+        _audio.PlayLocal(ent.Comp.SoundScan, target, args.Args.User);
+        // End Triad
         _popup.PopupPredictedCursor(Loc.GetString("log-probe-scan", ("device", target)), args.Args.User);
 
         ent.Comp.EntityName = Name(target);
