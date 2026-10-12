@@ -31,6 +31,7 @@ public sealed partial class BountyContractUiFragmentList : Control
         }
 
         NoContractsLabel.Visible = false;
+        listStateContracts = new List<BountyContract>(listStateContracts); // Triad: a copy, the fed state is replayed into every rebuilt fragment
         listStateContracts.Reverse();
         foreach (var contract in listStateContracts)
         {

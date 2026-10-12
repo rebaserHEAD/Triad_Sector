@@ -138,10 +138,8 @@ public sealed class NanoChatCartridgeSystem : EntitySystem
         if (_nanoChat.GetRecipient(card.AsNullable(), currentChat) is not { } recipient || !recipient.HasUnread)
             return;
 
-        // Deliberately no UpdateUIForCard here. Both callers are followed by the loader publishing its own state,
-        // the client rebuilding the fragment and answering with CartridgeUiReadyEvent, which pushes this state
-        // anyway. Writing one here would race the loader's state for the single slot they share under PdaUiKey.
         _nanoChat.SetRecipient(card.AsNullable(), currentChat, recipient with { HasUnread = false });
+        UpdateUIForCard(card);
     }
 
     private void OnUiClosed(Entity<CartridgeLoaderComponent> ent, ref BoundUIClosedEvent args)
@@ -927,6 +925,6 @@ public sealed class NanoChatCartridgeSystem : EntitySystem
             notificationsMuted,
             listNumber,
             canList); // Triad
-        _cartridge.UpdateCartridgeUiState(loader, state);
+        _cartridge.UpdateCartridgeUiState(ent.Owner, state); // Triad: loader<ent.Owner
     }
 }

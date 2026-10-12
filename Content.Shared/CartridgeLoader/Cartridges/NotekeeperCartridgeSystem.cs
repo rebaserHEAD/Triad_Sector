@@ -58,6 +58,6 @@ public sealed partial class NotekeeperCartridgeSystem : EntitySystem
             return;
 
         var state = new NotekeeperUiState(component.Notes);
-        _cartridgeLoaderSystem.UpdateCartridgeUiState(loaderUid, state);
+        _cartridgeLoaderSystem.UpdateCartridgeUiState(uid, state); // Triad: loaderUid<uid
     }
 }

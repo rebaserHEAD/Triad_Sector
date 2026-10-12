@@ -3,6 +3,7 @@ using Content.Server.Station.Systems;
 using Content.Shared.CartridgeLoader;
 using Content.Shared.CartridgeLoader.Cartridges;
 using Content.Shared.CCVar;
+using Content.Shared.CrewManifest; // Triad
 using Robust.Shared.Configuration;
 using Robust.Shared.Prototypes;
 
@@ -59,12 +60,19 @@ public sealed partial class CrewManifestCartridgeSystem : EntitySystem
         var owningStation = _stationSystem.GetOwningStation(uid);
 
         if (owningStation is null)
+        {
+            // Triad: ported from wizden #43400, the app says it failed instead of sitting on its loading text
+            var failureMessage = Loc.GetString("crew-manifest-cartridge-loading-failed");
+            var failureState = new CrewManifestUiState(failureMessage, new CrewManifestEntries());
+            _cartridgeLoader.UpdateCartridgeUiState(uid, failureState);
+            // End Triad
             return;
+        }
 
         var (stationName, entries) = _crewManifest.GetCrewManifest(owningStation.Value);
 
         var state = new CrewManifestUiState(stationName, entries);
-        _cartridgeLoader.UpdateCartridgeUiState(loaderUid, state);
+        _cartridgeLoader.UpdateCartridgeUiState(uid, state); // Triad: loaderUid<uid
     }
 
     private void OnInstallationAttempt(ref ProgramInstallationAttempt args)

@@ -2,10 +2,12 @@ using System.Linq;
 using Content.Server._NF.SectorServices;
 using Content.Server.StationRecords;
 using Content.Shared._NF.BountyContracts;
+using Content.Shared._Triad.CartridgeLoader; // Triad
 using Content.Shared.Access.Components;
 using Content.Shared.CartridgeLoader;
 using Content.Shared.IdentityManagement;
 using Content.Shared.PDA;
+using Content.Shared.Popups; // Triad
 using Content.Shared.StationRecords;
 using Robust.Shared.Prototypes;
 using Robust.Shared.Timing;
@@ -16,6 +18,7 @@ public sealed partial class BountyContractSystem
 {
     [Dependency] SectorServiceSystem _sectorService = default!;
     [Dependency] IGameTiming _timing = default!;
+    [Dependency] private SharedPopupSystem _popup = default!; // Triad
     private void InitializeUi()
     {
         SubscribeLocalEvent<BountyContractsCartridgeComponent, CartridgeUiReadyEvent>(OnUiReady);
@@ -28,7 +31,7 @@ public sealed partial class BountyContractSystem
     private void CartridgeOpenCreateUi(Entity<BountyContractsCartridgeComponent> cartridge, EntityUid loaderUid, ProtoId<BountyContractCollectionPrototype> collection)
     {
         var state = GetCreateState(cartridge, collection);
-        _cartridgeLoader.UpdateCartridgeUiState(loaderUid, state);
+        _cartridgeLoader.UpdateCartridgeUiState(cartridge.Owner, state); // Triad: loaderUid<cartridge.Owner
     }
 
     /// <summary>
@@ -39,10 +42,28 @@ public sealed partial class BountyContractSystem
         var state = GetListState(cartridge, loaderUid, collection);
 
         if (state == null)
+        {
+            _cartridgeLoader.UpdateCartridgeUiState(cartridge.Owner, new BountyContractNoAccessUiState()); // Triad: the app says there is no board to read
             return;
+        }
 
-        _cartridgeLoader.UpdateCartridgeUiState(loaderUid, state);
+        _cartridgeLoader.UpdateCartridgeUiState(cartridge.Owner, state); // Triad: loaderUid<cartridge.Owner
     }
+
+    // Triad: a posted or removed contract reaches every PDA showing a board list, a PDA on the create form keeps its form
+    private void RefreshOtherLists(EntityUid except)
+    {
+        var query = EntityQueryEnumerator<BountyContractsCartridgeComponent, CartridgeComponent, CartridgeUiStateComponent>();
+        while (query.MoveNext(out var uid, out var bounty, out var cartridge, out var stored))
+        {
+            if (uid == except || cartridge.LoaderUid is not { } loader || stored.State is not BountyContractListUiState)
+                continue;
+
+            if (_cartridgeLoader.IsProgramShowing((uid, cartridge)))
+                CartridgeOpenListUi((uid, bounty), loader);
+        }
+    }
+    // End Triad
 
     private void CartridgeRefreshListUi(Entity<BountyContractsCartridgeComponent> cartridge, EntityUid loaderUid, ProtoId<BountyContractCollectionPrototype>? collection = null)
     {
@@ -145,7 +166,10 @@ public sealed partial class BountyContractSystem
 
         // Check the delete access for the user on this collection.
         if (TryRemoveBountyContract(loader, args.Actor, args.ContractId))
+        {
             CartridgeRefreshListUi(cartridge, loader);
+            RefreshOtherLists(cartridge); // Triad
+        }
     }
 
     private void OnTryCreateMessage(Entity<BountyContractsCartridgeComponent> cartridge, ref BountyContractTryCreateMessageEvent args)
@@ -153,7 +177,13 @@ public sealed partial class BountyContractSystem
         var loader = GetEntity(args.LoaderUid);
 
         if (!cartridge.Comp.CreateEnabled)
+        {
+            // Triad: the poster is told the cooldown is why nothing happened
+            var seconds = (int) Math.Ceiling((cartridge.Comp.NextCreate - _timing.CurTime).TotalSeconds);
+            _popup.PopupEntity(Loc.GetString("bounty-contracts-ui-create-cooldown", ("seconds", Math.Max(seconds, 1))), loader, args.Actor);
+            // End Triad
             return;
+        }
 
         var c = args.Contract;
         var author = Identity.Name(args.Actor, EntityManager);
@@ -165,6 +195,7 @@ public sealed partial class BountyContractSystem
             cartridge.Comp.NextCreate = _timing.CurTime + TimeSpan.FromSeconds(cartridge.Comp.CreateCooldown);
 
             CartridgeOpenListUi(cartridge, loader);
+            RefreshOtherLists(cartridge); // Triad
         }
     }
 }

@@ -39,6 +39,9 @@ bounty-contracts-ui-list-author = Posted by: {$author}
 bounty-contracts-ui-list-unknown-author = Unknown
 bounty-contracts-ui-list-remove = Remove
 bounty-contracts-ui-list-loading = Loading...
+# Triad
+bounty-contracts-ui-no-access = No bounty boards are open to this ID.
+# End Triad
 
 ## UI - Create contract
 bounty-contracts-ui-create-category = Category:{" "}
@@ -61,5 +64,8 @@ bounty-contracts-ui-create-error-name-too-long = Error: Name too long!
 bounty-contracts-ui-create-error-vessel-too-long = Error: Vessel too long!
 bounty-contracts-ui-create-error-description-too-long = Error: Description too long!
 bounty-contracts-ui-create-ready = Your contract is ready to be published!
+# Triad
+bounty-contracts-ui-create-cooldown = You can post another contract in { $seconds } seconds.
+# End Triad
 
 

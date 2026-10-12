@@ -29,6 +29,7 @@ public sealed partial class CartridgeLoaderSystem
                 break;
             // End Triad
             case CartridgeUiMessageAction.UIReady:
+                ResendActiveProgramState(ent.AsNullable()); // Triad: a new fragment gets the stored state even if the program stays silent
                 if (ent.Comp.ActiveProgram is { } foreground)
                 {
                     var evt = new CartridgeUiReadyEvent(ent);
@@ -54,24 +55,26 @@ public sealed partial class CartridgeLoaderSystem
             RaiseLocalEvent(foreground, cartridgeEvent);
     }
 
-    /// <summary>
-    /// Updates the programs ui state.
-    /// </summary>
-    /// <param name="loaderUid">The cartridge loaders entity uid.</param>
-    /// <param name="state">The programs ui state. Programs should use their own ui state class inheriting from <see cref="BoundUserInterfaceState"/>.</param>
-    /// <param name="loader">The cartridge loader component.</param>
-    /// <remarks>
-    /// This method is called "UpdateCartridgeUiState" but cartridges and a programs are the same. A cartridge is just a program as a visible item.
-    /// </remarks>
-    /// <seealso cref="Cartridges.NotekeeperCartridgeSystem.UpdateUiState"/>
-    public void UpdateCartridgeUiState(EntityUid loaderUid, BoundUserInterfaceState state, CartridgeLoaderComponent? loader = null)
-    {
-        if (!Resolve(loaderUid, ref loader))
-            return;
-
-        if (_userInterface.HasUi(loaderUid, loader.UiKey))
-            _userInterface.SetUiState(loaderUid, loader.UiKey, state);
-    }
+    // Triad: removed, a program publishes onto its own entity (UpdateCartridgeUiState in CartridgeLoaderSystem.ProgramState.cs), never into the loader's ui state slot
+    // /// <summary>
+    // /// Updates the programs ui state.
+    // /// </summary>
+    // /// <param name="loaderUid">The cartridge loaders entity uid.</param>
+    // /// <param name="state">The programs ui state. Programs should use their own ui state class inheriting from <see cref="BoundUserInterfaceState"/>.</param>
+    // /// <param name="loader">The cartridge loader component.</param>
+    // /// <remarks>
+    // /// This method is called "UpdateCartridgeUiState" but cartridges and a programs are the same. A cartridge is just a program as a visible item.
+    // /// </remarks>
+    // /// <seealso cref="Cartridges.NotekeeperCartridgeSystem.UpdateUiState"/>
+    // public void UpdateCartridgeUiState(EntityUid loaderUid, BoundUserInterfaceState state, CartridgeLoaderComponent? loader = null)
+    // {
+    //     if (!Resolve(loaderUid, ref loader))
+    //         return;
+    //
+    //     if (_userInterface.HasUi(loaderUid, loader.UiKey))
+    //         _userInterface.SetUiState(loaderUid, loader.UiKey, state);
+    // }
+    // End Triad
 
 
     /// <summary>
@@ -89,6 +92,13 @@ public sealed partial class CartridgeLoaderSystem
 
         if (!_userInterface.HasUi(ent.Owner, ent.Comp.UiKey))
             return;
+
+        // Triad: the ui's owner publishes the loader state inside its own, so the slot never holds a bare loader state over it
+        var ownerUpdate = new CartridgeLoaderUiStateUpdateEvent();
+        RaiseLocalEvent(ent.Owner, ref ownerUpdate);
+        if (ownerUpdate.Handled)
+            return;
+        // End Triad
 
         var programs = GetNetEntityList(GetAllPrograms(ent).ToList());
         var state = new CartridgeLoaderUiState(programs, GetNetEntity(ent.Comp.ActiveProgram));

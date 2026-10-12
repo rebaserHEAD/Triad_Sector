@@ -103,6 +103,6 @@ public sealed partial class AppraisalCartridgeSystem : EntitySystem
             return;
 
         var state = new AppraisalUiState(component.AppraisedItems);
-        _cartridgeLoaderSystem?.UpdateCartridgeUiState(loaderUid, state);
+        _cartridgeLoaderSystem?.UpdateCartridgeUiState(uid, state); // Triad: loaderUid<uid
     }
 }

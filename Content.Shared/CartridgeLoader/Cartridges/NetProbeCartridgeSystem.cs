@@ -78,6 +78,6 @@ public sealed partial class NetProbeCartridgeSystem : EntitySystem
             return;
 
         var state = new NetProbeUiState(component.ProbedDevices);
-        _cartridgeLoaderSystem.UpdateCartridgeUiState(loaderUid, state);
+        _cartridgeLoaderSystem.UpdateCartridgeUiState(uid, state); // Triad: loaderUid<uid
     }
 }

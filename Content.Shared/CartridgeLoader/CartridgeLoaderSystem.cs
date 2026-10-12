@@ -1,6 +1,6 @@
 using Content.Shared.Containers.ItemSlots;
 using Robust.Shared.Containers;
-using Robust.Shared.Network; // Frontier
+using Robust.Shared.Network; // Frontier, Triad
 using Robust.Shared.Timing;
 
 namespace Content.Shared.CartridgeLoader;
@@ -8,7 +8,7 @@ namespace Content.Shared.CartridgeLoader;
 public sealed partial class CartridgeLoaderSystem : EntitySystem
 {
     [Dependency] private IGameTiming _timing = default!;
-    [Dependency] private INetManager _net = default!; // Frontier
+    [Dependency] private INetManager _net = default!; // Frontier, Triad
     [Dependency] private ItemSlotsSystem _itemSlotsSystem = default!;
     [Dependency] private SharedAppearanceSystem _appearanceSystem = default!;
     [Dependency] private SharedContainerSystem _container = default!;
@@ -19,6 +19,7 @@ public sealed partial class CartridgeLoaderSystem : EntitySystem
         base.Initialize();
 
         InitializeRelay();
+        InitializeProgramState(); // Triad
 
         SubscribeLocalEvent<CartridgeLoaderComponent, ComponentInit>(OnComponentInit);
         SubscribeLocalEvent<CartridgeLoaderComponent, ComponentRemove>(OnComponentRemove);
@@ -112,6 +113,8 @@ public sealed partial class CartridgeLoaderSystem : EntitySystem
             cartridge.LoaderUid = null;
             Dirty(args.Entity, cartridge);
         }
+
+        ClearCartridgeUiState(args.Entity); // Triad: it was computed for this loader and must not follow the cartridge into the next
 
         var removed = new CartridgeRemovedEvent(ent);
         RaiseLocalEvent(args.Entity, ref removed);

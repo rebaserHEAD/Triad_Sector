@@ -71,6 +71,7 @@ namespace Content.Server.PDA
             SubscribeLocalEvent<StationRenamedEvent>(OnStationRenamed);
             SubscribeLocalEvent<EntityRenamedEvent>(OnEntityRenamed, after: new[] { typeof(IdCardSystem) });
             SubscribeLocalEvent<AlertLevelChangedEvent>(OnAlertLevelChanged);
+            SubscribeLocalEvent<PlayerAttachedEvent>(OnPlayerAttached); // Triad
 
             // Begin DeltaV additions
             Subs.CVar(_config,
@@ -79,6 +80,34 @@ namespace Content.Server.PDA
                 true);
             // End DeltaV additions
         }
+
+        // Triad: the PDA's state carries the loader's, so a loader update is answered with the whole shell state
+        protected override void UpdateShellUi(Entity<PdaComponent> ent)
+        {
+            UpdatePdaUi(ent.Owner, ent.Comp);
+        }
+
+        // Ported from Monolith #4427. The engine reopens a reattached player's BUIs on their client and raises
+        // no open event for it, so the shell and the open program are sent again from here.
+        private void OnPlayerAttached(PlayerAttachedEvent args)
+        {
+            foreach (var (uid, key) in _ui.GetActorUis(args.Entity))
+            {
+                if (!PdaUiKey.Key.Equals(key) || !TryComp(uid, out PdaComponent? pda))
+                    continue;
+
+                UpdatePdaUi(uid, pda, args.Entity);
+                _cartridgeLoader.ResendActiveProgramState(uid);
+            }
+        }
+
+        // The open program reads the ID (bounty boards and their permissions, the TriTalk card), so it publishes again.
+        private void RefreshProgramOnIdChange(EntityUid uid, PdaComponent pda, string containerId)
+        {
+            if (containerId == pda.IdSlot.ID)
+                _cartridgeLoader.RefreshActiveProgram(uid);
+        }
+        // End Triad
 
         private void OnEntityRenamed(ref EntityRenamedEvent ev)
         {
@@ -117,6 +146,7 @@ namespace Content.Server.PDA
             if (id != null)
                 pda.OwnerName = id.FullName;
             UpdatePdaUi(uid, pda);
+            RefreshProgramOnIdChange(uid, pda, args.Container.ID); // Triad
         }
 
         protected override void OnItemRemoved(EntityUid uid, PdaComponent pda, EntRemovedFromContainerMessage args)
@@ -130,6 +160,7 @@ namespace Content.Server.PDA
 
             base.OnItemRemoved(uid, pda, args);
             UpdatePdaUi(uid, pda);
+            RefreshProgramOnIdChange(uid, pda, args.Container.ID); // Triad
         }
 
         private void OnLightToggle(EntityUid uid, PdaComponent pda, LightToggleEvent args)
@@ -272,6 +303,7 @@ namespace Content.Server.PDA
                 return;
 
             UpdatePdaUi(ent.Owner, ent.Comp, args.Actor); // Frontier
+            _cartridgeLoader.ResendActiveProgramState(ent.Owner); // Triad: the opener has not received what the program published while the ui was shut
         }
 
         private void OnUiMessage(EntityUid uid, PdaComponent pda, PdaRequestUpdateInterfaceMessage msg)

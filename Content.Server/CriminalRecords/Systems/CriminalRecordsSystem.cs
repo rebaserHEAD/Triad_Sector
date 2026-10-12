@@ -186,6 +186,6 @@ public sealed partial class CriminalRecordsSystem : SharedCriminalRecordsSystem
             });
         var state = new WantedListUiState(records.ToList());
 
-        _cartridge.UpdateCartridgeUiState(loaderUid, state);
+        _cartridge.UpdateCartridgeUiState(ent.Owner, state); // Triad: loaderUid<ent.Owner
     }
 }

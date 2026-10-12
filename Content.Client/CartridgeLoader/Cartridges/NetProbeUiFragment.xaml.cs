@@ -30,6 +30,7 @@ public sealed partial class NetProbeUiFragment : BoxContainer
         ProbedDeviceContainer.RemoveAllChildren();
 
         //Reverse the list so the oldest entries appear at the bottom
+        devices = new List<ProbedNetworkDevice>(devices); // Triad: a copy, the fed state is replayed into every rebuilt fragment
         devices.Reverse();
 
         //Enable scrolling if there are more entries that can fit on the screen

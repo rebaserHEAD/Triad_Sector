@@ -136,6 +136,6 @@ public sealed partial class LogProbeCartridgeSystem : EntitySystem // Triad: mad
     private void UpdateUiState(Entity<LogProbeCartridgeComponent> ent, EntityUid loaderUid)
     {
         var state = new LogProbeUiState(ent.Comp.EntityName, ent.Comp.PulledAccessLogs, ent.Comp.ScannedNanoChatData); // Triad: TriTalk support
-        _cartridge.UpdateCartridgeUiState(loaderUid, state);
+        _cartridge.UpdateCartridgeUiState(ent.Owner, state); // Triad: loaderUid<ent.Owner
     }
 }

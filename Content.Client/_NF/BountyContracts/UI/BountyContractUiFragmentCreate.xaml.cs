@@ -65,12 +65,17 @@ public sealed partial class BountyContractUiFragmentCreate : Control
 
     public void SetVessels(List<string> vessels)
     {
-        // make sure that all ships sorted by names alphabetically
-        vessels.Sort();
-
-        // add unknown option as a first option
-        vessels.Insert(0, Loc.GetString("bounty-contracts-ui-create-vessel-unknown"));
-        _vessels = vessels;
+        // Triad: sorted and extended on a copy, the list belongs to a state that is fed to every rebuilt fragment
+        // // make sure that all ships sorted by names alphabetically
+        // vessels.Sort();
+        //
+        // // add unknown option as a first option
+        // vessels.Insert(0, Loc.GetString("bounty-contracts-ui-create-vessel-unknown"));
+        // _vessels = vessels;
+        _vessels = new List<string>(vessels);
+        _vessels.Sort();
+        _vessels.Insert(0, Loc.GetString("bounty-contracts-ui-create-vessel-unknown"));
+        // End Triad
 
         // update ships dropdown
         VesselSelector.Clear();
@@ -194,7 +199,7 @@ public sealed partial class BountyContractUiFragmentCreate : Control
 
         if (VesselEdit.Text.Length > SharedBountyContractSystem.MaxVesselLength)
         {
-            var err = Loc.GetString("bounty-contracts-ui-create-error-vessel-name-too-long");
+            var err = Loc.GetString("bounty-contracts-ui-create-error-vessel-too-long"); // Triad: vessel-name-too-long<vessel-too-long, the key the locale declares
             DisclaimerLabel.SetMessage(err);
             CreateButton.Disabled = true;
             return;

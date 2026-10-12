@@ -1,4 +1,5 @@
 using Content.Shared.Access.Components;
+using Content.Shared.CartridgeLoader; // Triad
 using Content.Shared.Containers.ItemSlots;
 using Robust.Shared.Containers;
 
@@ -20,7 +21,22 @@ namespace Content.Shared.PDA
             SubscribeLocalEvent<PdaComponent, EntRemovedFromContainerMessage>(OnItemRemoved);
 
             SubscribeLocalEvent<PdaComponent, GetAdditionalAccessEvent>(OnGetAdditionalAccess);
+            SubscribeLocalEvent<PdaComponent, CartridgeLoaderUiStateUpdateEvent>(OnLoaderUiStateUpdate); // Triad
         }
+
+        // Triad: a PDA's ui state slot holds the PDA's own state, which carries the loader's. The server answers a
+        // loader update with that whole state (UpdateShellUi), and a client never writes the slot: a state it wrote
+        // while applying server state is not reset, so it would stay over the server's.
+        private void OnLoaderUiStateUpdate(Entity<PdaComponent> ent, ref CartridgeLoaderUiStateUpdateEvent args)
+        {
+            args.Handled = true;
+            UpdateShellUi(ent);
+        }
+
+        protected virtual void UpdateShellUi(Entity<PdaComponent> ent)
+        {
+        }
+        // End Triad
         protected virtual void OnComponentInit(EntityUid uid, PdaComponent pda, ComponentInit args)
         {
             if (pda.IdCard != null)

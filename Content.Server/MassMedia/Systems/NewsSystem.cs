@@ -291,13 +291,16 @@ public sealed partial class NewsSystem : SharedNewsSystem
     private void UpdateReaderUi(Entity<NewsReaderCartridgeComponent> ent, EntityUid loaderUid)
     {
         if (!TryGetArticles(ent, out var articles))
+        {
+            _cartridgeLoaderSystem.ClearCartridgeUiState(ent); // Triad: no article set, so no stale article stays up
             return;
+        }
 
         NewsReaderLeafArticle(ent, 0);
 
         if (articles.Count == 0)
         {
-            _cartridgeLoaderSystem.UpdateCartridgeUiState(loaderUid, new NewsReaderEmptyBoundUserInterfaceState(ent.Comp.NotificationOn));
+            _cartridgeLoaderSystem.UpdateCartridgeUiState(ent.Owner, new NewsReaderEmptyBoundUserInterfaceState(ent.Comp.NotificationOn)); // Triad: loaderUid<ent.Owner
             return;
         }
 
@@ -307,7 +310,7 @@ public sealed partial class NewsSystem : SharedNewsSystem
             articles.Count,
             ent.Comp.NotificationOn);
 
-        _cartridgeLoaderSystem.UpdateCartridgeUiState(loaderUid, state);
+        _cartridgeLoaderSystem.UpdateCartridgeUiState(ent.Owner, state); // Triad: loaderUid<ent.Owner
     }
 
     private void NewsReaderLeafArticle(Entity<NewsReaderCartridgeComponent> ent, int leafDir)

@@ -4,6 +4,7 @@ using Content.Shared._NF.BountyContracts;
 using Content.Shared.CartridgeLoader;
 using JetBrains.Annotations;
 using Robust.Client.UserInterface;
+using Robust.Client.UserInterface.Controls; // Triad
 using Robust.Shared.Prototypes;
 
 namespace Content.Client._NF.BountyContracts.UI;
@@ -15,6 +16,7 @@ public sealed partial class BountyContractUi : UIFragment
     private BoundUserInterface? _userInterface;
     private ProtoId<BountyContractCollectionPrototype> _lastCollection = "Command"; //FIXME: nasty.
     private BoundUserInterfaceState? _lastState = null;
+    private bool _listShown; // Triad: whether this fragment has shown a board list yet
 
     public override Control GetUIFragmentRoot()
     {
@@ -26,6 +28,7 @@ public sealed partial class BountyContractUi : UIFragment
         _fragment = new BountyContractUiFragment();
         _userInterface = userInterface;
         _lastState = null;
+        _listShown = false; // Triad
     }
 
 
@@ -37,9 +40,32 @@ public sealed partial class BountyContractUi : UIFragment
         if (state is BountyContractListUiState listState)
             ShowListState(listState);
         else if (state is BountyContractCreateUiState createState)
+        {
+            // Triad: a create form only follows a list this fragment showed, one replayed from the stored state is stale
+            if (!_listShown)
+                return;
+            // End Triad
             ShowCreateState(createState);
+        }
+        else if (state is BountyContractNoAccessUiState) // Triad
+            ShowNoAccess();
         _lastState = state;
     }
+
+    // Triad
+    private void ShowNoAccess()
+    {
+        UnloadPreviousState();
+        _listShown = false;
+        _fragment?.AddChild(new Label
+        {
+            Text = Loc.GetString("bounty-contracts-ui-no-access"),
+            HorizontalAlignment = Control.HAlignment.Center,
+            VerticalAlignment = Control.VAlignment.Center,
+            VerticalExpand = true,
+        });
+    }
+    // End Triad
 
     private void UnloadPreviousState()
     {
@@ -69,8 +95,12 @@ public sealed partial class BountyContractUi : UIFragment
         UnloadPreviousState();
         var tabs = new BountyContractUiFragmentTabSet();
         tabs.OnSelectCollection += OnSelectCollection;
-        state.Collections.Reverse(); // invert order, show latest first
-        foreach (var collection in state.Collections)
+        _listShown = true; // Triad
+        // Triad: read in reverse, never reversed in place: the same state object is fed to every rebuilt fragment
+        // state.Collections.Reverse(); // invert order, show latest first
+        // foreach (var collection in state.Collections)
+        foreach (var collection in Enumerable.Reverse(state.Collections))
+        // End Triad
         {
             int newTabIndex = tabs.Children.Count();
             if (collection == state.Collection)

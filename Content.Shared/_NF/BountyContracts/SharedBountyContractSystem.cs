@@ -120,6 +120,11 @@ public sealed class BountyContractListUiState(ProtoId<BountyContractCollectionPr
     public readonly bool NotificationsEnabled = notificationsEnabled;
 }
 
+// Triad: published when the loader's ID can read no board
+[NetSerializable, Serializable]
+public sealed class BountyContractNoAccessUiState : BoundUserInterfaceState;
+// End Triad
+
 public enum BountyContractCommand : byte
 {
     OpenCreateUi = 0,

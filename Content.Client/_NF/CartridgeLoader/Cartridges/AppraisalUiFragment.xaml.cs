@@ -30,6 +30,7 @@ public sealed partial class AppraisalUiFragment : BoxContainer
         AppraisedItemContainer.RemoveAllChildren();
 
         //Reverse the list so the oldest entries appear at the bottom
+        items = new List<AppraisedItem>(items); // Triad: a copy, the fed state is replayed into every rebuilt fragment
         items.Reverse();
 
         //Enable scrolling if there are more entries that can fit on the screen

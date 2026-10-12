@@ -86,6 +86,7 @@ public sealed partial class CartridgeLoaderSystem
         ent.Comp.ActiveProgram = program;
         Dirty(ent);
         UpdateUiState(ent.AsNullable());
+        ResendActiveProgramState(ent.AsNullable()); // Triad: what it published while it was not showing
     }
 
     public void DeactivateProgram(Entity<CartridgeLoaderComponent> ent, EntityUid program)

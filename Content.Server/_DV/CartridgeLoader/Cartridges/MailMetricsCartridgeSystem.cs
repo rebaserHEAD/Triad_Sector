@@ -24,7 +24,7 @@ public sealed partial class MailMetricsCartridgeSystem : EntitySystem
 
     private void OnUiReady(Entity<MailMetricsCartridgeComponent> ent, ref CartridgeUiReadyEvent args)
     {
-        UpdateUI(args.Loader); // Frontier: remove station as first arg
+        UpdateUI(ent); // Frontier: remove station as first arg // Triad: args.Loader<ent
     }
 
     private void OnLogisticsStatsUpdated(LogisticStatsUpdatedEvent args)
@@ -44,11 +44,11 @@ public sealed partial class MailMetricsCartridgeSystem : EntitySystem
         {
             if (cartridge.LoaderUid is not { } loader)
                 continue;
-            UpdateUI(loader);
+            UpdateUI(uid); // Triad: loader<uid
         }
     }
 
-    private void UpdateUI(EntityUid loader)
+    private void UpdateUI(EntityUid cartridge) // Triad: loader<cartridge
     {
         //if (_station.GetOwningStation(loader) is { } station) // Frontier
         //    ent.Comp.Station = station; // Frontier
@@ -61,7 +61,7 @@ public sealed partial class MailMetricsCartridgeSystem : EntitySystem
 
         // Send logistic stats to cartridge client
         var state = new MailMetricUiState(logiStats.Metrics, unopenedMailCount);
-        _cartridgeLoader.UpdateCartridgeUiState(loader, state);
+        _cartridgeLoader.UpdateCartridgeUiState(cartridge, state); // Triad: loader<cartridge
     }
 
 
