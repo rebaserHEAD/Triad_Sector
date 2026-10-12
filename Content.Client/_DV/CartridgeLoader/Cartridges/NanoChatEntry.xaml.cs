@@ -41,7 +41,7 @@ public sealed partial class NanoChatEntry : BoxContainer
 
         // FIXME: Truncate and Escape can lead to stray `\`, if the truncate cuts a markup tag in half
         NameLabel.Text = FormattedMessage.EscapeText(SharedNanoChatSystem.Truncate(recipient.Name, _maxNameLength));
-        JobLabel.Text = FormattedMessage.EscapeText(SharedNanoChatSystem.Truncate(recipient.JobTitle ?? string.Empty, _maxIdJobLength));
+        JobLabel.Text = SharedNanoChatSystem.Truncate(recipient.JobTitle ?? string.Empty, _maxIdJobLength); // Triad: JobLabel is a plain Label, escaped text would show its backslashes
         JobLabel.Visible = !string.IsNullOrWhiteSpace(JobLabel.Text);
         UnreadIndicator.Visible = recipient.HasUnread;
 

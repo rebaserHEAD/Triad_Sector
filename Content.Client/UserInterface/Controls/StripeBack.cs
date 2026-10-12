@@ -100,18 +100,31 @@ namespace Content.Client.UserInterface.Controls
 
             var padSize = HasMargins ? PadSize : 0;
 
+            // Triad: the edges are clamped to the box. PixelHeight is rounded, so at a fractional ui scale a StripeBack
+            // with nothing in it comes out a fraction of a pixel shorter than its two edges, and UIBox2 asserts on a
+            // top below its bottom (NewsReaderUiFragment before its first state, at ui scale 0.68).
+            var edge = (padSize + EdgeSize) * UIScale;
+            var pad = padSize * UIScale;
+
             if (HasTopEdge)
             {
-                centerBox += (0, (padSize + EdgeSize) * UIScale, 0, 0);
-                handle.DrawRect(new UIBox2(0, padSize * UIScale, PixelWidth, centerBox.Top), EdgeColor);
+                // centerBox += (0, (padSize + EdgeSize) * UIScale, 0, 0);
+                // handle.DrawRect(new UIBox2(0, padSize * UIScale, PixelWidth, centerBox.Top), EdgeColor);
+                var top = Math.Min(centerBox.Top + edge, centerBox.Bottom);
+                centerBox = new UIBox2(centerBox.Left, top, centerBox.Right, centerBox.Bottom);
+                handle.DrawRect(new UIBox2(0, Math.Min(pad, top), PixelWidth, top), EdgeColor);
             }
 
             if (HasBottomEdge)
             {
-                centerBox += (0, 0, 0, -((padSize + EdgeSize) * UIScale));
-                handle.DrawRect(new UIBox2(0, centerBox.Bottom, PixelWidth, PixelHeight - padSize * UIScale),
-                    EdgeColor);
+                // centerBox += (0, 0, 0, -((padSize + EdgeSize) * UIScale));
+                // handle.DrawRect(new UIBox2(0, centerBox.Bottom, PixelWidth, PixelHeight - padSize * UIScale),
+                //     EdgeColor);
+                var bottom = Math.Max(centerBox.Bottom - edge, centerBox.Top);
+                centerBox = new UIBox2(centerBox.Left, centerBox.Top, centerBox.Right, bottom);
+                handle.DrawRect(new UIBox2(0, bottom, PixelWidth, Math.Max(PixelHeight - pad, bottom)), EdgeColor);
             }
+            // End Triad
 
             GetActualStyleBox()?.Draw(handle, centerBox, UIScale);
         }

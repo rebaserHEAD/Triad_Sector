@@ -104,6 +104,14 @@ namespace Content.Server.PDA.Ringer
             if (args.Ringtone.Length != RingtoneLength)
                 return;
 
+            // Triad: a note outside the enum has no sound file, and the client check is not the authority
+            foreach (var note in args.Ringtone)
+            {
+                if (!Enum.IsDefined(note))
+                    return;
+            }
+            // End Triad
+
             var ev = new BeforeRingtoneSetEvent(args.Ringtone);
             RaiseLocalEvent(uid, ref ev);
             if (ev.Handled)

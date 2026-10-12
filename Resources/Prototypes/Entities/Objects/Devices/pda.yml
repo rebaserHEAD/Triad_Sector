@@ -88,8 +88,9 @@
   - type: UnpoweredFlashlight
   - type: PointLight
     enabled: false
-    radius: 1.5
+    radius: 1.7 # Triad: 1.5<1.7, ported from wizden #40687
     softness: 5
+    falloff: 3 # Triad: ported from wizden #40687
     autoRot: true
   - type: Ringer
   - type: DeviceNetwork
@@ -428,12 +429,24 @@
   - type: Pda
     id: MimeIDCard
     paiSlot:
-      priority: -2
+      priority: -3 # Triad: -2<-3, ported from Frontier #3318, -2 is the book slot
       ejectSound: null
       insertSound: null
       whitelist:
         components:
         - PAI
+    # Triad: ported from Frontier #3318, the mime's book slot is as silent as its other slots.
+    # A redeclared slot replaces BasePDA's whole, so the book and whitelist are restated.
+    bookSlot:
+      startingItem: BookTriadLaw
+      priority: -2
+      ejectSound: null
+      insertSound: null
+      whitelist:
+        tags:
+        - BookSpaceLaw
+        - BookNfsdSop
+    # End Triad
     idSlot:
       name: access-id-card-component-default
       ejectSound: null # mime is silent
