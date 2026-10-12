@@ -212,6 +212,18 @@ namespace Content.Client.Popups
                 PopupCursor(message, type);
         }
 
+        // Triad: ported from wizden #36655
+        public override void PopupPredictedCursor(string? message, ICommonSession recipient, PopupType type = PopupType.Small)
+        {
+            PopupCursor(message, recipient, type);
+        }
+
+        public override void PopupPredictedCursor(string? message, EntityUid recipient, PopupType type = PopupType.Small)
+        {
+            PopupCursor(message, recipient, type);
+        }
+        // End Triad
+
         public override void PopupCoordinates(string? message, EntityCoordinates coordinates, Filter filter, bool replayRecord, PopupType type = PopupType.Small)
         {
             PopupCoordinates(message, coordinates, type);

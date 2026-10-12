@@ -10,14 +10,16 @@
     id: PlantManagerIDCard
   - type: PdaBorderColor
     borderColor: "#c59a3b"
-  - type: CartridgeLoader # Triad - extended with the ledger for the plant account + cargo bounties
-    preinstalled:
-    - CrewManifestCartridge
-    - NotekeeperCartridge
-    - NewsReaderCartridge
-    - LedgerCartridge
-    - BountyContractsCartridge
-    - TriTalkCartridge # Triad
+  - type: EntityTableContainerFill # Triad - extended with the ledger for the plant account + cargo bounties
+    containers:
+      preinstalled-program-container: !type:AllSelector
+        children:
+        - id: CrewManifestCartridge
+        - id: NotekeeperCartridge
+        - id: NewsReaderCartridge
+        - id: LedgerCartridge
+        - id: BountyContractsCartridge
+        - id: TriTalkCartridge # Triad
 
 - type: entity
   parent: EngineerPDA

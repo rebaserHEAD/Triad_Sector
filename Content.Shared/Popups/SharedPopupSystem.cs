@@ -32,6 +32,20 @@ namespace Content.Shared.Popups
         /// <param name="type">Used to customize how this popup should appear visually.</param>
         public abstract void PopupCursor(string? message, EntityUid recipient, PopupType type = PopupType.Small);
 
+        // Triad: ported from wizden #36655
+        /// <summary>
+        /// Variant of <see cref="PopupCursor(string?, ICommonSession, PopupType)"/> for use with prediction.
+        /// The local client will show the popup to the recipient. Does nothing on the server.
+        /// </summary>
+        public abstract void PopupPredictedCursor(string? message, ICommonSession recipient, PopupType type = PopupType.Small);
+
+        /// <summary>
+        /// Variant of <see cref="PopupCursor(string?, EntityUid, PopupType)"/> for use with prediction.
+        /// The local client will show the popup to the recipient. Does nothing on the server.
+        /// </summary>
+        public abstract void PopupPredictedCursor(string? message, EntityUid recipient, PopupType type = PopupType.Small);
+        // End Triad
+
         /// <summary>
         ///     Shows a popup at a world location to every entity in PVS range.
         /// </summary>

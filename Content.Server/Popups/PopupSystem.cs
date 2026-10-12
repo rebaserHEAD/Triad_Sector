@@ -35,6 +35,18 @@ namespace Content.Server.Popups
                 RaiseNetworkEvent(new PopupCursorEvent(message, type), actor.PlayerSession);
         }
 
+        // Triad: ported from wizden #36655
+        public override void PopupPredictedCursor(string? message, ICommonSession recipient, PopupType type = PopupType.Small)
+        {
+            // Do nothing, since the client already predicted the popup.
+        }
+
+        public override void PopupPredictedCursor(string? message, EntityUid recipient, PopupType type = PopupType.Small)
+        {
+            // Do nothing, since the client already predicted the popup.
+        }
+        // End Triad
+
         public override void PopupCoordinates(string? message, EntityCoordinates coordinates, Filter filter, bool replayRecord, PopupType type = PopupType.Small)
         {
             if (message == null)

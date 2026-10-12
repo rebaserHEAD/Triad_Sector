@@ -64,7 +64,11 @@ public sealed class NanoChatCartridgeSystem : EntitySystem
         _pdaQuery = GetEntityQuery<PdaComponent>();
         _cardQuery = GetEntityQuery<NanoChatCardComponent>();
 
-        SubscribeLocalEvent<CartridgeLoaderComponent, ActiveProgramChangedEvent>(OnActiveProgramChanged);
+        // Triad: the loader raises these on the program itself whenever it becomes or stops being the open one
+        // SubscribeLocalEvent<CartridgeLoaderComponent, ActiveProgramChangedEvent>(OnActiveProgramChanged);
+        SubscribeLocalEvent<NanoChatCartridgeComponent, CartridgeActivatedEvent>(OnActivated);
+        SubscribeLocalEvent<NanoChatCartridgeComponent, CartridgeDeactivatedEvent>(OnDeactivated);
+        // End Triad
 
         SubscribeLocalEvent<CartridgeLoaderComponent, BoundUIOpenedEvent>(OnUiOpened);
         SubscribeLocalEvent<CartridgeLoaderComponent, BoundUIClosedEvent>(OnUiClosed);
@@ -77,13 +81,27 @@ public sealed class NanoChatCartridgeSystem : EntitySystem
         SubscribeLocalEvent<NanoChatCartridgeComponent, CartridgeMessageEvent>(OnMessage);
     }
 
-    private void OnActiveProgramChanged(Entity<CartridgeLoaderComponent> ent, ref ActiveProgramChangedEvent args)
-    {
-        if (!GetCardEntity(ent, out var nanoChatCard))
-            return;
+    // Triad: removed, replaced by OnActivated and OnDeactivated
+    // private void OnActiveProgramChanged(Entity<CartridgeLoaderComponent> ent, ref ActiveProgramChangedEvent args)
+    // {
+    //     if (!GetCardEntity(ent, out var nanoChatCard))
+    //         return;
+    //
+    //     SetVisible(nanoChatCard.Value, HasComp<NanoChatCartridgeComponent>(args.NewActiveProgram));
+    // }
 
-        SetVisible(nanoChatCard.Value, HasComp<NanoChatCartridgeComponent>(args.NewActiveProgram));
+    private void OnActivated(Entity<NanoChatCartridgeComponent> ent, ref CartridgeActivatedEvent args)
+    {
+        if (GetCardEntity(args.Loader, out var nanoChatCard))
+            SetVisible(nanoChatCard.Value, true);
     }
+
+    private void OnDeactivated(Entity<NanoChatCartridgeComponent> ent, ref CartridgeDeactivatedEvent args)
+    {
+        if (GetCardEntity(args.Loader, out var nanoChatCard))
+            SetVisible(nanoChatCard.Value, false);
+    }
+    // End Triad
 
     private void OnUiOpened(Entity<CartridgeLoaderComponent> ent, ref BoundUIOpenedEvent args)
     {
@@ -819,7 +837,8 @@ public sealed class NanoChatCartridgeSystem : EntitySystem
 
     private void OnUiReady(Entity<NanoChatCartridgeComponent> ent, ref CartridgeUiReadyEvent args)
     {
-        _cartridge.RegisterBackgroundProgram(args.Loader, ent);
+        // Triad: removed, the loader has no background programs and this program listens for nothing they received
+        // _cartridge.RegisterBackgroundProgram(args.Loader, ent);
         UpdateUI(ent, args.Loader);
     }
 

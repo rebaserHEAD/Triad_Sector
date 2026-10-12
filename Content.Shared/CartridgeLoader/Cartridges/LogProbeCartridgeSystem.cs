@@ -50,8 +50,8 @@ public sealed partial class LogProbeCartridgeSystem : EntitySystem // Triad: mad
         // Triad begin: probing a TriTalk card pulls its message history instead of access logs
         if (TryComp<NanoChatCardComponent>(target, out var nanoChatCard))
         {
-            ScanNanoChatCard(ent, args, target, nanoChatCard);
-            args.InteractEvent.Handled = true;
+            ScanNanoChatCard(ent, ref args, target, nanoChatCard);
+            args.Args.Handled = true;
             return;
         }
         // Triad end

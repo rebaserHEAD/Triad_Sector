@@ -160,7 +160,17 @@ public sealed partial class CartridgeLoaderSystem
                 return false;
         }
 
-        return InstallProgram(ent, cartridgeProto);
+        // Frontier: a readonly cartridge installs as a program that cannot be uninstalled, a disposable one is used up
+        // return InstallProgram(ent, cartridgeProto);
+        var cartridgeComp = Comp<CartridgeComponent>(cartridge);
+        if (!InstallProgram(ent, cartridgeProto, deinstallable: !cartridgeComp.Readonly))
+            return false;
+
+        if (cartridgeComp.Disposable)
+            PredictedQueueDel(cartridge);
+
+        return true;
+        // End Frontier
     }
 
     private void UpdateCartridgeInstallationStatus(Entity<CartridgeComponent> ent, InstallationStatus installationStatus)

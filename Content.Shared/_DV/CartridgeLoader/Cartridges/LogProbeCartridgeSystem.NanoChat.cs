@@ -2,13 +2,17 @@ using Content.Shared.Audio;
 using Content.Shared.CartridgeLoader;
 using Content.Shared._DV.CartridgeLoader.Cartridges;
 using Content.Shared._DV.NanoChat;
+using Content.Shared.Interaction; // Triad
 using Robust.Shared.Audio;
+using Robust.Shared.Network; // Triad
 using Robust.Shared.Random;
 
-namespace Content.Server.CartridgeLoader.Cartridges;
+namespace Content.Shared.CartridgeLoader.Cartridges; // Triad: Server<Shared, a partial lives in the assembly of the class it extends
 
 public sealed partial class LogProbeCartridgeSystem
 {
+    [Dependency] private INetManager _net = default!; // Triad
+
     private void InitializeNanoChat()
     {
         SubscribeLocalEvent<NanoChatRecipientUpdatedEvent>(OnRecipientUpdated);
@@ -60,15 +64,19 @@ public sealed partial class LogProbeCartridgeSystem
     }
 
     private void ScanNanoChatCard(Entity<LogProbeCartridgeComponent> ent,
-        CartridgeAfterInteractEvent args,
+        ref CartridgeRelayedEvent<AfterInteractEvent> args, // Triad: CartridgeAfterInteractEvent<CartridgeRelayedEvent
         EntityUid target,
         NanoChatCardComponent card)
     {
+        // Triad: the scanned history is server data and is not networked, so the scan is not predicted
+        if (_net.IsClient)
+            return;
+
         _audio.PlayEntity(ent.Comp.SoundScan,
-            args.InteractEvent.User,
+            args.Args.User,
             target,
             AudioParams.Default.WithVariation(0.25f));
-        _popup.PopupCursor(Loc.GetString("log-probe-scan-nanochat", ("card", target)), args.InteractEvent.User);
+        _popup.PopupCursor(Loc.GetString("log-probe-scan-nanochat", ("card", target)), args.Args.User);
 
         ent.Comp.PulledAccessLogs.Clear();
 

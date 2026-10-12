@@ -1,6 +1,7 @@
 using Content.Server.Cargo.Systems;
 using Content.Shared.CartridgeLoader;
 using Content.Shared.CartridgeLoader.Cartridges;
+using Content.Shared.Interaction; // Triad
 using Content.Shared.Popups;
 using Robust.Shared.Audio.Systems;
 using Robust.Shared.Random;
@@ -22,7 +23,7 @@ public sealed partial class AppraisalCartridgeSystem : EntitySystem
     {
         base.Initialize();
         SubscribeLocalEvent<AppraisalCartridgeComponent, CartridgeUiReadyEvent>(OnUiReady);
-        SubscribeLocalEvent<AppraisalCartridgeComponent, CartridgeAfterInteractEvent>(AfterInteract);
+        SubscribeLocalEvent<AppraisalCartridgeComponent, CartridgeRelayedEvent<AfterInteractEvent>>(AfterInteract); // Triad: CartridgeAfterInteractEvent<CartridgeRelayedEvent
         SubscribeLocalEvent<AppraisalCartridgeComponent, CartridgeActivatedEvent>(OnCartridgeActivated);
         SubscribeLocalEvent<AppraisalCartridgeComponent, CartridgeDeactivatedEvent>(OnCartridgeDeactivated);
     }
@@ -46,24 +47,28 @@ public sealed partial class AppraisalCartridgeSystem : EntitySystem
 
     private void OnCartridgeDeactivated(Entity<AppraisalCartridgeComponent> ent, ref CartridgeDeactivatedEvent args)
     {
-        var parent = Transform(args.Loader).ParentUid;
-        RemComp<PriceGunComponent>(parent);
-        RemComp<UseDelayComponent>(parent);
+        // Triad: the event carries the loader, which is the entity OnCartridgeActivated added these to
+        // var parent = Transform(args.Loader).ParentUid;
+        // RemComp<PriceGunComponent>(parent);
+        // RemComp<UseDelayComponent>(parent);
+        RemComp<PriceGunComponent>(args.Loader);
+        RemComp<UseDelayComponent>(args.Loader);
+        // End Triad
     }
 
     /// <summary>
-    /// The <see cref="CartridgeAfterInteractEvent" /> gets relayed to this system if the cartridge loader is running
+    /// The <see cref="CartridgeRelayedEvent{TEvent}" /> gets relayed to this system if the cartridge loader is running
     /// the Appraisal program and someone clicks on something with it. <br/>
     /// <br/>
     /// Does the thing... TODO
     /// </summary>
-    private void AfterInteract(EntityUid uid, AppraisalCartridgeComponent component, CartridgeAfterInteractEvent args)
+    private void AfterInteract(EntityUid uid, AppraisalCartridgeComponent component, CartridgeRelayedEvent<AfterInteractEvent> args) // Triad: CartridgeAfterInteractEvent<CartridgeRelayedEvent
     {
-        if (args.InteractEvent.Handled || !args.InteractEvent.CanReach || !args.InteractEvent.Target.HasValue)
+        if (args.Args.Handled || !args.Args.CanReach || !args.Args.Target.HasValue) // Triad: InteractEvent<Args
             return;
 
-        var target = args.InteractEvent.Target;
-        var who = args.InteractEvent.User;
+        var target = args.Args.Target; // Triad: InteractEvent<Args
+        var who = args.Args.User; // Triad: InteractEvent<Args
         double price = 0.00;
 
         // All of the pop up display stuff is being handled by the PriceGunComponent addded to the PDA,

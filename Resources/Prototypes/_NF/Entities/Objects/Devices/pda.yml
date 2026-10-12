@@ -12,21 +12,23 @@
   parent: [MusicBasePDA, AdminPDA]
   id: NFAdminPDA
   components:
-  - type: CartridgeLoader
-    preinstalled:
-      - CrewManifestCartridge
-      - NotekeeperCartridge
-      - NewsReaderCartridge
-      - BountyContractsCartridge
-      - AstroNavCartridge
-      - WantedListCartridge
-      - LedgerCartridge
-      - LogProbeCartridge
-      - MailMetricsCartridge
-      - AppraisalCartridge
-      - NetProbeCartridge
-      - MedTekCartridge # Mono
-      - TriTalkCartridge # Triad
+  - type: EntityTableContainerFill
+    containers:
+      preinstalled-program-container: !type:AllSelector
+        children:
+        - id: CrewManifestCartridge
+        - id: NotekeeperCartridge
+        - id: NewsReaderCartridge
+        - id: BountyContractsCartridge
+        - id: AstroNavCartridge
+        - id: WantedListCartridge
+        - id: LedgerCartridge
+        - id: LogProbeCartridge
+        - id: MailMetricsCartridge
+        - id: AppraisalCartridge
+        - id: NetProbeCartridge
+        - id: MedTekCartridge # Mono
+        - id: TriTalkCartridge # Triad
 
 - type: entity
   parent: BasePDA
@@ -140,16 +142,18 @@
     accentHColor: "#447987"
   - type: Icon
     state: pda-hop
-  - type: CartridgeLoader
-    preinstalled:
-    - CrewManifestCartridge
-    - NotekeeperCartridge
-    - NewsReaderCartridge
-    - BountyContractsCartridge
-    - AstroNavCartridge
-    - LedgerCartridge
-    - MailMetricsCartridge
-    - TriTalkCartridge # Triad
+  - type: EntityTableContainerFill
+    containers:
+      preinstalled-program-container: !type:AllSelector
+        children:
+        - id: CrewManifestCartridge
+        - id: NotekeeperCartridge
+        - id: NewsReaderCartridge
+        - id: BountyContractsCartridge
+        - id: AstroNavCartridge
+        - id: LedgerCartridge
+        - id: MailMetricsCartridge
+        - id: TriTalkCartridge # Triad
 
 - type: entity
   parent: PassengerPDA
@@ -213,13 +217,15 @@
   - type: Icon
     sprite: _NF/Objects/Devices/pda.rsi
     state: pda-cmo
-  - type: CartridgeLoader
-    preinstalled:
-    - CrewManifestCartridge
-    - NotekeeperCartridge
-    - NewsReaderCartridge
-    - BountyContractsCartridge
-    - AstroNavCartridge
-    - LedgerCartridge
-    - MedTekCartridge #medtek preloaded. Should be ok.
-    - TriTalkCartridge # Triad
+  - type: EntityTableContainerFill
+    containers:
+      preinstalled-program-container: !type:AllSelector
+        children:
+        - id: CrewManifestCartridge
+        - id: NotekeeperCartridge
+        - id: NewsReaderCartridge
+        - id: BountyContractsCartridge
+        - id: AstroNavCartridge
+        - id: LedgerCartridge
+        - id: MedTekCartridge #medtek preloaded. Should be ok.
+        - id: TriTalkCartridge # Triad

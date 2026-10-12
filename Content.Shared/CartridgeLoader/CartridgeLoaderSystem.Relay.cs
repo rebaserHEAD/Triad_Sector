@@ -7,10 +7,21 @@ public sealed partial class CartridgeLoaderSystem
 {
     private void InitializeRelay()
     {
-        SubscribeLocalEvent<CartridgeLoaderComponent, AfterInteractEvent>(RelayEvent);
-        SubscribeLocalEvent<CartridgeLoaderComponent, InteractUsingEvent>(RelayEvent);
+        // Triad: a click with the loader reaches the open program only, not every installed one
+        // SubscribeLocalEvent<CartridgeLoaderComponent, AfterInteractEvent>(RelayEvent);
+        // SubscribeLocalEvent<CartridgeLoaderComponent, InteractUsingEvent>(RelayEvent);
+        SubscribeLocalEvent<CartridgeLoaderComponent, AfterInteractEvent>(RelayForegroundEvent);
+        SubscribeLocalEvent<CartridgeLoaderComponent, InteractUsingEvent>(RelayForegroundEvent);
+        // End Triad
         SubscribeLocalEvent<CartridgeLoaderComponent, DeviceNetworkPacketEvent>(RelayEvent);
     }
+
+    // Triad
+    private void RelayForegroundEvent<T>(EntityUid uid, CartridgeLoaderComponent component, T args) where T : class
+    {
+        RelayEvent((uid, component), args, foregroundOnly: true);
+    }
+    // End Triad
 
     private void RefRelayEvent<T>(EntityUid uid, CartridgeLoaderComponent component, ref T args) where T : struct
     {

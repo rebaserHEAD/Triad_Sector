@@ -1542,11 +1542,12 @@
     borderColor: "#891417"
   - type: Icon
     state: pda-syndi-agent
-  - type: CartridgeLoader
-    uiKey: enum.PdaUiKey.Key
-    preinstalled:
-      - NotekeeperCartridge
-      - MedTekCartridge
+  - type: EntityTableContainerFill
+    containers:
+      preinstalled-program-container: !type:AllSelector
+        children:
+        - id: NotekeeperCartridge
+        - id: MedTekCartridge
 
 - type: entity
   parent: BasePDA

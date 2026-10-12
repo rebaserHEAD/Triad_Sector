@@ -208,8 +208,12 @@ public sealed partial class BountyContractSystem : SharedBountyContractSystem
             var pdaList = EntityQueryEnumerator<CartridgeLoaderComponent>();
             while (pdaList.MoveNext(out var loaderUid, out var loaderComp))
             {
-                if (_cartridgeLoader.TryGetProgram<BountyContractsCartridgeComponent>(loaderUid, out _, out var cartComp, true, loaderComp)
-                    && cartComp.NotificationsEnabled)
+                // Triad: the loader's lookup returns the program, or null
+                // if (_cartridgeLoader.TryGetProgram<BountyContractsCartridgeComponent>(loaderUid, out _, out var cartComp, true, loaderComp)
+                //     && cartComp.NotificationsEnabled)
+                if (_cartridgeLoader.TryGetProgram<BountyContractsCartridgeComponent>((loaderUid, loaderComp)) is { } program
+                    && program.Comp.NotificationsEnabled)
+                // End Triad
                 {
                     _cartridgeLoader.SendNotification(loaderUid, sender, msg, loaderComp);
                 }

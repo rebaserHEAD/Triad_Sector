@@ -36,15 +36,17 @@
         tags:
         - BookSpaceLaw
         - BookNfsdSop
-  - type: CartridgeLoader
-    preinstalled:
-    - CrewManifestCartridge
-    - NotekeeperCartridge
-    - NewsReaderCartridge
-    - BountyContractsCartridge
-    - AstroNavCartridge
-    - WantedListCartridge
-    - TriTalkCartridge # Triad
+  - type: EntityTableContainerFill
+    containers:
+      preinstalled-program-container: !type:AllSelector
+        children:
+        - id: CrewManifestCartridge
+        - id: NotekeeperCartridge
+        - id: NewsReaderCartridge
+        - id: BountyContractsCartridge
+        - id: AstroNavCartridge
+        - id: WantedListCartridge
+        - id: TriTalkCartridge # Triad
   - type: PdaBorderColor
     borderColor: "#515151"
     accentVColor: "#858321"
@@ -97,16 +99,18 @@
   components:
   - type: Pda
     id: TdfMedicIDCard
-  - type: CartridgeLoader
-    preinstalled:
-    - CrewManifestCartridge
-    - NotekeeperCartridge
-    - NewsReaderCartridge
-    - BountyContractsCartridge
-    - AstroNavCartridge
-    - WantedListCartridge
-    - MedTekCartridge
-    - TriTalkCartridge # Triad
+  - type: EntityTableContainerFill
+    containers:
+      preinstalled-program-container: !type:AllSelector
+        children:
+        - id: CrewManifestCartridge
+        - id: NotekeeperCartridge
+        - id: NewsReaderCartridge
+        - id: BountyContractsCartridge
+        - id: AstroNavCartridge
+        - id: WantedListCartridge
+        - id: MedTekCartridge
+        - id: TriTalkCartridge # Triad
   - type: Appearance
     appearanceDataInit:
       enum.PdaVisuals.PdaType:
@@ -123,17 +127,19 @@
   components:
   - type: Pda
     id: TdfLieutenantIDCard
-  - type: CartridgeLoader # Extended with the ledger
-    preinstalled:
-    - CrewManifestCartridge
-    - NotekeeperCartridge
-    - NewsReaderCartridge
-    - BountyContractsCartridge
-    - AstroNavCartridge
-    - WantedListCartridge
-    - LedgerCartridge
-    - MedTekCartridge
-    - TriTalkCartridge # Triad
+  - type: EntityTableContainerFill # Extended with the ledger
+    containers:
+      preinstalled-program-container: !type:AllSelector
+        children:
+        - id: CrewManifestCartridge
+        - id: NotekeeperCartridge
+        - id: NewsReaderCartridge
+        - id: BountyContractsCartridge
+        - id: AstroNavCartridge
+        - id: WantedListCartridge
+        - id: LedgerCartridge
+        - id: MedTekCartridge
+        - id: TriTalkCartridge # Triad
   - type: Appearance
     appearanceDataInit:
       enum.PdaVisuals.PdaType:
@@ -178,16 +184,18 @@
     borderColor: "#515151"
     accentVColor: "#858321"
     accentHColor: "#832d2d"
-  - type: CartridgeLoader # Extended with the ledger
-    preinstalled:
-    - CrewManifestCartridge
-    - NotekeeperCartridge
-    - NewsReaderCartridge
-    - BountyContractsCartridge
-    - AstroNavCartridge
-    - WantedListCartridge
-    - LedgerCartridge
-    - TriTalkCartridge # Triad
+  - type: EntityTableContainerFill # Extended with the ledger
+    containers:
+      preinstalled-program-container: !type:AllSelector
+        children:
+        - id: CrewManifestCartridge
+        - id: NotekeeperCartridge
+        - id: NewsReaderCartridge
+        - id: BountyContractsCartridge
+        - id: AstroNavCartridge
+        - id: WantedListCartridge
+        - id: LedgerCartridge
+        - id: TriTalkCartridge # Triad
 
 - type: entity
   parent: TdfChiefPda

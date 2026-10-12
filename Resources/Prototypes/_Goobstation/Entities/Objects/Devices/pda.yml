@@ -40,14 +40,17 @@
     uiKey: enum.PdaUiKey.Key
     notificationsEnabled: false
     diskSpace: 10 # DeltaV
-    preinstalled:
-    - CrewManifestCartridge
-    - NotekeeperCartridge
-    - NewsReaderCartridge
-    - LogProbeCartridge
-    - MedTekCartridge
-    - AstroNavCartridge
-    - TriTalkCartridge # Triad
+  - type: EntityTableContainerFill
+    containers:
+      preinstalled-program-container: !type:AllSelector
+        children:
+        - id: CrewManifestCartridge
+        - id: NotekeeperCartridge
+        - id: NewsReaderCartridge
+        - id: LogProbeCartridge
+        - id: MedTekCartridge
+        - id: AstroNavCartridge
+        - id: TriTalkCartridge # Triad
 
 - type: entity
   parent: NavyCaptainPDA

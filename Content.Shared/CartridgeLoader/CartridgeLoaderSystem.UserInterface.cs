@@ -16,12 +16,18 @@ public sealed partial class CartridgeLoaderSystem
             case CartridgeUiMessageAction.Deactivate:
                 DeactivateProgram(ent, cartridge);
                 break;
+            // Triad: the uid comes from the client, so Install takes only this loader's slot cartridge and Uninstall only a removable program
             case CartridgeUiMessageAction.Install:
-                InstallCartridge(ent, cartridge);
+                // InstallCartridge(ent, cartridge);
+                if (_itemSlotsSystem.GetItemOrNull(ent, CartridgeLoaderComponent.CartridgeSlotId) == cartridge)
+                    InstallCartridge(ent, cartridge);
                 break;
             case CartridgeUiMessageAction.Uninstall:
-                UninstallProgram(ent, cartridge);
+                // UninstallProgram(ent, cartridge);
+                if (GetRemovablePrograms(ent).Contains(cartridge))
+                    UninstallProgram(ent, cartridge);
                 break;
+            // End Triad
             case CartridgeUiMessageAction.UIReady:
                 if (ent.Comp.ActiveProgram is { } foreground)
                 {

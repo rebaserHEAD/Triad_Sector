@@ -1,5 +1,6 @@
 using Content.Shared.Containers.ItemSlots;
 using Robust.Shared.Containers;
+using Robust.Shared.Network; // Frontier
 using Robust.Shared.Timing;
 
 namespace Content.Shared.CartridgeLoader;
@@ -7,6 +8,7 @@ namespace Content.Shared.CartridgeLoader;
 public sealed partial class CartridgeLoaderSystem : EntitySystem
 {
     [Dependency] private IGameTiming _timing = default!;
+    [Dependency] private INetManager _net = default!; // Frontier
     [Dependency] private ItemSlotsSystem _itemSlotsSystem = default!;
     [Dependency] private SharedAppearanceSystem _appearanceSystem = default!;
     [Dependency] private SharedContainerSystem _container = default!;
@@ -76,6 +78,15 @@ public sealed partial class CartridgeLoaderSystem : EntitySystem
         RaiseLocalEvent(args.Entity, ref evt);
         UpdateUiState(ent.AsNullable());
         UpdateAppearanceData(ent);
+
+        // Frontier: a cartridge marked autoInstall installs as soon as it is in the slot. Server only, the result replicates.
+        if (_net.IsServer
+            && cartridge is { AutoInstall: true }
+            && args.Container.ID == CartridgeLoaderComponent.CartridgeSlotId)
+        {
+            InstallCartridge(ent, args.Entity);
+        }
+        // End Frontier
     }
 
     private void OnItemRemoved(Entity<CartridgeLoaderComponent> ent, ref EntRemovedFromContainerMessage args)
